@@ -27,5 +27,25 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "typebox": "*"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/goal-controller"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/goal-controller#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
 }

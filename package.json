@@ -42,5 +42,14 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "typebox": "*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
   }
 }

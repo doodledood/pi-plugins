@@ -11,5 +11,24 @@
     "extensions": [
       "./extensions/gpt-fast-toggle.ts"
     ]
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/gpt-fast-toggle"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/gpt-fast-toggle#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json"
+  ]
 }

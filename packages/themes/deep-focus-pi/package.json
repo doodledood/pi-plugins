@@ -11,5 +11,23 @@
     "themes": [
       "./themes/deep-focus-pi.json"
     ]
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/themes/deep-focus-pi"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/themes/deep-focus-pi#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "themes",
+    "README.md",
+    "package.json"
+  ]
 }

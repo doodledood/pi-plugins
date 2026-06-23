@@ -14,5 +14,23 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-tui": "*"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/simple-statusline"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/simple-statusline#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json"
+  ]
 }

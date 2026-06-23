@@ -15,5 +15,24 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/tool-activity-renderer"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/tool-activity-renderer#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json"
+  ]
 }

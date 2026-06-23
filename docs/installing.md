@@ -5,7 +5,7 @@
 The root package lists all included resources. Installing it without filters loads every extension, skill, and theme declared in `package.json`:
 
 ```bash
-pi install git:github.com/doodledood/pi-plugins@main
+pi install git:github.com/doodledood/pi-plugins@v0.1.0
 ```
 
 Use this only when you want the full curated resource set.
@@ -18,7 +18,7 @@ Pi's documented Git source installs the repo package. To load one resource from 
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@main",
+      "source": "git:github.com/doodledood/pi-plugins@v0.1.0",
       "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
       "skills": [],
       "prompts": [],
@@ -35,7 +35,7 @@ Theme example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@main",
+      "source": "git:github.com/doodledood/pi-plugins@v0.1.0",
       "extensions": [],
       "skills": [],
       "prompts": [],
@@ -47,7 +47,7 @@ Theme example:
 
 Do not rely on undocumented Git subdirectory install syntax.
 
-The examples use `@main` because this repository has not cut a release tag yet. After a release, prefer a pinned tag such as `@v0.1.0`.
+The examples use the pinned `@v0.1.0` release tag. Use `@main` only when you intentionally want the latest development version.
 
 ## Install one local package after cloning
 

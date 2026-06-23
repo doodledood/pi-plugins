@@ -14,5 +14,23 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/managed-chrome-devtools"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/managed-chrome-devtools#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json"
+  ]
 }

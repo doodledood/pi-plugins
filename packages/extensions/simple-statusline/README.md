@@ -22,7 +22,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@main",
+      "source": "git:github.com/doodledood/pi-plugins@v0.1.0",
       "extensions": ["packages/extensions/simple-statusline/extensions/simple-statusline.ts"],
       "skills": [],
       "prompts": [],
