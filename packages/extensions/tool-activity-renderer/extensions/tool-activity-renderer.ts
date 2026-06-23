@@ -277,15 +277,20 @@ function getRowState(context: RenderContext): RowState {
 	return context.state;
 }
 
+function getStoredCallText(context: Pick<RenderContext, "state">): Text {
+	const state = context.state;
+	if (state.call) return state.call;
+	state.call = new Text("", 0, 0);
+	return state.call;
+}
+
 function getCallText(context: RenderContext): Text {
 	const state = getRowState(context);
 	if (context.lastComponent instanceof Text) {
 		state.call = context.lastComponent;
 		return context.lastComponent;
 	}
-	if (state.call) return state.call;
-	state.call = new Text("", 0, 0);
-	return state.call;
+	return getStoredCallText(context);
 }
 
 function emptyText(): Text {
@@ -443,37 +448,45 @@ function registerReadTool(pi: ExtensionAPI): void {
 			return getBuiltInTools(ctx.cwd).read.execute(toolCallId, params, signal, onUpdate, ctx);
 		},
 		renderCall(args, theme, context) {
-			if (!context.expanded) return emptyText();
 			const rowContext = context as RenderContext;
 			setStarted(rowContext);
-			return new Text(formatReadCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded), 0, 0);
+			const call = getCallText(rowContext);
+			call.setText(formatReadCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded));
+			return call;
 		},
 		renderResult(result, { expanded, isPartial }, theme, context) {
-			if (isPartial) return emptyText();
+			const rowContext = context as RenderContext;
+			setEnded(rowContext, isPartial);
 			const typedResult = result as ToolResult;
 			const args = context.args as Record<string, unknown>;
-			const call = formatReadCall(args, theme, context.isError ? "error" : abnormal ? "success" : "muted", expanded);
+			const call = getStoredCallText(rowContext);
 			const text = getText(typedResult);
 			const abnormal = context.isError || hasImage(typedResult) || hasTruncation(typedResult.details);
 
-			if (!expanded && !abnormal) return emptyText();
-
-			if (context.isError) {
-				return new Text(`${call} ${theme.fg("error", `✗ ${firstMeaningfulLine(text) || "error"}`)}`, 0, 0);
+			if (isPartial) {
+				call.setText(`${formatReadCall(args, theme, currentGlyphState(rowContext, "running"), expanded)} ${theme.fg("muted", "…")}`);
+				return emptyText();
 			}
 
+			if (context.isError) {
+				const message = firstMeaningfulLine(text) || "read failed";
+				call.setText(`${formatReadCall(args, theme, settleGlyphState(rowContext, true), expanded)} ${theme.fg("error", "failed")}`);
+				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
+			}
+
+			const successCall = formatReadCall(args, theme, settleGlyphState(rowContext, false), expanded);
 			if (hasImage(typedResult)) {
-				return new Text(`${call} ${theme.fg("success", "🖼 image")}`, 0, 0);
+				call.setText(`${successCall} ${theme.fg("success", "🖼 image")}`);
+				return emptyText();
 			}
 
 			const lineCount = countLines(text);
-			if (!expanded) {
-				const warning = hasTruncation(typedResult.details) ? theme.fg("warning", " ⚠ truncated") : "";
-				return new Text(`${call} ${theme.fg("success", `✓ ${plural(lineCount, "line")}`)}${warning}`, 0, 0);
-			}
+			const warning = abnormal ? theme.fg("warning", " ⚠ truncated") : "";
+			call.setText(`${successCall} ${renderStatus(theme, true, plural(lineCount, "line"))}${warning}`);
 
-			const content = text ? `\n${outputBlock(text, theme)}` : "";
-			return new Text(`${toolDetail(theme, `✓ ${plural(lineCount, "line")}`)}${content}`, 0, 0);
+			if (!expanded) return emptyText();
+
+			return text ? new Text(outputBlock(text, theme), 0, 0) : emptyText();
 		},
 	});
 }
