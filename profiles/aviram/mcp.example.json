@@ -8,6 +8,28 @@
     "tavily": {
       "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=<TAVILY_API_KEY>",
       "directTools": true
+    },
+    "direct-url-mcp": {
+      "url": "https://<MCP_HOST>/<MCP_PATH>",
+      "directTools": true
+    },
+    "remote-command-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@latest",
+        "https://<MCP_HOST>/<MCP_PATH>"
+      ],
+      "directTools": true
+    },
+    "proxy-command-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://<PROXY_HOST>/api/v1/proxy/<PROXY_ID>/mcp"
+      ],
+      "directTools": true
     }
   }
 }

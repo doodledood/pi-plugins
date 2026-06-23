@@ -3,7 +3,13 @@
   "budgetTokens": 10000,
   "halfLifeDays": 14,
   "minProjectEvents": 5,
-  "prior": {},
+  "prior": {
+    "chrome-devtools": 2,
+    "direct-url-mcp": 2,
+    "remote-command-mcp": 2,
+    "proxy-command-mcp": 2,
+    "tavily": 1
+  },
   "alwaysActiveMcpTools": [],
   "excludeFromCatalog": []
 }
