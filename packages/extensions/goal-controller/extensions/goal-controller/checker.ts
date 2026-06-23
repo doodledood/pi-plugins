@@ -16,26 +16,69 @@ export interface CheckerRunner {
   run(input: CheckerRunInput): Promise<CheckerVerdict>;
 }
 
+type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+
 export class PiSubprocessCheckerRunner implements CheckerRunner {
   public constructor(private readonly pi: Pick<ExtensionAPI, "exec">) {}
 
   public async run(input: CheckerRunInput): Promise<CheckerVerdict> {
     const prompt = buildCheckerPrompt(input.goal, input.context);
     const args = checkerArgs(input, prompt);
+    const startedAt = Date.now();
     const result = await this.pi.exec("pi", args, {
       cwd: input.cwd,
       timeout: input.config.checker.timeoutMs,
       signal: input.signal,
     });
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
 
     if (result.code !== 0) {
-      const stderr = result.stderr.trim();
-      throw new Error(stderr || `checker subprocess exited with code ${result.code}`);
+      throw new Error(formatCheckerSubprocessFailure(result, input.config, elapsedMs));
     }
 
     const finalText = finalAssistantTextFromJsonMode(result.stdout) || result.stdout.trim();
     return parseCheckerVerdict(finalText);
   }
+}
+
+function formatCheckerSubprocessFailure(result: ExecResult, config: GoalControllerConfig, elapsedMs: number): string {
+  const configSummary = `Checker config: toolMode=${config.checker.toolMode}, model=${config.checker.model}, thinking=${config.checker.thinking}, timeoutMs=${config.checker.timeoutMs}.`;
+  const noVerdict = "No checker verdict was returned.";
+  const output = outputDiagnostics(result);
+
+  if (result.killed) {
+    const reachedTimeout = elapsedMs >= Math.max(0, config.checker.timeoutMs - Math.min(1_000, Math.floor(config.checker.timeoutMs * 0.05)));
+    const reason = reachedTimeout
+      ? `Goal checker subprocess timed out after ${formatDuration(elapsedMs)} (configured timeout ${formatDuration(config.checker.timeoutMs)} / timeoutMs=${config.checker.timeoutMs}) and was terminated.`
+      : `Goal checker subprocess was terminated after ${formatDuration(elapsedMs)} before the configured timeout elapsed (${formatDuration(config.checker.timeoutMs)} / timeoutMs=${config.checker.timeoutMs}); this usually means the host or user aborted the checker.`;
+    return [reason, `Exit code: ${result.code}.`, configSummary, noVerdict, output].filter(Boolean).join("\n");
+  }
+
+  return [
+    `Goal checker subprocess exited with code ${result.code} after ${formatDuration(elapsedMs)} before returning a verdict.`,
+    configSummary,
+    noVerdict,
+    output,
+  ].filter(Boolean).join("\n");
+}
+
+function outputDiagnostics(result: ExecResult): string | undefined {
+  const stderr = result.stderr.trim();
+  const stdout = result.stdout.trim();
+  const parts = [formatOutputTail("stderr", stderr), formatOutputTail("stdout tail", stdout)].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function formatOutputTail(label: string, value: string): string | undefined {
+  if (!value) return undefined;
+  const maxChars = 2_000;
+  const tail = value.length > maxChars ? `…${value.slice(-maxChars)}` : value;
+  return `${label}:\n${tail}`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
+  return `${ms}ms`;
 }
 
 function checkerArgs(input: CheckerRunInput, prompt: string): string[] {

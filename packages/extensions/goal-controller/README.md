@@ -28,7 +28,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-See `config/` for safe example config and `profiles/aviram/configs/` for Aviram's current non-secret defaults.
+See `config/` for a safe example config. Aviram's profile intentionally ships no goal-controller override right now; the package defaults are the current setup defaults unless you create `~/.pi/agent/goal-controller.config.json` locally.
 
 ## Original extension notes
 
@@ -125,7 +125,7 @@ Default installed config:
     "toolMode": "inspect",
     "model": "inherit",
     "thinking": "inherit",
-    "timeoutMs": 120000
+    "timeoutMs": 300000
   },
   "continuation": {
     "noToolContinuationLimit": 3
@@ -143,6 +143,8 @@ Budget fields are user-editable and default to unbounded. `defaultTokenBudget`, 
 
 `continuation.noToolContinuationLimit` blocks runaway automatic continuation loops after the configured number of consecutive checker-driven continuation turns make no tool progress. The default is `3`. Tool-using turns and user/system interventions reset the count.
 
+The default checker timeout is 300000ms (5 minutes), which gives tool-assisted checker subprocesses more room to inspect larger sessions while still bounding runaway checks.
+
 `inherit` means the checker uses the current Pi session model or thinking level when possible. Set explicit values, for example:
 
 ```json
@@ -152,7 +154,7 @@ Budget fields are user-editable and default to unbounded. `defaultTokenBudget`, 
     "toolMode": "inspect",
     "model": "openai/gpt-5.5",
     "thinking": "xhigh",
-    "timeoutMs": 120000
+    "timeoutMs": 300000
   }
 }
 ```
