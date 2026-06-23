@@ -93,7 +93,7 @@ It includes:
 
 - local-path settings examples for extensions/theme
 - MCP and model templates
-- extension config defaults
+- extension config examples/overrides
 - Aviram's `AGENTS.md` / `APPEND_SYSTEM.md`
 
 ## Security

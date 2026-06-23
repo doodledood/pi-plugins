@@ -175,6 +175,52 @@ test("PiSubprocessCheckerRunner maps transcript and full tool modes to subproces
   assert.equal(fullArgs.includes("--no-extensions"), false);
 });
 
+test("PiSubprocessCheckerRunner reports killed subprocesses as timeout or termination failures", async () => {
+  const config: GoalControllerConfig = { ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, timeoutMs: 1 } };
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { stdout: "partial checker output", stderr: "", code: 143, killed: true };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, config),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /timed out|terminated/iu);
+      assert.match(error.message, /timeoutMs=1/iu);
+      assert.match(error.message, /Exit code: 143/iu);
+      assert.match(error.message, /No checker verdict was returned/iu);
+      assert.match(error.message, /Checker config: toolMode=inspect, model=inherit, thinking=inherit/iu);
+      assert.match(error.message, /stdout tail:\npartial checker output/iu);
+      assert.doesNotMatch(error.message, /^checker subprocess exited with code 143$/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner preserves exit-code and output diagnostics for non-killed failures", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return { stdout: "stdout clue", stderr: "stderr clue", code: 7, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /exited with code 7/iu);
+      assert.match(error.message, /stderr:\nstderr clue/iu);
+      assert.match(error.message, /stdout tail:\nstdout clue/iu);
+      assert.match(error.message, /No checker verdict was returned/iu);
+      assert.doesNotMatch(error.message, /timed out/iu);
+      return true;
+    },
+  );
+});
+
 async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[]> {
   let capturedArgs: string[] = [];
   const runner = new PiSubprocessCheckerRunner({
@@ -206,6 +252,11 @@ async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[
     },
   });
 
+  await runChecker(runner, config);
+  return capturedArgs;
+}
+
+async function runChecker(runner: PiSubprocessCheckerRunner, config: GoalControllerConfig): Promise<void> {
   await runner.run({
     goal: createGoal("fake goal", config, 0),
     context: checkerContext(undefined),
@@ -214,5 +265,4 @@ async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[
     model: undefined,
     thinkingLevel: "off",
   });
-  return capturedArgs;
 }

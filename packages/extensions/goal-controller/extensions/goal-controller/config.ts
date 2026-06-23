@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GoalControllerConfig } from "./types.ts";
 
-const DEFAULT_CHECKER_TIMEOUT_MS = 120_000;
+const DEFAULT_CHECKER_TIMEOUT_MS = 300_000;
 const DEFAULT_NO_TOOL_CONTINUATION_LIMIT = 3;
 
 export const CONFIG_PATH = join(

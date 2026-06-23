@@ -7,7 +7,7 @@
     "toolMode": "inspect",
     "model": "inherit",
     "thinking": "inherit",
-    "timeoutMs": 120000
+    "timeoutMs": 300000
   },
   "continuation": {
     "noToolContinuationLimit": 3
