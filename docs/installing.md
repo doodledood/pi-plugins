@@ -56,14 +56,3 @@ git clone git@github.com:doodledood/pi-plugins.git
 pi install /path/to/pi-plugins/packages/extensions/goal-controller
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
 ```
-
-## Future npm install shape
-
-Each extension/theme package is named for future publishing, for example:
-
-```bash
-pi install npm:@doodledood/pi-goal-controller
-pi install npm:@doodledood/pi-theme-deep-focus-pi
-```
-
-Publishing is not part of the initial setup.

@@ -10,12 +10,6 @@ From a local clone:
 pi install /path/to/pi-plugins/packages/extensions/goal-controller
 ```
 
-Future npm form:
-
-```bash
-pi install npm:@doodledood/pi-goal-controller
-```
-
 From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`:
 
 ```json

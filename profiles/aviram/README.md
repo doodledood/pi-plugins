@@ -5,7 +5,6 @@ This is a copy/merge profile for Aviram's Pi setup. It is not a blind overwrite 
 ## What is included
 
 - `settings.local.example.json`: full extension/theme setup using local paths after cloning this repo. Replace `/ABSOLUTE/PATH/TO/pi-plugins` before use.
-- `settings.npm.example.json`: future setup shape after packages are published to npm.
 - `mcp.example.json`: MCP setup template with placeholders for local wrapper paths, direct remote MCP URLs, `mcp-remote` command servers, proxy-style MCP URLs, proxy IDs, and API keys.
 - `models.example.json`: model override example.
 - `AGENTS.md` and `APPEND_SYSTEM.md`: Aviram's global instruction/profile text.

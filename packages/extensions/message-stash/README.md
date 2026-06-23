@@ -10,12 +10,6 @@ From a local clone:
 pi install /path/to/pi-plugins/packages/extensions/message-stash
 ```
 
-Future npm form:
-
-```bash
-pi install npm:@doodledood/pi-message-stash
-```
-
 From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`:
 
 ```json

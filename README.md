@@ -85,24 +85,13 @@ pi install /path/to/pi-plugins/packages/extensions/goal-controller
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
 ```
 
-## Future npm install shape
-
-Each resource package is named for future npm publishing, for example:
-
-```bash
-pi install npm:@doodledood/pi-goal-controller
-pi install npm:@doodledood/pi-theme-deep-focus-pi
-```
-
-Publishing is not part of this initial setup.
-
 ## Copy Aviram's setup
 
 See [`profiles/aviram/README.md`](profiles/aviram/README.md). The profile is a merge guide, not a blind overwrite bundle.
 
 It includes:
 
-- local-path and future-npm settings examples for extensions/theme
+- local-path settings examples for extensions/theme
 - MCP and model templates
 - extension config defaults
 - Aviram's `AGENTS.md` / `APPEND_SYSTEM.md`

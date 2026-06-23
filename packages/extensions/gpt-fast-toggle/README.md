@@ -10,12 +10,6 @@ From a local clone:
 pi install /path/to/pi-plugins/packages/extensions/gpt-fast-toggle
 ```
 
-Future npm form:
-
-```bash
-pi install npm:@doodledood/pi-gpt-fast-toggle
-```
-
 From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`:
 
 ```json
