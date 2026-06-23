@@ -17,7 +17,6 @@ function ensureNoForbiddenNames(dir = root) {
     const path = join(dir, entry);
     const rel = path.slice(root.length + 1);
     if (["node_modules", ".git"].includes(entry)) continue;
-    if (/self-compact/i.test(rel)) errors.push(`${rel}: self-compact is intentionally excluded`);
     if (["auth.json", "trust.json"].includes(entry)) errors.push(`${rel}: forbidden live Pi state file`);
     if (/mcp-oauth|sessions|mcp-cache|mcp-npx-cache|pi-debug|pi-crash/.test(rel)) errors.push(`${rel}: forbidden runtime state`);
     const st = statSync(path);

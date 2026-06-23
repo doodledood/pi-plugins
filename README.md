@@ -21,7 +21,6 @@ This repo has two jobs:
 - `skill-argument-hints` — phantom argument hints for skill commands.
 - `tool-activity-renderer` — compact rendering wrappers for built-in tools.
 
-`self-compact` is intentionally excluded.
 
 ### Skills
 
