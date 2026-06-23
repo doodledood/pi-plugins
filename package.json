@@ -1,0 +1,46 @@
+{
+  "name": "@doodledood/pi-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Aviram's Pi extensions, theme, and setup profiles.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-plugins"
+  ],
+  "workspaces": [
+    "packages/extensions/*",
+    "packages/themes/*"
+  ],
+  "pi": {
+    "extensions": [
+      "./packages/extensions/goal-controller/extensions/goal-controller/index.ts",
+      "./packages/extensions/mcp-tool-loadout/extensions/mcp-tool-loadout/index.ts",
+      "./packages/extensions/context-breakdown/extensions/context-breakdown.ts",
+      "./packages/extensions/gpt-fast-toggle/extensions/gpt-fast-toggle.ts",
+      "./packages/extensions/managed-chrome-devtools/extensions/managed-chrome-devtools.ts",
+      "./packages/extensions/message-stash/extensions/message-stash.ts",
+      "./packages/extensions/simple-statusline/extensions/simple-statusline.ts",
+      "./packages/extensions/skill-argument-hints/extensions/skill-argument-hints.ts",
+      "./packages/extensions/tool-activity-renderer/extensions/tool-activity-renderer.ts"
+    ],
+    "themes": [
+      "./packages/themes/deep-focus-pi/themes/deep-focus-pi.json"
+    ]
+  },
+  "scripts": {
+    "test": "npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout",
+    "typecheck": "npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout",
+    "verify:structure": "node scripts/verify-structure.mjs",
+    "verify": "npm run verify:structure && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typebox": "*"
+  }
+}

@@ -1,0 +1,51 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+pi-debug.log
+pi-crash.log
+
+# Secrets and local overlays
+.env
+.env.*
+*.local.json
+*.secret.json
+auth.json
+trust.json
+
+# Pi/package runtime state
+.pi/
+git/
+npm/
+sessions/
+session*/
+mcp-oauth/
+mcp.json
+mcp-onboarding.json
+mcp.json.pre-*.bak
+mcp-cache.json
+mcp-npx-cache.json
+*-stats.json
+
+# Never commit live profile state; commit templates/examples only.
+profiles/**/.pi/
+profiles/**/git/
+profiles/**/npm/
+profiles/**/mcp.json
+profiles/**/mcp-onboarding.json
+profiles/**/mcp.json.pre-*.bak
+profiles/**/auth.json
+profiles/**/settings.json
+profiles/**/models.json
+!profiles/**/*.example.json
+!profiles/**/*.template.json
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,18 @@
+{
+  "name": "@doodledood/pi-message-stash",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Single-slot draft stash for Pi input editor with keyboard shortcuts.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/message-stash.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

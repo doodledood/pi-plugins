@@ -1,0 +1,18 @@
+{
+  "name": "@doodledood/pi-simple-statusline",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aviram's ambient custom Pi footer/statusline.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/simple-statusline.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-tui": "*"
+  }
+}

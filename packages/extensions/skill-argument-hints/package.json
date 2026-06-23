@@ -1,0 +1,19 @@
+{
+  "name": "@doodledood/pi-skill-argument-hints",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Show argument-hint frontmatter as phantom hints for Pi skill commands.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/skill-argument-hints.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

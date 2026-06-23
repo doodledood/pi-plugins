@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "budgetTokens": 10000,
+  "halfLifeDays": 14,
+  "minProjectEvents": 5,
+  "prior": {},
+  "alwaysActiveMcpTools": [],
+  "excludeFromCatalog": []
+}

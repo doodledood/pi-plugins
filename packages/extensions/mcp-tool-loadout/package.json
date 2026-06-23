@@ -1,0 +1,30 @@
+{
+  "name": "@doodledood/pi-mcp-tool-loadout",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Usage-driven MCP tool loadout for Pi: compact catalog, budgeted active schemas, and wake-on-demand.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/mcp-tool-loadout/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/mcp-tool-loadout/*.test.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typebox": "*"
+  }
+}

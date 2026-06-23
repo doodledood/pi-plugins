@@ -1,0 +1,19 @@
+{
+  "name": "@doodledood/pi-tool-activity-renderer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Compact custom rendering wrappers for Pi built-in file and shell tools.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/tool-activity-renderer.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

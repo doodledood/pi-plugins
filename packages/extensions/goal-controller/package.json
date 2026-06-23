@@ -1,0 +1,31 @@
+{
+  "name": "@doodledood/pi-goal-controller",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi goal controller with model-callable goal start and checker-only completion.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/goal-controller/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/goal-controller/*.test.ts",
+    "smoke": "tsx extensions/goal-controller/smoke.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typebox": "*"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "openai/gpt-5.5:xhigh",
+    "anthropic/claude-opus-4-8:xhigh",
+    "anthropic/claude-fable-5:xhigh"
+  ],
+  "followUpMode": "all",
+  "steeringMode": "all",
+  "enableInstallTelemetry": false,
+  "theme": "deep-focus-pi",
+  "packages": [
+    "npm:pi-mcp-adapter",
+    "npm:@gotgenes/pi-subagents",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/context-breakdown",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/goal-controller",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/gpt-fast-toggle",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/managed-chrome-devtools",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/mcp-tool-loadout",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/message-stash",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/simple-statusline",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/skill-argument-hints",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/tool-activity-renderer",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/themes/deep-focus-pi"
+  ]
+}
