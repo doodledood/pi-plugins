@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheckerVerdict, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
+import { applyCheckerVerdict, loadGoalFromSession, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 const config = DEFAULT_CONFIG;
@@ -93,13 +93,39 @@ test("checker blocked verdict blocks without completing", () => {
   assert.equal(blocked.lastCheckerVerdict?.blocked, true);
 });
 
-test("no-tool continuation suppression blocks infinite loops", () => {
+test("consecutive no-tool continuations block only after configured threshold", () => {
   const started = startGoal(undefined, "finish task", config, 0);
   if (!started.ok) throw new Error("expected goal");
   const first = applyCheckerVerdict(started.goal, { decision: "continue", complete: false, reason: "not done" }, config, true);
   const second = applyCheckerVerdict(first, { decision: "continue", complete: false, reason: "still not done" }, config, false);
-  assert.equal(second.status, "blocked");
-  assert.match(second.lastTransitionReason ?? "", /no tool progress/iu);
+  const third = applyCheckerVerdict(second, { decision: "continue", complete: false, reason: "still not done" }, config, false);
+  const fourth = applyCheckerVerdict(third, { decision: "continue", complete: false, reason: "still not done" }, config, false);
+  assert.equal(second.status, "active");
+  assert.equal(second.consecutiveNoToolContinuations, 1);
+  assert.equal(third.status, "active");
+  assert.equal(third.consecutiveNoToolContinuations, 2);
+  assert.equal(fourth.status, "blocked");
+  assert.match(fourth.lastTransitionReason ?? "", /3 consecutive automatic continuation/iu);
+});
+
+test("tool progress resets consecutive no-tool continuation count", () => {
+  const started = startGoal(undefined, "finish task", config, 0);
+  if (!started.ok) throw new Error("expected goal");
+  const first = applyCheckerVerdict(started.goal, { decision: "continue", complete: false, reason: "not done" }, config, true);
+  const second = applyCheckerVerdict(first, { decision: "continue", complete: false, reason: "still not done" }, config, false);
+  const third = applyCheckerVerdict(second, { decision: "continue", complete: false, reason: "tool progress" }, config, true);
+  assert.equal(second.consecutiveNoToolContinuations, 1);
+  assert.equal(third.status, "active");
+  assert.equal(third.consecutiveNoToolContinuations, 0);
+});
+
+test("old persisted goals hydrate missing no-tool continuation count", () => {
+  const started = startGoal(undefined, "finish task", config, 0);
+  if (!started.ok) throw new Error("expected goal");
+  const legacyGoal = { ...started.goal } as Record<string, unknown>;
+  delete legacyGoal.consecutiveNoToolContinuations;
+  const loaded = loadGoalFromSession([{ type: "custom", customType: "goal-controller-state", data: { goal: legacyGoal } }]);
+  assert.equal(loaded?.consecutiveNoToolContinuations, 0);
 });
 
 test("token budget limit is not completion", () => {

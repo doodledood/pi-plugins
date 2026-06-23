@@ -3,7 +3,27 @@ import assert from "node:assert/strict";
 import { parseCheckerVerdict, PiSubprocessCheckerRunner } from "./checker.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { createGoal } from "./controller.ts";
-import type { GoalControllerConfig } from "./types.ts";
+import type { CheckerSessionContext, GoalControllerConfig } from "./types.ts";
+
+function checkerContext(sessionFile: string | undefined): CheckerSessionContext {
+  return {
+    sessionFormat: "pi-jsonl-tree",
+    sessionFile,
+    sessionUnavailableReason: sessionFile ? undefined : "in_memory_or_not_persisted",
+    currentLeafId: "leaf-1",
+    branchEntryCount: 5,
+    branchMessageCount: 3,
+    latestTurn: {
+      messageCount: 1,
+      assistantMessageCount: 1,
+      toolCallCount: 0,
+      toolResultCount: 0,
+      toolNames: [],
+      hadToolUse: false,
+      finalAssistantStopReason: "stop",
+    },
+  };
+}
 
 test("parseCheckerVerdict parses complete verdict JSON with evidence and requirements", () => {
   const verdict = parseCheckerVerdict('{"complete":true,"reason":"tests pass","evidence":["npm test exited 0"],"requirements":[{"requirement":"tests pass","status":"satisfied","evidence":"npm test exited 0"}]}');
@@ -103,10 +123,9 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   const goal = createGoal("fake goal", DEFAULT_CONFIG, 0);
   const verdict = await runner.run({
     goal,
-    transcript: "assistant: fake evidence",
+    context: checkerContext("/tmp/pi-session.jsonl"),
     config: DEFAULT_CONFIG,
     cwd: "/tmp",
-    sessionFile: "/tmp/pi-session.jsonl",
     model: {
       id: "gpt-5.5",
       name: "GPT 5.5",
@@ -135,9 +154,12 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   assert.equal(capturedArgs.includes("--exclude-tools"), true);
   assert.equal(capturedArgs[capturedArgs.indexOf("--exclude-tools") + 1], "edit,write");
   const checkerPrompt = capturedArgs.at(-1) ?? "";
-  assert.match(checkerPrompt, /Current Pi session file path:\n\/tmp\/pi-session\.jsonl/iu);
+  assert.match(checkerPrompt, /Session navigation context:/iu);
+  assert.match(checkerPrompt, /"sessionFile": "\/tmp\/pi-session\.jsonl"/iu);
+  assert.match(checkerPrompt, /"currentLeafId": "leaf-1"/iu);
+  assert.match(checkerPrompt, /Pi session files are JSONL trees/iu);
   assert.match(checkerPrompt, /Tool availability is controlled by checker\.toolMode/iu);
-  assert.match(checkerPrompt, /you may use them to inspect evidence needed for judgment/iu);
+  assert.match(checkerPrompt, /you may inspect evidence needed for judgment/iu);
   assert.match(checkerPrompt, /Do not use checker-side tools to perform omitted primary success work on the worker's behalf/iu);
 });
 
@@ -186,10 +208,9 @@ async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[
 
   await runner.run({
     goal: createGoal("fake goal", config, 0),
-    transcript: "assistant: fake evidence",
+    context: checkerContext(undefined),
     config,
     cwd: "/tmp",
-    sessionFile: undefined,
     model: undefined,
     thinkingLevel: "off",
   });

@@ -10,8 +10,6 @@
     "timeoutMs": 120000
   },
   "continuation": {
-    "suppressAfterNoToolContinuation": true,
-    "transcriptMaxChars": 80000,
-    "checkerHistoryLimit": 8
+    "noToolContinuationLimit": 3
   }
 }

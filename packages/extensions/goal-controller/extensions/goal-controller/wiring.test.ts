@@ -80,6 +80,7 @@ interface CtxOptions {
   pending?: () => boolean;
   idle?: () => boolean;
   sessionFile?: string;
+  leafId?: string | null;
   editorResult?: string;
   onEditor?: (title: string, prefill?: string) => void;
 }
@@ -110,6 +111,9 @@ function makeCtx(entries: SessionEntryLike[] = [], options: CtxOptions = {}): Ex
       getSessionFile() {
         return options.sessionFile ?? "/tmp/pi-current-session.jsonl";
       },
+      getLeafId() {
+        return options.leafId ?? entries.at(-1)?.id ?? "leaf-1";
+      },
     },
     model: { provider: "openai", id: "gpt-5.5" },
     isIdle() {
@@ -137,8 +141,8 @@ function agentEnd(text: string, toolUse = false, stopReason: "stop" | "toolUse" 
   } as unknown as AgentEndEvent;
 }
 
-function latestGoal(host: FakeHost): { goal?: string; status?: string; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } | undefined {
-  return (host.customEntries.at(-1)?.data as { goal?: { goal?: string; status?: string; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } } | undefined)?.goal;
+function latestGoal(host: FakeHost): { goal?: string; status?: string; consecutiveNoToolContinuations?: number; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } | undefined {
+  return (host.customEntries.at(-1)?.data as { goal?: { goal?: string; status?: string; consecutiveNoToolContinuations?: number; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } } | undefined)?.goal;
 }
 
 test("extension registers one model-facing goal tool and user-only lifecycle commands", () => {
@@ -181,10 +185,12 @@ test("bare goal_edit opens editor prefilled with current goal and replaces on su
   assert.equal(latestGoal(host)?.status, "active");
 });
 
-test("command start, checker not-complete continuation, and no-tool suppression are wired", async () => {
+test("command start, checker continuation, and no-tool threshold are wired", async () => {
   const host = new FakeHost();
   const checker = new FakeChecker([
     { decision: "continue", complete: false, reason: "need tests", nextTurnGuidance: "run tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
     { decision: "continue", complete: false, reason: "still no tests" },
   ]);
   activate(host, checker);
@@ -199,13 +205,53 @@ test("command start, checker not-complete continuation, and no-tool suppression 
 
   await host.handlers.agent_end?.(agentEnd("not done yet", true), ctx as ExtensionContext);
   assert.equal(checker.inputs.length, 1);
-  assert.equal(checker.inputs[0]?.sessionFile, "/tmp/pi-current-session.jsonl");
+  assert.equal(checker.inputs[0]?.context.sessionFile, "/tmp/pi-current-session.jsonl");
+  assert.equal(checker.inputs[0]?.context.currentLeafId, "leaf-1");
+  assert.equal(checker.inputs[0]?.context.latestTurn.hadToolUse, true);
+  assert.deepEqual(checker.inputs[0]?.context.latestTurn.toolNames, ["bash"]);
   assert.equal(host.sentMessages.length, 2);
   assert.match(host.sentMessages[1]?.content ?? "", /need tests/iu);
 
   await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "active");
+  assert.equal(host.sentMessages.length, 3);
+
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "active");
+  assert.equal(host.sentMessages.length, 4);
+
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
   assert.equal(latestGoal(host)?.status, "blocked");
-  assert.equal(host.sentMessages.length, 2);
+  assert.equal(host.sentMessages.length, 4);
+});
+
+test("user intervention resets pending no-tool continuation threshold", async () => {
+  const host = new FakeHost();
+  const checker = new FakeChecker([
+    { decision: "continue", complete: false, reason: "need tests", nextTurnGuidance: "run tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
+    { decision: "continue", complete: false, reason: "still no tests" },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+  await host.commandHandler?.("finish the smoke goal", ctx);
+  await host.handlers.agent_end?.(agentEnd("not done yet", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "active");
+
+  await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "I have extra context", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "active");
+  assert.equal(latestGoal(host)?.consecutiveNoToolContinuations, 0);
+
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "active");
+  assert.equal(latestGoal(host)?.consecutiveNoToolContinuations, 2);
+
+  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "blocked");
 });
 
 test("missing user success evidence continues with ask-user guidance instead of blocking", async () => {

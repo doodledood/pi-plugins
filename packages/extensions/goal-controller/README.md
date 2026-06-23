@@ -103,7 +103,7 @@ On each completed worker turn, the controller:
    - `decision: "waiting_for_user"` → automatic continuation stops until the next user-driven worker turn, then goal context resumes automatically
    - `decision: "blocked"` → goal becomes blocked and continuation stops until resumed
 
-The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives the transcript and current session file path. Its tool access is controlled by `checker.toolMode`: `inspect` (default) allows inspection while excluding obvious local mutation tools and extension tools; `transcript` disables tools; `full` is explicit opt-in for unrestricted tools. When tools are available, the checker may inspect files, logs, session artifacts, external sources, or command output when that helps judge completion. It must distinguish worker-surfaced evidence from checker-inspected evidence, and it must not use checker tools to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the transcript/state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
+The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives compact goal/session navigation context rather than a capped transcript: goal state, the current Pi session file path when available, current leaf entry id, branch/message counts, and latest-turn tool metadata. Its tool access is controlled by `checker.toolMode`: `inspect` (default) allows inspection while excluding obvious local mutation tools and extension tools; `transcript` disables tools and is degraded for session-file inspection; `full` is explicit opt-in for unrestricted tools. When tools and a persisted session file are available, the checker may inspect files, logs, session artifacts, external sources, or command output when that helps judge completion. It must distinguish worker-surfaced evidence from checker-inspected evidence, and it must not use checker tools to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the session state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
 
 ## Configuration
 
@@ -128,9 +128,7 @@ Default installed config:
     "timeoutMs": 120000
   },
   "continuation": {
-    "suppressAfterNoToolContinuation": true,
-    "transcriptMaxChars": 80000,
-    "checkerHistoryLimit": 8
+    "noToolContinuationLimit": 3
   }
 }
 ```
@@ -140,8 +138,10 @@ Budget fields are user-editable and default to unbounded. `defaultTokenBudget`, 
 `checker.toolMode` controls checker subprocess tools:
 
 - `inspect` (default): checker can inspect with built-in tools but excludes obvious local mutation tools (`edit`, `write`) and extension tools.
-- `transcript`: checker runs without tools and judges only the provided state/transcript.
+- `transcript`: checker runs without tools. This mode is degraded with the session-navigation checker design because it cannot inspect the persisted session file; prefer `inspect` unless you deliberately want no checker-side inspection.
 - `full`: checker gets unrestricted tools as an explicit opt-in; rely on the checker prompt for restraint.
+
+`continuation.noToolContinuationLimit` blocks runaway automatic continuation loops after the configured number of consecutive checker-driven continuation turns make no tool progress. The default is `3`. Tool-using turns and user/system interventions reset the count.
 
 `inherit` means the checker uses the current Pi session model or thinking level when possible. Set explicit values, for example:
 
@@ -184,6 +184,7 @@ To roll back, add that package entry back to `packages`, remove or disable this 
 - Single active non-terminal goal per session.
 - No hard goal-quality enforcement.
 - No model-callable goal update/replace/clear/pause/resume/complete.
-- No worker progress tool; progress is ordinary transcript text/evidence.
+- No worker progress tool; progress is ordinary assistant responses and tool-result evidence in the session.
 - Checker is tool-assisted but not a worker substitute. Default `inspect` mode allows inspection but excludes obvious mutation tools and extension tools; `full` is opt-in. The checker should not run omitted primary verification work such as required test/build/eval/deploy steps on the worker's behalf.
+- In-memory or otherwise unpersisted sessions provide degraded checker evidence because there is no session file for deeper checker inspection.
 - Checker `waiting_for_user` is a stop-for-input state, not terminal completion; the next user-driven turn resumes goal context automatically.

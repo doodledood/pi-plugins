@@ -21,7 +21,7 @@ test("loadConfig merges valid user overrides", () => {
       defaultTurnBudget: 9,
       defaultTimeBudgetSeconds: 456,
       checker: { model: "openai/gpt-5.5", toolMode: "transcript", thinking: "xhigh", timeoutMs: 77_000 },
-      continuation: { suppressAfterNoToolContinuation: false, transcriptMaxChars: 42_000, checkerHistoryLimit: 3 },
+      continuation: { noToolContinuationLimit: 5 },
     }),
   );
   const loaded = loadConfig(path);
@@ -32,9 +32,7 @@ test("loadConfig merges valid user overrides", () => {
   assert.equal(loaded.config.checker.toolMode, "transcript");
   assert.equal(loaded.config.checker.thinking, "xhigh");
   assert.equal(loaded.config.checker.timeoutMs, 77_000);
-  assert.equal(loaded.config.continuation.suppressAfterNoToolContinuation, false);
-  assert.equal(loaded.config.continuation.transcriptMaxChars, 42_000);
-  assert.equal(loaded.config.continuation.checkerHistoryLimit, 3);
+  assert.equal(loaded.config.continuation.noToolContinuationLimit, 5);
 });
 
 test("loadConfig falls back safely on invalid JSON", () => {
@@ -52,20 +50,18 @@ test("loadConfig warns and ignores invalid field values", () => {
     JSON.stringify({
       defaultTokenBudget: -1,
       checker: { model: "", toolMode: "reckless", thinking: "turbo", timeoutMs: 0 },
-      continuation: { suppressAfterNoToolContinuation: "yes", transcriptMaxChars: -10, checkerHistoryLimit: 0 },
+      continuation: { noToolContinuationLimit: 0 },
     }),
   );
   const loaded = loadConfig(path);
   assert.match(loaded.warning ?? "", /defaultTokenBudget/iu);
   assert.match(loaded.warning ?? "", /checker\.model/iu);
   assert.match(loaded.warning ?? "", /checker\.toolMode/iu);
-  assert.match(loaded.warning ?? "", /continuation\.transcriptMaxChars/iu);
+  assert.match(loaded.warning ?? "", /continuation\.noToolContinuationLimit/iu);
   assert.equal(loaded.config.defaultTokenBudget, DEFAULT_CONFIG.defaultTokenBudget);
   assert.equal(loaded.config.checker.model, DEFAULT_CONFIG.checker.model);
   assert.equal(loaded.config.checker.toolMode, DEFAULT_CONFIG.checker.toolMode);
   assert.equal(loaded.config.checker.thinking, DEFAULT_CONFIG.checker.thinking);
   assert.equal(loaded.config.checker.timeoutMs, DEFAULT_CONFIG.checker.timeoutMs);
-  assert.equal(loaded.config.continuation.suppressAfterNoToolContinuation, DEFAULT_CONFIG.continuation.suppressAfterNoToolContinuation);
-  assert.equal(loaded.config.continuation.transcriptMaxChars, DEFAULT_CONFIG.continuation.transcriptMaxChars);
-  assert.equal(loaded.config.continuation.checkerHistoryLimit, DEFAULT_CONFIG.continuation.checkerHistoryLimit);
+  assert.equal(loaded.config.continuation.noToolContinuationLimit, DEFAULT_CONFIG.continuation.noToolContinuationLimit);
 });

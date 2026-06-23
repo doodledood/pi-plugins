@@ -3,8 +3,7 @@ import { join } from "node:path";
 import type { GoalControllerConfig } from "./types.ts";
 
 const DEFAULT_CHECKER_TIMEOUT_MS = 120_000;
-const DEFAULT_TRANSCRIPT_MAX_CHARS = 80_000;
-const DEFAULT_CHECKER_HISTORY_LIMIT = 8;
+const DEFAULT_NO_TOOL_CONTINUATION_LIMIT = 3;
 
 export const CONFIG_PATH = join(
   process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
@@ -20,9 +19,7 @@ export const DEFAULT_CONFIG: GoalControllerConfig = {
     timeoutMs: DEFAULT_CHECKER_TIMEOUT_MS,
   },
   continuation: {
-    suppressAfterNoToolContinuation: true,
-    transcriptMaxChars: DEFAULT_TRANSCRIPT_MAX_CHARS,
-    checkerHistoryLimit: DEFAULT_CHECKER_HISTORY_LIMIT,
+    noToolContinuationLimit: DEFAULT_NO_TOOL_CONTINUATION_LIMIT,
   },
 };
 
@@ -68,22 +65,10 @@ function mergeConfig(raw: Record<string, unknown>): { config: GoalControllerConf
         timeoutMs: positiveInteger(checker?.timeoutMs, DEFAULT_CONFIG.checker.timeoutMs, "checker.timeoutMs", warnings),
       },
       continuation: {
-        suppressAfterNoToolContinuation: booleanOrDefault(
-          continuation?.suppressAfterNoToolContinuation,
-          DEFAULT_CONFIG.continuation.suppressAfterNoToolContinuation,
-          "continuation.suppressAfterNoToolContinuation",
-          warnings,
-        ),
-        transcriptMaxChars: positiveInteger(
-          continuation?.transcriptMaxChars,
-          DEFAULT_CONFIG.continuation.transcriptMaxChars,
-          "continuation.transcriptMaxChars",
-          warnings,
-        ),
-        checkerHistoryLimit: positiveInteger(
-          continuation?.checkerHistoryLimit,
-          DEFAULT_CONFIG.continuation.checkerHistoryLimit,
-          "continuation.checkerHistoryLimit",
+        noToolContinuationLimit: positiveInteger(
+          continuation?.noToolContinuationLimit,
+          DEFAULT_CONFIG.continuation.noToolContinuationLimit,
+          "continuation.noToolContinuationLimit",
           warnings,
         ),
       },
@@ -148,13 +133,6 @@ function thinkingOrDefault(
   if (value === "inherit" || value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
     return value;
   }
-  warnings.push(field);
-  return defaultValue;
-}
-
-function booleanOrDefault(value: unknown, defaultValue: boolean, field: string, warnings: string[]): boolean {
-  if (value === undefined || value === null) return defaultValue;
-  if (typeof value === "boolean") return value;
   warnings.push(field);
   return defaultValue;
 }

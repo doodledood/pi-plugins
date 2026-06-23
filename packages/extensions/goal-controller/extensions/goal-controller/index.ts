@@ -16,7 +16,7 @@ import {
   updateUsage,
 } from "./controller.ts";
 import { PiSubprocessCheckerRunner, type CheckerRunner } from "./checker.ts";
-import { buildActiveGoalSystemPrompt, buildContinuationPrompt, buildTranscript, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
+import { buildActiveGoalSystemPrompt, buildCheckerSessionContext, buildContinuationPrompt, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
 import type { GoalControllerHost } from "./host.ts";
 import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike } from "./types.ts";
 
@@ -39,6 +39,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   let loadedConfig: LoadedConfig = loadConfig();
   let activeGoal: ActiveGoal | undefined;
   let checkingGoalId: string | undefined;
+  let pendingContinuationGoalId: string | undefined;
+  let pendingContinuationPrompt: string | undefined;
 
   const persistGoal = (goal: ActiveGoal | undefined): void => {
     pi.appendEntry<GoalStateEntryData>(STATE_ENTRY_TYPE, { goal: goal ?? null });
@@ -55,6 +57,11 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   const reloadConfig = (ctx?: ExtensionContext): void => {
     loadedConfig = loadConfig();
     if (loadedConfig.warning && ctx) ctx.ui.notify(loadedConfig.warning, "warning");
+  };
+
+  const clearPendingContinuation = (): void => {
+    pendingContinuationGoalId = undefined;
+    pendingContinuationPrompt = undefined;
   };
 
   pi.registerTool({
@@ -75,6 +82,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       }
 
       activeGoal = result.goal;
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(`Goal started: ${activeGoal.goal}`, "info");
@@ -104,6 +112,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       }
 
       activeGoal = result.goal;
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(`Goal started: ${activeGoal.goal}`, "info");
@@ -124,6 +133,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
       activeGoal = pauseGoal(activeGoal, "paused by user");
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify("Goal paused.", "info");
@@ -143,6 +153,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
       activeGoal = resumeGoal(activeGoal);
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify("Goal resumed.", "info");
@@ -182,6 +193,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
       activeGoal = editGoalText(activeGoal, nextGoalText);
       checkingGoalId = undefined;
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(`Goal edited and resumed: ${activeGoal.goal}`, "info");
@@ -201,6 +213,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       persistGoal(cleared);
       activeGoal = undefined;
       checkingGoalId = undefined;
+      clearPendingContinuation();
       setStatus(ctx);
       ctx.ui.notify("Goal cleared.", "warning");
     },
@@ -210,6 +223,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     reloadConfig(ctx);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch());
     checkingGoalId = undefined;
+    clearPendingContinuation();
     setStatus(ctx);
   });
 
@@ -217,6 +231,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     reloadConfig(ctx);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch());
     checkingGoalId = undefined;
+    clearPendingContinuation();
     setStatus(ctx);
   });
 
@@ -224,16 +239,30 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     if (activeGoal) persistGoal(activeGoal);
     ctx.ui.setStatus(STATUS_KEY, undefined);
     checkingGoalId = undefined;
+    clearPendingContinuation();
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!activeGoal) return;
     if (activeGoal.status === "waiting_for_user") {
       activeGoal = resumeGoal(activeGoal);
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
     }
     if (activeGoal.status !== "active") return;
+
+    const isPendingAutomaticContinuation =
+      activeGoal.awaitingContinuationTurn &&
+      pendingContinuationGoalId === activeGoal.id &&
+      pendingContinuationPrompt === event.prompt;
+    if (activeGoal.awaitingContinuationTurn && !isPendingAutomaticContinuation) {
+      activeGoal = resumeGoal(activeGoal);
+      persistGoal(activeGoal);
+      setStatus(ctx);
+    }
+    clearPendingContinuation();
+
     return { systemPrompt: `${event.systemPrompt}\n\n${buildActiveGoalSystemPrompt(activeGoal)}` };
   });
 
@@ -246,6 +275,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     const finalAssistant = findFinalAssistantMessage(event.messages);
     if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
       activeGoal = pauseGoal(activeGoal, finalAssistant.stopReason === "aborted" ? "paused after interruption" : `paused after agent error${finalAssistant.errorMessage ? `: ${finalAssistant.errorMessage}` : ""}`);
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal paused.", "warning");
@@ -254,6 +284,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
     activeGoal = maybeApplyBudgetLimit(activeGoal);
     if (activeGoal.status === "budget_limited") {
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal budget reached.", "warning");
@@ -261,6 +292,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     }
 
     if (ctx.hasPendingMessages()) {
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       return;
@@ -273,13 +305,18 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     setStatus(ctx);
 
     try {
-      const transcript = buildTranscript(ctx.sessionManager.getBranch(), loadedConfig.config.continuation.transcriptMaxChars);
+      const context = buildCheckerSessionContext(
+        ctx.sessionManager.getBranch(),
+        ctx.sessionManager.getSessionFile(),
+        ctx.sessionManager.getLeafId(),
+        event.messages as MessageLike[],
+        turnHadToolUse,
+      );
       const verdict = await checkerRunner.run({
         goal: activeGoal,
-        transcript,
+        context,
         config: loadedConfig.config,
         cwd: ctx.cwd,
-        sessionFile: ctx.sessionManager.getSessionFile(),
         model: ctx.model,
         thinkingLevel: pi.getThinkingLevel(),
         signal: ctx.signal,
@@ -291,29 +328,35 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       setStatus(ctx);
 
       if (activeGoal.status === "complete") {
+        clearPendingContinuation();
         ctx.ui.notify(`Goal complete: ${verdict.reason}`, "info");
         return;
       }
       if (activeGoal.status === "waiting_for_user") {
+        clearPendingContinuation();
         ctx.ui.notify(`Goal waiting for user input: ${activeGoal.lastTransitionReason ?? verdict.reason}`, "info");
         return;
       }
       if (activeGoal.status === "blocked") {
+        clearPendingContinuation();
         ctx.ui.notify(`Goal blocked: ${activeGoal.lastTransitionReason ?? verdict.reason}`, "warning");
         return;
       }
       if (activeGoal.status === "active") {
         if (ctx.hasPendingMessages()) {
+          clearPendingContinuation();
           persistGoal(activeGoal);
           setStatus(ctx);
           return;
         }
-        await sendContinuation(pi, ctx, activeGoal, verdict);
+        pendingContinuationPrompt = await sendContinuation(pi, ctx, activeGoal, verdict);
+        pendingContinuationGoalId = activeGoal.id;
       }
     } catch (error) {
       if (!activeGoal || activeGoal.id !== goalId) return;
       const message = error instanceof Error ? error.message : String(error);
       activeGoal = pauseGoal(activeGoal, `checker failed: ${message}`);
+      clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
       ctx.ui.notify(`Goal checker failed and paused the goal: ${message}`, "error");
@@ -327,8 +370,10 @@ async function sendGoalKickoff(pi: GoalControllerHost, ctx: ExtensionContext, go
   await sendUserMessage(pi, ctx, `Goal mode is active. Work toward this goal until the independent checker marks it complete:\n\n<goal_objective>\n${goal.goal}\n</goal_objective>\n\nSurface concrete verification evidence as you work. Do not claim completion authority; the checker owns completion.`);
 }
 
-async function sendContinuation(pi: GoalControllerHost, ctx: ExtensionContext, goal: ActiveGoal, verdict: CheckerVerdict): Promise<void> {
-  await sendUserMessage(pi, ctx, buildContinuationPrompt(goal, verdict));
+async function sendContinuation(pi: GoalControllerHost, ctx: ExtensionContext, goal: ActiveGoal, verdict: CheckerVerdict): Promise<string> {
+  const prompt = buildContinuationPrompt(goal, verdict);
+  await sendUserMessage(pi, ctx, prompt);
+  return prompt;
 }
 
 async function sendUserMessage(pi: GoalControllerHost, ctx: ExtensionContext, prompt: string): Promise<void> {

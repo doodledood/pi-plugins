@@ -1,13 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ActiveGoal, CheckerDecision, CheckerVerdict, GoalControllerConfig, ThinkingLevel } from "./types.ts";
+import type { ActiveGoal, CheckerDecision, CheckerSessionContext, CheckerVerdict, GoalControllerConfig, ThinkingLevel } from "./types.ts";
 import { buildCheckerPrompt } from "./prompts.ts";
 
 export interface CheckerRunInput {
   goal: ActiveGoal;
-  transcript: string;
+  context: CheckerSessionContext;
   config: GoalControllerConfig;
   cwd: string;
-  sessionFile: string | undefined;
   model: ExtensionContext["model"];
   thinkingLevel: ThinkingLevel;
   signal?: AbortSignal;
@@ -21,7 +20,7 @@ export class PiSubprocessCheckerRunner implements CheckerRunner {
   public constructor(private readonly pi: Pick<ExtensionAPI, "exec">) {}
 
   public async run(input: CheckerRunInput): Promise<CheckerVerdict> {
-    const prompt = buildCheckerPrompt(input.goal, input.transcript, input.sessionFile);
+    const prompt = buildCheckerPrompt(input.goal, input.context);
     const args = checkerArgs(input, prompt);
     const result = await this.pi.exec("pi", args, {
       cwd: input.cwd,

@@ -6,6 +6,25 @@ export type CheckerToolMode = "transcript" | "inspect" | "full";
 export type CheckerModelSetting = "inherit" | string;
 export type CheckerThinkingSetting = "inherit" | ThinkingLevel;
 
+export interface CheckerSessionContext {
+  sessionFormat: "pi-jsonl-tree";
+  sessionFile?: string;
+  sessionUnavailableReason?: "in_memory_or_not_persisted";
+  currentLeafId: string | null;
+  branchEntryCount: number;
+  branchMessageCount: number;
+  latestTurn: {
+    messageCount: number;
+    assistantMessageCount: number;
+    toolCallCount: number;
+    toolResultCount: number;
+    toolNames: string[];
+    hadToolUse: boolean;
+    finalAssistantStopReason?: string;
+    finalAssistantErrorMessage?: string;
+  };
+}
+
 export interface GoalControllerConfig {
   defaultTokenBudget?: number;
   defaultTurnBudget?: number;
@@ -18,9 +37,7 @@ export interface GoalControllerConfig {
     timeoutMs: number;
   };
   continuation: {
-    suppressAfterNoToolContinuation: boolean;
-    transcriptMaxChars: number;
-    checkerHistoryLimit: number;
+    noToolContinuationLimit: number;
   };
 }
 
@@ -66,6 +83,7 @@ export interface ActiveGoal {
   lastCheckerVerdict?: CheckerHistoryEntry;
   checkerHistory: CheckerHistoryEntry[];
   awaitingContinuationTurn: boolean;
+  consecutiveNoToolContinuations: number;
   lastTransitionReason?: string;
 }
 
@@ -110,6 +128,8 @@ export interface MessageLike {
 
 export interface SessionEntryLike {
   type?: string;
+  id?: string;
+  parentId?: string | null;
   customType?: string;
   data?: unknown;
   message?: MessageLike;

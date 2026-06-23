@@ -65,6 +65,7 @@ export function createGoal(goal: string, config: GoalControllerConfig, baselineT
     timeBudgetSeconds: config.defaultTimeBudgetSeconds,
     checkerHistory: [],
     awaitingContinuationTurn: false,
+    consecutiveNoToolContinuations: 0,
   };
 }
 
@@ -85,6 +86,7 @@ export function transitionGoal(goal: ActiveGoal, status: GoalStatus, reason: str
     updatedAt: now,
     lastTransitionReason: reason,
     awaitingContinuationTurn: status === "active" || status === "checking" ? goal.awaitingContinuationTurn : false,
+    consecutiveNoToolContinuations: status === "active" || status === "checking" ? nonNegativeIntegerOrZero(goal.consecutiveNoToolContinuations) : 0,
   };
 }
 
@@ -104,7 +106,7 @@ export function applyCheckerVerdict(
     checkedAt: now,
     iteration: goal.checkerIteration + 1,
   };
-  const checkerHistory = [...goal.checkerHistory, historyEntry].slice(-config.continuation.checkerHistoryLimit);
+  const checkerHistory = [...goal.checkerHistory, historyEntry];
   const base: ActiveGoal = {
     ...goal,
     checkerIteration: goal.checkerIteration + 1,
@@ -118,6 +120,7 @@ export function applyCheckerVerdict(
       ...base,
       status: "complete",
       awaitingContinuationTurn: false,
+      consecutiveNoToolContinuations: 0,
       lastTransitionReason: verdict.reason,
     };
   }
@@ -127,6 +130,7 @@ export function applyCheckerVerdict(
       ...base,
       status: "waiting_for_user",
       awaitingContinuationTurn: false,
+      consecutiveNoToolContinuations: 0,
       lastTransitionReason: verdict.reason,
     };
   }
@@ -136,16 +140,19 @@ export function applyCheckerVerdict(
       ...base,
       status: "blocked",
       awaitingContinuationTurn: false,
+      consecutiveNoToolContinuations: 0,
       lastTransitionReason: verdict.reason,
     };
   }
 
-  if (config.continuation.suppressAfterNoToolContinuation && base.awaitingContinuationTurn && !turnHadToolUse) {
+  const nextNoToolContinuations = base.awaitingContinuationTurn && !turnHadToolUse ? base.consecutiveNoToolContinuations + 1 : 0;
+  if (nextNoToolContinuations >= config.continuation.noToolContinuationLimit) {
     return {
       ...base,
       status: "blocked",
       awaitingContinuationTurn: false,
-      lastTransitionReason: "Checker still found the goal incomplete after an automatic continuation made no tool progress.",
+      consecutiveNoToolContinuations: 0,
+      lastTransitionReason: `Checker still found the goal incomplete after ${nextNoToolContinuations} consecutive automatic continuation turn(s) made no tool progress.`,
     };
   }
 
@@ -153,6 +160,7 @@ export function applyCheckerVerdict(
     ...base,
     status: "active",
     awaitingContinuationTurn: true,
+    consecutiveNoToolContinuations: nextNoToolContinuations,
     iteration: base.iteration + 1,
     lastTransitionReason: verdict.reason,
   };
@@ -183,7 +191,11 @@ export function clearGoal(goal: ActiveGoal | undefined, now = Date.now()): Activ
 }
 
 export function resumeGoal(goal: ActiveGoal, now = Date.now()): ActiveGoal {
-  return transitionGoal(goal, "active", "resumed by user", now);
+  return {
+    ...transitionGoal(goal, "active", "resumed by user", now),
+    awaitingContinuationTurn: false,
+    consecutiveNoToolContinuations: 0,
+  };
 }
 
 export function editGoalText(goal: ActiveGoal, goalText: string, now = Date.now()): ActiveGoal {
@@ -195,6 +207,7 @@ export function editGoalText(goal: ActiveGoal, goalText: string, now = Date.now(
     checkerHistory: [],
     lastCheckerVerdict: undefined,
     awaitingContinuationTurn: false,
+    consecutiveNoToolContinuations: 0,
   };
 }
 
@@ -222,7 +235,15 @@ export function loadGoalFromSession(entries: SessionEntryLike[]): ActiveGoal | u
     .pop();
   const data = entry?.data as GoalStateEntryData | undefined;
   if (!isGoal(data?.goal)) return undefined;
-  return data.goal.status === "cleared" ? undefined : data.goal;
+  const goal = hydrateGoal(data.goal);
+  return goal.status === "cleared" ? undefined : goal;
+}
+
+function hydrateGoal(goal: ActiveGoal): ActiveGoal {
+  return {
+    ...goal,
+    consecutiveNoToolContinuations: nonNegativeIntegerOrZero(goal.consecutiveNoToolContinuations),
+  };
 }
 
 export function isGoal(value: unknown): value is ActiveGoal {
@@ -241,8 +262,14 @@ export function isGoal(value: unknown): value is ActiveGoal {
     typeof goal.turnsUsed === "number" &&
     typeof goal.timeUsedSeconds === "number" &&
     Array.isArray(goal.checkerHistory) &&
-    typeof goal.awaitingContinuationTurn === "boolean"
+    typeof goal.awaitingContinuationTurn === "boolean" &&
+    (goal.consecutiveNoToolContinuations === undefined || typeof goal.consecutiveNoToolContinuations === "number")
   );
+}
+
+function nonNegativeIntegerOrZero(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
 }
 
 function isGoalStatus(value: unknown): value is GoalStatus {
