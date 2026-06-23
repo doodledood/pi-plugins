@@ -12,6 +12,17 @@ function readJson(path) {
   catch (error) { errors.push(`${path}: invalid JSON (${error.message})`); return undefined; }
 }
 function mustExist(path) { if (!existsSync(path)) errors.push(`${path}: missing`); }
+function walkFiles(dir, predicate, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (["node_modules", ".git"].includes(entry)) continue;
+    const st = statSync(path);
+    if (st.isDirectory()) walkFiles(path, predicate, out);
+    else if (predicate(path)) out.push(path);
+  }
+  return out;
+}
 function ensureNoForbiddenNames(dir = root) {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
@@ -30,6 +41,7 @@ function verifyPackage(pkgDir, resourceType, expectedPath) {
   if (!pkg) return;
   if (!pkg.name || !pkg.version || pkg.type !== "module") errors.push(`${pkgDir}: package metadata incomplete`);
   if (!pkg.keywords?.includes("pi-package")) errors.push(`${pkgDir}: missing pi-package keyword`);
+  if (Array.isArray(pkg.pi?.skills) && pkg.pi.skills.length > 0) errors.push(`${pkgDir}: package must not declare pi.skills`);
   const piPaths = pkg.pi?.[resourceType];
   if (!Array.isArray(piPaths) || !piPaths.includes(expectedPath)) errors.push(`${pkgDir}: missing pi.${resourceType} ${expectedPath}`);
   mustExist(join(pkgDir, expectedPath));
@@ -49,7 +61,8 @@ if (existsSync(join(root, "packages", "skills"))) errors.push("packages/skills: 
 if (rootPkg?.pi?.skills && rootPkg.pi.skills.length > 0) errors.push("root package.json must not declare pi.skills");
 for (const name of expectedThemes) verifyPackage(join(root, "packages", "themes", name), "themes", `./themes/${name}.json`);
 
-for (const path of ["profiles/aviram/settings.local.example.json", "profiles/aviram/settings.npm.example.json", "profiles/aviram/mcp.example.json", "profiles/aviram/models.example.json", "packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]) readJson(join(root, path));
+for (const path of walkFiles(join(root, "packages"), (p) => p.endsWith(".json"))) readJson(path);
+for (const path of walkFiles(join(root, "profiles"), (p) => p.endsWith(".json"))) readJson(path);
 ensureNoForbiddenNames();
 
 if (errors.length) {

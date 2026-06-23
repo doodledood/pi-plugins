@@ -120,7 +120,7 @@ orders the set, and as you use tools the prior washes out.
 
 ## Files & state
 
-- `~/.pi/agent/extensions/mcp-tool-loadout/` — this extension (auto-loaded; `index.ts` entry).
+- Installed package source location depends on install source: your local package path, Pi's git package cache, or Pi's npm package cache. In this repo, the development package lives at `packages/extensions/mcp-tool-loadout/` and its extension entry is `extensions/mcp-tool-loadout/index.ts`.
 - `~/.pi/agent/mcp-tool-loadout.json` — tunables (optional).
 - `~/.pi/agent/mcp-tool-loadout-stats.json` — usage events keyed by repo name (auto-created); the global signal is the pool of all repos' buckets.
 - Reads `~/.pi/agent/mcp-cache.json` (the adapter's metadata cache) for the full tool universe.
@@ -139,9 +139,9 @@ It loads on the next `/reload` or Pi restart. To disable without uninstalling, s
 ## Development
 
 ```bash
-cd ~/.pi/agent/extensions/mcp-tool-loadout
+cd /path/to/pi-plugins/packages/extensions/mcp-tool-loadout
 npm run typecheck   # tsc --noEmit
-npm run test        # tsx --test *.test.ts
+npm run test        # tsx --test extensions/mcp-tool-loadout/*.test.ts
 ```
 
 Logic lives in pure modules (`config`, `mcp-detect`, `stats`, `select`, `catalog`,
