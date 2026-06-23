@@ -229,14 +229,19 @@ export function goalSummary(goal: ActiveGoal | undefined): string {
     .join("\n");
 }
 
-export function loadGoalFromSession(entries: SessionEntryLike[]): ActiveGoal | undefined {
+export function loadGoalFromSession(
+  entries: SessionEntryLike[],
+  interruptedCheckingReason = "checker interrupted during session reload; run /goal_resume to continue",
+): ActiveGoal | undefined {
   const entry = entries
     .filter((candidate) => candidate.type === "custom" && candidate.customType === "goal-controller-state")
     .pop();
   const data = entry?.data as GoalStateEntryData | undefined;
   if (!isGoal(data?.goal)) return undefined;
   const goal = hydrateGoal(data.goal);
-  return goal.status === "cleared" ? undefined : goal;
+  if (goal.status === "cleared") return undefined;
+  if (goal.status === "checking") return pauseGoal(goal, interruptedCheckingReason);
+  return goal;
 }
 
 function hydrateGoal(goal: ActiveGoal): ActiveGoal {

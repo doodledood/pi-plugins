@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { loadConfig, type LoadedConfig } from "./config.ts";
@@ -22,6 +23,22 @@ import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike } from
 
 const STATUS_KEY = "goal-controller";
 const STATE_ENTRY_TYPE = "goal-controller-state";
+const CHECKER_STATUS_INTERVAL_MS = 1_000;
+const CHECKER_STATUS_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+export interface CheckerStatusRuntime {
+  startedAt: number;
+  timeoutMs: number;
+  frame: string;
+}
+
+interface LiveCheckerRun extends CheckerStatusRuntime {
+  runId: string;
+  goalId: string;
+  controller: AbortController;
+  timer?: ReturnType<typeof setInterval>;
+  frameIndex: number;
+}
 
 const goalSchema = Type.Object({
   goal: Type.String({
@@ -38,7 +55,7 @@ export default function goalController(pi: ExtensionAPI): void {
 export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): void {
   let loadedConfig: LoadedConfig = loadConfig();
   let activeGoal: ActiveGoal | undefined;
-  let checkingGoalId: string | undefined;
+  let checkerRun: LiveCheckerRun | undefined;
   let pendingContinuationGoalId: string | undefined;
   let pendingContinuationPrompt: string | undefined;
 
@@ -51,7 +68,55 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       ctx.ui.setStatus(STATUS_KEY, undefined);
       return;
     }
-    ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal));
+    ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal, checkerRuntimeFor(activeGoal)));
+  };
+
+  const checkerRuntimeFor = (goal: ActiveGoal): CheckerStatusRuntime | undefined => {
+    if (goal.status !== "checking" || !checkerRun || checkerRun.goalId !== goal.id) return undefined;
+    return {
+      startedAt: checkerRun.startedAt,
+      timeoutMs: checkerRun.timeoutMs,
+      frame: checkerRun.frame,
+    };
+  };
+
+  const stopCheckerStatusTimer = (run: LiveCheckerRun | undefined): void => {
+    if (run?.timer !== undefined) {
+      clearInterval(run.timer);
+      run.timer = undefined;
+    }
+  };
+
+  const resetCheckerRuntime = (run = checkerRun, abort = false): void => {
+    if (!run) return;
+    if (abort) run.controller.abort();
+    stopCheckerStatusTimer(run);
+    if (checkerRun === run) checkerRun = undefined;
+  };
+
+  const startCheckerRun = (ctx: ExtensionContext, goalId: string): LiveCheckerRun => {
+    const run: LiveCheckerRun = {
+      runId: randomUUID(),
+      goalId,
+      controller: new AbortController(),
+      startedAt: Date.now(),
+      timeoutMs: loadedConfig.config.checker.timeoutMs,
+      frame: CHECKER_STATUS_FRAMES[0],
+      frameIndex: 0,
+    };
+    checkerRun = run;
+    setStatus(ctx);
+    run.timer = setInterval(() => {
+      if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) {
+        stopCheckerStatusTimer(run);
+        return;
+      }
+      run.frameIndex = (run.frameIndex + 1) % CHECKER_STATUS_FRAMES.length;
+      run.frame = CHECKER_STATUS_FRAMES[run.frameIndex] ?? CHECKER_STATUS_FRAMES[0];
+      setStatus(ctx);
+    }, CHECKER_STATUS_INTERVAL_MS);
+    run.timer.unref?.();
+    return run;
   };
 
   const reloadConfig = (ctx?: ExtensionContext): void => {
@@ -128,11 +193,13 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         ctx.ui.notify("Usage: /goal_pause", "warning");
         return;
       }
-      if (!activeGoal || (activeGoal.status !== "active" && activeGoal.status !== "waiting_for_user")) {
-        ctx.ui.notify("No active or waiting goal can be paused.", "warning");
+      if (!activeGoal || (activeGoal.status !== "active" && activeGoal.status !== "waiting_for_user" && activeGoal.status !== "checking")) {
+        ctx.ui.notify("No active, waiting, or checking goal can be paused.", "warning");
         return;
       }
-      activeGoal = pauseGoal(activeGoal, "paused by user");
+      const wasChecking = activeGoal.status === "checking";
+      if (wasChecking) resetCheckerRuntime(checkerRun, true);
+      activeGoal = pauseGoal(activeGoal, wasChecking ? "checker cancelled and goal paused by user" : "paused by user");
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
@@ -170,7 +237,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
       if (activeGoal.status === "checking") {
-        ctx.ui.notify("Goal is being checked right now; wait for the checker result before editing.", "warning");
+        ctx.ui.notify("Goal is being checked right now; use /goal_pause to cancel and pause it, or /goal_clear to cancel and clear it before editing.", "warning");
         return;
       }
 
@@ -192,7 +259,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       }
 
       activeGoal = editGoalText(activeGoal, nextGoalText);
-      checkingGoalId = undefined;
+      resetCheckerRuntime(checkerRun, true);
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
@@ -209,10 +276,10 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         ctx.ui.notify("Usage: /goal_clear", "warning");
         return;
       }
+      if (activeGoal?.status === "checking") resetCheckerRuntime(checkerRun, true);
       const cleared = clearGoal(activeGoal);
       persistGoal(cleared);
       activeGoal = undefined;
-      checkingGoalId = undefined;
       clearPendingContinuation();
       setStatus(ctx);
       ctx.ui.notify("Goal cleared.", "warning");
@@ -221,24 +288,26 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
   pi.on("session_start", (_event, ctx) => {
     reloadConfig(ctx);
-    activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch());
-    checkingGoalId = undefined;
+    resetCheckerRuntime(checkerRun, true);
+    activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session reload; run /goal_resume to continue");
+    if (activeGoal?.lastTransitionReason?.includes("session reload")) persistGoal(activeGoal);
     clearPendingContinuation();
     setStatus(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
     reloadConfig(ctx);
-    activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch());
-    checkingGoalId = undefined;
+    resetCheckerRuntime(checkerRun, true);
+    activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session navigation; run /goal_resume to continue");
+    if (activeGoal?.lastTransitionReason?.includes("session navigation")) persistGoal(activeGoal);
     clearPendingContinuation();
     setStatus(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    if (activeGoal) persistGoal(activeGoal);
+    resetCheckerRuntime(checkerRun, true);
+    if (activeGoal) persistGoal(activeGoal.status === "checking" ? pauseGoal(activeGoal, "checker interrupted by session shutdown; run /goal_resume to continue") : activeGoal);
     ctx.ui.setStatus(STATUS_KEY, undefined);
-    checkingGoalId = undefined;
     clearPendingContinuation();
   });
 
@@ -268,7 +337,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
   pi.on("agent_end", async (event, ctx) => {
     if (!activeGoal || activeGoal.status !== "active") return;
-    if (checkingGoalId === activeGoal.id) return;
+    if (checkerRun?.goalId === activeGoal.id) return;
 
     const goalId = activeGoal.id;
     activeGoal = updateUsage(activeGoal, currentTokenTotal(ctx), Date.now(), true);
@@ -300,9 +369,11 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
     const turnHadToolUse = eventTurnHadToolUse(event);
     activeGoal = markChecking(activeGoal);
-    checkingGoalId = goalId;
     persistGoal(activeGoal);
-    setStatus(ctx);
+    const run = startCheckerRun(ctx, goalId);
+    const forwardAbort = (): void => run.controller.abort();
+    if (ctx.signal?.aborted) forwardAbort();
+    else ctx.signal?.addEventListener("abort", forwardAbort, { once: true });
 
     try {
       const context = buildCheckerSessionContext(
@@ -319,10 +390,10 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         cwd: ctx.cwd,
         model: ctx.model,
         thinkingLevel: pi.getThinkingLevel(),
-        signal: ctx.signal,
+        signal: run.controller.signal,
       });
 
-      if (!activeGoal || activeGoal.id !== goalId) return;
+      if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
       activeGoal = applyCheckerVerdict(activeGoal, verdict, loadedConfig.config, turnHadToolUse);
       persistGoal(activeGoal);
       setStatus(ctx);
@@ -353,7 +424,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         pendingContinuationGoalId = activeGoal.id;
       }
     } catch (error) {
-      if (!activeGoal || activeGoal.id !== goalId) return;
+      if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
       const message = error instanceof Error ? error.message : String(error);
       activeGoal = pauseGoal(activeGoal, `checker failed: ${message}`);
       clearPendingContinuation();
@@ -361,7 +432,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       setStatus(ctx);
       ctx.ui.notify(`Goal checker failed and paused the goal: ${message}`, "error");
     } finally {
-      if (checkingGoalId === goalId) checkingGoalId = undefined;
+      ctx.signal?.removeEventListener("abort", forwardAbort);
+      if (checkerRun === run) resetCheckerRuntime(run, false);
     }
   });
 }
@@ -425,14 +497,18 @@ function findFinalAssistantMessage(messages: unknown[]): { stopReason?: string; 
   return undefined;
 }
 
-function formatStatus(goal: ActiveGoal): string {
-  if (goal.status === "active") return `active ${formatBudget(goal)}`;
-  if (goal.status === "checking") return "checking";
-  if (goal.status === "waiting_for_user") return "waiting user";
-  if (goal.status === "complete") return "complete";
-  if (goal.status === "blocked") return "blocked";
-  if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
-  return goal.status;
+export function formatStatus(goal: ActiveGoal, checkerRuntime?: CheckerStatusRuntime, now = Date.now()): string {
+  if (goal.status === "active") return `goal active ${formatBudget(goal)}`;
+  if (goal.status === "checking") {
+    if (!checkerRuntime) return "goal checking";
+    return `goal checking ${checkerRuntime.frame} ${formatDuration(Math.max(0, now - checkerRuntime.startedAt))}/${formatDuration(checkerRuntime.timeoutMs)}`;
+  }
+  if (goal.status === "waiting_for_user") return "goal waiting user";
+  if (goal.status === "complete") return "goal complete";
+  if (goal.status === "blocked") return "goal blocked";
+  if (goal.status === "budget_limited") return `goal budget ${formatBudget(goal)}`;
+  if (goal.status === "paused") return "goal paused";
+  return `goal ${goal.status}`;
 }
 
 function formatBudget(goal: ActiveGoal): string {
@@ -445,6 +521,15 @@ function formatCount(value: number): string {
   if (value < 1_000) return `${value}`;
   if (value < 1_000_000) return `${Number.isInteger(value / 1_000) ? value / 1_000 : (value / 1_000).toFixed(1)}k`;
   return `${Number.isInteger(value / 1_000_000) ? value / 1_000_000 : (value / 1_000_000).toFixed(1)}m`;
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `0:${seconds.toString().padStart(2, "0")}`;
+  if (seconds === 0) return `${minutes}m`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

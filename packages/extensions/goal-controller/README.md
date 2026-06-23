@@ -105,6 +105,26 @@ On each completed worker turn, the controller:
 
 The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives compact goal/session navigation context rather than a capped transcript: goal state, the current Pi session file path when available, current leaf entry id, branch/message counts, and latest-turn tool metadata. Its tool access is controlled by `checker.toolMode`: `inspect` (default) allows inspection while excluding obvious local mutation tools and extension tools; `transcript` disables tools and is degraded for session-file inspection; `full` is explicit opt-in for unrestricted tools. When tools and a persisted session file are available, the checker may inspect files, logs, session artifacts, external sources, or command output when that helps judge completion. It must distinguish worker-surfaced evidence from checker-inspected evidence, and it must not use checker tools to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the session state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
 
+## Footer status and checker control
+
+The controller publishes compact lifecycle status through Pi's extension status API under the `goal-controller` key. It does not own or customize the footer renderer; any installed statusline consumes the published status as a generic extension status.
+
+While a checker subprocess is running, the published status includes a subtle loading frame plus elapsed time and the configured timeout, for example:
+
+```text
+goal checking ⠋ 0:42/5m
+```
+
+When a check is not running, the status stays compact, for example `goal active 3 turns`, `goal waiting user`, `goal paused`, or `goal complete`.
+
+User commands that change goal state handle a running checker explicitly:
+
+- `/goal_pause` cancels the running checker and pauses the goal.
+- `/goal_clear` cancels the running checker and clears the goal.
+- `/goal_edit` refuses to edit while checking and asks the user to pause or clear first.
+
+If Pi reloads, switches session tree state, or shuts down while a persisted goal says `checking`, the controller treats that checker as interrupted rather than showing it as still running with no subprocess behind it.
+
 ## Configuration
 
 Config path:

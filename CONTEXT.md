@@ -16,6 +16,20 @@ _Avoid_: Compact mode when the renderer context is unclear.
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
 
+**Goal controller**:
+A Pi extension in this repo that manages one long-running session goal and delegates completion authority to an independent checker.
+_Avoid_: Goal mode when referring to the extension implementation.
+
+**Goal checker**:
+An independent Pi subprocess run by the goal controller to assess whether the active goal's completion contract has been proven.
+_Avoid_: Worker, completion tool.
+
+**Goal footer**:
+The Pi footer/statusline segment used by the goal controller to show the active goal's lifecycle state.
+_Avoid_: Goal widget when referring only to the footer/statusline surface.
+
 ## Relationships
+
+- The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 
 ## Flagged ambiguities

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheckerVerdict, loadGoalFromSession, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
+import { applyCheckerVerdict, loadGoalFromSession, markChecking, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 const config = DEFAULT_CONFIG;
@@ -126,6 +126,20 @@ test("old persisted goals hydrate missing no-tool continuation count", () => {
   delete legacyGoal.consecutiveNoToolContinuations;
   const loaded = loadGoalFromSession([{ type: "custom", customType: "goal-controller-state", data: { goal: legacyGoal } }]);
   assert.equal(loaded?.consecutiveNoToolContinuations, 0);
+});
+
+test("loadGoalFromSession recovers persisted checking as paused with resume guidance", () => {
+  const started = startGoal(undefined, "finish task", config, 0);
+  if (!started.ok) throw new Error("expected goal");
+  const checking = markChecking(started.goal);
+
+  const loaded = loadGoalFromSession([{ type: "custom", customType: "goal-controller-state", data: { goal: checking } }]);
+
+  assert.equal(loaded?.status, "paused");
+  assert.notEqual(loaded?.status, "checking");
+  assert.match(loaded?.lastTransitionReason ?? "", /checker interrupted/iu);
+  assert.match(loaded?.lastTransitionReason ?? "", /\/goal_resume/iu);
+  assert.equal(loaded?.awaitingContinuationTurn, false);
 });
 
 test("token budget limit is not completion", () => {
