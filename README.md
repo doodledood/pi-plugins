@@ -32,7 +32,7 @@ Global skills are intentionally not included in this repo.
 
 ## Install all resources from the Git repo
 
-The root package lists all included resources. Installing it without filters loads every extension, skill, and theme declared in `package.json`:
+The root package lists all included resources. Installing it without filters loads every extension and theme declared in `package.json`:
 
 ```bash
 pi install git:github.com/doodledood/pi-plugins@main
@@ -52,7 +52,6 @@ Extension example:
     {
       "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
-      "skills": [],
       "prompts": [],
       "themes": []
     }
@@ -69,7 +68,6 @@ Theme example:
     {
       "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": [],
-      "skills": [],
       "prompts": [],
       "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
     }
