@@ -17,6 +17,14 @@ pi-crash.log
 *.secret.json
 auth.json
 trust.json
+token.json
+access-token.json
+credentials.json
+cookies.json
+**/token.json
+**/access-token.json
+**/credentials.json
+**/cookies.json
 
 # Pi/package runtime state
 .pi/
@@ -31,6 +39,10 @@ mcp.json.pre-*.bak
 mcp-cache.json
 mcp-npx-cache.json
 *-stats.json
+.cache/
+**/.cache/
+**/Cookies
+**/Cookies-journal
 
 # Never commit live profile state; commit templates/examples only.
 profiles/**/.pi/
