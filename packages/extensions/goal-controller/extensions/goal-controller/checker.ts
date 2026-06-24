@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActiveGoal, CheckerDecision, CheckerSessionContext, CheckerVerdict, GoalControllerConfig, ThinkingLevel } from "./types.ts";
 import { buildCheckerPrompt } from "./prompts.ts";
+import { CHECKER_AUDIT_TOOLS_ARG, CHECKER_DISABLED_RESOURCE_ARGS } from "./checker-profile.ts";
 
 export interface CheckerRunInput {
   goal: ActiveGoal;
@@ -42,7 +43,7 @@ export class PiSubprocessCheckerRunner implements CheckerRunner {
 }
 
 function formatCheckerSubprocessFailure(result: ExecResult, config: GoalControllerConfig, elapsedMs: number): string {
-  const configSummary = `Checker config: toolMode=${config.checker.toolMode}, model=${config.checker.model}, thinking=${config.checker.thinking}, timeoutMs=${config.checker.timeoutMs}.`;
+  const configSummary = `Checker config: model=${config.checker.model}, thinking=${config.checker.thinking}, timeoutMs=${config.checker.timeoutMs}.`;
   const noVerdict = "No checker verdict was returned.";
   const output = outputDiagnostics(result);
 
@@ -82,15 +83,15 @@ function formatDuration(ms: number): string {
 }
 
 function checkerArgs(input: CheckerRunInput, prompt: string): string[] {
-  const args = ["--mode", "json", "-p", "--no-session"];
-
-  if (input.config.checker.toolMode === "transcript") {
-    args.push("--no-extensions", "--no-tools");
-  } else if (input.config.checker.toolMode === "inspect") {
-    args.push("--no-extensions", "--exclude-tools", "edit,write");
-  }
-
-  args.push("--no-skills", "--no-prompt-templates", "--no-context-files");
+  const args = [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--tools",
+    CHECKER_AUDIT_TOOLS_ARG,
+    ...CHECKER_DISABLED_RESOURCE_ARGS,
+  ];
 
   const model = resolveModelPattern(input.config.checker.model, input.model);
   if (model) args.push("--model", model);

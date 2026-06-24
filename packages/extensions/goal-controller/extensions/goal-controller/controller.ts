@@ -10,10 +10,47 @@ import type {
   StartGoalResult,
 } from "./types.ts";
 
-const NON_TERMINAL_STATUSES = new Set<GoalStatus>(["active", "checking", "waiting_for_user", "paused", "blocked", "budget_limited"]);
+interface GoalStatusPolicy {
+  label: string;
+  live: boolean;
+  pausable: boolean;
+  resumable: boolean;
+  editable: boolean;
+}
 
-export function isNonTerminalGoal(goal: ActiveGoal | undefined): goal is ActiveGoal {
-  return goal !== undefined && NON_TERMINAL_STATUSES.has(goal.status);
+const GOAL_STATUS_POLICY = {
+  active: { label: "active", live: true, pausable: true, resumable: false, editable: true },
+  checking: { label: "checking", live: true, pausable: true, resumable: false, editable: false },
+  waiting_for_user: { label: "waiting user", live: true, pausable: true, resumable: true, editable: true },
+  paused: { label: "paused", live: false, pausable: false, resumable: true, editable: true },
+  blocked: { label: "blocked", live: false, pausable: false, resumable: true, editable: true },
+  budget_limited: { label: "budget", live: false, pausable: false, resumable: true, editable: true },
+  complete: { label: "complete", live: false, pausable: false, resumable: false, editable: false },
+  cleared: { label: "cleared", live: false, pausable: false, resumable: false, editable: false },
+} as const satisfies Record<GoalStatus, GoalStatusPolicy>;
+
+export function isLiveGoal(goal: ActiveGoal | undefined): goal is ActiveGoal {
+  return hasGoalStatusPolicy(goal, "live");
+}
+
+export function canPauseGoal(goal: ActiveGoal | undefined): goal is ActiveGoal {
+  return hasGoalStatusPolicy(goal, "pausable");
+}
+
+export function canResumeGoal(goal: ActiveGoal | undefined): goal is ActiveGoal {
+  return hasGoalStatusPolicy(goal, "resumable");
+}
+
+export function canEditGoal(goal: ActiveGoal | undefined): goal is ActiveGoal {
+  return hasGoalStatusPolicy(goal, "editable");
+}
+
+export function goalStatusLabel(status: GoalStatus): string {
+  return GOAL_STATUS_POLICY[status].label;
+}
+
+function hasGoalStatusPolicy(goal: ActiveGoal | undefined, property: keyof Omit<GoalStatusPolicy, "label">): goal is ActiveGoal {
+  return goal !== undefined && GOAL_STATUS_POLICY[goal.status][property];
 }
 
 export function startGoal(
@@ -32,11 +69,11 @@ export function startGoal(
     };
   }
 
-  if (isNonTerminalGoal(currentGoal)) {
+  if (isLiveGoal(currentGoal)) {
     return {
       ok: false,
       error: "active_goal_exists",
-      message: "A non-terminal goal is already active. Continue it, edit it with /goal_edit, clear it with /goal_clear, or wait for checker completion before starting another.",
+      message: "A live goal is already active. Continue it, pause it with /goal_pause, clear it with /goal_clear, or wait for checker completion before starting another.",
       activeGoal: currentGoal,
     };
   }
@@ -278,5 +315,5 @@ function nonNegativeIntegerOrZero(value: unknown): number {
 }
 
 function isGoalStatus(value: unknown): value is GoalStatus {
-  return value === "active" || value === "checking" || value === "waiting_for_user" || value === "paused" || value === "blocked" || value === "budget_limited" || value === "complete" || value === "cleared";
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(GOAL_STATUS_POLICY, value);
 }

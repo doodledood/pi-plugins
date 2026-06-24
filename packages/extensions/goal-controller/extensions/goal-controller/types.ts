@@ -2,7 +2,6 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 export type GoalStatus = "active" | "checking" | "waiting_for_user" | "paused" | "blocked" | "budget_limited" | "complete" | "cleared";
 export type CheckerMode = "llm";
-export type CheckerToolMode = "transcript" | "inspect" | "full";
 export type CheckerModelSetting = "inherit" | string;
 export type CheckerThinkingSetting = "inherit" | ThinkingLevel;
 
@@ -31,7 +30,6 @@ export interface GoalControllerConfig {
   defaultTimeBudgetSeconds?: number;
   checker: {
     mode: CheckerMode;
-    toolMode: CheckerToolMode;
     model: CheckerModelSetting;
     thinking: CheckerThinkingSetting;
     timeoutMs: number;

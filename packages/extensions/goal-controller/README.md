@@ -45,7 +45,7 @@ This extension replaces `@narumitw/pi-goal` for this machine. The old package ex
 ```text
 /goal <goal text>     Start a goal from the user/harness
 /goal                 Show current goal status
-/goal_pause           Pause an active or waiting goal
+/goal_pause           Pause an active, checking, or waiting goal
 /goal_resume          Resume a paused, waiting, blocked, or budget-limited goal
 /goal_edit            Open an editor UI prefilled with the current goal; submitting replaces it
 /goal_edit <text>     Replace the current goal text immediately
@@ -60,10 +60,11 @@ goal({ goal: string })
 
 `goal` is **create-only**:
 
-- accepts any non-empty goal string when no non-terminal goal exists
+- accepts any non-empty goal string when no live goal exists
 - rejects blank goals
-- returns `active_goal_exists` without mutating state if a goal is active/checking/waiting-for-user/paused/blocked/budget-limited
-- never updates, replaces, edits, clears, pauses, resumes, or completes a goal
+- returns `active_goal_exists` without mutating state if a goal is active/checking/waiting-for-user
+- creates a fresh active goal over a stopped paused/blocked/budget-limited goal without requiring `/goal_clear`
+- never updates, edits, clears, pauses, resumes, or completes a live goal
 
 ## Writing effective goal text
 
@@ -103,7 +104,7 @@ On each completed worker turn, the controller:
    - `decision: "waiting_for_user"` → automatic continuation stops until the next user-driven worker turn, then goal context resumes automatically
    - `decision: "blocked"` → goal becomes blocked and continuation stops until resumed
 
-The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives compact goal/session navigation context rather than a capped transcript: goal state, the current Pi session file path when available, current leaf entry id, branch/message counts, and latest-turn tool metadata. Its tool access is controlled by `checker.toolMode`: `inspect` (default) allows inspection while excluding obvious local mutation tools and extension tools; `transcript` disables tools and is degraded for session-file inspection; `full` is explicit opt-in for unrestricted tools. When tools and a persisted session file are available, the checker may inspect files, logs, session artifacts, external sources, or command output when that helps judge completion. It must distinguish worker-surfaced evidence from checker-inspected evidence, and it must not use checker tools to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the session state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
+The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives compact goal/session navigation context rather than capped inline history: goal state, the current Pi session file path when available, current leaf entry id, branch/message counts, and latest-turn tool metadata. The checker always runs with one audit-only capability profile: built-in `read`, `grep`, `find`, and `ls` plus skill discovery. Extension tools, prompt templates, context files, shell execution, and file mutation tools are disabled. When read/search tools and a persisted session file are available, the checker may review the session artifact, referenced files, workspace search results, or relevant skills when that helps judge completion. It must distinguish worker-surfaced evidence from checker-reviewed evidence, and it must not use checker-side review to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the session state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
 
 ## Footer status and checker control
 
@@ -142,7 +143,6 @@ Default installed config:
   "defaultTimeBudgetSeconds": null,
   "checker": {
     "mode": "llm",
-    "toolMode": "inspect",
     "model": "inherit",
     "thinking": "inherit",
     "timeoutMs": 300000
@@ -155,15 +155,13 @@ Default installed config:
 
 Budget fields are user-editable and default to unbounded. `defaultTokenBudget`, `defaultTurnBudget`, and `defaultTimeBudgetSeconds` may be positive numbers to add token, turn, or wall-clock limits for new goals; set them to `null` or omit them to leave that dimension unbounded.
 
-`checker.toolMode` controls checker subprocess tools:
+The checker subprocess capability profile is fixed: it can use built-in `read`, `grep`, `find`, and `ls`, and it can discover and activate skills. Extension tools, prompt templates, context files, `bash`, `edit`, and `write` are disabled so the checker remains an auditor rather than a worker substitute.
 
-- `inspect` (default): checker can inspect with built-in tools but excludes obvious local mutation tools (`edit`, `write`) and extension tools.
-- `transcript`: checker runs without tools. This mode is degraded with the session-navigation checker design because it cannot inspect the persisted session file; prefer `inspect` unless you deliberately want no checker-side inspection.
-- `full`: checker gets unrestricted tools as an explicit opt-in; rely on the checker prompt for restraint.
+If an existing local config still contains `checker.toolMode`, remove that field. It no longer changes checker behavior; the loader warns that it is unsupported and uses the fixed audit-only profile.
 
 `continuation.noToolContinuationLimit` blocks runaway automatic continuation loops after the configured number of consecutive checker-driven continuation turns make no tool progress. The default is `3`. Tool-using turns and user/system interventions reset the count.
 
-The default checker timeout is 300000ms (5 minutes), which gives tool-assisted checker subprocesses more room to inspect larger sessions while still bounding runaway checks.
+The default checker timeout is 300000ms (5 minutes), which gives tool-assisted checker subprocesses more room to review larger sessions while still bounding runaway checks.
 
 `inherit` means the checker uses the current Pi session model or thinking level when possible. Set explicit values, for example:
 
@@ -171,7 +169,6 @@ The default checker timeout is 300000ms (5 minutes), which gives tool-assisted c
 {
   "checker": {
     "mode": "llm",
-    "toolMode": "inspect",
     "model": "openai/gpt-5.5",
     "thinking": "xhigh",
     "timeoutMs": 300000
@@ -179,7 +176,7 @@ The default checker timeout is 300000ms (5 minutes), which gives tool-assisted c
 }
 ```
 
-Missing config uses defaults. Invalid JSON or non-object config surfaces a warning and uses defaults. Invalid scalar field values are ignored, surfaced in a warning, and replaced with documented defaults.
+Missing config uses defaults. Invalid JSON or non-object config surfaces a warning and uses defaults. Invalid scalar field values are ignored, surfaced in a warning, and replaced with documented defaults. Unsupported checker fields are also surfaced in a warning and ignored.
 
 ## Reload
 
@@ -203,10 +200,10 @@ To roll back, add that package entry back to `packages`, remove or disable this 
 
 ## Current limitations
 
-- Single active non-terminal goal per session.
+- Single live goal per session; stopped paused/blocked/budget-limited goals may be superseded by a new goal.
 - No hard goal-quality enforcement.
-- No model-callable goal update/replace/clear/pause/resume/complete.
+- No model-callable lifecycle controls beyond starting a fresh goal and superseding stopped goals; no live-goal update/replace/clear/pause/resume/complete.
 - No worker progress tool; progress is ordinary assistant responses and tool-result evidence in the session.
-- Checker is tool-assisted but not a worker substitute. Default `inspect` mode allows inspection but excludes obvious mutation tools and extension tools; `full` is opt-in. The checker should not run omitted primary verification work such as required test/build/eval/deploy steps on the worker's behalf.
-- In-memory or otherwise unpersisted sessions provide degraded checker evidence because there is no session file for deeper checker inspection.
+- Checker is tool-assisted but not a worker substitute. Its fixed audit-only profile allows read/search/list tools and skills, while disabling shell execution, file mutation, extension tools, prompt templates, and context files. The checker should not run omitted primary verification work such as required test/build/eval/deploy steps on the worker's behalf.
+- In-memory or otherwise unpersisted sessions provide degraded checker evidence because there is no session file for deeper checker review.
 - Checker `waiting_for_user` is a stop-for-input state, not terminal completion; the next user-driven turn resumes goal context automatically.

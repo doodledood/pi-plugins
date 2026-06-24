@@ -1,17 +1,18 @@
 import type { ActiveGoal, CheckerSessionContext, CheckerVerdict, MessageLike, SessionEntryLike, ToolCallBlockLike } from "./types.ts";
+import { checkerAuditProfilePromptText } from "./checker-profile.ts";
 
 export const GOAL_DESCRIPTION =
-  "Start a long-running goal when no non-terminal goal is active. Input is one goal string. " +
+  "Start a long-running goal when no live goal is active. Input is one goal string. " +
   "Use goal for work that may take multiple turns and has a meaningful completion condition. " +
   "Write the goal as a compact completion contract: state the durable objective, desired end state, verification signal, important constraints, and any stop/block condition. " +
   "The goal may reference files, docs, issues, or plans for context. Prefer text standalone enough for an independent checker to understand what done means. " +
   "For longer goals, include how compact progress should be recorded, such as checkpoint notes covering what changed, what was verified, what remains, and blockers. " +
-  "goal only creates a goal; it never updates, replaces, edits, clears, pauses, resumes, or completes an active goal.";
+  "goal creates a fresh goal; it may supersede a stopped goal but never updates, edits, clears, pauses, resumes, or completes a live goal.";
 
 export const GOAL_GUIDELINES = [
-  "Use goal only when no goal is active and the work may require multiple turns toward a verifiable end state.",
+  "Use goal only when no live goal is active and the work may require multiple turns toward a verifiable end state.",
   "When calling goal, put the objective, done criteria, verification signal, constraints, and stop/block condition into the single goal string; include compact checkpoint-progress expectations when useful.",
-  "Do not call goal to replace or narrow an active goal. If another goal is active, continue it or ask the user to edit or clear it.",
+  "Do not call goal to replace or narrow a live goal. If another goal is active, checking, or waiting for user input, continue it or ask the user to pause or clear it; edit only when the goal is not checking.",
 ] as const;
 
 export function buildActiveGoalSystemPrompt(goal: ActiveGoal): string {
@@ -34,12 +35,12 @@ Rules:
 - Worker claims are claims, not proof. Prefer concrete evidence surfaced in the session artifact: command outputs, test/build/lint results, file/artifact descriptions, diffs summarized by the worker, or other surfaced evidence.
 - You receive compact session navigation context, not an inline transcript. Use it to decide whether deeper session inspection is needed.
 - Pi session files are JSONL trees. The first line is a session header; later entries use id and parentId. The active branch is the path from currentLeafId to the root. Do not assume the last JSONL line is on the active branch.
-- Tool availability is controlled by checker.toolMode: transcript mode may have no tools and cannot inspect the session file, inspect mode supports inspection while excluding obvious local mutation tools, and full mode is explicit opt-in for unrestricted tools.
-- When tools and a session file are available, you may inspect evidence needed for judgment: read the session artifact, files, logs, external sources, or command output that helps judge completion.
-- If the session file is unavailable or tools are unavailable, do not pretend to have inspected missing history; return complete=false unless the provided goal state and navigation context already prove every requirement.
+- ${checkerAuditProfilePromptText()}
+- When read/search/list tools and a session file are available, you may inspect evidence needed for judgment: read the session artifact, read referenced files, search the workspace, or activate relevant skills.
+- If the session file or needed inspection tool is unavailable, do not pretend to have inspected missing history; return complete=false unless the provided goal state and navigation context already prove every requirement.
 - Distinguish evidence the worker surfaced from evidence you inspected yourself. Checker-side inspection may corroborate completion, reveal missing evidence, or sharpen next guidance.
-- Do not use checker-side tools to perform omitted primary success work on the worker's behalf. If tests, builds, evals, deployments, or other primary verification are required and the session state does not show they were done, return complete=false and tell the worker to do or surface that verification.
-- Avoid destructive or unnecessary state-changing actions; prefer inspection over mutation.
+- Do not use checker-side tools to perform omitted primary success work on the worker's behalf. If tests, builds, evals, deployments, shell commands, or other primary verification are required and the session state does not show they were done, return complete=false and tell the worker to do or surface that verification.
+- Avoid destructive or unnecessary state-changing actions; this checker profile is inspection-only.
 - If required verification is missing, weak, indirect, or the goal was narrowed by the worker, return complete=false and tell the worker what evidence to surface next.
 - Before returning blocked, identify the smallest useful next action the worker could take. If one exists — inspect, test, retry, ask the user, or use an available focused user-question tool — return decision=continue with that nextTurnGuidance.
 - Use decision=waiting_for_user only when the worker has already asked for the needed user/external signal and no useful automatic continuation remains before that answer.

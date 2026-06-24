@@ -20,7 +20,7 @@ test("loadConfig merges valid user overrides", () => {
       defaultTokenBudget: 1234,
       defaultTurnBudget: 9,
       defaultTimeBudgetSeconds: 456,
-      checker: { model: "openai/gpt-5.5", toolMode: "transcript", thinking: "xhigh", timeoutMs: 77_000 },
+      checker: { model: "openai/gpt-5.5", thinking: "xhigh", timeoutMs: 77_000 },
       continuation: { noToolContinuationLimit: 5 },
     }),
   );
@@ -29,7 +29,6 @@ test("loadConfig merges valid user overrides", () => {
   assert.equal(loaded.config.defaultTurnBudget, 9);
   assert.equal(loaded.config.defaultTimeBudgetSeconds, 456);
   assert.equal(loaded.config.checker.model, "openai/gpt-5.5");
-  assert.equal(loaded.config.checker.toolMode, "transcript");
   assert.equal(loaded.config.checker.thinking, "xhigh");
   assert.equal(loaded.config.checker.timeoutMs, 77_000);
   assert.equal(loaded.config.continuation.noToolContinuationLimit, 5);
@@ -49,18 +48,17 @@ test("loadConfig warns and ignores invalid field values", () => {
     path,
     JSON.stringify({
       defaultTokenBudget: -1,
-      checker: { model: "", toolMode: "reckless", thinking: "turbo", timeoutMs: 0 },
+      checker: { model: "", thinking: "turbo", timeoutMs: 0, toolMode: "full" },
       continuation: { noToolContinuationLimit: 0 },
     }),
   );
   const loaded = loadConfig(path);
   assert.match(loaded.warning ?? "", /defaultTokenBudget/iu);
   assert.match(loaded.warning ?? "", /checker\.model/iu);
-  assert.match(loaded.warning ?? "", /checker\.toolMode/iu);
+  assert.match(loaded.warning ?? "", /checker\.toolMode is no longer supported/iu);
   assert.match(loaded.warning ?? "", /continuation\.noToolContinuationLimit/iu);
   assert.equal(loaded.config.defaultTokenBudget, DEFAULT_CONFIG.defaultTokenBudget);
   assert.equal(loaded.config.checker.model, DEFAULT_CONFIG.checker.model);
-  assert.equal(loaded.config.checker.toolMode, DEFAULT_CONFIG.checker.toolMode);
   assert.equal(loaded.config.checker.thinking, DEFAULT_CONFIG.checker.thinking);
   assert.equal(loaded.config.checker.timeoutMs, DEFAULT_CONFIG.checker.timeoutMs);
   assert.equal(loaded.config.continuation.noToolContinuationLimit, DEFAULT_CONFIG.continuation.noToolContinuationLimit);

@@ -4,6 +4,8 @@ import type { GoalControllerConfig } from "./types.ts";
 
 const DEFAULT_CHECKER_TIMEOUT_MS = 300_000;
 const DEFAULT_NO_TOOL_CONTINUATION_LIMIT = 3;
+const REMOVED_CHECKER_CAPABILITY_FIELD = "toolMode";
+const CHECKER_CONFIG_FIELDS = new Set(["mode", "model", "thinking", "timeoutMs"]);
 
 export const CONFIG_PATH = join(
   process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
@@ -13,7 +15,6 @@ export const CONFIG_PATH = join(
 export const DEFAULT_CONFIG: GoalControllerConfig = {
   checker: {
     mode: "llm",
-    toolMode: "inspect",
     model: "inherit",
     thinking: "inherit",
     timeoutMs: DEFAULT_CHECKER_TIMEOUT_MS,
@@ -51,6 +52,7 @@ function mergeConfig(raw: Record<string, unknown>): { config: GoalControllerConf
   const warnings: string[] = [];
   const checker = pathRecord(raw, "checker");
   const continuation = pathRecord(raw, "continuation");
+  warnings.push(...unsupportedFields(checker, "checker", CHECKER_CONFIG_FIELDS));
   return {
     warnings,
     config: {
@@ -59,7 +61,6 @@ function mergeConfig(raw: Record<string, unknown>): { config: GoalControllerConf
       defaultTimeBudgetSeconds: optionalPositiveInteger(raw.defaultTimeBudgetSeconds, DEFAULT_CONFIG.defaultTimeBudgetSeconds, "defaultTimeBudgetSeconds", warnings),
       checker: {
         mode: "llm",
-        toolMode: toolModeOrDefault(checker?.toolMode, DEFAULT_CONFIG.checker.toolMode, "checker.toolMode", warnings),
         model: stringOrDefault(checker?.model, DEFAULT_CONFIG.checker.model, "checker.model", warnings),
         thinking: thinkingOrDefault(checker?.thinking, DEFAULT_CONFIG.checker.thinking, "checker.thinking", warnings),
         timeoutMs: positiveInteger(checker?.timeoutMs, DEFAULT_CONFIG.checker.timeoutMs, "checker.timeoutMs", warnings),
@@ -79,6 +80,20 @@ function mergeConfig(raw: Record<string, unknown>): { config: GoalControllerConf
 function pathRecord(raw: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
   const value = raw[key];
   return isRecord(value) ? value : undefined;
+}
+
+function unsupportedFields(raw: Record<string, unknown> | undefined, prefix: string, supportedFields: ReadonlySet<string>): string[] {
+  if (!raw) return [];
+  return Object.keys(raw)
+    .filter((key) => !supportedFields.has(key))
+    .map((key) => unsupportedFieldWarning(prefix, key));
+}
+
+function unsupportedFieldWarning(prefix: string, key: string): string {
+  if (key === REMOVED_CHECKER_CAPABILITY_FIELD) {
+    return `${prefix}.${key} is no longer supported; checker always uses the fixed audit-only profile`;
+  }
+  return `${prefix}.${key}`;
 }
 
 function optionalPositiveInteger(
@@ -107,18 +122,6 @@ function positiveInteger(value: unknown, defaultValue: number, field: string, wa
 function stringOrDefault(value: unknown, defaultValue: string, field: string, warnings: string[]): string {
   if (value === undefined || value === null) return defaultValue;
   if (typeof value === "string" && value.trim().length > 0) return value.trim();
-  warnings.push(field);
-  return defaultValue;
-}
-
-function toolModeOrDefault(
-  value: unknown,
-  defaultValue: GoalControllerConfig["checker"]["toolMode"],
-  field: string,
-  warnings: string[],
-): GoalControllerConfig["checker"]["toolMode"] {
-  if (value === undefined || value === null) return defaultValue;
-  if (value === "transcript" || value === "inspect" || value === "full") return value;
   warnings.push(field);
   return defaultValue;
 }

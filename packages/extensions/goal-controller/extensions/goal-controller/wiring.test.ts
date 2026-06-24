@@ -176,7 +176,43 @@ test("extension registers one model-facing goal tool and user-only lifecycle com
   assert.deepEqual(host.tools.map((tool) => tool.name), ["goal"]);
   assert.deepEqual([...host.commandHandlers.keys()].sort(), ["goal", "goal_clear", "goal_edit", "goal_pause", "goal_resume"]);
   assert.equal(host.commandHandler !== undefined, true);
-  assert.equal(host.tools[0]?.description.includes("never updates, replaces, edits, clears, pauses, resumes, or completes"), true);
+  assert.equal(host.tools[0]?.description.includes("may supersede a stopped goal"), true);
+  assert.equal(host.tools[0]?.description.includes("never updates, edits, clears, pauses, resumes, or completes a live goal"), true);
+});
+
+test("goal command supersedes a stopped paused goal with a fresh active goal", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const ctx = makeCtx();
+  await host.commandHandler?.("old goal", ctx);
+  const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
+
+  await host.commandHandlers.get("goal_pause")?.("", ctx);
+  assert.equal(latestGoal(host)?.status, "paused");
+
+  await host.commandHandler?.("new goal", ctx);
+  const nextGoal = host.customEntries.at(-1)?.data as { goal?: { id?: string; goal?: string; status?: string } } | undefined;
+  assert.equal(nextGoal?.goal?.goal, "new goal");
+  assert.equal(nextGoal?.goal?.status, "active");
+  assert.notEqual(nextGoal?.goal?.id, oldGoalId);
+});
+
+test("model-facing goal tool supersedes a stopped paused goal with a fresh active goal", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const ctx = makeCtx();
+  await host.commandHandler?.("old goal", ctx);
+  const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
+
+  await host.commandHandlers.get("goal_pause")?.("", ctx);
+  assert.equal(latestGoal(host)?.status, "paused");
+
+  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as ExtensionContext);
+  const nextGoal = host.customEntries.at(-1)?.data as { goal?: { id?: string; goal?: string; status?: string } } | undefined;
+  assert.match(result?.content[0]?.type === "text" ? result.content[0].text : "", /Goal started/iu);
+  assert.equal(nextGoal?.goal?.goal, "new tool goal");
+  assert.equal(nextGoal?.goal?.status, "active");
+  assert.notEqual(nextGoal?.goal?.id, oldGoalId);
 });
 
 test("goal_edit with args replaces the current goal immediately", async () => {
