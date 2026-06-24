@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 
 const config = DEFAULT_CONFIG;
 
-test("startGoal accepts any non-empty goal when no non-terminal goal exists", () => {
+test("startGoal accepts any non-empty goal when no live goal exists", () => {
   const result = startGoal(undefined, "  implement PLAN.md  ", config, 100);
   assert.equal(result.ok, true);
   if (!result.ok) throw new Error("expected accepted goal");
@@ -21,7 +21,7 @@ test("startGoal rejects blank goals", () => {
   assert.equal(result.error, "empty_goal");
 });
 
-test("startGoal rejects when non-terminal goal exists and preserves current goal", () => {
+test("startGoal rejects when an active live goal exists and preserves current goal", () => {
   const first = startGoal(undefined, "first", config, 0);
   if (!first.ok) throw new Error("expected first goal");
   const second = startGoal(first.goal, "second", config, 0);
@@ -32,6 +32,17 @@ test("startGoal rejects when non-terminal goal exists and preserves current goal
   assert.equal(first.goal.goal, "first");
 });
 
+test("startGoal rejects while a goal is checking", () => {
+  const first = startGoal(undefined, "first", config, 0);
+  if (!first.ok) throw new Error("expected first goal");
+  const checking = markChecking(first.goal);
+  const second = startGoal(checking, "second", config, 0);
+  assert.equal(second.ok, false);
+  if (second.ok) throw new Error("expected active goal error");
+  assert.equal(second.error, "active_goal_exists");
+  assert.equal(second.activeGoal, checking);
+});
+
 test("startGoal rejects while a goal is waiting for user input", () => {
   const first = startGoal(undefined, "first", config, 0);
   if (!first.ok) throw new Error("expected first goal");
@@ -40,6 +51,44 @@ test("startGoal rejects while a goal is waiting for user input", () => {
   assert.equal(second.ok, false);
   if (second.ok) throw new Error("expected active goal error");
   assert.equal(second.error, "active_goal_exists");
+  assert.equal(second.activeGoal, waiting);
+});
+
+test("startGoal can create a new goal after stopped paused goal", () => {
+  const first = startGoal(undefined, "first", config, 0);
+  if (!first.ok) throw new Error("expected first goal");
+  const paused = pauseGoal(first.goal, "paused by user");
+  const second = startGoal(paused, "second", config, 0);
+  assert.equal(second.ok, true);
+  if (!second.ok) throw new Error("expected second goal");
+  assert.equal(second.goal.goal, "second");
+  assert.equal(second.goal.status, "active");
+  assert.notEqual(second.goal.id, paused.id);
+});
+
+test("startGoal can create a new goal after stopped blocked goal", () => {
+  const first = startGoal(undefined, "first", config, 0);
+  if (!first.ok) throw new Error("expected first goal");
+  const blocked = applyCheckerVerdict(first.goal, { decision: "blocked", complete: false, blocked: true, reason: "blocked" }, config, true);
+  const second = startGoal(blocked, "second", config, 0);
+  assert.equal(second.ok, true);
+  if (!second.ok) throw new Error("expected second goal");
+  assert.equal(second.goal.goal, "second");
+  assert.equal(second.goal.status, "active");
+  assert.notEqual(second.goal.id, blocked.id);
+});
+
+test("startGoal can create a new goal after stopped budget-limited goal", () => {
+  const first = startGoal(undefined, "first", { ...config, defaultTurnBudget: 1 }, 0);
+  if (!first.ok) throw new Error("expected first goal");
+  const used = updateUsage(first.goal, 0, Date.now(), true);
+  const budgetLimited = maybeApplyBudgetLimit(used);
+  const second = startGoal(budgetLimited, "second", config, 0);
+  assert.equal(second.ok, true);
+  if (!second.ok) throw new Error("expected second goal");
+  assert.equal(second.goal.goal, "second");
+  assert.equal(second.goal.status, "active");
+  assert.notEqual(second.goal.id, budgetLimited.id);
 });
 
 test("startGoal can create a new goal after terminal complete", () => {
@@ -126,6 +175,14 @@ test("old persisted goals hydrate missing no-tool continuation count", () => {
   delete legacyGoal.consecutiveNoToolContinuations;
   const loaded = loadGoalFromSession([{ type: "custom", customType: "goal-controller-state", data: { goal: legacyGoal } }]);
   assert.equal(loaded?.consecutiveNoToolContinuations, 0);
+});
+
+test("loadGoalFromSession rejects inherited object property status values", () => {
+  const started = startGoal(undefined, "finish task", config, 0);
+  if (!started.ok) throw new Error("expected goal");
+  const invalidGoal = { ...started.goal, status: "toString" };
+  const loaded = loadGoalFromSession([{ type: "custom", customType: "goal-controller-state", data: { goal: invalidGoal } }]);
+  assert.equal(loaded, undefined);
 });
 
 test("loadGoalFromSession recovers persisted checking as paused with resume guidance", () => {

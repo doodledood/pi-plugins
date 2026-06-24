@@ -4,10 +4,13 @@ import { Type, type Static } from "typebox";
 import { loadConfig, type LoadedConfig } from "./config.ts";
 import {
   applyCheckerVerdict,
+  canEditGoal,
+  canPauseGoal,
+  canResumeGoal,
   clearGoal,
   editGoalText,
+  goalStatusLabel,
   goalSummary,
-  isNonTerminalGoal,
   loadGoalFromSession,
   markChecking,
   maybeApplyBudgetLimit,
@@ -193,7 +196,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         ctx.ui.notify("Usage: /goal_pause", "warning");
         return;
       }
-      if (!activeGoal || (activeGoal.status !== "active" && activeGoal.status !== "waiting_for_user" && activeGoal.status !== "checking")) {
+      if (!canPauseGoal(activeGoal)) {
         ctx.ui.notify("No active, waiting, or checking goal can be paused.", "warning");
         return;
       }
@@ -215,7 +218,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         ctx.ui.notify("Usage: /goal_resume", "warning");
         return;
       }
-      if (!activeGoal || (activeGoal.status !== "paused" && activeGoal.status !== "waiting_for_user" && activeGoal.status !== "blocked" && activeGoal.status !== "budget_limited")) {
+      if (!canResumeGoal(activeGoal)) {
         ctx.ui.notify("No paused, waiting, blocked, or budget-limited goal can be resumed.", "warning");
         return;
       }
@@ -229,15 +232,15 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   });
 
   pi.registerCommand("goal_edit", {
-    description: "Edit the current non-terminal goal text and resume it. With no args, opens an editor prefilled with the current goal. User-only command; not model-callable.",
+    description: "Edit the current editable goal text and resume it. With no args, opens an editor prefilled with the current goal. User-only command; not model-callable.",
     handler: async (args, ctx) => {
       reloadConfig(ctx);
-      if (!isNonTerminalGoal(activeGoal)) {
-        ctx.ui.notify("No non-terminal goal can be edited.", "warning");
+      if (activeGoal?.status === "checking") {
+        ctx.ui.notify("Goal is being checked right now; use /goal_pause to cancel and pause it, or /goal_clear to cancel and clear it before editing.", "warning");
         return;
       }
-      if (activeGoal.status === "checking") {
-        ctx.ui.notify("Goal is being checked right now; use /goal_pause to cancel and pause it, or /goal_clear to cancel and clear it before editing.", "warning");
+      if (!canEditGoal(activeGoal)) {
+        ctx.ui.notify("No editable goal can be edited.", "warning");
         return;
       }
 
@@ -503,12 +506,8 @@ export function formatStatus(goal: ActiveGoal, checkerRuntime?: CheckerStatusRun
     if (!checkerRuntime) return "goal checking";
     return `goal checking ${checkerRuntime.frame} ${formatDuration(Math.max(0, now - checkerRuntime.startedAt))}/${formatDuration(checkerRuntime.timeoutMs)}`;
   }
-  if (goal.status === "waiting_for_user") return "goal waiting user";
-  if (goal.status === "complete") return "goal complete";
-  if (goal.status === "blocked") return "goal blocked";
-  if (goal.status === "budget_limited") return `goal budget ${formatBudget(goal)}`;
-  if (goal.status === "paused") return "goal paused";
-  return `goal ${goal.status}`;
+  if (goal.status === "budget_limited") return `goal ${goalStatusLabel(goal.status)} ${formatBudget(goal)}`;
+  return `goal ${goalStatusLabel(goal.status)}`;
 }
 
 function formatBudget(goal: ActiveGoal): string {

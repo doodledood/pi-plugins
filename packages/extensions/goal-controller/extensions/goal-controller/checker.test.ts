@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseCheckerVerdict, PiSubprocessCheckerRunner } from "./checker.ts";
-import { DEFAULT_CONFIG } from "./config.ts";
+import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { createGoal } from "./controller.ts";
 import type { CheckerSessionContext, GoalControllerConfig } from "./types.ts";
 
@@ -23,6 +26,25 @@ function checkerContext(sessionFile: string | undefined): CheckerSessionContext 
       finalAssistantStopReason: "stop",
     },
   };
+}
+
+function assertAuditOnlyCheckerArgs(args: string[]): void {
+  const toolsIndexes = args.flatMap((arg, index) => (arg === "--tools" ? [index] : []));
+  assert.equal(toolsIndexes.length, 1);
+  const toolsIndex = toolsIndexes[0];
+  if (toolsIndex === undefined) throw new Error("missing --tools argument");
+  assert.equal(args[toolsIndex + 1], "read,grep,find,ls");
+  assert.equal(args.includes("--no-extensions"), true);
+  assert.equal(args.includes("--no-prompt-templates"), true);
+  assert.equal(args.includes("--no-context-files"), true);
+  assert.equal(args.includes("--no-skills"), false);
+  assert.equal(args.includes("--no-tools"), false);
+  assert.equal(args.includes("--no-builtin-tools"), false);
+  assert.equal(args.includes("--exclude-tools"), false);
+  for (const arg of args) {
+    if (!arg.includes(",")) continue;
+    assert.equal(arg.split(",").some((tool) => tool === "bash" || tool === "edit" || tool === "write"), false);
+  }
 }
 
 test("parseCheckerVerdict parses complete verdict JSON with evidence and requirements", () => {
@@ -148,31 +170,31 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   assert.equal(capturedArgs.includes("--thinking"), true);
   assert.equal(capturedArgs[capturedArgs.indexOf("--thinking") + 1], "xhigh");
   assert.equal(capturedArgs.includes("--no-session"), true);
-  assert.equal(capturedArgs.includes("--no-extensions"), true);
-  assert.equal(capturedArgs.includes("--no-builtin-tools"), false);
-  assert.equal(capturedArgs.includes("--tools"), false);
-  assert.equal(capturedArgs.includes("--exclude-tools"), true);
-  assert.equal(capturedArgs[capturedArgs.indexOf("--exclude-tools") + 1], "edit,write");
+  assertAuditOnlyCheckerArgs(capturedArgs);
   const checkerPrompt = capturedArgs.at(-1) ?? "";
   assert.match(checkerPrompt, /Session navigation context:/iu);
   assert.match(checkerPrompt, /"sessionFile": "\/tmp\/pi-session\.jsonl"/iu);
   assert.match(checkerPrompt, /"currentLeafId": "leaf-1"/iu);
   assert.match(checkerPrompt, /Pi session files are JSONL trees/iu);
-  assert.match(checkerPrompt, /Tool availability is controlled by checker\.toolMode/iu);
+  assert.match(checkerPrompt, /fixed audit-only capability profile/iu);
+  assert.match(checkerPrompt, /skill discovery/iu);
+  assert.match(checkerPrompt, /Extension tools, prompt templates, context files, shell execution, and file mutation tools are unavailable/iu);
   assert.match(checkerPrompt, /you may inspect evidence needed for judgment/iu);
   assert.match(checkerPrompt, /Do not use checker-side tools to perform omitted primary success work on the worker's behalf/iu);
 });
 
-test("PiSubprocessCheckerRunner maps transcript and full tool modes to subprocess args", async () => {
-  const transcriptArgs = await captureCheckerArgs({ ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, toolMode: "transcript" } });
-  assert.equal(transcriptArgs.includes("--no-tools"), true);
-  assert.equal(transcriptArgs.includes("--no-extensions"), true);
-  assert.equal(transcriptArgs.includes("--exclude-tools"), false);
+test("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled", async () => {
+  assertAuditOnlyCheckerArgs(await captureCheckerArgs(DEFAULT_CONFIG));
+});
 
-  const fullArgs = await captureCheckerArgs({ ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, toolMode: "full" } });
-  assert.equal(fullArgs.includes("--no-tools"), false);
-  assert.equal(fullArgs.includes("--exclude-tools"), false);
-  assert.equal(fullArgs.includes("--no-extensions"), false);
+test("removed checker capability config cannot expand audit-only subprocess tools", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "goal-controller-checker-"));
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify({ checker: { toolMode: "full" } }));
+
+  const loaded = loadConfig(configPath);
+  assert.match(loaded.warning ?? "", /checker\.toolMode is no longer supported/iu);
+  assertAuditOnlyCheckerArgs(await captureCheckerArgs(loaded.config));
 });
 
 test("PiSubprocessCheckerRunner reports killed subprocesses as timeout or termination failures", async () => {
@@ -192,7 +214,7 @@ test("PiSubprocessCheckerRunner reports killed subprocesses as timeout or termin
       assert.match(error.message, /timeoutMs=1/iu);
       assert.match(error.message, /Exit code: 143/iu);
       assert.match(error.message, /No checker verdict was returned/iu);
-      assert.match(error.message, /Checker config: toolMode=inspect, model=inherit, thinking=inherit/iu);
+      assert.match(error.message, /Checker config: model=inherit, thinking=inherit/iu);
       assert.match(error.message, /stdout tail:\npartial checker output/iu);
       assert.doesNotMatch(error.message, /^checker subprocess exited with code 143$/iu);
       return true;

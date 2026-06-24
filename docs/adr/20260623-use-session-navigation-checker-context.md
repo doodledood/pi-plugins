@@ -17,7 +17,7 @@ Remove `continuation.checkerHistoryLimit` while preserving checker history in go
 
 Replace `continuation.suppressAfterNoToolContinuation` with a consecutive no-tool continuation threshold defaulting to 3. Only automatic checker-driven continuation turns count; tool-using turns and user/system interventions reset the counter. The goal blocks when the threshold is reached.
 
-Keep `checker.toolMode` defaulting to `inspect`. Treat the old `transcript`/no-tools mode as incompatible with session-file inspection unless it is explicitly redesigned; do not silently grant tools to a no-tools configuration.
+At the time, keep the old checker capability mode defaulting to read-oriented inspection. Treat the old no-tools mode as incompatible with session-file inspection unless it is explicitly redesigned; do not silently grant tools to a no-tools configuration.
 
 ## Alternatives Considered
 - **Keep capped inline transcript**: Simple and supports no-tools checking, but preserves the core failure mode where the controller truncates evidence before the checker can decide what matters.
@@ -43,3 +43,4 @@ Keep `checker.toolMode` defaulting to `inspect`. Treat the old `transcript`/no-t
 ## Source
 - Session: figure-out discussion in this repo on 2026-06-23
 - Related: `packages/extensions/goal-controller/extensions/goal-controller/`
+- Related: checker capability-mode portion superseded by 20260624-use-audit-only-goal-checker-profile
