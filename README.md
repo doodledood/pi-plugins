@@ -35,7 +35,7 @@ Global skills are intentionally not included in this repo.
 The root package lists all included resources. Installing it without filters loads every extension and theme declared in `package.json`:
 
 ```bash
-pi install git:github.com/doodledood/pi-plugins@v0.2.0
+pi install git:github.com/doodledood/pi-plugins@v0.2.1
 ```
 
 Use this only when you want the full curated resource set.
@@ -50,7 +50,7 @@ Extension example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.2.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.2.1",
       "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
       "prompts": [],
       "themes": []
@@ -66,7 +66,7 @@ Theme example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.2.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.2.1",
       "extensions": [],
       "prompts": [],
       "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
@@ -75,7 +75,7 @@ Theme example:
 }
 ```
 
-Do not rely on undocumented Git subdirectory install syntax. The examples use the pinned `@v0.2.0` release tag. Use `@main` only when you intentionally want the latest development version.
+Do not rely on undocumented Git subdirectory install syntax. The examples use the pinned `@v0.2.1` release tag. Use `@main` only when you intentionally want the latest development version.
 
 ## Install one package from a local clone
 

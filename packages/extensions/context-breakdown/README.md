@@ -16,7 +16,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.2.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.2.1",
       "extensions": ["packages/extensions/context-breakdown/extensions/context-breakdown.ts"],
       "skills": [],
       "prompts": [],
