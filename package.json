@@ -30,8 +30,8 @@
     ]
   },
   "scripts": {
-    "test": "npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout",
-    "typecheck": "npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout",
+    "test": "npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "typecheck": "npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
     "verify:structure": "node scripts/verify-structure.mjs",
     "verify": "npm run verify:structure && npm run typecheck && npm test"
   },

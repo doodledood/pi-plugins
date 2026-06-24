@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import type { AgentToolResult, EditToolDetails, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { AgentToolResult, EditToolDetails, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	createBashToolDefinition,
 	createEditToolDefinition,
@@ -13,12 +14,12 @@ import {
 	getAgentDir,
 	keyHint,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, getCapabilities, hyperlink, Text, truncateToWidth } from "@earendil-works/pi-tui";
 
 type ToolRenderMode = "compact" | "default";
 type BuiltInToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 type BuiltInTools = ReturnType<typeof createBuiltInTools>;
-type BuiltInTool = BuiltInTools[BuiltInToolName];
+type AnyToolDefinition = ToolDefinition<any, any, any>;
 type ToolResult = AgentToolResult<unknown>;
 
 type RenderContext = {
@@ -77,7 +78,7 @@ function getBuiltInTools(cwd: string): BuiltInTools {
 	return tools;
 }
 
-function getTemplateTool(name: BuiltInToolName): BuiltInTool {
+function getTemplateTool<Name extends BuiltInToolName>(name: Name): BuiltInTools[Name] {
 	return getBuiltInTools(process.cwd())[name];
 }
 
@@ -101,6 +102,37 @@ function shortenPath(path: string | undefined): string {
 	if (path === home) return "~";
 	if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
 	return path;
+}
+
+function normalizePathForLink(path: string): string {
+	if (path.startsWith("file://")) return fileURLToPath(path);
+	const home = homedir();
+	if (path === "~") return home;
+	if (path.startsWith("~/")) return join(home, path.slice(2));
+	return path;
+}
+
+function resolvePathForLink(path: string, cwd: string): string {
+	const normalizedPath = normalizePathForLink(path);
+	const normalizedCwd = normalizePathForLink(cwd);
+	return isAbsolute(normalizedPath) ? resolvePath(normalizedPath) : resolvePath(normalizedCwd, normalizedPath);
+}
+
+function linkPath(styledText: string, rawPath: string, cwd: string): string {
+	if (!getCapabilities().hyperlinks) return styledText;
+	return hyperlink(styledText, pathToFileURL(resolvePathForLink(rawPath, cwd)).href);
+}
+
+function pathArg(value: unknown): string | null | undefined {
+	if (typeof value === "string") return value;
+	if (value === undefined || value === null) return undefined;
+	return null;
+}
+
+function renderToolPath(path: string | null | undefined, theme: ThemeLike, cwd: string): string {
+	if (path === null) return theme.fg("error", "[invalid arg]");
+	if (!path) return theme.fg("toolOutput", "...");
+	return linkPath(theme.fg("accent", shortenPath(path)), path, cwd);
 }
 
 function stringArg(value: unknown): string | undefined {
@@ -186,18 +218,18 @@ interface ThemeLike {
 	bold(text: string): string;
 }
 
-function formatFileChangeHeader(action: "Create" | "Update", path: string | undefined, theme: ThemeLike, state: GlyphState, expanded: boolean): string {
-	const displayPath = collapsedText(shortenPath(path), expanded, COLLAPSED_PATH_CHARS);
+function formatFileChangeHeader(action: "Create" | "Update", path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
+	const displayPath = renderToolPath(path, theme, cwd);
 	const nameColor = state === "error" ? "error" : state === "success" ? "success" : action === "Create" ? "warning" : "mdHeading";
-	return `${toolGlyph(theme, state)} ${theme.fg(nameColor, theme.bold(action))}${theme.fg("text", "(")}${theme.fg("accent", displayPath)}${theme.fg("text", ")")}`;
+	return `${toolGlyph(theme, state)} ${theme.fg(nameColor, theme.bold(action))}${theme.fg("text", "(")}${displayPath}${theme.fg("text", ")")}`;
 }
 
-function formatEditHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, expanded: boolean): string {
-	return formatFileChangeHeader("Update", path, theme, state, expanded);
+function formatEditHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
+	return formatFileChangeHeader("Update", path, theme, state, cwd);
 }
 
-function formatWriteHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, expanded: boolean): string {
-	return formatFileChangeHeader("Create", path, theme, state, expanded);
+function formatWriteHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
+	return formatFileChangeHeader("Create", path, theme, state, cwd);
 }
 
 function parseDiffLine(line: string): { prefix: string; lineNumber: string; content: string } | undefined {
@@ -352,9 +384,9 @@ function getReadRange(args: Record<string, unknown>): string {
 	return end === undefined ? `:${start}` : `:${start}-${end}`;
 }
 
-function formatReadCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "muted", expanded = false): string {
-	const path = collapsedText(shortenPath(stringArg(args.path)), expanded, COLLAPSED_PATH_CHARS);
-	return `${toolGlyph(theme, state)} ${toolName(theme, state === "error" ? "error" : "muted", "read")} ${theme.fg("accent", path)}${theme.fg("warning", getReadRange(args))}`;
+function formatReadCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state: GlyphState = "muted"): string {
+	const path = renderToolPath(pathArg(args.file_path ?? args.path), theme, cwd);
+	return `${toolGlyph(theme, state)} ${toolName(theme, state === "error" ? "error" : "muted", "read")} ${path}${theme.fg("warning", getReadRange(args))}`;
 }
 
 function formatBashCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "running", expanded = false): string {
@@ -397,8 +429,8 @@ function formatLsCall(args: Record<string, unknown>, theme: ThemeLike, state: Gl
 	return `${toolGlyph(theme, state)} ${toolName(theme, nameColor, "ls")} ${theme.fg("accent", path)}`;
 }
 
-function formatWriteCall(args: Record<string, unknown>, theme: ThemeLike, state?: GlyphState, expanded = false): string {
-	return formatWriteHeader(stringArg(args.path), theme, state ?? "running", expanded);
+function formatWriteCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state?: GlyphState): string {
+	return formatWriteHeader(stringArg(args.file_path ?? args.path), theme, state ?? "running", cwd);
 }
 
 function buildWriteDiffLines(content: string): string[] {
@@ -408,8 +440,8 @@ function buildWriteDiffLines(content: string): string[] {
 	return lines.map((line, index) => `+${String(index + 1).padStart(width)} ${line}`);
 }
 
-function formatEditCall(args: Record<string, unknown>, theme: ThemeLike, state?: GlyphState, expanded = false): string {
-	return formatEditHeader(stringArg(args.path), theme, state ?? "running", expanded);
+function formatEditCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state?: GlyphState): string {
+	return formatEditHeader(stringArg(args.file_path ?? args.path), theme, state ?? "running", cwd);
 }
 
 function hasImage(result: ToolResult): boolean {
@@ -421,7 +453,7 @@ function hasTruncation(details: unknown): boolean {
 }
 
 function registerDefaultTool(pi: ExtensionAPI, name: BuiltInToolName): void {
-	const template = getTemplateTool(name);
+	const template = getTemplateTool(name) as AnyToolDefinition;
 	const {
 		execute: _execute,
 		renderCall: _renderCall,
@@ -433,10 +465,10 @@ function registerDefaultTool(pi: ExtensionAPI, name: BuiltInToolName): void {
 	pi.registerTool({
 		...metadata,
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const tool = getBuiltInTools(ctx.cwd)[name];
+			const tool = getBuiltInTools(ctx.cwd)[name] as AnyToolDefinition;
 			return tool.execute(toolCallId, params, signal, onUpdate, ctx);
 		},
-	});
+	} as AnyToolDefinition);
 }
 
 function registerReadTool(pi: ExtensionAPI): void {
@@ -451,7 +483,7 @@ function registerReadTool(pi: ExtensionAPI): void {
 			const rowContext = context as RenderContext;
 			setStarted(rowContext);
 			const call = getCallText(rowContext);
-			call.setText(formatReadCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded));
+			call.setText(formatReadCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
 			return call;
 		},
 		renderResult(result, { expanded, isPartial }, theme, context) {
@@ -464,17 +496,17 @@ function registerReadTool(pi: ExtensionAPI): void {
 			const abnormal = context.isError || hasImage(typedResult) || hasTruncation(typedResult.details);
 
 			if (isPartial) {
-				call.setText(`${formatReadCall(args, theme, currentGlyphState(rowContext, "running"), expanded)} ${theme.fg("muted", "…")}`);
+				call.setText(`${formatReadCall(args, theme, context.cwd, currentGlyphState(rowContext, "running"))} ${theme.fg("muted", "…")}`);
 				return emptyText();
 			}
 
 			if (context.isError) {
 				const message = firstMeaningfulLine(text) || "read failed";
-				call.setText(`${formatReadCall(args, theme, settleGlyphState(rowContext, true), expanded)} ${theme.fg("error", "failed")}`);
+				call.setText(`${formatReadCall(args, theme, context.cwd, settleGlyphState(rowContext, true))} ${theme.fg("error", "failed")}`);
 				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
 			}
 
-			const successCall = formatReadCall(args, theme, settleGlyphState(rowContext, false), expanded);
+			const successCall = formatReadCall(args, theme, context.cwd, settleGlyphState(rowContext, false));
 			if (hasImage(typedResult)) {
 				call.setText(`${successCall} ${theme.fg("success", "🖼 image")}`);
 				return emptyText();
@@ -556,7 +588,7 @@ function registerEditTool(pi: ExtensionAPI): void {
 			const rowContext = context as RenderContext;
 			setStarted(rowContext);
 			const call = getCallText(rowContext);
-			call.setText(formatEditCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded));
+			call.setText(formatEditCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
 			return call;
 		},
 		renderResult(result, options, theme, context) {
@@ -567,19 +599,19 @@ function registerEditTool(pi: ExtensionAPI): void {
 			const call = getCallText(rowContext);
 
 			if (options.isPartial) {
-				call.setText(`${formatEditCall(args, theme, "running", options.expanded)} ${theme.fg("muted", "…")}`);
+				call.setText(`${formatEditCall(args, theme, context.cwd, "running")} ${theme.fg("muted", "…")}`);
 				return emptyText();
 			}
 
 			if (context.isError) {
 				const message = firstMeaningfulLine(getText(typedResult as ToolResult)) || "edit failed";
-				call.setText(`${formatEditCall(args, theme, settleGlyphState(rowContext, true), options.expanded)} ${theme.fg("error", "failed")}`);
+				call.setText(`${formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, true))} ${theme.fg("error", "failed")}`);
 				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
 			}
 
 			const diff = typedResult.details?.diff;
 			if (!diff) {
-				call.setText(`${formatEditCall(args, theme, settleGlyphState(rowContext, false), options.expanded)} ${theme.fg("success", "applied")}`);
+				call.setText(`${formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, false))} ${theme.fg("success", "applied")}`);
 				return emptyText();
 			}
 
@@ -589,7 +621,7 @@ function registerEditTool(pi: ExtensionAPI): void {
 			const visibleDiffLines = options.expanded ? diffLines : diffLines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
 			const hiddenCount = diffLines.length - visibleDiffLines.length;
 			const summary = `${additions === 0 ? "Added 0 lines" : `Added ${plural(additions, "line")}`}, ${removals === 0 ? "removed 0 lines" : `removed ${plural(removals, "line")}`}`;
-			call.setText(formatEditCall(args, theme, settleGlyphState(rowContext, false), options.expanded));
+			call.setText(formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, false)));
 			return new ClaudeStyleDiff(summary, visibleDiffLines, hiddenCount, options.expanded, theme);
 		},
 	});
@@ -607,7 +639,7 @@ function registerWriteTool(pi: ExtensionAPI): void {
 			const rowContext = context as RenderContext;
 			setStarted(rowContext);
 			const call = getCallText(rowContext);
-			call.setText(formatWriteCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded));
+			call.setText(formatWriteCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
 			return call;
 		},
 		renderResult(result, options, theme, context) {
@@ -622,25 +654,26 @@ function registerWriteTool(pi: ExtensionAPI): void {
 			const output = getText(result as ToolResult);
 			if (context.isError) {
 				const message = firstMeaningfulLine(output) || "write failed";
-				call.setText(`${formatWriteHeader(stringArg(args.path), theme, settleGlyphState(rowContext, true), options.expanded)} ${theme.fg("error", "failed")}`);
+				call.setText(`${formatWriteHeader(stringArg(args.file_path ?? args.path), theme, settleGlyphState(rowContext, true), context.cwd)} ${theme.fg("error", "failed")}`);
 				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
 			}
 			const visibleDiffLines = options.expanded ? diffLines : diffLines.slice(0, WRITE_COLLAPSED_DIFF_LINES);
 			const hiddenCount = diffLines.length - visibleDiffLines.length;
 			const summary = `Added ${plural(lineCount, "line")}, removed 0 lines`;
-			call.setText(`${formatWriteHeader(stringArg(args.path), theme, settleGlyphState(rowContext, false), options.expanded)} ${renderStatus(theme, true, plural(lineCount, "line"))}`);
+			call.setText(`${formatWriteHeader(stringArg(args.file_path ?? args.path), theme, settleGlyphState(rowContext, false), context.cwd)} ${renderStatus(theme, true, plural(lineCount, "line"))}`);
 			return new ClaudeStyleDiff(summary, visibleDiffLines, hiddenCount, options.expanded, theme);
 		},
 	});
 }
 
 function registerSearchLikeTool(pi: ExtensionAPI, name: "grep" | "find" | "ls"): void {
-	const template = getTemplateTool(name);
+	const template = getTemplateTool(name) as AnyToolDefinition;
 	pi.registerTool({
 		...template,
 		renderShell: "self",
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getBuiltInTools(ctx.cwd)[name].execute(toolCallId, params, signal, onUpdate, ctx);
+			const tool = getBuiltInTools(ctx.cwd)[name] as AnyToolDefinition;
+			return tool.execute(toolCallId, params, signal, onUpdate, ctx);
 		},
 		renderCall(args, theme, context) {
 			const rowContext = context as RenderContext;
@@ -678,7 +711,7 @@ function registerSearchLikeTool(pi: ExtensionAPI, name: "grep" | "find" | "ls"):
 
 			return output.trim() ? new Text(outputBlock(output, theme), 0, 0) : emptyText();
 		},
-	});
+	} as AnyToolDefinition);
 }
 
 function registerCompactTools(pi: ExtensionAPI): void {

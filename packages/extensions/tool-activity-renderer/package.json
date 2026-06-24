@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Compact custom rendering wrappers for Pi built-in file and shell tools.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/*.test.ts"
+  },
   "keywords": [
     "pi-package",
     "pi-extension"
