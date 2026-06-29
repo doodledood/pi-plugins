@@ -110,13 +110,20 @@ The checker prompt is adversarial: it treats completion as unproven, audits the 
 
 The controller publishes compact lifecycle status through Pi's extension status API under the `goal-controller` key. It does not own or customize the footer renderer; any installed statusline consumes the published status as a generic extension status.
 
-While a checker subprocess is running, the published status includes a subtle loading frame plus elapsed time and the configured timeout, for example:
+While a checker subprocess is running, the published status includes a subtle loading frame plus second-level elapsed time and the configured timeout, for example:
 
 ```text
 goal checking ⠋ 0:42/5m
 ```
 
-When a check is not running, the status stays compact, for example `goal active 3 turns`, `goal waiting user`, `goal paused`, or `goal complete`.
+While a goal is active and no checker is running, the status includes only calm wall-clock elapsed time since the goal started. The elapsed token is subtly highlighted with the statusbar effort/high theme color when theming is available, and it is rounded to the visible minute boundary instead of ticking every second, for example:
+
+```text
+goal active 12m
+goal active 1h 04m
+```
+
+Other non-checking lifecycle states stay compact, for example `goal waiting user`, `goal paused`, or `goal complete`.
 
 User commands that change goal state handle a running checker explicitly:
 

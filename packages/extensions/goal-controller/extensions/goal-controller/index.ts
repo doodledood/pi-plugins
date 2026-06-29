@@ -27,6 +27,7 @@ import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike } from
 const STATUS_KEY = "goal-controller";
 const STATE_ENTRY_TYPE = "goal-controller-state";
 const CHECKER_STATUS_INTERVAL_MS = 1_000;
+const ACTIVE_STATUS_REFRESH_GRANULARITY_MS = 60_000;
 const CHECKER_STATUS_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 export interface CheckerStatusRuntime {
@@ -59,6 +60,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   let loadedConfig: LoadedConfig = loadConfig();
   let activeGoal: ActiveGoal | undefined;
   let checkerRun: LiveCheckerRun | undefined;
+  let activeStatusTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingContinuationGoalId: string | undefined;
   let pendingContinuationPrompt: string | undefined;
 
@@ -69,9 +71,12 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   const setStatus = (ctx: ExtensionContext): void => {
     if (!activeGoal) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
+      stopActiveStatusTimer();
       return;
     }
-    ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal, checkerRuntimeFor(activeGoal)));
+    const now = Date.now();
+    ctx.ui.setStatus(STATUS_KEY, formatStatus(activeGoal, checkerRuntimeFor(activeGoal), now, { activeElapsedStyle: activeElapsedStyle(ctx) }));
+    scheduleActiveStatusRefresh(ctx, now);
   };
 
   const checkerRuntimeFor = (goal: ActiveGoal): CheckerStatusRuntime | undefined => {
@@ -81,6 +86,25 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       timeoutMs: checkerRun.timeoutMs,
       frame: checkerRun.frame,
     };
+  };
+
+  const stopActiveStatusTimer = (): void => {
+    if (activeStatusTimer !== undefined) {
+      clearTimeout(activeStatusTimer);
+      activeStatusTimer = undefined;
+    }
+  };
+
+  const scheduleActiveStatusRefresh = (ctx: ExtensionContext, now = Date.now()): void => {
+    stopActiveStatusTimer();
+    if (!activeGoal || activeGoal.status !== "active") return;
+
+    activeStatusTimer = setTimeout(() => {
+      activeStatusTimer = undefined;
+      if (!activeGoal || activeGoal.status !== "active") return;
+      setStatus(ctx);
+    }, activeStatusRefreshDelayMs(activeGoal, now));
+    activeStatusTimer.unref?.();
   };
 
   const stopCheckerStatusTimer = (run: LiveCheckerRun | undefined): void => {
@@ -309,6 +333,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
   pi.on("session_shutdown", (_event, ctx) => {
     resetCheckerRuntime(checkerRun, true);
+    stopActiveStatusTimer();
     if (activeGoal) persistGoal(activeGoal.status === "checking" ? pauseGoal(activeGoal, "checker interrupted by session shutdown; run /goal_resume to continue") : activeGoal);
     ctx.ui.setStatus(STATUS_KEY, undefined);
     clearPendingContinuation();
@@ -500,8 +525,16 @@ function findFinalAssistantMessage(messages: unknown[]): { stopReason?: string; 
   return undefined;
 }
 
-export function formatStatus(goal: ActiveGoal, checkerRuntime?: CheckerStatusRuntime, now = Date.now()): string {
-  if (goal.status === "active") return `goal active ${formatBudget(goal)}`;
+export function formatStatus(
+  goal: ActiveGoal,
+  checkerRuntime?: CheckerStatusRuntime,
+  now = Date.now(),
+  options: { activeElapsedStyle?: (elapsed: string) => string } = {},
+): string {
+  if (goal.status === "active") {
+    const elapsed = formatActiveElapsed(now - goal.startedAt);
+    return `goal active ${options.activeElapsedStyle?.(elapsed) ?? elapsed}`;
+  }
   if (goal.status === "checking") {
     if (!checkerRuntime) return "goal checking";
     return `goal checking ${checkerRuntime.frame} ${formatDuration(Math.max(0, now - checkerRuntime.startedAt))}/${formatDuration(checkerRuntime.timeoutMs)}`;
@@ -520,6 +553,50 @@ function formatCount(value: number): string {
   if (value < 1_000) return `${value}`;
   if (value < 1_000_000) return `${Number.isInteger(value / 1_000) ? value / 1_000 : (value / 1_000).toFixed(1)}k`;
   return `${Number.isInteger(value / 1_000_000) ? value / 1_000_000 : (value / 1_000_000).toFixed(1)}m`;
+}
+
+function activeElapsedStyle(ctx: ExtensionContext): (elapsed: string) => string {
+  return (elapsed) => {
+    const theme = (ctx.ui as { theme?: { fg?: (tone: string, text: string) => string } }).theme;
+    if (!theme?.fg) return elapsed;
+    try {
+      return theme.fg("thinkingHigh", elapsed);
+    } catch {
+      try {
+        return theme.fg("accent", elapsed);
+      } catch {
+        return elapsed;
+      }
+    }
+  };
+}
+
+function formatActiveElapsed(ms: number): string {
+  const totalMinutes = Math.floor(Math.max(0, ms) / ACTIVE_STATUS_REFRESH_GRANULARITY_MS);
+  if (totalMinutes < 1) return "<1m";
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    return minutes === 0 ? `${totalHours}h` : `${totalHours}h ${minutes.toString().padStart(2, "0")}m`;
+  }
+
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return hours === 0 ? `${days}d` : `${days}d ${hours.toString().padStart(2, "0")}h`;
+}
+
+export function activeStatusRefreshDelayMs(goal: ActiveGoal, now = Date.now()): number {
+  const elapsedMs = Math.max(0, now - goal.startedAt);
+  const refreshGranularityMs = activeStatusRefreshGranularityMs(elapsedMs);
+  const remainder = elapsedMs % refreshGranularityMs;
+  return Math.max(1, refreshGranularityMs - remainder);
+}
+
+function activeStatusRefreshGranularityMs(elapsedMs: number): number {
+  const totalMinutes = Math.floor(Math.max(0, elapsedMs) / ACTIVE_STATUS_REFRESH_GRANULARITY_MS);
+  return totalMinutes >= 24 * 60 ? 60 * ACTIVE_STATUS_REFRESH_GRANULARITY_MS : ACTIVE_STATUS_REFRESH_GRANULARITY_MS;
 }
 
 function formatDuration(ms: number): string {

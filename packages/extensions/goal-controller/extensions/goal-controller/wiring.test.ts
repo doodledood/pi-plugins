@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEndEvent, BeforeAgentStartEvent, ExtensionCommandContext, ExtensionContext, SessionStartEvent, SessionTreeEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { activate, formatStatus } from "./index.ts";
+import { activate, activeStatusRefreshDelayMs, formatStatus } from "./index.ts";
 import type { CheckerRunner, CheckerRunInput } from "./checker.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { createGoal, markChecking } from "./controller.ts";
@@ -97,6 +97,7 @@ interface CtxOptions {
   onStatus?: (key: string, value: string | undefined) => void;
   onNotify?: (message: string, level?: string) => void;
   signal?: AbortSignal;
+  theme?: { fg: (tone: string, text: string) => string };
 }
 
 function makeCtx(entries: SessionEntryLike[] = [], options: CtxOptions = {}): ExtensionCommandContext {
@@ -111,6 +112,7 @@ function makeCtx(entries: SessionEntryLike[] = [], options: CtxOptions = {}): Ex
         statuses[key] = value;
         options.onStatus?.(key, value);
       },
+      theme: options.theme,
       notify(message: string, level?: string) {
         notifications.push(message);
         options.onNotify?.(message, level);
@@ -169,6 +171,119 @@ function goalStatusLog(log: Array<{ key: string; value: string | undefined }>): 
 function persistedCheckingGoal(text = "persisted checking goal"): ActiveGoal {
   return markChecking(createGoal(text, DEFAULT_CONFIG, 0, Date.now() - 10_000), Date.now() - 1_000);
 }
+
+test("active status shows only calm wall-clock elapsed from goal start", () => {
+  const goal = createGoal("active elapsed goal", DEFAULT_CONFIG, 0, 0);
+  assert.equal(formatStatus({ ...goal, timeUsedSeconds: 9999, turnsUsed: 99 }, undefined, 42_000), "goal active <1m");
+  assert.equal(formatStatus({ ...goal, turnsUsed: 3 }, undefined, 5 * 60_000 + 42_000), "goal active 5m");
+  assert.equal(formatStatus({ ...goal, turnsUsed: 8 }, undefined, 64 * 60_000 + 5_000), "goal active 1h 04m");
+  assert.equal(formatStatus({ ...goal, turnsUsed: 12 }, undefined, 27 * 60 * 60_000), "goal active 1d 03h");
+});
+
+test("active status refresh waits until the next visible elapsed boundary", () => {
+  const goal = createGoal("active refresh goal", DEFAULT_CONFIG, 0, 0);
+  assert.equal(activeStatusRefreshDelayMs(goal, 0), 60_000);
+  assert.equal(activeStatusRefreshDelayMs(goal, 42_000), 18_000);
+  assert.equal(activeStatusRefreshDelayMs(goal, 60_000), 60_000);
+  assert.equal(activeStatusRefreshDelayMs(goal, 119_999), 1);
+  assert.equal(activeStatusRefreshDelayMs(goal, 27 * 60 * 60_000 + 42 * 60_000), 18 * 60_000);
+  assert.equal(activeStatusRefreshDelayMs(goal, 27 * 60 * 60_000 + 59 * 60_000 + 59_999), 1);
+});
+
+test("published active goal status schedules from the same clock sample it displays", async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
+  const scheduled: Array<{ delay: number; handle: ReturnType<typeof setTimeout> }> = [];
+  const goal = createGoal("boundary goal", DEFAULT_CONFIG, 0, 0);
+  let calls = 0;
+
+  Date.now = () => (calls++ === 0 ? 24 * 60 * 60_000 - 1 : 24 * 60 * 60_000);
+  globalThis.setTimeout = ((_handler: Parameters<typeof setTimeout>[0], timeout?: number) => {
+    const handle = { unref() {} } as ReturnType<typeof setTimeout>;
+    scheduled.push({ delay: Number(timeout), handle });
+    return handle;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const host = new FakeHost();
+    activate(host, new FakeChecker([]));
+    const statuses: Array<{ key: string; value: string | undefined }> = [];
+    const ctx = makeCtx([{ type: "custom", customType: "goal-controller-state", data: { goal } }], {
+      onStatus: (key, value) => statuses.push({ key, value }),
+    });
+
+    await host.handlers.session_start?.({ type: "session_start", reason: "startup" } as SessionStartEvent, ctx);
+
+    assert.equal(goalStatusLog(statuses).at(-1), "goal active 23h 59m");
+    assert.equal(scheduled[0]?.delay, 1);
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("published active goal status highlights elapsed and keeps calm refresh timers", async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
+  const scheduled: Array<{
+    delay: number;
+    cleared: boolean;
+    handle: ReturnType<typeof setTimeout>;
+    handler: Parameters<typeof setTimeout>[0];
+    args: unknown[];
+  }> = [];
+  let now = 1_000_000;
+
+  Date.now = () => now;
+  globalThis.setTimeout = ((handler: Parameters<typeof setTimeout>[0], timeout?: number, ...args: unknown[]) => {
+    const handle = { unref() {} } as ReturnType<typeof setTimeout>;
+    scheduled.push({ delay: Number(timeout), cleared: false, handle, handler, args });
+    return handle;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((handle?: string | number | NodeJS.Timeout) => {
+    const entry = scheduled.find((candidate) => candidate.handle === handle);
+    if (entry) entry.cleared = true;
+  }) as typeof clearTimeout;
+
+  try {
+    const host = new FakeHost();
+    activate(host, new FakeChecker([]));
+    const statuses: Array<{ key: string; value: string | undefined }> = [];
+    const ctx = makeCtx([], {
+      onStatus: (key, value) => statuses.push({ key, value }),
+      theme: { fg: (tone, text) => (tone === "thinkingHigh" ? `<high>${text}</high>` : text) },
+    });
+
+    await host.commandHandler?.("goal with calm active status", ctx);
+
+    assert.equal(goalStatusLog(statuses).at(-1), "goal active <high><1m</high>");
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0]!.delay, 60_000);
+    assert.notEqual(scheduled[0]!.delay, 1_000);
+
+    now += scheduled[0]!.delay;
+    if (typeof scheduled[0]!.handler !== "function") throw new Error("expected function timeout handler");
+    scheduled[0]!.handler(...scheduled[0]!.args);
+
+    assert.equal(goalStatusLog(statuses).at(-1), "goal active <high>1m</high>");
+    assert.equal(scheduled.length, 2);
+    assert.equal(scheduled[1]!.delay, 60_000);
+
+    await host.commandHandlers.get("goal_pause")?.("", ctx);
+
+    assert.equal(scheduled[1]!.cleared, true);
+    assert.equal(scheduled.length, 2);
+    assert.equal(goalStatusLog(statuses).at(-1), "goal paused");
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
 
 test("extension registers one model-facing goal tool and user-only lifecycle commands", () => {
   const host = new FakeHost();
