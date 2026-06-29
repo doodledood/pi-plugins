@@ -46,7 +46,7 @@ This extension replaces `@narumitw/pi-goal` for this machine. The old package ex
 /goal <goal text>     Start a goal from the user/harness
 /goal                 Show current goal status
 /goal_pause           Pause an active, checking, or waiting goal
-/goal_resume          Resume a paused, waiting, blocked, or budget-limited goal
+/goal_resume          Resume a paused, waiting, blocked, budget-limited, or completed goal
 /goal_edit            Open an editor UI prefilled with the current goal; submitting replaces it
 /goal_edit <text>     Replace the current goal text immediately
 /goal_clear           Clear the current goal
@@ -63,7 +63,7 @@ goal({ goal: string })
 - accepts any non-empty goal string when no live goal exists
 - rejects blank goals
 - returns `active_goal_exists` without mutating state if a goal is active/checking/waiting-for-user
-- creates a fresh active goal over a stopped paused/blocked/budget-limited goal without requiring `/goal_clear`
+- creates a fresh active goal over a completed goal or a stopped paused/blocked/budget-limited goal without requiring `/goal_clear`
 - never updates, edits, clears, pauses, resumes, or completes a live goal
 
 ## Writing effective goal text
@@ -103,6 +103,8 @@ On each completed worker turn, the controller:
    - `decision: "continue"` → checker guidance is fed into the next worker turn
    - `decision: "waiting_for_user"` → automatic continuation stops until the next user-driven worker turn, then goal context resumes automatically
    - `decision: "blocked"` → goal becomes blocked and continuation stops until resumed
+
+A completed goal is not live. The model-facing `goal` tool may supersede it with a fresh goal, and the user-only `/goal_resume` command may reactivate the same goal record. Resuming a completed goal preserves its checker history and counters for audit continuity, but clears the operational `lastCheckerVerdict` so the previous completion is historical rather than current proof.
 
 The checker prompt is adversarial: it treats completion as unproven, audits the exact goal text requirement-by-requirement, treats worker claims as claims rather than proof, and prefers false negatives over false positives. The checker receives compact goal/session navigation context rather than capped inline history: goal state, the current Pi session file path when available, current leaf entry id, branch/message counts, and latest-turn tool metadata. The checker always runs with one audit-only capability profile: built-in `read`, `grep`, `find`, and `ls` plus skill discovery. Extension tools, prompt templates, context files, shell execution, and file mutation tools are disabled. When read/search tools and a persisted session file are available, the checker may review the session artifact, referenced files, workspace search results, or relevant skills when that helps judge completion. It must distinguish worker-surfaced evidence from checker-reviewed evidence, and it must not use checker-side review to perform omitted primary success work on the worker's behalf: if tests/builds/evals/deployments are required and the session state does not show they were done, it tells the worker to run or surface them. It must choose `continue` while the worker has a meaningful next action, including asking the user for a missing success signal; `blocked` is reserved for cases where no safe/actionable next step remains.
 
@@ -207,9 +209,9 @@ To roll back, add that package entry back to `packages`, remove or disable this 
 
 ## Current limitations
 
-- Single live goal per session; stopped paused/blocked/budget-limited goals may be superseded by a new goal.
+- Single live goal per session; completed goals and stopped paused/blocked/budget-limited goals may be superseded by a new goal.
 - No hard goal-quality enforcement.
-- No model-callable lifecycle controls beyond starting a fresh goal and superseding stopped goals; no live-goal update/replace/clear/pause/resume/complete.
+- No model-callable lifecycle controls beyond starting a fresh goal and superseding completed or stopped goals; no live-goal update/replace/clear/pause/resume/complete.
 - No worker progress tool; progress is ordinary assistant responses and tool-result evidence in the session.
 - Checker is tool-assisted but not a worker substitute. Its fixed audit-only profile allows read/search/list tools and skills, while disabling shell execution, file mutation, extension tools, prompt templates, and context files. The checker should not run omitted primary verification work such as required test/build/eval/deploy steps on the worker's behalf.
 - In-memory or otherwise unpersisted sessions provide degraded checker evidence because there is no session file for deeper checker review.

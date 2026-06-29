@@ -291,8 +291,10 @@ test("extension registers one model-facing goal tool and user-only lifecycle com
   assert.deepEqual(host.tools.map((tool) => tool.name), ["goal"]);
   assert.deepEqual([...host.commandHandlers.keys()].sort(), ["goal", "goal_clear", "goal_edit", "goal_pause", "goal_resume"]);
   assert.equal(host.commandHandler !== undefined, true);
-  assert.equal(host.tools[0]?.description.includes("may supersede a stopped goal"), true);
+  assert.equal(host.tools[0]?.description.includes("completed goals"), true);
+  assert.equal(host.tools[0]?.description.includes("stopped paused/blocked/budget-limited goals"), true);
   assert.equal(host.tools[0]?.description.includes("never updates, edits, clears, pauses, resumes, or completes a live goal"), true);
+  assert.equal(host.tools[0]?.promptGuidelines?.some((guideline) => guideline.includes("completed goals are not live")), true);
 });
 
 test("goal command supersedes a stopped paused goal with a fresh active goal", async () => {
@@ -328,6 +330,66 @@ test("model-facing goal tool supersedes a stopped paused goal with a fresh activ
   assert.equal(nextGoal?.goal?.goal, "new tool goal");
   assert.equal(nextGoal?.goal?.status, "active");
   assert.notEqual(nextGoal?.goal?.id, oldGoalId);
+});
+
+test("model-facing goal tool supersedes a completed goal with a fresh active goal", async () => {
+  const host = new FakeHost();
+  activate(
+    host,
+    new FakeChecker([
+      {
+        decision: "complete",
+        complete: true,
+        reason: "all evidence proven",
+        evidence: ["fake"],
+        requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+      },
+    ]),
+  );
+  const ctx = makeCtx();
+  await host.commandHandler?.("old completed goal", ctx);
+  const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "complete");
+
+  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as ExtensionContext);
+  const nextGoal = host.customEntries.at(-1)?.data as { goal?: { id?: string; goal?: string; status?: string } } | undefined;
+  assert.match(result?.content[0]?.type === "text" ? result.content[0].text : "", /Goal started/iu);
+  assert.equal(nextGoal?.goal?.goal, "new tool goal");
+  assert.equal(nextGoal?.goal?.status, "active");
+  assert.notEqual(nextGoal?.goal?.id, oldGoalId);
+});
+
+test("goal_resume reactivates a completed goal without stale completion verdict", async () => {
+  const host = new FakeHost();
+  activate(
+    host,
+    new FakeChecker([
+      {
+        decision: "complete",
+        complete: true,
+        reason: "all evidence proven",
+        evidence: ["fake"],
+        requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+      },
+    ]),
+  );
+  const ctx = makeCtx();
+  await host.commandHandler?.("resumable completed goal", ctx);
+  const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "complete");
+  assert.equal(latestGoal(host)?.lastCheckerVerdict?.complete, true);
+
+  await host.commandHandlers.get("goal_resume")?.("", ctx);
+
+  const resumed = host.customEntries.at(-1)?.data as { goal?: { id?: string; status?: string; checkerHistory?: unknown[]; checkerIteration?: number; lastCheckerVerdict?: unknown } } | undefined;
+  assert.equal(resumed?.goal?.id, oldGoalId);
+  assert.equal(resumed?.goal?.status, "active");
+  assert.equal(resumed?.goal?.lastCheckerVerdict, undefined);
+  assert.equal(resumed?.goal?.checkerHistory?.length, 1);
+  assert.equal(resumed?.goal?.checkerIteration, 1);
+  assert.match(host.sentMessages.at(-1)?.content ?? "", /resumable completed goal/iu);
 });
 
 test("goal_edit with args replaces the current goal immediately", async () => {

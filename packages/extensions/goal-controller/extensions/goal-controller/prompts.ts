@@ -7,10 +7,10 @@ export const GOAL_DESCRIPTION =
   "Write the goal as a compact completion contract: state the durable objective, desired end state, verification signal, important constraints, and any stop/block condition. " +
   "The goal may reference files, docs, issues, or plans for context. Prefer text standalone enough for an independent checker to understand what done means. " +
   "For longer goals, include how compact progress should be recorded, such as checkpoint notes covering what changed, what was verified, what remains, and blockers. " +
-  "goal creates a fresh goal; it may supersede a stopped goal but never updates, edits, clears, pauses, resumes, or completes a live goal.";
+  "goal creates a fresh goal; it may supersede stopped paused/blocked/budget-limited goals or completed goals, but never updates, edits, clears, pauses, resumes, or completes a live goal.";
 
 export const GOAL_GUIDELINES = [
-  "Use goal only when no live goal is active and the work may require multiple turns toward a verifiable end state.",
+  "Use goal only when no live goal is active and the work may require multiple turns toward a verifiable end state; completed goals are not live, so a fresh goal may be started after status complete.",
   "When calling goal, put the objective, done criteria, verification signal, constraints, and stop/block condition into the single goal string; include compact checkpoint-progress expectations when useful.",
   "Do not call goal to replace or narrow a live goal. If another goal is active, checking, or waiting for user input, continue it or ask the user to pause or clear it; edit only when the goal is not checking.",
 ] as const;

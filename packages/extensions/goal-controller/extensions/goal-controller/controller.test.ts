@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheckerVerdict, loadGoalFromSession, markChecking, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
+import { applyCheckerVerdict, canResumeGoal, clearGoal, loadGoalFromSession, markChecking, maybeApplyBudgetLimit, pauseGoal, resumeGoal, startGoal, updateUsage } from "./controller.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 const config = DEFAULT_CONFIG;
@@ -91,7 +91,7 @@ test("startGoal can create a new goal after stopped budget-limited goal", () => 
   assert.notEqual(second.goal.id, budgetLimited.id);
 });
 
-test("startGoal can create a new goal after terminal complete", () => {
+test("startGoal can create a new goal after a completed non-live goal", () => {
   const first = startGoal(undefined, "first", config, 0);
   if (!first.ok) throw new Error("expected first goal");
   const complete = applyCheckerVerdict(first.goal, { decision: "complete", complete: true, reason: "done" }, config, true);
@@ -101,13 +101,76 @@ test("startGoal can create a new goal after terminal complete", () => {
   assert.equal(second.goal.goal, "second");
 });
 
-test("checker complete is the only terminal complete transition in controller", () => {
+test("resume policy treats completed goals as resumable and cleared goals as not resumable", () => {
+  const first = startGoal(undefined, "first", config, 0);
+  if (!first.ok) throw new Error("expected first goal");
+  const complete = applyCheckerVerdict(first.goal, { decision: "complete", complete: true, reason: "done" }, config, true);
+  const cleared = clearGoal(complete);
+
+  assert.equal(canResumeGoal(first.goal), false);
+  assert.equal(canResumeGoal(markChecking(first.goal)), false);
+  assert.equal(canResumeGoal(complete), true);
+  assert.equal(canResumeGoal(cleared), false);
+});
+
+test("checker complete verdict records completed state in controller", () => {
   const started = startGoal(undefined, "finish task", config, 0);
   if (!started.ok) throw new Error("expected goal");
   const complete = applyCheckerVerdict(started.goal, { decision: "complete", complete: true, reason: "all criteria proven", evidence: ["tests pass"] }, config, true);
   assert.equal(complete.status, "complete");
   assert.equal(complete.lastCheckerVerdict?.complete, true);
   assert.equal(complete.awaitingContinuationTurn, false);
+});
+
+test("resumeGoal reactivates completed goals while making prior completion historical", () => {
+  const started = startGoal(undefined, "finish task", { ...config, defaultTokenBudget: 100, defaultTurnBudget: 5, defaultTimeBudgetSeconds: 60 }, 10, 1_000);
+  if (!started.ok) throw new Error("expected goal");
+  const used = updateUsage(started.goal, 42, 4_000, true);
+  const continued = applyCheckerVerdict(used, { decision: "continue", complete: false, reason: "need more evidence" }, config, true, 5_000);
+  const complete = applyCheckerVerdict(
+    continued,
+    {
+      decision: "complete",
+      complete: true,
+      reason: "all criteria proven",
+      evidence: ["tests pass"],
+      requirements: [{ requirement: "tests", status: "satisfied", evidence: "tests pass" }],
+    },
+    config,
+    true,
+    6_000,
+  );
+
+  const resumed = resumeGoal(complete, 7_000);
+
+  assert.equal(resumed.status, "active");
+  assert.equal(resumed.id, complete.id);
+  assert.equal(resumed.goal, complete.goal);
+  assert.equal(resumed.lastCheckerVerdict, undefined);
+  assert.equal(resumed.checkerHistory.length, 2);
+  assert.equal(resumed.checkerHistory.at(-1)?.decision, "complete");
+  assert.equal(resumed.checkerIteration, complete.checkerIteration);
+  assert.equal(resumed.iteration, complete.iteration);
+  assert.equal(resumed.tokensUsed, complete.tokensUsed);
+  assert.equal(resumed.turnsUsed, complete.turnsUsed);
+  assert.equal(resumed.timeUsedSeconds, complete.timeUsedSeconds);
+  assert.equal(resumed.tokenBudget, complete.tokenBudget);
+  assert.equal(resumed.turnBudget, complete.turnBudget);
+  assert.equal(resumed.timeBudgetSeconds, complete.timeBudgetSeconds);
+  assert.equal(resumed.awaitingContinuationTurn, false);
+  assert.equal(resumed.consecutiveNoToolContinuations, 0);
+  assert.equal(resumed.lastTransitionReason, "resumed by user");
+});
+
+test("resumeGoal preserves last checker verdict for non-complete resumable goals", () => {
+  const started = startGoal(undefined, "finish task", config, 0);
+  if (!started.ok) throw new Error("expected goal");
+  const waiting = applyCheckerVerdict(started.goal, { decision: "waiting_for_user", complete: false, reason: "need user input" }, config, true);
+  const resumed = resumeGoal(waiting);
+
+  assert.equal(resumed.status, "active");
+  assert.equal(resumed.lastCheckerVerdict, waiting.lastCheckerVerdict);
+  assert.equal(resumed.lastCheckerVerdict?.decision, "waiting_for_user");
 });
 
 test("checker not-complete keeps active and prepares continuation guidance", () => {

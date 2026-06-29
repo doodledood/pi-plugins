@@ -25,7 +25,7 @@ const GOAL_STATUS_POLICY = {
   paused: { label: "paused", live: false, pausable: false, resumable: true, editable: true },
   blocked: { label: "blocked", live: false, pausable: false, resumable: true, editable: true },
   budget_limited: { label: "budget", live: false, pausable: false, resumable: true, editable: true },
-  complete: { label: "complete", live: false, pausable: false, resumable: false, editable: false },
+  complete: { label: "complete", live: false, pausable: false, resumable: true, editable: false },
   cleared: { label: "cleared", live: false, pausable: false, resumable: false, editable: false },
 } as const satisfies Record<GoalStatus, GoalStatusPolicy>;
 
@@ -230,6 +230,7 @@ export function clearGoal(goal: ActiveGoal | undefined, now = Date.now()): Activ
 export function resumeGoal(goal: ActiveGoal, now = Date.now()): ActiveGoal {
   return {
     ...transitionGoal(goal, "active", "resumed by user", now),
+    lastCheckerVerdict: goal.status === "complete" ? undefined : goal.lastCheckerVerdict,
     awaitingContinuationTurn: false,
     consecutiveNoToolContinuations: 0,
   };

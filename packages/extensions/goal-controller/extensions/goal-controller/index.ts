@@ -235,7 +235,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   });
 
   pi.registerCommand("goal_resume", {
-    description: "Resume a paused, waiting, blocked, or budget-limited goal. User-only command; not model-callable.",
+    description: "Resume a paused, waiting, blocked, budget-limited, or completed goal. User-only command; not model-callable.",
     handler: async (args, ctx) => {
       reloadConfig(ctx);
       if (args.trim()) {
@@ -243,7 +243,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
       if (!canResumeGoal(activeGoal)) {
-        ctx.ui.notify("No paused, waiting, blocked, or budget-limited goal can be resumed.", "warning");
+        ctx.ui.notify("No paused, waiting, blocked, budget-limited, or completed goal can be resumed.", "warning");
         return;
       }
       activeGoal = resumeGoal(activeGoal);
@@ -557,8 +557,7 @@ function formatCount(value: number): string {
 
 function activeElapsedStyle(ctx: ExtensionContext): (elapsed: string) => string {
   return (elapsed) => {
-    const theme = (ctx.ui as { theme?: { fg?: (tone: string, text: string) => string } }).theme;
-    if (!theme?.fg) return elapsed;
+    const theme = ctx.ui.theme;
     try {
       return theme.fg("thinkingHigh", elapsed);
     } catch {

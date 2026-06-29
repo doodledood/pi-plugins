@@ -36,9 +36,14 @@ _Avoid_: Non-terminal goal when the distinction includes stopped states.
 A goal controller goal that is paused, blocked, or budget-limited and may be replaced by a newly started goal without an explicit clear.
 _Avoid_: Inactive goal when the lifecycle boundary is ambiguous.
 
+**Completed goal**:
+A goal controller goal with status complete that is not live and may be resumed or superseded while preserving prior checker verdicts only as history.
+_Avoid_: Terminal goal when resumability matters.
+
 ## Relationships
 
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
+- A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.
 
 ## Flagged ambiguities
