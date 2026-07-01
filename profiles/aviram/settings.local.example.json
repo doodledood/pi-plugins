@@ -14,6 +14,9 @@
   "packages": [
     "npm:pi-mcp-adapter",
     "npm:@gotgenes/pi-subagents",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-todo",
+    "npm:pi-web-access",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/context-breakdown",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/goal-controller",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/gpt-fast-toggle",

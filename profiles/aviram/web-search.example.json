@@ -1,0 +1,5 @@
+{
+  "provider": "tavily",
+  "tavilyApiKey": "<TAVILY_API_KEY>",
+  "workflow": "summary-review"
+}

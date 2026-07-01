@@ -35,6 +35,7 @@ session*/
 mcp-oauth/
 mcp.json
 mcp-onboarding.json
+web-search.json
 mcp.json.pre-*.bak
 mcp-cache.json
 mcp-npx-cache.json
@@ -50,6 +51,7 @@ profiles/**/git/
 profiles/**/npm/
 profiles/**/mcp.json
 profiles/**/mcp-onboarding.json
+profiles/**/web-search.json
 profiles/**/mcp.json.pre-*.bak
 profiles/**/auth.json
 profiles/**/settings.json

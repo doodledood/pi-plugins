@@ -5,10 +5,6 @@
       "args": [],
       "directTools": true
     },
-    "tavily": {
-      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=<TAVILY_API_KEY>",
-      "directTools": true
-    },
     "direct-url-mcp": {
       "url": "https://<MCP_HOST>/<MCP_PATH>",
       "directTools": true

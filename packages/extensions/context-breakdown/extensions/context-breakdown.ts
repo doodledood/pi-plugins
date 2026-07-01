@@ -37,7 +37,7 @@ import type {
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 
-// pi-native tools (everything else is treated as an MCP tool).
+// Pi-native and local extension tools (everything else is treated as an MCP tool).
 const PI_BUILTIN_TOOLS = new Set([
   "read",
   "bash",
@@ -53,6 +53,11 @@ const PI_BUILTIN_TOOLS = new Set([
   "steer_subagent",
   "goal_complete",
   "ask_user",
+  "ask_user_question",
+  "todo",
+  "web_search",
+  "fetch_content",
+  "get_search_content",
   "mcp",
 ]);
 
