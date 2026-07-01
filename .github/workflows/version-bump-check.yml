@@ -1,0 +1,37 @@
+name: Version bump check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure package changes bump the version
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.sha }}"
+
+          if git diff --quiet "$base" "$head" -- packages; then
+            echo "No package changes; version bump not required."
+            exit 0
+          fi
+
+          base_version=$(git show "$base:package.json" | jq -r '.version')
+          head_version=$(git show "$head:package.json" | jq -r '.version')
+
+          if [ "$base_version" = "$head_version" ]; then
+            echo "::error::packages/** changed but the root package.json version ($head_version) was not bumped. Bump the root version (and the affected package's version) so CI can publish a matching git tag on merge. See CLAUDE.md's tag/version sync policy."
+            exit 1
+          fi
+
+          echo "Version bumped: $base_version -> $head_version"

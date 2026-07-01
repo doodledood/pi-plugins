@@ -19,3 +19,12 @@ When adding, removing, renaming, or moving an extension/theme, keep all install 
 - `package-lock.json`: regenerate with `npm install --package-lock-only --ignore-scripts` when package metadata/workspaces change; remove `node_modules/` afterward.
 
 If an extension starts reading or writing local files, env vars, credentials, browser profiles, caches, or generated state, document that in its package README and add/verify matching `.gitignore` coverage. Do not leave stale install paths such as `~/.pi/agent/extensions/<name>` unless that is truly the supported install mode.
+
+## Tag/version sync policy
+
+Pi clients install this repo via a Git source pinned to a release tag (`git:github.com/doodledood/pi-plugins@vX.Y.Z`). A tag that doesn't exist, or that lags the version referenced in the docs, breaks installs/updates for every client pinned to it. To keep tags and docs always in sync:
+
+- Any change under `packages/**` must bump the root `package.json` `version` (and the affected package's own `version`) in the same change. Bump minor for new features, patch for fixes, per semver.
+- Update every `@vX.Y.Z` reference (`README.md`, `docs/installing.md`, each changed package's `README.md`) to the new version in the same change.
+- `.github/workflows/tag-release.yml` runs on every push to `main`: it walks the root `package.json` version history and pushes a matching `vX.Y.Z` tag (plus a GitHub release) for any version that doesn't have one yet. It backfills gaps automatically, so never hand-create a release tag — just bump the version and let it merge.
+- `.github/workflows/version-bump-check.yml` fails PRs that touch `packages/**` without bumping the root version, so this can't regress silently again.
