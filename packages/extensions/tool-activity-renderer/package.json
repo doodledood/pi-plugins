@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-tool-activity-renderer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Compact custom rendering wrappers for Pi built-in file and shell tools.",
   "scripts": {

@@ -35,7 +35,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.5.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.6.0",
       "extensions": ["packages/extensions/model-aliases/extensions/model-aliases/index.ts"],
       "skills": [],
       "prompts": [],
@@ -47,34 +47,41 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-Aliases are configured under the `model-aliases` key in Pi settings. The extension reads settings in normal priority order:
+Aliases are configured in `model-aliases.json`. The extension reads config files in normal priority order:
 
-1. `~/.pi/agent/settings.json`
-2. `$PI_AGENT_HOME/settings.json`, when set
-3. `<cwd>/.pi/settings.json`
+1. `~/.pi/agent/model-aliases.json`
+2. `$PI_AGENT_HOME/model-aliases.json`, when set
+3. `<cwd>/.pi/model-aliases.json`
 
-Higher-priority files override the lower-priority `model-aliases` object. After editing settings, run `/reload` or restart Pi.
+Higher-priority files override lower-priority fields. After editing config, run `/reload` or restart Pi.
 
 ### GPT-5.5 1M example
 
+`~/.pi/agent/model-aliases.json`:
+
 ```json
 {
-  "model-aliases": {
-    "enabled": true,
-    "aliases": [
-      {
-        "provider": "openai-1m",
-        "providerName": "OpenAI 1M Context",
-        "id": "gpt-5.5-1m",
-        "name": "GPT-5.5 1M",
-        "targetProvider": "openai",
-        "targetModel": "gpt-5.5",
-        "apiKey": "$OPENAI_API_KEY",
-        "contextWindow": 1050000,
-        "maxTokens": 128000
-      }
-    ]
-  },
+  "enabled": true,
+  "aliases": [
+    {
+      "provider": "openai-1m",
+      "providerName": "OpenAI 1M Context",
+      "id": "gpt-5.5-1m",
+      "name": "GPT-5.5 1M",
+      "targetProvider": "openai",
+      "targetModel": "gpt-5.5",
+      "apiKey": "$OPENAI_API_KEY",
+      "contextWindow": 1050000,
+      "maxTokens": 128000
+    }
+  ]
+}
+```
+
+Then include the alias in `~/.pi/agent/settings.json` if you want it in the scoped model cycle:
+
+```json
+{
   "enabledModels": [
     "openai/gpt-5.5:xhigh",
     "openai-1m/gpt-5.5-1m:xhigh"
@@ -90,15 +97,13 @@ If `provider/id` already exists, your configured entry wins and sibling models r
 
 ```json
 {
-  "model-aliases": {
-    "aliases": [
-      {
-        "provider": "openai",
-        "id": "gpt-5.5",
-        "contextWindow": 1050000
-      }
-    ]
-  }
+  "aliases": [
+    {
+      "provider": "openai",
+      "id": "gpt-5.5",
+      "contextWindow": 1050000
+    }
+  ]
 }
 ```
 

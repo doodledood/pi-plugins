@@ -1,52 +1,37 @@
 {
-  "model-aliases": {
-    "enabled": true,
-    "aliases": [
-      {
-        "provider": "openai-1m",
-        "providerName": "OpenAI 1M Context",
-        "id": "gpt-5.5-1m",
-        "name": "GPT-5.5 1M",
-        "targetProvider": "openai",
-        "targetModel": "gpt-5.5",
-        "apiKey": "$OPENAI_API_KEY",
-        "reasoning": true,
-        "thinkingLevelMap": {
-          "off": "none",
-          "minimal": null,
-          "xhigh": "xhigh"
-        },
-        "input": ["text", "image"],
-        "contextWindow": 1050000,
-        "maxTokens": 128000,
-        "cost": {
-          "input": 5,
-          "output": 30,
-          "cacheRead": 0.5,
-          "cacheWrite": 0
-        }
-      },
-      {
-        "provider": "openai-1m",
-        "providerName": "OpenAI 1M Context",
-        "id": "gpt-5.6-1m",
-        "name": "GPT-5.6 1M",
-        "targetProvider": "openai",
-        "targetModel": "gpt-5.6",
-        "api": "openai-responses",
-        "baseUrl": "https://api.openai.com/v1",
-        "apiKey": "$OPENAI_API_KEY",
-        "reasoning": true,
-        "input": ["text", "image"],
-        "contextWindow": 1050000,
-        "maxTokens": 128000,
-        "cost": {
-          "input": 5,
-          "output": 30,
-          "cacheRead": 0.5,
-          "cacheWrite": 0
-        }
+  "enabled": true,
+  "aliases": [
+    {
+      "provider": "openai-1m",
+      "providerName": "OpenAI 1M Context",
+      "id": "gpt-5.5-1m",
+      "name": "GPT-5.5 1M",
+      "targetProvider": "openai",
+      "targetModel": "gpt-5.5",
+      "apiKey": "$OPENAI_API_KEY",
+      "contextWindow": 1050000,
+      "maxTokens": 128000
+    },
+    {
+      "provider": "openai-1m",
+      "providerName": "OpenAI 1M Context",
+      "id": "gpt-5.6-1m",
+      "name": "GPT-5.6 1M",
+      "targetProvider": "openai",
+      "targetModel": "gpt-5.6",
+      "api": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "$OPENAI_API_KEY",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "cost": {
+        "input": 5,
+        "output": 30,
+        "cacheRead": 0.5,
+        "cacheWrite": 0
       }
-    ]
-  }
+    }
+  ]
 }

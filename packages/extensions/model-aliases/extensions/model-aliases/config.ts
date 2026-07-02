@@ -48,30 +48,28 @@ interface RawObject {
   [key: string]: unknown;
 }
 
-const SETTINGS_KEY = "model-aliases";
-const DEFAULT_COST: ModelAliasCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const CONFIG_FILE_NAME = "model-aliases.json";
 
-export function defaultSettingsPaths(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
+export function defaultConfigPaths(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
   const home = env.HOME ?? env.USERPROFILE ?? ".";
-  const paths = [join(home, ".pi", "agent", "settings.json")];
+  const paths = [join(home, ".pi", "agent", CONFIG_FILE_NAME)];
 
   if (env.PI_AGENT_HOME) {
-    paths.push(join(env.PI_AGENT_HOME, "settings.json"));
+    paths.push(join(env.PI_AGENT_HOME, CONFIG_FILE_NAME));
   }
 
-  paths.push(join(cwd, ".pi", "settings.json"));
+  paths.push(join(cwd, ".pi", CONFIG_FILE_NAME));
 
   return [...new Set(paths)];
 }
 
-export function loadConfig(paths = defaultSettingsPaths()): ModelAliasesConfig {
+export function loadConfig(paths = defaultConfigPaths()): ModelAliasesConfig {
   let merged: RawObject | undefined;
 
   for (const path of paths) {
-    const settings = readJsonObject(path);
-    const section = settings?.[SETTINGS_KEY];
-    if (isPlainObject(section)) {
-      merged = { ...(merged ?? {}), ...section };
+    const config = readJsonObject(path);
+    if (config) {
+      merged = { ...(merged ?? {}), ...config };
     }
   }
 

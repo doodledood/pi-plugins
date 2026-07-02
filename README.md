@@ -36,7 +36,7 @@ Global skills are intentionally not included in this repo.
 The root package lists all included resources. Installing it without filters loads every extension and theme declared in `package.json`:
 
 ```bash
-pi install git:github.com/doodledood/pi-plugins@v0.5.0
+pi install git:github.com/doodledood/pi-plugins@v0.6.0
 ```
 
 Use this only when you want the full curated resource set.
@@ -51,7 +51,7 @@ Extension example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.5.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.6.0",
       "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
       "prompts": [],
       "themes": []
@@ -67,7 +67,7 @@ Theme example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.5.0",
+      "source": "git:github.com/doodledood/pi-plugins@v0.6.0",
       "extensions": [],
       "prompts": [],
       "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
@@ -76,7 +76,7 @@ Theme example:
 }
 ```
 
-Do not rely on undocumented Git subdirectory install syntax. The examples use the pinned `@v0.5.0` release tag. Use `@main` only when you intentionally want the latest development version.
+Do not rely on undocumented Git subdirectory install syntax. The examples use the pinned `@v0.6.0` release tag. Use `@main` only when you intentionally want the latest development version.
 
 ## Install one package from a local clone
 
@@ -92,9 +92,9 @@ See [`profiles/aviram/README.md`](profiles/aviram/README.md). The profile is a m
 
 It includes:
 
-- local-path settings examples for extensions/theme
+- upstream-tagged and local-path settings examples for packages/theme/model cycle
 - MCP, model, `pi-web-access` web-search, and `pi-image-gen` defaults/templates
-- extension config examples/overrides
+- per-extension config examples/overrides, including `model-aliases`
 - Aviram's `AGENTS.md` / `APPEND_SYSTEM.md`
 
 ## Security

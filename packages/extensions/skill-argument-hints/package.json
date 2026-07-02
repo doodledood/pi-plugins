@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-skill-argument-hints",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Show argument-hint frontmatter as phantom hints for Pi skill commands.",
   "keywords": [

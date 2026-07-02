@@ -58,28 +58,24 @@ test("normalizeConfig drops invalid aliases and honors enabled:false", () => {
   assert.equal(config.aliases[1]?.targetModel, "real-model");
 });
 
-test("loadConfig merges model-aliases settings from low to high priority files", () => {
+test("loadConfig merges model-aliases config files from low to high priority", () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-model-aliases-"));
-  const globalPath = join(dir, "global-settings.json");
-  const projectPath = join(dir, "project-settings.json");
+  const globalPath = join(dir, "global-model-aliases.json");
+  const projectPath = join(dir, "project-model-aliases.json");
   mkdirSync(dir, { recursive: true });
 
   writeFileSync(
     globalPath,
     `${JSON.stringify({
-      "model-aliases": {
-        enabled: false,
-        aliases: [{ provider: "global", id: "global-alias", targetModel: "global-real" }],
-      },
+      enabled: false,
+      aliases: [{ provider: "global", id: "global-alias", targetModel: "global-real" }],
     })}\n`,
   );
   writeFileSync(
     projectPath,
     `${JSON.stringify({
-      "model-aliases": {
-        enabled: true,
-        aliases: [{ provider: "project", id: "project-alias", targetModel: "project-real" }],
-      },
+      enabled: true,
+      aliases: [{ provider: "project", id: "project-alias", targetModel: "project-real" }],
     })}\n`,
   );
 
