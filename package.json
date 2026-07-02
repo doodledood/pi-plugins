@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Aviram's Pi extensions, theme, and setup profiles.",
@@ -20,6 +20,7 @@
       "./packages/extensions/context-breakdown/extensions/context-breakdown.ts",
       "./packages/extensions/gpt-fast-toggle/extensions/gpt-fast-toggle.ts",
       "./packages/extensions/managed-chrome-devtools/extensions/managed-chrome-devtools.ts",
+      "./packages/extensions/model-aliases/extensions/model-aliases/index.ts",
       "./packages/extensions/message-stash/extensions/message-stash.ts",
       "./packages/extensions/simple-statusline/extensions/simple-statusline.ts",
       "./packages/extensions/skill-argument-hints/extensions/skill-argument-hints.ts",
@@ -30,8 +31,8 @@
     ]
   },
   "scripts": {
-    "test": "npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-tool-activity-renderer",
-    "typecheck": "npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
+    "test": "npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "typecheck": "npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
     "verify:structure": "node scripts/verify-structure.mjs",
     "verify": "npm run verify:structure && npm run typecheck && npm test"
   },

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-managed-chrome-devtools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Manage a persistent Chrome DevTools MCP browser profile and wrapper from Pi.",
   "keywords": [

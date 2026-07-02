@@ -1,0 +1,43 @@
+{
+  "name": "@doodledood/pi-model-aliases",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Configurable model aliases for Pi: show custom model ids while sending existing upstream model ids.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/model-aliases/*.test.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "model-alias",
+    "model-overrides"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/model-aliases/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/model-aliases"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/model-aliases#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json"
+  ]
+}
