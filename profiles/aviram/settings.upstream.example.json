@@ -1,0 +1,44 @@
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "openai/gpt-5.5:xhigh",
+    "openai-1m/gpt-5.5-1m:xhigh",
+    "anthropic/claude-opus-4-8:xhigh",
+    "anthropic/claude-fable-5:xhigh"
+  ],
+  "followUpMode": "all",
+  "steeringMode": "all",
+  "enableInstallTelemetry": false,
+  "theme": "deep-focus-pi",
+  "model-aliases": {
+    "enabled": true,
+    "aliases": [
+      {
+        "provider": "openai-1m",
+        "providerName": "OpenAI 1M Context",
+        "id": "gpt-5.5-1m",
+        "name": "GPT-5.5 1M",
+        "targetProvider": "openai",
+        "targetModel": "gpt-5.5",
+        "apiKey": "$OPENAI_API_KEY",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      }
+    ]
+  },
+  "pi-image-gen": {
+    "defaultModel": "gpt-image-2"
+  },
+  "packages": [
+    "npm:pi-mcp-adapter",
+    "npm:@gotgenes/pi-subagents",
+    "git:github.com/doodledood/manifest-dev@main",
+    "git:github.com/doodledood/pi-plugins@v0.5.0",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-todo",
+    "npm:pi-web-access",
+    "npm:@amaster.ai/pi-image-gen"
+  ]
+}
