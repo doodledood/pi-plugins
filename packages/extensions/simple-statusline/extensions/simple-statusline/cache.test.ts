@@ -6,6 +6,7 @@ import {
   BREAK_READ_FRACTION,
   buildCacheReport,
   collectTurnStats,
+  hitBar,
   computeSessionCacheStats,
   diffSnapshots,
   isCacheBreak,
@@ -372,6 +373,26 @@ test("buildCacheReport labels unrecognized payload pairs instead of claiming an 
   const text = report.lines.map((line) => line.text).join("\n");
   assert.match(text, /request shape not recognized for fingerprinting/);
   assert.doesNotMatch(text, /prefix looks identical/);
+});
+
+test("hitBar renders 10 cells with correct rounding at the boundaries", () => {
+  assert.equal(hitBar(0), "░".repeat(10));
+  assert.equal(hitBar(1), "█".repeat(10));
+  assert.equal(hitBar(0.5), "█".repeat(5) + "░".repeat(5));
+  assert.equal(hitBar(0.04), "░".repeat(10), "below half a cell rounds down");
+  assert.equal(hitBar(0.05), "█" + "░".repeat(9), "half a cell rounds up");
+  assert.equal(hitBar(1.5), "█".repeat(10), "clamped above 1");
+  assert.equal(hitBar(-0.2), "░".repeat(10), "clamped below 0");
+});
+
+test("buildCacheReport rows carry per-turn hit bars", () => {
+  const report = buildCacheReport({
+    branch: [assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000, write: 0 })],
+  });
+  const rowLine = report.lines.find((line) => line.text.startsWith("#1"));
+  assert.ok(rowLine, "turn row present");
+  assert.match(rowLine.text, /[█░]{10}/, "row includes a 10-cell hit bar");
+  assert.match(report.lines[0]!.text, /Session cache rate: \d+%\s+[█░]{10}/, "headline includes a bar");
 });
 
 test("buildCacheReport on an empty branch", () => {

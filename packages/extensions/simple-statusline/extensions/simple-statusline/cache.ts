@@ -390,6 +390,13 @@ export function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+/** 10-cell hit-rate bar for the /cache report (█ filled, ░ empty). */
+export function hitBar(rate: number): string {
+  const slots = 10;
+  const filled = Math.max(0, Math.min(slots, Math.round(rate * slots)));
+  return "█".repeat(filled) + "░".repeat(slots - filled);
+}
+
 /** Build the /cache report: per-turn stats, breaks, and attributed causes. */
 export function buildCacheReport(args: CacheReportArgs): CacheReport {
   const stats = computeSessionCacheStats(args.branch);
@@ -428,17 +435,17 @@ export function buildCacheReport(args: CacheReportArgs): CacheReport {
   }
 
   lines.push({
-    text: `Session cache rate: ${pct(stats.sessionRate)}  (read ${formatTokens(stats.totalRead)} / prompt ${formatTokens(stats.totalPrompt)}, write ${formatTokens(stats.totalWrite)})`,
+    text: `Session cache rate: ${pct(stats.sessionRate)}  ${hitBar(stats.sessionRate)}  read ${formatTokens(stats.totalRead)} / prompt ${formatTokens(stats.totalPrompt)} · write ${formatTokens(stats.totalWrite)}`,
     tone: "text",
   });
   lines.push({ text: "", tone: "text" });
-  lines.push({ text: "turn  prompt   read     write    hit    note", tone: "muted" });
+  lines.push({ text: `${"turn".padEnd(6)}${"hit".padEnd(17)}${"prompt".padEnd(9)}${"read".padEnd(9)}${"write".padEnd(9)}`, tone: "muted" });
   for (const row of rows) {
     const t = row.turn;
-    const base = `${`#${t.turn + 1}`.padEnd(5)} ${formatTokens(t.prompt).padEnd(8)} ${formatTokens(t.read).padEnd(8)} ${formatTokens(t.write).padEnd(8)} ${pct(t.rate).padEnd(6)}`;
-    lines.push({ text: `${base} ${row.isBreak ? "BREAK" : ""}`.trimEnd(), tone: row.isBreak ? "warning" : "text" });
+    const base = `${`#${t.turn + 1}`.padEnd(6)}${hitBar(t.rate)} ${pct(t.rate).padEnd(6)}${formatTokens(t.prompt).padEnd(9)}${formatTokens(t.read).padEnd(9)}${formatTokens(t.write).padEnd(9)}`;
+    lines.push({ text: `${base}${row.isBreak ? "BREAK" : ""}`.trimEnd(), tone: row.isBreak ? "warning" : "text" });
     for (const cause of row.causes) {
-      lines.push({ text: `        └ ${formatCause(cause)}`, tone: "muted" });
+      lines.push({ text: `      └ ${formatCause(cause)}`, tone: "muted" });
     }
   }
   const observed = rows.filter((row) => row.fingerprinted).length;

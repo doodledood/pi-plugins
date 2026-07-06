@@ -152,11 +152,14 @@ export default function simpleStatusline(pi: any) {
 function overlayViewportRows(tui: any): number {
   const rows = tui?.terminal?.rows;
   if (typeof rows !== "number" || rows <= 0) return 30;
-  // Leave headroom for the overlay title, spacer, scroll hint, and close hint.
+  // Leave headroom for the border, title, and hint rows.
   return Math.max(8, Math.min(30, rows - 6));
 }
 
+// Bordered report panel styled after the context-breakdown overlay: rounded
+// border, bold title, tone-tagged body rows, dim hint row inside the frame.
 class CacheReportOverlay {
+  readonly width = 78;
   focused = false;
   private scroll = 0;
   private readonly viewport: number;
@@ -176,25 +179,44 @@ class CacheReportOverlay {
       return;
     }
     const maxScroll = Math.max(0, this.lines.length - this.viewport);
-    if (matchesKey(data, "up")) this.scroll = Math.max(0, this.scroll - 1);
-    else if (matchesKey(data, "down")) this.scroll = Math.min(maxScroll, this.scroll + 1);
+    if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) this.scroll = Math.max(0, this.scroll - 1);
+    else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) this.scroll = Math.min(maxScroll, this.scroll + 1);
   }
 
   render(width: number): string[] {
+    const th = this.theme;
+    const w = Math.min(this.width, Math.max(40, width));
+    const innerW = w - 2;
+    const pad = (s: string, len: number) => s + " ".repeat(Math.max(0, len - visibleWidth(s)));
+    const row = (content: string) =>
+      color(th, "border", "│") + pad(` ${truncateToWidth(content, innerW - 1)}`, innerW) + color(th, "border", "│");
+
     const out: string[] = [];
-    out.push(truncateToWidth(color(this.theme, "accent", "Cache report"), width));
-    out.push("");
+    out.push(color(th, "border", `╭${"─".repeat(innerW)}╮`));
+    out.push(row(bold(th, color(th, "text", "Cache report"))));
+    out.push(row(""));
     for (const line of this.lines.slice(this.scroll, this.scroll + this.viewport)) {
-      out.push(truncateToWidth(color(this.theme, line.tone, line.text), width));
+      out.push(row(color(th, line.tone, line.text)));
     }
-    if (this.lines.length > this.viewport) {
-      out.push(color(this.theme, "dim", `↑↓ scroll (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length})`));
-    }
-    out.push(color(this.theme, "dim", "esc/q close"));
+    out.push(row(""));
+    const hint =
+      this.lines.length > this.viewport
+        ? `↑↓ scroll (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length}) • Esc close`
+        : "Esc close";
+    out.push(row(color(th, "dim", hint)));
+    out.push(color(th, "border", `╰${"─".repeat(innerW)}╯`));
     return out;
   }
 
   invalidate(): void {}
+}
+
+function bold(theme: any, text: string): string {
+  try {
+    return theme.bold(text);
+  } catch {
+    return text;
+  }
 }
 
 function renderMainLine(width: number, ctx: any, theme: any, footerData: any, runtime: RuntimeState): string {
