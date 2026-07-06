@@ -50,14 +50,7 @@ function createHarness(branch: SessionEntryLike[]): Harness {
       setFooter(factory: any) {
         harness.footerFactory = factory;
       },
-      async custom(factory: any) {
-        const recording = createRecordingTheme();
-        const component = factory(fakeTui, recording.theme, undefined, () => {});
-        harness.ctx.lastOverlay = component;
-        return undefined;
-      },
     },
-    lastOverlay: undefined as any,
   };
   harness.ctx = ctx;
 
@@ -118,136 +111,8 @@ test("footer omits the cache token when the branch has no cache data", () => {
   assert.doesNotMatch(line, /cache \d+%/);
 });
 
-async function runCacheReport(harness: Harness): Promise<string> {
-  const command = harness.commands.get("cache");
-  assert.ok(command, "/cache command registered");
-  await command.handler("", harness.ctx);
-  const overlay = harness.ctx.lastOverlay;
-  assert.ok(overlay, "overlay component created");
-  assert.ok(Array.isArray(overlay.render(300)), "overlay renders lines");
-  // Assert on the full report content (render() shows a scrollable viewport).
-  return overlay.lines.map((line: { text: string }) => line.text).join("\n");
-}
-
-test("/cache reports per-turn stats and entry-correlated break causes", async () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry(1_000, 2_000, 0, 18_000),
-    { type: "compaction" },
-    assistantEntry(2_000, 5_000, 100, 10_000),
-    { type: "model_change", modelId: "other-model" },
-    assistantEntry(3_000, 16_000, 200, 0),
-    // idle > 5 minutes before this turn -> probable TTL expiry
-    assistantEntry(3_000 + 6 * 60_000, 16_000, 300, 0),
-  ];
-  // Insert a branch_summary before a final breaking turn.
-  branch.push({ type: "branch_summary" });
-  branch.push(assistantEntry(3_000 + 6 * 60_000 + 1_000, 16_000, 400, 0));
-
-  const harness = createHarness(branch);
-  const text = await runCacheReport(harness);
-
-  assert.match(text, /Session cache rate: \d+%/);
-  assert.match(text, /#1/);
-  assert.match(text, /BREAK/);
-  assert.match(text, /compaction rewrote the context/);
-  assert.match(text, /model switched to other-model/);
-  assert.match(text, /probable cache TTL expiry/);
-  assert.match(text, /branch\/tree navigation rewrote the prefix/);
-});
-
-test("/cache attributes an unexplained break via prefix fingerprints when observed in-process", async () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry(1_000, 2_000, 0, 18_000),
-    assistantEntry(2_000, 20_000, 100, 0),
-  ];
-  const harness = createHarness(branch);
-
-  // Simulate the two provider requests this process observed.
-  harness.handlers.get("before_provider_request")!({ payload: { system: "prompt-v1", messages: [{ role: "user", content: "hi" }] } }, harness.ctx);
-  harness.handlers.get("turn_end")!({ message: { role: "assistant", timestamp: 1_000 } }, harness.ctx);
-  harness.handlers.get("before_provider_request")!({ payload: { system: "prompt-v2", messages: [{ role: "user", content: "hi" }] } }, harness.ctx);
-  harness.handlers.get("turn_end")!({ message: { role: "assistant", timestamp: 2_000 } }, harness.ctx);
-
-  const text = await runCacheReport(harness);
-  assert.match(text, /prefix changed: system prompt changed/);
-  assert.match(text, /fingerprints cover 1\/2 turns/i);
-});
-
-test("/cache labels breaks without a retained fingerprint as entry-correlation only", async () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry(1_000, 2_000, 0, 18_000),
-    assistantEntry(2_000, 20_000, 100, 0),
-  ];
-  const harness = createHarness(branch);
-  const text = await runCacheReport(harness);
-  assert.match(text, /no fingerprint retained for this turn — predates this process or pruned; entry-correlation only/);
-});
-
-test("/cache overlay supports wheel, page keys, and mouse-mode lifecycle", async () => {
-  // Long branch so the report overflows the viewport.
-  const branch: SessionEntryLike[] = [];
-  for (let i = 0; i < 80; i++) branch.push(assistantEntry(i, 10, 10, 10));
-  const harness = createHarness(branch);
-
-  const writes: string[] = [];
-  harness.ctx.ui.custom = async (factory: any) => {
-    const recording = createRecordingTheme();
-    const tui = { requestRender() {}, terminal: { write: (data: string) => writes.push(data), rows: 40 } };
-    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => {});
-    return undefined;
-  };
-  await harness.commands.get("cache")!.handler("", harness.ctx);
-  const overlay = harness.ctx.lastOverlay;
-
-  assert.ok(writes.some((w) => w.includes("\x1b[?1006h")), "SGR mouse reporting enabled on open");
-
-  const windowOf = (rendered: string[]) => rendered.join("\n").match(/\((\d+)-\d+\/\d+\)/)?.[1];
-  assert.equal(windowOf(overlay.render(100)), "1");
-
-  // Wheel down: one notch scrolls 3 lines.
-  overlay.handleInput("\x1b[<65;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "4");
-  // Wheel up returns to the top (clamped).
-  overlay.handleInput("\x1b[<64;10;5M");
-  overlay.handleInput("\x1b[<64;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "1");
-
-  // PageDown/PageUp jump by a full viewport.
-  overlay.handleInput("\x1b[6~");
-  const afterPageDown = Number(windowOf(overlay.render(100)));
-  assert.ok(afterPageDown > 10, `page down jumps a viewport (got ${afterPageDown})`);
-  overlay.handleInput("\x1b[5~");
-  assert.equal(windowOf(overlay.render(100)), "1");
-
-  // Click sequences are ignored (no scroll, no close).
-  overlay.handleInput("\x1b[<0;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "1");
-
-  // Closing (q) disables mouse reporting; dispose is idempotent.
-  overlay.handleInput("q");
-  assert.ok(writes.some((w) => w.includes("\x1b[?1006l")), "SGR mouse reporting disabled on close");
-  const disableCount = writes.filter((w) => w.includes("\x1b[?1006l")).length;
-  overlay.dispose();
-  assert.equal(writes.filter((w) => w.includes("\x1b[?1006l")).length, disableCount, "dispose after close does not double-disable");
-});
-
-test("fingerprint state stores hashes only and stays bounded to 500 pairs", async () => {
-  const turns = 600;
-  const branch: SessionEntryLike[] = [];
-  for (let i = 0; i < turns; i++) branch.push(assistantEntry(i, 10, 10, 10));
-
-  const harness = createHarness(branch);
-  const before = harness.handlers.get("before_provider_request")!;
-  const turnEnd = harness.handlers.get("turn_end")!;
-  const secret = "TOP-SECRET-CONTENT";
-  for (let i = 0; i < turns; i++) {
-    before({ payload: { system: secret, messages: [{ role: "user", content: secret }] } }, harness.ctx);
-    turnEnd({ message: { role: "assistant", timestamp: i } }, harness.ctx);
-  }
-
-  const text = await runCacheReport(harness);
-  // Pruned to the most recent 500 pairs, so only those turns carry fingerprints.
-  assert.match(text, /fingerprints cover 500\/600 turns/i);
-  // Retained state is hashes only — raw payload content never reaches the report.
-  assert.doesNotMatch(text, /TOP-SECRET-CONTENT/);
+test("statusline no longer owns /cache or payload fingerprinting (moved to cache-optimization)", () => {
+  const harness = createHarness([assistantEntry(1_000, 1_000, 1_000, 0)]);
+  assert.equal(harness.commands.get("cache"), undefined, "no /cache command registered");
+  assert.equal(harness.handlers.get("before_provider_request"), undefined, "no payload observation");
 });

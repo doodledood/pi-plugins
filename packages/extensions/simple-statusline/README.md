@@ -2,7 +2,7 @@
 
 Aviram's ambient custom Pi footer/statusline.
 
-## Cache metric and /cache report
+## Cache metric
 
 The footer's `cache NN%` token is the **session cache rate**: across the active
 session branch so far, the share of input-side prompt traffic that was served
@@ -10,34 +10,17 @@ from prompt cache (total cache reads divided by total non-cached input + cache
 reads + cache writes over all assistant turns). It converges as the session
 progresses instead of bouncing with each turn. The token appears once the
 branch has meaningful prompt traffic (≥1024 tokens) and the provider actually
-reports cache usage. Cache-write totals live in the `/cache` report, not the
-footer.
+reports cache usage.
 
 When the latest turn **breaks** the cache — it reads back less than half of the
 prefix established by the previous turn (only checked once that prefix is
 ≥10k tokens; the first turn is never flagged) — the token turns warning-colored
 with a `!` marker, e.g. `cache 42%!`.
 
-Run **`/cache`** for a display-only report (never enters model context) with
-per-turn prompt/read/write tokens, hit rates, flagged breaks, and why each
-break happened, attributed in two layers:
-
-1. **Session-entry correlation** (works for every turn, including turns from
-   before the current process): compaction, model switch, branch/tree
-   navigation, probable cache-TTL expiry from idle gaps (5 minutes by default,
-   1 hour when `PI_CACHE_RETENTION=long`), or a generic "prefix content
-   changed" fallback.
-2. **Prefix fingerprinting** (only turns observed in the current process): each
-   outgoing provider request's system prompt, tool set, and messages are
-   hashed, and when no session-entry cause explains a break, the report names
-   the first divergence — e.g. "system prompt changed", "tool set changed", or
-   "message #12 changed".
-
-Fingerprint state is **in-memory only and hashes only** — no request content is
-retained, nothing is written to disk, and it is bounded to the most recent 500
-turns. Turns without a retained fingerprint (from before the current process,
-or pruned past that 500-turn window) get entry-correlation-only attribution and
-are labeled as such.
+Full cache diagnostics — the `/cache` per-turn report, break attribution,
+prefix fingerprinting, cache keeper, and TTL keepalive — live in the separately
+installable `cache-optimization` extension in this repo. The footer here is the
+ambient signal; `/cache` is the on-demand "why".
 
 ## Install
 

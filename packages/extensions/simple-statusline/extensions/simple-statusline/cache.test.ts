@@ -1,22 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  attributeBreak,
   BREAK_MIN_PREV_PROMPT_TOKENS,
   BREAK_READ_FRACTION,
-  buildCacheReport,
   collectTurnStats,
-  hitBar,
   computeSessionCacheStats,
-  diffSnapshots,
+  formatCost,
+  formatTokens,
   isCacheBreak,
   MIN_VISIBLE_PROMPT_TOKENS,
-  snapshotPayload,
-  TTL_LONG_MS,
-  TTL_SHORT_MS,
-  type FingerprintSnapshot,
+  pct,
   type SessionEntryLike,
-  type SnapshotPair,
   type TurnCacheStats,
 } from "./cache.ts";
 
@@ -100,9 +94,6 @@ test("metric hidden when the provider reports no cache fields (data-driven gatin
 });
 
 test("zero-usage (aborted/errored) turns are excluded and never poison break detection", () => {
-  // An aborted turn persists zero-initialized usage. It must not register as a
-  // turn (no false break flag), and the next real turn's break baseline must be
-  // the earlier real turn — so a genuine break right after an abort still flags.
   const stats = computeSessionCacheStats([
     assistantEntry({ id: "a1", timestamp: 1_000, input: 2_000, write: 18_000 }),
     assistantEntry({ id: "aborted", timestamp: 1_500, input: 0, read: 0, write: 0 }),
@@ -135,78 +126,6 @@ test("break detection threshold boundaries", () => {
   assert.equal(isCacheBreak(smallPrev, turn({ read: 0, input: 1 })), false, "small previous prompt never flags");
 });
 
-test("attribution: compaction, model change, and branch nav from entries between turns", () => {
-  const prev = turn({ timestamp: 0, prompt: 20_000 });
-  const current = turn({ timestamp: 1_000, read: 0, input: 20_000 });
-  const causes = attributeBreak({
-    entriesBetween: [{ type: "compaction" }, { type: "model_change", modelId: "gpt-x" }, { type: "branch_summary" }],
-    prev,
-    current,
-  });
-  assert.deepEqual(
-    causes.map((cause) => cause.kind),
-    ["compaction", "model_change", "branch_nav"],
-  );
-  const modelCause = causes[1]!;
-  assert.ok(modelCause.kind === "model_change" && modelCause.modelId === "gpt-x");
-});
-
-test("attribution: TTL expiry from idle gap, respecting long retention", () => {
-  const prev = turn({ timestamp: 0, prompt: 20_000 });
-  const current = turn({ timestamp: TTL_SHORT_MS + 1, read: 0, input: 20_000 });
-  const shortCauses = attributeBreak({ entriesBetween: [], prev, current });
-  assert.equal(shortCauses[0]!.kind, "ttl_expiry");
-
-  const longCauses = attributeBreak({ entriesBetween: [], prev, current, longRetention: true });
-  assert.equal(longCauses[0]!.kind, "prefix_change", "gap below long TTL is not expiry under long retention");
-
-  const longGap = turn({ timestamp: TTL_LONG_MS + 1, read: 0, input: 20_000 });
-  assert.equal(attributeBreak({ entriesBetween: [], prev, current: longGap, longRetention: true })[0]!.kind, "ttl_expiry");
-});
-
-test("attribution falls back to prefix_change with the fingerprint divergence attached", () => {
-  const prev = turn({ timestamp: 0, prompt: 20_000 });
-  const current = turn({ timestamp: 1, read: 0, input: 20_000 });
-  const causes = attributeBreak({ entriesBetween: [], prev, current, divergence: { kind: "message", index: 3 } });
-  assert.deepEqual(causes, [{ kind: "prefix_change", divergence: { kind: "message", index: 3 } }]);
-});
-
-test("snapshotPayload handles anthropic, completions, responses, and google payload shapes", () => {
-  const anthropic = snapshotPayload({ system: "sys", tools: [{ name: "a" }], messages: [{ role: "user" }] });
-  assert.ok(anthropic.systemHash && anthropic.toolsHash);
-  assert.equal(anthropic.messageHashes.length, 1);
-  assert.equal(anthropic.recognized, true);
-
-  const responses = snapshotPayload({ instructions: "sys", input: [{ role: "user" }, { role: "assistant" }] });
-  assert.ok(responses.systemHash);
-  assert.equal(responses.toolsHash, undefined);
-  assert.equal(responses.messageHashes.length, 2);
-  assert.equal(responses.recognized, true);
-
-  const google = snapshotPayload({
-    model: "gemini",
-    contents: [{ role: "user" }, { role: "model" }],
-    config: { systemInstruction: "sys", tools: [{ functionDeclarations: [] }] },
-  });
-  assert.ok(google.systemHash && google.toolsHash);
-  assert.equal(google.messageHashes.length, 2);
-  assert.equal(google.recognized, true);
-
-  const empty = snapshotPayload(undefined);
-  assert.deepEqual(empty.messageHashes, []);
-  assert.equal(empty.recognized, false);
-});
-
-test("snapshotPayload retains only fixed-size hashes, never payload content", () => {
-  const SECRET = "TOP-SECRET-CONTENT";
-  const snapshot = snapshotPayload({ system: SECRET, tools: [{ name: SECRET }], messages: [{ content: SECRET }] });
-  assert.match(snapshot.systemHash!, /^[0-9a-f]{16}$/);
-  assert.match(snapshot.toolsHash!, /^[0-9a-f]{16}$/);
-  assert.equal(snapshot.messageHashes.length, 1);
-  for (const hash of snapshot.messageHashes) assert.match(hash, /^[0-9a-f]{16}$/);
-  assert.ok(!JSON.stringify(snapshot).includes(SECRET), "raw content must never be retained in the snapshot");
-});
-
 test("messageTimestamp falls back to the entry ISO timestamp, then 0", () => {
   const iso = "2026-07-06T10:00:00.000Z";
   const stats = collectTurnStats([
@@ -217,208 +136,12 @@ test("messageTimestamp falls back to the entry ISO timestamp, then 0", () => {
   assert.equal(stats[1]!.timestamp, 0);
 });
 
-test("moving anthropic cache_control markers and content-shape churn do not change fingerprints", () => {
-  // Anthropic attaches cache_control to the LAST user message/tool of every
-  // request (and may restructure string content into a text-block array), so
-  // consecutive requests differ at the marker's host even when nothing real
-  // changed. Canonicalization must make such pairs diff as a clean prefix.
-  const prev = snapshotPayload({
-    system: [{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }],
-    tools: [{ name: "a" }, { name: "b", cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }] }],
-  });
-  const curr = snapshotPayload({
-    system: [{ type: "text", text: "sys" }],
-    tools: [{ name: "a" }, { name: "b" }],
-    messages: [
-      { role: "user", content: "hi" }, // marker moved on; string vs block form
-      { role: "assistant", content: [{ type: "text", text: "yo" }] },
-      { role: "user", content: [{ type: "text", text: "next", cache_control: { type: "ephemeral" } }] },
-    ],
-  });
-  assert.deepEqual(diffSnapshots(prev, curr), { kind: "none" });
-});
-
-test("bedrock toolConfig changes are fingerprinted as tool-set divergence", () => {
-  const prev = snapshotPayload({
-    system: "s",
-    messages: [{ role: "user", content: [{ text: "hi" }] }],
-    toolConfig: { tools: [{ toolSpec: { name: "a" } }] },
-  });
-  const curr = snapshotPayload({
-    system: "s",
-    messages: [{ role: "user", content: [{ text: "hi" }] }],
-    toolConfig: { tools: [{ toolSpec: { name: "a" } }, { toolSpec: { name: "b" } }] },
-  });
-  assert.ok(prev.toolsHash && curr.toolsHash, "bedrock toolConfig is hashed");
-  assert.deepEqual(diffSnapshots(prev, curr), { kind: "tools" });
-});
-
-test("bedrock cachePoint content blocks are ignored in fingerprints", () => {
-  const prev = snapshotPayload({
-    system: "s",
-    messages: [{ role: "user", content: [{ text: "hi" }, { cachePoint: { type: "default" } }] }],
-  });
-  const curr = snapshotPayload({
-    system: "s",
-    messages: [
-      { role: "user", content: [{ text: "hi" }] },
-      { role: "user", content: [{ text: "more" }, { cachePoint: { type: "default" } }] },
-    ],
-  });
-  assert.deepEqual(diffSnapshots(prev, curr), { kind: "none" });
-});
-
-test("unrecognized payload shapes never diff as identical", () => {
-  const unknownA = snapshotPayload({ some: "proprietary", shape: 1 });
-  const unknownB = snapshotPayload({ some: "proprietary", shape: 2 });
-  assert.equal(unknownA.recognized, false);
-  assert.deepEqual(diffSnapshots(unknownA, unknownB), { kind: "unrecognized_payload" });
-
-  const known = snapshotPayload({ system: "sys", messages: [] });
-  assert.deepEqual(diffSnapshots(unknownA, known), { kind: "unrecognized_payload" });
-});
-
-test("diffSnapshots names the first divergence", () => {
-  const base = snapshotPayload({ system: "sys", tools: ["t"], messages: [{ a: 1 }, { b: 2 }] });
-  const grown = snapshotPayload({ system: "sys", tools: ["t"], messages: [{ a: 1 }, { b: 2 }, { c: 3 }] });
-  assert.deepEqual(diffSnapshots(base, grown), { kind: "none" }, "prefix-extension is not a divergence");
-
-  assert.deepEqual(diffSnapshots(base, snapshotPayload({ system: "other", tools: ["t"], messages: [{ a: 1 }, { b: 2 }] })), {
-    kind: "system_prompt",
-  });
-  assert.deepEqual(diffSnapshots(base, snapshotPayload({ system: "sys", tools: ["u"], messages: [{ a: 1 }, { b: 2 }] })), {
-    kind: "tools",
-  });
-  assert.deepEqual(
-    diffSnapshots(base, snapshotPayload({ system: "sys", tools: ["t"], messages: [{ a: 1 }, { b: 999 }, { c: 3 }] })),
-    { kind: "message", index: 1 },
-  );
-  assert.deepEqual(diffSnapshots(base, snapshotPayload({ system: "sys", tools: ["t"], messages: [{ a: 1 }] })), {
-    kind: "history_shrunk",
-    from: 2,
-    to: 1,
-  });
-});
-
-test("buildCacheReport: per-turn rows, break attribution, and fingerprint coverage note", () => {
-  const branch: SessionEntryLike[] = [
-    userEntry(),
-    assistantEntry({ id: "a1", timestamp: 1_000, input: 2_000, write: 18_000 }),
-    { type: "compaction" },
-    assistantEntry({ id: "a2", timestamp: 2_000, input: 5_000, read: 1_000, write: 4_000 }),
-  ];
-  const before: FingerprintSnapshot = snapshotPayload({ system: "s", messages: [{ a: 1 }] });
-  const after: FingerprintSnapshot = snapshotPayload({ system: "s2", messages: [{ a: 1 }] });
-  const snapshots = new Map<number, SnapshotPair>([[2_000, { prev: before, curr: after }]]);
-
-  const report = buildCacheReport({ branch, snapshots });
-  assert.equal(report.rows.length, 2);
-  assert.equal(report.rows[0]!.isBreak, false);
-  assert.equal(report.rows[1]!.isBreak, true);
-  // compaction wins as the entry-correlated cause
-  assert.equal(report.rows[1]!.causes[0]!.kind, "compaction");
-  assert.equal(report.rows[1]!.fingerprinted, true);
-
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.match(text, /Session cache rate: \d+%/);
-  assert.match(text, /#1/);
-  assert.match(text, /#2/);
-  assert.match(text, /BREAK/);
-  assert.match(text, /compaction rewrote the context/);
-  assert.match(text, /fingerprints cover 1\/2 turns/i);
-  // Tone travels with the data: break rows are warnings, cause lines are muted.
-  assert.equal(report.lines.find((line) => /BREAK/.test(line.text))?.tone, "warning");
-  assert.equal(report.lines.find((line) => /compaction rewrote/.test(line.text))?.tone, "muted");
-});
-
-test("buildCacheReport labels turns without snapshots as entry-correlation only", () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry({ id: "a1", timestamp: 1_000, input: 2_000, write: 18_000 }),
-    assistantEntry({ id: "a2", timestamp: 2_000, input: 20_000, read: 100, write: 0 }),
-  ];
-  const report = buildCacheReport({ branch });
-  assert.equal(report.rows[1]!.isBreak, true);
-  assert.equal(report.rows[1]!.fingerprinted, false);
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.match(text, /no fingerprint retained for this turn/);
-});
-
-test("buildCacheReport labels the first in-process request as having no diff baseline", () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry({ id: "a1", timestamp: 1_000, input: 2_000, write: 18_000 }),
-    assistantEntry({ id: "a2", timestamp: 2_000, input: 20_000, read: 100, write: 0 }),
-  ];
-  // The breaking turn was observed in-process, but it was the first request seen
-  // (prev === undefined), so there is nothing to diff against yet.
-  const snapshots = new Map<number, SnapshotPair>([
-    [2_000, { curr: snapshotPayload({ system: "s", messages: [{ a: 1 }] }) }],
-  ]);
-  const report = buildCacheReport({ branch, snapshots });
-  assert.equal(report.rows[1]!.isBreak, true);
-  assert.equal(report.rows[1]!.fingerprinted, false, "no baseline means no diffable fingerprint");
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.match(text, /first request observed in this process — no earlier request to diff against/);
-  assert.doesNotMatch(text, /no fingerprint retained for this turn/);
-});
-
-test("buildCacheReport labels unrecognized payload pairs instead of claiming an identical prefix", () => {
-  const branch: SessionEntryLike[] = [
-    assistantEntry({ id: "a1", timestamp: 1_000, input: 2_000, write: 18_000 }),
-    assistantEntry({ id: "a2", timestamp: 2_000, input: 20_000, read: 100, write: 0 }),
-  ];
-  const snapshots = new Map<number, SnapshotPair>([
-    [2_000, { prev: snapshotPayload({ unknown: 1 }), curr: snapshotPayload({ unknown: 2 }) }],
-  ]);
-  const report = buildCacheReport({ branch, snapshots });
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.match(text, /request shape not recognized for fingerprinting/);
-  assert.doesNotMatch(text, /prefix looks identical/);
-});
-
-test("hitBar renders 10 cells with correct rounding at the boundaries", () => {
-  assert.equal(hitBar(0), "░".repeat(10));
-  assert.equal(hitBar(1), "█".repeat(10));
-  assert.equal(hitBar(0.5), "█".repeat(5) + "░".repeat(5));
-  assert.equal(hitBar(0.04), "░".repeat(10), "below half a cell rounds down");
-  assert.equal(hitBar(0.05), "█" + "░".repeat(9), "half a cell rounds up");
-  assert.equal(hitBar(1.5), "█".repeat(10), "clamped above 1");
-  assert.equal(hitBar(-0.2), "░".repeat(10), "clamped below 0");
-});
-
-test("buildCacheReport rows carry per-turn hit bars", () => {
-  const report = buildCacheReport({
-    branch: [assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000, write: 0 })],
-  });
-  const rowLine = report.lines.find((line) => line.text.startsWith("#1"));
-  assert.ok(rowLine, "turn row present");
-  assert.match(rowLine.text, /[█░]{10}/, "row includes a 10-cell hit bar");
-  assert.match(report.lines[0]!.text, /Session cache rate: \d+%\s+[█░]{10}/, "headline includes a bar");
-});
-
-test("buildCacheReport shows a per-turn cost column and headline total when cost data exists", () => {
-  const entry = assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000 });
-  (entry.message!.usage as { cost?: { total?: number } }).cost = { total: 0.042 };
-  const entry2 = assistantEntry({ id: "a2", timestamp: 2_000, input: 1_000, read: 9_000 });
-  (entry2.message!.usage as { cost?: { total?: number } }).cost = { total: 1.5 };
-
-  const report = buildCacheReport({ branch: [entry, entry2] });
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.match(text, /cost \$1\.54/, "headline shows the summed session cost");
-  assert.match(text, /turn\s+hit\s+prompt\s+read\s+write\s+cost/, "cost column header present");
-  assert.match(text, /#1.*\$0\.042/, "turn 1 cost shown");
-  assert.match(text, /#2.*\$1\.50/, "turn 2 cost shown");
-});
-
-test("buildCacheReport hides the cost column when the model has no pricing", () => {
-  const report = buildCacheReport({ branch: [assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000 })] });
-  const text = report.lines.map((line) => line.text).join("\n");
-  assert.doesNotMatch(text, /cost/);
-  assert.doesNotMatch(text, /\$/);
-});
-
-test("buildCacheReport on an empty branch", () => {
-  const report = buildCacheReport({ branch: [] });
-  assert.equal(report.rows.length, 0);
-  assert.match(report.lines[0]!.text, /No assistant turns/);
+test("formatters: tokens, percentages, and dollars", () => {
+  assert.equal(formatTokens(999), "999");
+  assert.equal(formatTokens(1_500), "1.5k");
+  assert.equal(formatTokens(250_000), "250k");
+  assert.equal(formatTokens(1_200_000), "1.2m");
+  assert.equal(pct(0.494), "49%");
+  assert.equal(formatCost(0.042), "$0.042");
+  assert.equal(formatCost(1.5), "$1.50");
 });

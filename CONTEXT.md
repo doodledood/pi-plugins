@@ -13,7 +13,7 @@ A renderer mode that minimizes built-in tool rows by hiding routine output unles
 _Avoid_: Compact mode when the renderer context is unclear.
 
 **Session cache rate**:
-The cumulative token-weighted cache-hit percentage for the active session branch, computed as total cacheRead over total input + cacheRead + cacheWrite across assistant messages.
+The cumulative token-weighted cache-hit percentage for the active session branch, computed as total cacheRead over total input + cacheRead + cacheWrite across assistant messages. Shown ambiently by the simple-statusline footer; the full per-turn breakdown lives in cache-optimization's /cache report.
 _Avoid_: Cache %, cache utilization when the latest-turn rate could be meant.
 
 **Latest cache hit rate**:
@@ -23,6 +23,22 @@ _Avoid_: Session cache rate.
 **Cache break**:
 A turn whose cache reads fall far below what the established context prefix predicts, typically flagged by a low latest cache hit rate together with a large prompt and often a cacheWrite spike (re-prime signature).
 _Avoid_: Cache miss when referring to a whole-prefix invalidation event.
+
+**Cache keeper**:
+The cache-optimization behavior that stamps Anthropic's spare 4th cache_control breakpoint at the previous request's tail-marker position whenever more than ~15 content blocks were appended between requests, so the provider's 20-block lookback still finds the previous cache write.
+_Avoid_: Cache pinning, breakpoint hack.
+
+**TTL keepalive**:
+The cache-optimization behavior that re-reads a large cached Anthropic prefix (max_tokens 1, 0.1× input price) during long in-flight tool waits so the 5-minute cache TTL does not expire mid-turn; structurally bounded (in-flight only, per-gap ping cap, daily dollar cap, activation floor) and correctness-guarded (never pings thinking-enabled payloads or sessions routed through a different Anthropic identity/baseUrl).
+_Avoid_: Cache heartbeat, keep-warm when the bounded design is the point.
+
+**20-block lookback**:
+Anthropic's prompt-cache read behavior of checking at most 20 content-block positions backward from each cache breakpoint for a previously written prefix; appends larger than the window silently lose the message-history cache.
+_Avoid_: Cache window when the context-window could be meant.
+
+**Goal reminder message**:
+The goal controller's persistent appended context message carrying the active goal text and rules, injected once per goal activation (and on resume transitions) instead of a system-prompt override, so goal lifecycle changes never invalidate the provider prompt cache head.
+_Avoid_: Goal system prompt.
 
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
@@ -58,5 +74,7 @@ _Avoid_: Terminal goal when resumability matters.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
 - A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.
 - A **Cache break** is detected by comparing the latest turn's cache reads against the previously established prefix, with a collapsed **Latest cache hit rate** as its visible symptom; the **Session cache rate** tracks aggregate efficiency — the two are complementary, not interchangeable.
+- The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and in-flight TTL expiry); the /cache report in cache-optimization explains the rest after the fact.
+- The **Goal reminder message** replaced the goal controller's system-prompt suffix precisely because system-prompt churn was a recurring **Cache break** cause.
 
 ## Flagged ambiguities

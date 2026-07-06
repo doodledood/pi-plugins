@@ -1,15 +1,16 @@
 {
-  "name": "@doodledood/pi-simple-statusline",
-  "version": "0.3.0",
+  "name": "@doodledood/pi-cache-optimization",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Aviram's ambient custom Pi footer/statusline.",
+  "description": "Prompt-cache efficiency toolkit for Pi: /cache diagnostics, Anthropic 4th-breakpoint keeper, and a runaway-proof TTL keepalive.",
   "keywords": [
     "pi-package",
-    "pi-extension"
+    "pi-extension",
+    "prompt-cache"
   ],
   "pi": {
     "extensions": [
-      "./extensions/simple-statusline.ts"
+      "./extensions/cache-optimization.ts"
     ]
   },
   "peerDependencies": {
@@ -17,7 +18,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test extensions/simple-statusline/*.test.ts"
+    "test": "tsx --test extensions/cache-optimization/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "*",
@@ -28,9 +29,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/doodledood/pi-plugins.git",
-    "directory": "packages/extensions/simple-statusline"
+    "directory": "packages/extensions/cache-optimization"
   },
-  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/simple-statusline#readme",
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/cache-optimization#readme",
   "bugs": {
     "url": "https://github.com/doodledood/pi-plugins/issues"
   },

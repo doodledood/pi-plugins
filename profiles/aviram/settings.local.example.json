@@ -32,6 +32,7 @@
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/simple-statusline",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/skill-argument-hints",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/tool-activity-renderer",
-    "/ABSOLUTE/PATH/TO/pi-plugins/packages/themes/deep-focus-pi"
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/themes/deep-focus-pi",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/cache-optimization"
   ]
 }

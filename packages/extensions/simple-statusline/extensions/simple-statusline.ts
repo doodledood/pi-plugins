@@ -4,46 +4,31 @@
 // works and rests dim when idle. Right side carries model/context/cache/cost —
 // grayscale at rest, color only under pressure (context ≥70% warning, ≥90% error;
 // cache turns warning + "!" when the latest turn broke the prompt cache).
-// The /cache command opens a per-turn cache report with break attribution.
+// Full cache diagnostics (/cache report, break attribution, fingerprinting)
+// live in the cache-optimization extension.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  buildCacheReport,
   computeSessionCacheStats,
   formatCost,
   formatTokens,
   pct,
-  snapshotPayload,
-  type FingerprintSnapshot,
-  type ReportLine,
   type SessionCacheStats,
-  type SnapshotPair,
 } from "./simple-statusline/cache.ts";
 
 const STATUSLINE_KEY = "simple-statusline";
-// Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
-const MAX_FINGERPRINT_PAIRS = 500;
 const GPT_FAST_STATUS_KEY = "gpt-fast";
 const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type TokenTotals = { input: number; output: number; cost: number };
-type FingerprintState = {
-  /** Snapshot of the most recent outgoing provider payload, not yet paired with a turn. */
-  pending?: FingerprintSnapshot;
-  /** The last snapshot paired with a finished turn (previous request in this process). */
-  lastPaired?: FingerprintSnapshot;
-  /** Pairs keyed by assistant message timestamp (Unix ms). Hashes only — never payload content. */
-  byTimestamp: Map<number, SnapshotPair>;
-};
 type RuntimeState = {
   thinkingLevel: ThinkingLevel;
   turnCount: number;
   active: boolean;
   requestRender?: () => void;
-  fingerprints: FingerprintState;
 };
 type ModelSignal = { plain: string; colored: string };
 
@@ -52,7 +37,6 @@ export default function simpleStatusline(pi: any) {
     thinkingLevel: "off",
     turnCount: 0,
     active: false,
-    fingerprints: { byTimestamp: new Map() },
   };
   const refresh = () => runtime.requestRender?.();
 
@@ -78,7 +62,6 @@ export default function simpleStatusline(pi: any) {
 
   pi.on("session_start", (_event: any, ctx: any) => {
     runtime.thinkingLevel = pi.getThinkingLevel?.() ?? "off";
-    runtime.fingerprints = { byTimestamp: new Map() };
     installFooter(ctx);
   });
   pi.on("session_tree", (_event: any, ctx: any) => {
@@ -100,173 +83,12 @@ export default function simpleStatusline(pi: any) {
     runtime.active = true;
     refresh();
   });
-  // Capture a hash-only fingerprint of every outgoing provider payload so /cache
-  // can name the exact prefix divergence when cache breaks (in-process turns only).
-  pi.on("before_provider_request", (event: any) => {
-    try {
-      runtime.fingerprints.pending = snapshotPayload(event?.payload);
-    } catch {
-      runtime.fingerprints.pending = undefined;
-    }
-    // Never mutate the payload — return nothing so pi sends it unchanged.
-  });
-  pi.on("turn_end", (event: any) => {
-    const fingerprints = runtime.fingerprints;
-    const message = event?.message;
-    if (fingerprints.pending && message?.role === "assistant" && typeof message.timestamp === "number") {
-      fingerprints.byTimestamp.set(message.timestamp, { prev: fingerprints.lastPaired, curr: fingerprints.pending });
-      fingerprints.lastPaired = fingerprints.pending;
-      fingerprints.pending = undefined;
-      while (fingerprints.byTimestamp.size > MAX_FINGERPRINT_PAIRS) {
-        const oldest = fingerprints.byTimestamp.keys().next().value;
-        if (oldest === undefined) break;
-        fingerprints.byTimestamp.delete(oldest);
-      }
-    }
-    refresh();
-  });
+  pi.on("turn_end", () => refresh());
   pi.on("message_update", () => refresh());
   pi.on("agent_end", () => {
     runtime.active = false;
     refresh();
   });
-
-  pi.registerCommand?.("cache", {
-    description: "Session cache report: per-turn hit rates, breaks, and why they happened",
-    handler: async (_args: string, ctx: any) => {
-      const report = buildCacheReport({
-        branch: ctx.sessionManager.getBranch(),
-        snapshots: runtime.fingerprints.byTimestamp,
-        longRetention: process.env.PI_CACHE_RETENTION === "long",
-      });
-      // Display-only overlay: the report never enters LLM context.
-      await ctx.ui.custom(
-        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
-          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui), tui?.terminal),
-        { overlay: true },
-      );
-    },
-  });
-}
-
-/** Size the report viewport to the terminal so the tail stays reachable on short screens. */
-function overlayViewportRows(tui: any): number {
-  const rows = tui?.terminal?.rows;
-  if (typeof rows !== "number" || rows <= 0) return 30;
-  // Leave headroom for the border, title, and hint rows.
-  return Math.max(8, Math.min(30, rows - 6));
-}
-
-// SGR mouse reporting: enabled only while the overlay is open so the wheel
-// scrolls the report instead of the terminal scrollback. Always disabled on
-// close/dispose to restore native terminal selection behavior.
-const MOUSE_ENABLE = "\x1b[?1006h\x1b[?1000h";
-const MOUSE_DISABLE = "\x1b[?1000l\x1b[?1006l";
-const WHEEL_SCROLL_LINES = 3;
-
-/** Net wheel movement in an input chunk: negative = up, positive = down. */
-function wheelDelta(data: string): number {
-  let delta = 0;
-  const sequence = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
-  let match: RegExpExecArray | null;
-  while ((match = sequence.exec(data))) {
-    const base = Number(match[1]) & ~28; // strip shift/alt/ctrl modifier bits
-    if (base === 64) delta -= 1;
-    else if (base === 65) delta += 1;
-  }
-  return delta;
-}
-
-// Bordered report panel styled after the context-breakdown overlay: rounded
-// border, bold title, tone-tagged body rows, dim hint row inside the frame.
-class CacheReportOverlay {
-  readonly width = 78;
-  focused = false;
-  private scroll = 0;
-  private readonly viewport: number;
-  private mouseEnabled = false;
-
-  constructor(
-    private readonly theme: any,
-    private readonly done: (result: undefined) => void,
-    readonly lines: ReportLine[],
-    viewport = 30,
-    private readonly terminal?: { write(data: string): void },
-  ) {
-    this.viewport = viewport;
-    if (this.terminal) {
-      this.terminal.write(MOUSE_ENABLE);
-      this.mouseEnabled = true;
-    }
-  }
-
-  private releaseMouse(): void {
-    if (this.mouseEnabled) {
-      this.terminal?.write(MOUSE_DISABLE);
-      this.mouseEnabled = false;
-    }
-  }
-
-  private scrollBy(delta: number): void {
-    const maxScroll = Math.max(0, this.lines.length - this.viewport);
-    this.scroll = Math.max(0, Math.min(maxScroll, this.scroll + delta));
-  }
-
-  handleInput(data: string): void {
-    const wheel = wheelDelta(data);
-    if (wheel !== 0) {
-      this.scrollBy(wheel * WHEEL_SCROLL_LINES);
-      return;
-    }
-    if (matchesKey(data, "escape") || matchesKey(data, "return") || data === "q") {
-      this.releaseMouse();
-      this.done(undefined);
-      return;
-    }
-    if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) this.scrollBy(-1);
-    else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) this.scrollBy(1);
-    else if (matchesKey(data, "pageUp")) this.scrollBy(-this.viewport);
-    else if (matchesKey(data, "pageDown")) this.scrollBy(this.viewport);
-  }
-
-  dispose(): void {
-    this.releaseMouse();
-  }
-
-  render(width: number): string[] {
-    const th = this.theme;
-    const w = Math.min(this.width, Math.max(40, width));
-    const innerW = w - 2;
-    const pad = (s: string, len: number) => s + " ".repeat(Math.max(0, len - visibleWidth(s)));
-    const row = (content: string) =>
-      color(th, "border", "│") + pad(` ${truncateToWidth(content, innerW - 1)}`, innerW) + color(th, "border", "│");
-
-    const out: string[] = [];
-    out.push(color(th, "border", `╭${"─".repeat(innerW)}╮`));
-    out.push(row(bold(th, color(th, "text", "Cache report"))));
-    out.push(row(""));
-    for (const line of this.lines.slice(this.scroll, this.scroll + this.viewport)) {
-      out.push(row(color(th, line.tone, line.text)));
-    }
-    out.push(row(""));
-    const hint =
-      this.lines.length > this.viewport
-        ? `↑↓/wheel scroll • PgUp/PgDn page (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length}) • Esc close`
-        : "Esc close";
-    out.push(row(color(th, "dim", hint)));
-    out.push(color(th, "border", `╰${"─".repeat(innerW)}╯`));
-    return out;
-  }
-
-  invalidate(): void {}
-}
-
-function bold(theme: any, text: string): string {
-  try {
-    return theme.bold(text);
-  } catch {
-    return text;
-  }
 }
 
 function renderMainLine(width: number, ctx: any, theme: any, footerData: any, runtime: RuntimeState): string {

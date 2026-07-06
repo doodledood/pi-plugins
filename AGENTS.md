@@ -14,7 +14,7 @@ When adding, removing, renaming, or moving an extension/theme, keep all install 
 - The resource package `package.json`: `name`, `description`, `keywords`, `pi.*`, `files`, `repository.directory`, version, and publish metadata.
 - Package README: local install, future npm install, Git package-filter path, config/local-state notes.
 - Root docs: `README.md` and `docs/installing.md` examples and resource lists.
-- Profile templates: `profiles/aviram/settings.local.example.json`, `settings.npm.example.json`, relevant `configs/*.json`, and `mcp.example.json` when MCP categories change.
+- Profile templates: `profiles/aviram/settings.local.example.json`, `settings.upstream.example.json`, relevant `configs/*.json`, and `mcp.example.json` when MCP categories change.
 - `scripts/verify-structure.mjs`: expected extension/theme lists and structural checks.
 - `package-lock.json`: regenerate with `npm install --package-lock-only --ignore-scripts` when package metadata/workspaces change; remove `node_modules/` afterward.
 

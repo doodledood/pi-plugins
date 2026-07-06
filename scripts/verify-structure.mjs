@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const errors = [];
-const expectedExtensions = ["goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
+const expectedExtensions = ["cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
 const expectedSkills = [];
 const expectedThemes = ["deep-focus-pi"];
 
