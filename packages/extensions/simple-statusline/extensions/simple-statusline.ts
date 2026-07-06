@@ -1,25 +1,58 @@
 // simple-statusline.ts — local custom Pi footer for Aviram.
 // Design goal: ambient, low-hierarchy footer. No emoji, no tool activity.
 // Left side is quiet location context; the π marker glows (accent) while the agent
-// works and rests dim when idle. Right side carries model/context/cost — grayscale
-// at rest, color only under pressure (context ≥70% warning, ≥90% error).
+// works and rests dim when idle. Right side carries model/context/cache/cost —
+// grayscale at rest, color only under pressure (context ≥70% warning, ≥90% error;
+// cache turns warning + "!" when the latest turn broke the prompt cache).
+// The /cache command opens a per-turn cache report with break attribution.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  buildCacheReport,
+  computeSessionCacheStats,
+  formatTokens,
+  pct,
+  snapshotPayload,
+  type FingerprintSnapshot,
+  type ReportLine,
+  type SessionCacheStats,
+  type SnapshotPair,
+} from "./simple-statusline/cache.ts";
 
 const STATUSLINE_KEY = "simple-statusline";
+// Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
+const MAX_FINGERPRINT_PAIRS = 500;
 const GPT_FAST_STATUS_KEY = "gpt-fast";
 const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type TokenTotals = { input: number; output: number; cost: number };
-type CacheUsage = { input: number; read: number; write: number; rate: number };
-type RuntimeState = { thinkingLevel: ThinkingLevel; turnCount: number; active: boolean; requestRender?: () => void };
+type FingerprintState = {
+  /** Snapshot of the most recent outgoing provider payload, not yet paired with a turn. */
+  pending?: FingerprintSnapshot;
+  /** The last snapshot paired with a finished turn (previous request in this process). */
+  lastPaired?: FingerprintSnapshot;
+  /** Pairs keyed by assistant message timestamp (Unix ms). Hashes only — never payload content. */
+  byTimestamp: Map<number, SnapshotPair>;
+};
+type RuntimeState = {
+  thinkingLevel: ThinkingLevel;
+  turnCount: number;
+  active: boolean;
+  requestRender?: () => void;
+  fingerprints: FingerprintState;
+};
 type ModelSignal = { plain: string; colored: string };
 
 export default function simpleStatusline(pi: any) {
-  const runtime: RuntimeState = { thinkingLevel: "off", turnCount: 0, active: false };
+  const runtime: RuntimeState = {
+    thinkingLevel: "off",
+    turnCount: 0,
+    active: false,
+    fingerprints: { byTimestamp: new Map() },
+  };
   const refresh = () => runtime.requestRender?.();
 
   const installFooter = (ctx: any) => {
@@ -44,6 +77,7 @@ export default function simpleStatusline(pi: any) {
 
   pi.on("session_start", (_event: any, ctx: any) => {
     runtime.thinkingLevel = pi.getThinkingLevel?.() ?? "off";
+    runtime.fingerprints = { byTimestamp: new Map() };
     installFooter(ctx);
   });
   pi.on("session_tree", (_event: any, ctx: any) => {
@@ -65,18 +99,108 @@ export default function simpleStatusline(pi: any) {
     runtime.active = true;
     refresh();
   });
-  pi.on("turn_end", () => refresh());
+  // Capture a hash-only fingerprint of every outgoing provider payload so /cache
+  // can name the exact prefix divergence when cache breaks (in-process turns only).
+  pi.on("before_provider_request", (event: any) => {
+    try {
+      runtime.fingerprints.pending = snapshotPayload(event?.payload);
+    } catch {
+      runtime.fingerprints.pending = undefined;
+    }
+    // Never mutate the payload — return nothing so pi sends it unchanged.
+  });
+  pi.on("turn_end", (event: any) => {
+    const fingerprints = runtime.fingerprints;
+    const message = event?.message;
+    if (fingerprints.pending && message?.role === "assistant" && typeof message.timestamp === "number") {
+      fingerprints.byTimestamp.set(message.timestamp, { prev: fingerprints.lastPaired, curr: fingerprints.pending });
+      fingerprints.lastPaired = fingerprints.pending;
+      fingerprints.pending = undefined;
+      while (fingerprints.byTimestamp.size > MAX_FINGERPRINT_PAIRS) {
+        const oldest = fingerprints.byTimestamp.keys().next().value;
+        if (oldest === undefined) break;
+        fingerprints.byTimestamp.delete(oldest);
+      }
+    }
+    refresh();
+  });
   pi.on("message_update", () => refresh());
   pi.on("agent_end", () => {
     runtime.active = false;
     refresh();
   });
+
+  pi.registerCommand?.("cache", {
+    description: "Session cache report: per-turn hit rates, breaks, and why they happened",
+    handler: async (_args: string, ctx: any) => {
+      const report = buildCacheReport({
+        branch: ctx.sessionManager.getBranch(),
+        snapshots: runtime.fingerprints.byTimestamp,
+        longRetention: process.env.PI_CACHE_RETENTION === "long",
+      });
+      // Display-only overlay: the report never enters LLM context.
+      await ctx.ui.custom(
+        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
+          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui)),
+        { overlay: true },
+      );
+    },
+  });
+}
+
+/** Size the report viewport to the terminal so the tail stays reachable on short screens. */
+function overlayViewportRows(tui: any): number {
+  const rows = tui?.terminal?.rows;
+  if (typeof rows !== "number" || rows <= 0) return 30;
+  // Leave headroom for the overlay title, spacer, scroll hint, and close hint.
+  return Math.max(8, Math.min(30, rows - 6));
+}
+
+class CacheReportOverlay {
+  focused = false;
+  private scroll = 0;
+  private readonly viewport: number;
+
+  constructor(
+    private readonly theme: any,
+    private readonly done: (result: undefined) => void,
+    readonly lines: ReportLine[],
+    viewport = 30,
+  ) {
+    this.viewport = viewport;
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, "escape") || matchesKey(data, "return") || data === "q") {
+      this.done(undefined);
+      return;
+    }
+    const maxScroll = Math.max(0, this.lines.length - this.viewport);
+    if (matchesKey(data, "up")) this.scroll = Math.max(0, this.scroll - 1);
+    else if (matchesKey(data, "down")) this.scroll = Math.min(maxScroll, this.scroll + 1);
+  }
+
+  render(width: number): string[] {
+    const out: string[] = [];
+    out.push(truncateToWidth(color(this.theme, "accent", "Cache report"), width));
+    out.push("");
+    for (const line of this.lines.slice(this.scroll, this.scroll + this.viewport)) {
+      out.push(truncateToWidth(color(this.theme, line.tone, line.text), width));
+    }
+    if (this.lines.length > this.viewport) {
+      out.push(color(this.theme, "dim", `↑↓ scroll (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length})`));
+    }
+    out.push(color(this.theme, "dim", "esc/q close"));
+    return out;
+  }
+
+  invalidate(): void {}
 }
 
 function renderMainLine(width: number, ctx: any, theme: any, footerData: any, runtime: RuntimeState): string {
   const usage = ctx.getContextUsage?.();
   const totals = getTokenTotals(ctx);
-  const cacheUsage = getLatestCacheUsage(ctx, ctx.model);
+  const cacheStats = computeSessionCacheStats(ctx.sessionManager.getBranch());
 
   const project = basename(ctx.cwd) || ctx.cwd;
   const branch = footerData.getGitBranch?.() || "";
@@ -86,7 +210,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const ctxStr = formatContextUsage(usage, ctx.model?.contextWindow);
   const costStr = totals.cost > 0 ? `$${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}` : "";
   const modelSignal = formatModelSignal(ctx.model, model, level, isGptPriorityEnabled(), theme);
-  const cacheSignal = cacheUsage ? formatCacheSignal(cacheUsage, theme) : undefined;
+  const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
   const sep = "  ·  ";
   // Right cluster: the operational signals. It gets priority, but the final line still clamps for narrow terminals.
@@ -168,40 +292,16 @@ function getTokenTotals(ctx: any): TokenTotals {
   return totals;
 }
 
-function getLatestCacheUsage(ctx: any, model: any): CacheUsage | undefined {
-  if (!isCacheCapableModel(model)) return undefined;
-
-  const branch = ctx.sessionManager.getBranch();
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-
-    const usage = entry.message.usage;
-    if (!usage) continue;
-
-    const input = usage.input ?? 0;
-    const read = usage.cacheRead ?? 0;
-    const write = usage.cacheWrite ?? 0;
-    const total = input + read + write;
-    if (total < 1024) return undefined;
-
-    return { input, read, write, rate: read / total };
-  }
-  return undefined;
-}
-
-function isCacheCapableModel(model: any): boolean {
-  const provider = `${model?.provider ?? ""}`.toLowerCase();
-  return provider === "openai" || provider === "anthropic" || provider === "google" || provider === "google-vertex";
-}
-
-function formatCacheSignal(usage: CacheUsage, theme: any): ModelSignal {
-  const pct = `${Math.round(usage.rate * 100)}%`;
-  const write = usage.write > 0 ? ` W${formatCount(usage.write)}` : "";
-  const plain = `cache ${pct}${write}`;
+// Session cache rate (converging cumulative %) with a break flag: when the latest
+// turn read back far less than the established prefix, the token turns warning + "!".
+// Run /cache for per-turn history and why each break happened.
+function formatCacheSignal(stats: SessionCacheStats, theme: any): ModelSignal {
+  const breakMark = stats.latestBreak ? "!" : "";
+  const write = stats.totalWrite > 0 ? ` W${formatTokens(stats.totalWrite)}` : "";
+  const plain = `cache ${pct(stats.sessionRate)}${breakMark}${write}`;
   return {
     plain,
-    colored: color(theme, "dim", plain),
+    colored: color(theme, stats.latestBreak ? "warning" : "dim", plain),
   };
 }
 
@@ -276,7 +376,7 @@ function formatContextUsage(usage: any, fallbackContextWindow?: number): string 
 
   const tokens = typeof usage?.tokens === "number" ? usage.tokens : undefined;
   const percent = typeof usage?.percent === "number" ? usage.percent : undefined;
-  const tokenPair = `${tokens == null ? "?" : formatCount(tokens)}/${contextWindow > 0 ? formatCount(contextWindow) : "?"}`;
+  const tokenPair = `${tokens == null ? "?" : formatTokens(tokens)}/${contextWindow > 0 ? formatTokens(contextWindow) : "?"}`;
 
   if (percent == null) return tokenPair;
   const bar = percent >= 70 ? `${contextBar(percent)} ` : "";
@@ -301,12 +401,6 @@ function shortenModel(model: string): string {
     .replace(/^gpt-/, "gpt ")
     .replace(/-20\d{6}$/, "")
     .replace(/-latest$/, "");
-}
-
-function formatCount(value: number): string {
-  if (value < 1000) return `${value}`;
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
-  return `${(value / 1_000_000).toFixed(1)}m`;
 }
 
 function compact(value: string, max: number): string {

@@ -12,6 +12,18 @@ _Avoid_: Tool rendering plugin.
 A renderer mode that minimizes built-in tool rows by hiding routine output unless the row is expanded or something abnormal happens.
 _Avoid_: Compact mode when the renderer context is unclear.
 
+**Session cache rate**:
+The cumulative token-weighted cache-hit percentage for the active session branch, computed as total cacheRead over total input + cacheRead + cacheWrite across assistant messages.
+_Avoid_: Cache %, cache utilization when the latest-turn rate could be meant.
+
+**Latest cache hit rate**:
+The single most recent assistant turn's cacheRead share of its prompt tokens, matching Pi's built-in footer CH metric.
+_Avoid_: Session cache rate.
+
+**Cache break**:
+A turn whose cache reads fall far below what the established context prefix predicts, typically flagged by a low latest cache hit rate together with a large prompt and often a cacheWrite spike (re-prime signature).
+_Avoid_: Cache miss when referring to a whole-prefix invalidation event.
+
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
@@ -45,5 +57,6 @@ _Avoid_: Terminal goal when resumability matters.
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
 - A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.
+- A **Cache break** is detected by comparing the latest turn's cache reads against the previously established prefix, with a collapsed **Latest cache hit rate** as its visible symptom; the **Session cache rate** tracks aggregate efficiency — the two are complementary, not interchangeable.
 
 ## Flagged ambiguities

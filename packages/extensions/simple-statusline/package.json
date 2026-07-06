@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-simple-statusline",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "Aviram's ambient custom Pi footer/statusline.",
   "keywords": [
@@ -14,6 +14,15 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-tui": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/simple-statusline/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
   },
   "license": "MIT",
   "repository": {
@@ -31,6 +40,7 @@
   "files": [
     "extensions",
     "README.md",
-    "package.json"
+    "package.json",
+    "tsconfig.json"
   ]
 }

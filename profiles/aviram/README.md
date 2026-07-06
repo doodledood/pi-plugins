@@ -22,7 +22,7 @@ This is a copy/merge profile for Aviram's Pi setup. It is not a blind overwrite 
 
 ## Upstream package setup
 
-`settings.upstream.example.json` pins this repo as `git:github.com/doodledood/pi-plugins@v0.6.0`. That is the preferred live setup: custom extensions come from the upstream Git package/tag, while local bare extension files remain reserved for external installers such as Herdr.
+`settings.upstream.example.json` pins this repo as `git:github.com/doodledood/pi-plugins@v0.7.0`. That is the preferred live setup: custom extensions come from the upstream Git package/tag, while local bare extension files remain reserved for external installers such as Herdr.
 
 ## Local package setup
 
