@@ -78,6 +78,15 @@ class FakeHost implements GoalControllerHost {
     this.sentMessages.push({ content, options });
   }
 
+  public readonly customMessages: Array<{ customType: string; content: string; details?: Record<string, unknown>; options?: { deliverAs?: "steer" | "followUp" | "nextTurn" } }> = [];
+
+  public sendMessage(
+    message: { customType: string; content: string; display: boolean; details?: Record<string, unknown> },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+  ): void {
+    this.customMessages.push({ customType: message.customType, content: message.content, details: message.details, options });
+  }
+
   public getThinkingLevel(): "xhigh" {
     return "xhigh";
   }
@@ -438,8 +447,14 @@ test("command start, checker continuation, and no-tool threshold are wired", asy
   assert.equal(host.sentMessages.length, 1);
 
   const before = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
-  assert.equal(before?.systemPrompt?.includes("finish the smoke goal"), true);
-  assert.equal(before?.systemPrompt?.includes("cannot complete"), true);
+  assert.equal(before?.systemPrompt, undefined, "goal reminder never overrides the system prompt (cache stability)");
+  assert.equal(String(before?.message?.content).includes("finish the smoke goal"), true);
+  assert.equal(String(before?.message?.content).includes("cannot complete"), true);
+  assert.equal(before?.message?.customType, "goal-controller-reminder");
+
+  const secondStart = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "more work", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(secondStart?.message, undefined, "reminder injected once per (goal, activation), not every turn");
+  assert.equal(secondStart?.systemPrompt, undefined);
 
   await host.handlers.agent_end?.(agentEnd("not done yet", true), ctx as ExtensionContext);
   assert.equal(checker.inputs.length, 1);
@@ -532,7 +547,8 @@ test("waiting_for_user verdict stops auto-continuation and resumes on next user 
 
   const before = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
   assert.equal(latestGoal(host)?.status, "active");
-  assert.equal(before?.systemPrompt?.includes("make me laugh"), true);
+  assert.equal(before?.systemPrompt, undefined, "resume transition still never touches the system prompt");
+  assert.equal(String(before?.message?.content).includes("make me laugh"), true, "waiting->active transition re-injects the reminder");
 });
 
 test("checker-complete verdict completes without worker completion tool", async () => {
@@ -869,6 +885,290 @@ test("concurrent agent_end while checker is running does not start a second chec
   assert.equal(checker.inputs.length, 1);
   checker.resolve({ decision: "continue", complete: false, reason: "continue", nextTurnGuidance: "more work" });
   await first;
+});
+
+test("before_agent_start injects nothing without an active goal and reminder state survives session reload", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+
+  // No goal at all: no message, no systemPrompt, in any state.
+  const idle = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "hi", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(idle, undefined);
+
+  // Active goal: first start injects, then a session reload that carries the
+  // reminder entry in the branch must not re-inject a duplicate.
+  await host.commandHandler?.("persist across reload", ctx);
+  const injected = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(injected?.message, "first start injects the reminder");
+  const goalId = (injected?.message?.details as { goalId?: string })?.goalId;
+  assert.ok(goalId, "reminder carries its goal id for reload recovery");
+
+  // Simulate the reminder entry persisted in the branch, then reload. The
+  // goal state entry must be present too so the goal survives the reload.
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host) } });
+  entries.push({ type: "custom_message", customType: "goal-controller-reminder", details: { goalId } } as SessionEntryLike);
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  const afterReload = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "more", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(afterReload?.message, undefined, "no duplicate reminder after reload");
+});
+
+test("goal_edit refreshes the reminder so the standing goal text is never stale", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const ctx = makeCtx();
+  await host.commandHandler?.("original goal text", ctx);
+  const first = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(String(first?.message?.content).includes("original goal text"));
+
+  await host.commandHandlers.get("goal_edit")?.("edited goal text", ctx);
+  const second = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(second?.message, "edited goal re-injects the reminder");
+  assert.ok(String(second?.message?.content).includes("edited goal text"), "reminder carries the updated goal text");
+});
+
+test("compaction drops the reminder from context and the next start re-injects it", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+  await host.commandHandler?.("long compacting goal", ctx);
+  const first = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(first?.message, "initial injection");
+
+  // In-process compaction event: reminder is summarized out of context.
+  await host.handlers.session_compact?.({ type: "session_compact" } as never, ctx as ExtensionContext);
+  const after = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(after?.message, "re-injected after compaction");
+
+  // Reload recovery: a reminder entry BEFORE a compaction entry is not live.
+  const goalId = (after?.message?.details as { goalId?: string })?.goalId;
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host) } });
+  entries.push({ type: "custom_message", customType: "goal-controller-reminder", details: { goalId } } as SessionEntryLike);
+  entries.push({ type: "compaction" });
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  const reloaded = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(reloaded?.message, "pre-compaction reminder does not suppress re-injection after reload");
+});
+
+test("reload retracts a reminder whose goal was cleared or superseded offline", async () => {
+  // Case 1: cleared goal — state entry persists { goal: null }, reminder still in branch.
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [
+    { type: "custom", customType: "goal-controller-state", data: { goal: null } },
+    { type: "custom_message", customType: "goal-controller-reminder", details: { goalId: "gone-goal" } } as SessionEntryLike,
+  ];
+  const ctx = makeCtx(entries);
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  assert.equal(host.customMessages.length, 1, "cleared goal's orphaned reminder retracted on reload");
+  assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
+  assert.equal(host.customMessages[0]?.options?.deliverAs, "nextTurn");
+  const after = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(after, undefined, "no goal, no reminder re-injection");
+
+  // Case 2: superseded offline — branch carries goal B active but a reminder for goal A.
+  const host2 = new FakeHost();
+  activate(host2, new FakeChecker([]));
+  const entries2: SessionEntryLike[] = [];
+  const ctx2 = makeCtx(entries2);
+  await host2.commandHandler?.("goal B", ctx2);
+  entries2.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host2) } });
+  entries2.push({ type: "custom_message", customType: "goal-controller-reminder", details: { goalId: "old-goal-a" } } as SessionEntryLike);
+  host2.customMessages.length = 0;
+  await host2.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx2 as ExtensionContext);
+  assert.equal(host2.customMessages.length, 1, "stale reminder for a different goal retracted on reload");
+  const next = await host2.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx2 as ExtensionContext);
+  assert.ok(String(next?.message?.content).includes("goal B"), "current goal's reminder injected after the stale one is retracted");
+});
+
+test("a compaction whose kept window starts past the reminder evicts it and re-injects", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+  await host.commandHandler?.("evicted-by-compaction goal", ctx);
+  const injected = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  const goalId = (injected?.message?.details as { goalId?: string })?.goalId;
+
+  // The realistic production shape: the reminder sits BEFORE the kept tail, so
+  // compaction summarizes it away and it must be re-injected.
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host) } });
+  entries.push({ type: "custom_message", id: "rem-1", customType: "goal-controller-reminder", details: { goalId } } as SessionEntryLike);
+  entries.push({ type: "message", id: "later-1", message: { role: "user" } });
+  entries.push({ type: "compaction", id: "comp-1", firstKeptEntryId: "later-1" } as SessionEntryLike);
+
+  await host.handlers.session_compact?.({ type: "session_compact" } as never, ctx as ExtensionContext);
+  const after = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(after?.message, "reminder evicted by the kept window is re-injected");
+
+  // An unknown firstKeptEntryId also counts as evicted (conservative direction).
+  const host2 = new FakeHost();
+  activate(host2, new FakeChecker([]));
+  const entries2: SessionEntryLike[] = [];
+  const ctx2 = makeCtx(entries2);
+  await host2.commandHandler?.("unknown-kept-id goal", ctx2);
+  const injected2 = await host2.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx2 as ExtensionContext);
+  entries2.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host2) } });
+  entries2.push({ type: "custom_message", id: "rem-2", customType: "goal-controller-reminder", details: { goalId: (injected2?.message?.details as { goalId?: string })?.goalId } } as SessionEntryLike);
+  entries2.push({ type: "compaction", id: "comp-2", firstKeptEntryId: "no-such-entry" } as SessionEntryLike);
+  await host2.handlers.session_compact?.({ type: "session_compact" } as never, ctx2 as ExtensionContext);
+  const after2 = await host2.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx2 as ExtensionContext);
+  assert.ok(after2?.message, "unresolvable kept-window id treats the reminder as evicted");
+});
+
+test("reload after a delivered retraction is idempotent — no duplicate retraction, no resurrection", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  // Branch already carries the full story: terminal goal, its reminder, AND
+  // the delivered retraction. Reload must send nothing and inject nothing.
+  const goal = { id: "done-goal", goal: "finished offline", status: "complete", startedAt: 1, updatedAt: 2, iteration: 1, checkerIteration: 1, tokensUsed: 0, turnsUsed: 1, timeUsedSeconds: 1, consecutiveNoToolContinuations: 0 };
+  const entries: SessionEntryLike[] = [
+    { type: "custom", customType: "goal-controller-state", data: { goal } },
+    { type: "custom_message", customType: "goal-controller-reminder", details: { goalId: "done-goal" } } as SessionEntryLike,
+    { type: "custom_message", customType: "goal-controller-reminder-retraction", details: { goalId: "done-goal" } } as SessionEntryLike,
+  ];
+  const ctx = makeCtx(entries);
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  assert.equal(host.customMessages.length, 0, "already-retracted reminder must not be retracted again");
+  const after = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(after, undefined, "terminal goal stays retracted — nothing re-injected");
+});
+
+test("a reminder inside the compaction's kept window survives and is not duplicated", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+  await host.commandHandler?.("kept-window goal", ctx);
+  const injected = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  const goalId = (injected?.message?.details as { goalId?: string })?.goalId;
+
+  // Branch: goal state, the reminder entry, then a compaction whose kept
+  // window starts AT the reminder — pi keeps such entries in context verbatim.
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal: latestGoal(host) } });
+  entries.push({ type: "custom_message", id: "rem-1", customType: "goal-controller-reminder", details: { goalId } } as SessionEntryLike);
+  entries.push({ type: "compaction", id: "comp-1", firstKeptEntryId: "rem-1" } as SessionEntryLike);
+
+  // In-process compaction event: liveness recomputed from the branch.
+  await host.handlers.session_compact?.({ type: "session_compact" } as never, ctx as ExtensionContext);
+  const after = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(after?.message, undefined, "kept reminder is still live — no duplicate injection");
+
+  // Reload agrees with the in-process view.
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  const reloaded = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(reloaded?.message, undefined, "kept reminder survives reload without duplication");
+});
+
+test("terminal states retract the standing reminder (complete via checker, cleared via command)", async () => {
+  const host = new FakeHost();
+  const checker = new FakeChecker([
+    { decision: "complete", complete: true, reason: "all proven", evidence: ["e"] },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+  await host.commandHandler?.("finish and retire", ctx);
+  await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.equal(host.customMessages.length, 0, "no retraction while active");
+
+  await host.handlers.agent_end?.(agentEnd("done", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "complete");
+  assert.equal(host.customMessages.length, 1, "completion retracts the reminder");
+  assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
+  assert.match(host.customMessages[0]?.content ?? "", /no longer applies/);
+  assert.equal(
+    host.customMessages[0]?.options?.deliverAs,
+    "nextTurn",
+    "retraction must ride the next user prompt — steer delivery inside agent_end (still streaming) would trigger an unprompted full-context continuation turn",
+  );
+
+  // Cleared goals retract too — but only when a reminder is actually live.
+  const host2 = new FakeHost();
+  activate(host2, new FakeChecker([]));
+  const ctx2 = makeCtx();
+  await host2.commandHandler?.("clear me", ctx2);
+  await host2.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx2 as ExtensionContext);
+  await host2.commandHandlers.get("goal_clear")?.("", ctx2);
+  assert.equal(host2.customMessages.length, 1, "clear retracts the live reminder");
+
+  const host3 = new FakeHost();
+  activate(host3, new FakeChecker([]));
+  const ctx3 = makeCtx();
+  await host3.commandHandler?.("never injected", ctx3);
+  await host3.commandHandlers.get("goal_clear")?.("", ctx3);
+  assert.equal(host3.customMessages.length, 0, "no retraction when no reminder was injected");
+});
+
+test("superseding a paused goal retracts its reminder before the new goal's is injected", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const ctx = makeCtx();
+  await host.commandHandler?.("first goal", ctx);
+  await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  await host.commandHandlers.get("goal_pause")?.("", ctx);
+  assert.equal(host.customMessages.length, 0, "pause alone keeps the reminder (resume expected)");
+
+  await host.commandHandler?.("second goal", ctx);
+  assert.equal(host.customMessages.length, 1, "superseding retracts the old goal's reminder");
+  assert.match(host.customMessages[0]?.content ?? "", /no longer applies/);
+  const next = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  assert.ok(String(next?.message?.content).includes("second goal"), "new goal's reminder injected");
+});
+
+test("reload retracts a reminder whose goal is terminal (lost-retraction safety net)", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+  await host.commandHandler?.("went terminal offline", ctx);
+  const injected = await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  const goalId = (injected?.message?.details as { goalId?: string })?.goalId;
+
+  // Session persisted a completed goal + a live reminder (retraction was lost).
+  const goal = { ...latestGoal(host)!, status: "complete" };
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal } });
+  entries.push({ type: "custom_message", customType: "goal-controller-reminder", details: { goalId } } as SessionEntryLike);
+  host.customMessages.length = 0;
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  assert.equal(host.customMessages.length, 1, "reload retracts the stale reminder");
+  assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
+});
+
+test("blocked verdicts retract the standing reminder", async () => {
+  const host = new FakeHost();
+  const checker = new FakeChecker([
+    { decision: "blocked", complete: false, blocked: true, reason: "cannot proceed" },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+  await host.commandHandler?.("block me", ctx);
+  await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  await host.handlers.agent_end?.(agentEnd("stuck", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "blocked");
+  assert.equal(host.customMessages.length, 1, "blocked transition retracts the reminder");
+  assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
+});
+
+test("budget-limited transitions retract the standing reminder", async () => {
+  const host = new FakeHost();
+  activate(host, new FakeChecker([]));
+  const entries: SessionEntryLike[] = [];
+  const ctx = makeCtx(entries);
+
+  // Load a turn-budgeted active goal from the session (config defaults carry no budgets).
+  await host.commandHandler?.("budgeted goal", ctx);
+  const budgeted = { ...latestGoal(host)!, turnBudget: 1, turnsUsed: 0 };
+  entries.push({ type: "custom", customType: "goal-controller-state", data: { goal: budgeted } });
+  await host.handlers.session_start?.({ type: "session_start", reason: "reload" } as SessionStartEvent, ctx as ExtensionContext);
+  await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
+  host.customMessages.length = 0;
+
+  await host.handlers.agent_end?.(agentEnd("one turn used", true), ctx as ExtensionContext);
+  assert.equal(latestGoal(host)?.status, "budget_limited");
+  assert.equal(host.customMessages.length, 1, "budget-limited transition retracts the reminder");
+  assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
 });
 
 test("configured settings do not load the old pi-goal package", () => {

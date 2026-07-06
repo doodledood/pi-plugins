@@ -6,6 +6,7 @@ import type {
   ExecResult,
   ExtensionCommandContext,
   ExtensionContext,
+  SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   SessionTreeEvent,
@@ -24,9 +25,14 @@ export interface GoalControllerHost {
   on(event: "session_start", handler: Handler<SessionStartEvent>): void;
   on(event: "session_tree", handler: Handler<SessionTreeEvent>): void;
   on(event: "session_shutdown", handler: Handler<SessionShutdownEvent>): void;
+  on(event: "session_compact", handler: Handler<SessionCompactEvent>): void;
   on(event: "before_agent_start", handler: Handler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
   on(event: "agent_end", handler: Handler<AgentEndEvent>): void;
   appendEntry<T = unknown>(customType: string, data?: T): void;
+  sendMessage(
+    message: { customType: string; content: string; display: boolean; details?: Record<string, unknown> },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+  ): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
   getThinkingLevel(): HostThinkingLevel;
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
@@ -36,6 +42,7 @@ export type CapturedHandlers = {
   session_start?: Handler<SessionStartEvent>;
   session_tree?: Handler<SessionTreeEvent>;
   session_shutdown?: Handler<SessionShutdownEvent>;
+  session_compact?: Handler<SessionCompactEvent>;
   before_agent_start?: Handler<BeforeAgentStartEvent, BeforeAgentStartEventResult>;
   agent_end?: Handler<AgentEndEvent>;
 };

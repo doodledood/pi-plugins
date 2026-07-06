@@ -22,10 +22,21 @@ import {
 import { PiSubprocessCheckerRunner, type CheckerRunner } from "./checker.ts";
 import { buildActiveGoalSystemPrompt, buildCheckerSessionContext, buildContinuationPrompt, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
 import type { GoalControllerHost } from "./host.ts";
-import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike } from "./types.ts";
+import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike, SessionEntryLike } from "./types.ts";
 
 const STATUS_KEY = "goal-controller";
 const STATE_ENTRY_TYPE = "goal-controller-state";
+// Persistent context message carrying the active-goal reminder. Delivered via
+// before_agent_start's `message` channel instead of a systemPrompt override:
+// system-prompt churn invalidates the provider's prompt cache from the head
+// (Anthropic: system + all messages re-billed, ~$6 per goal transition at
+// large contexts), while appended messages extend the cached prefix for free.
+const REMINDER_MESSAGE_TYPE = "goal-controller-reminder";
+// Retraction message appended when a goal with an injected reminder reaches a
+// resting state (complete/blocked/budget-limited/cleared), so the standing
+// "Active goal-controller goal" instruction never outlives its goal. Appending
+// extends the cached prefix for free — same cache rationale as the reminder.
+const REMINDER_RETRACTION_TYPE = "goal-controller-reminder-retraction";
 const CHECKER_STATUS_INTERVAL_MS = 1_000;
 const ACTIVE_STATUS_REFRESH_GRANULARITY_MS = 60_000;
 const CHECKER_STATUS_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -63,6 +74,90 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   let activeStatusTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingContinuationGoalId: string | undefined;
   let pendingContinuationPrompt: string | undefined;
+  // Goal id whose reminder message is already in the session context. Injection
+  // happens at most once per (goal, activation): cleared on resume transitions
+  // and recovered from the session on reload so it is never duplicated.
+  let reminderInjectedForGoalId: string | undefined;
+
+  // Which goal's reminder is currently live in LLM context, judged from the
+  // branch: the latest reminder wins, a later retraction cancels it, and a
+  // later compaction drops it — unless the reminder sits inside the
+  // compaction's kept window (entries from firstKeptEntryId onward stay in
+  // context verbatim, so a kept reminder is still live).
+  const findInjectedReminderGoalId = (entries: readonly SessionEntryLike[]): string | undefined => {
+    let current: string | undefined;
+    let currentIndex = -1;
+    const indexById = new Map<string, number>();
+    entries.forEach((entry, index) => {
+      if (entry.id) indexById.set(entry.id, index);
+      if (entry.type === "compaction") {
+        const keptFrom = (entry as SessionEntryLike & { firstKeptEntryId?: string }).firstKeptEntryId;
+        const keptStart = keptFrom ? indexById.get(keptFrom) : undefined;
+        // Evicted unless the reminder provably falls in the kept window.
+        if (current !== undefined && (keptStart === undefined || currentIndex < keptStart)) {
+          current = undefined;
+          currentIndex = -1;
+        }
+      } else if (entry.type === "custom_message" && entry.customType === REMINDER_MESSAGE_TYPE) {
+        const goalId = (entry as SessionEntryLike & { details?: { goalId?: unknown } }).details?.goalId;
+        current = typeof goalId === "string" ? goalId : undefined;
+        currentIndex = index;
+      } else if (entry.type === "custom_message" && entry.customType === REMINDER_RETRACTION_TYPE) {
+        current = undefined;
+        currentIndex = -1;
+      }
+    });
+    return current;
+  };
+
+  // Append a retraction when a reminder-bearing goal stops being active work.
+  // Delivery is "nextTurn": several call sites run inside agent_end handlers,
+  // where the agent still counts as streaming — a steer-delivered message there
+  // would be queued and then drained by an unprompted continuation turn over
+  // the full context (exactly the spend this extension exists to avoid).
+  // "nextTurn" rides the next user prompt instead; if the session shuts down
+  // before one arrives, retireStaleReminderAfterLoad retracts on reload.
+  const retireReminder = (goal: ActiveGoal, status: string): void => {
+    if (reminderInjectedForGoalId !== goal.id) return;
+    reminderInjectedForGoalId = undefined;
+    pi.sendMessage(
+      {
+        customType: REMINDER_RETRACTION_TYPE,
+        content: `The goal-controller goal is now ${status}. The earlier "Active goal-controller goal" reminder no longer applies; there is no active goal-controller goal unless a new one is started or it is resumed.`,
+        display: false,
+        details: { goalId: goal.id },
+      },
+      { deliverAs: "nextTurn" },
+    );
+  };
+
+  // Reload safety net: if the branch carries a live reminder for a goal that is
+  // no longer active work (terminal, superseded, or cleared), retract it now —
+  // covers retractions lost to shutdown races and pre-fix sessions.
+  const retireStaleReminderAfterLoad = (): void => {
+    if (!reminderInjectedForGoalId) return;
+    const goal = activeGoal;
+    const reminderIsForCurrentGoal = goal !== undefined && goal.id === reminderInjectedForGoalId;
+    const restingButResumable = reminderIsForCurrentGoal && (goal.status === "paused" || goal.status === "waiting_for_user" || goal.status === "active" || goal.status === "checking");
+    if (restingButResumable) return;
+    const staleGoal: ActiveGoal | undefined = reminderIsForCurrentGoal ? goal : undefined;
+    if (staleGoal) {
+      retireReminder(staleGoal, staleGoal.status);
+    } else {
+      // Superseded or cleared: no goal object to hand over; retract directly.
+      const staleId = reminderInjectedForGoalId;
+      reminderInjectedForGoalId = undefined;
+      pi.sendMessage(
+        {
+          customType: REMINDER_RETRACTION_TYPE,
+          content: `The goal-controller goal is now inactive. The earlier "Active goal-controller goal" reminder no longer applies; there is no active goal-controller goal unless a new one is started or it is resumed.`,
+          display: false,
+          details: { goalId: staleId },
+        },
+        { deliverAs: "nextTurn" },
+      );
+    }
+  };
 
   const persistGoal = (goal: ActiveGoal | undefined): void => {
     pi.appendEntry<GoalStateEntryData>(STATE_ENTRY_TYPE, { goal: goal ?? null });
@@ -173,6 +268,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         };
       }
 
+      // A superseded goal's standing reminder must not govern the new goal.
+      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded");
       activeGoal = result.goal;
       clearPendingContinuation();
       persistGoal(activeGoal);
@@ -203,6 +300,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
 
+      // A superseded goal's standing reminder must not govern the new goal.
+      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded");
       activeGoal = result.goal;
       clearPendingContinuation();
       persistGoal(activeGoal);
@@ -250,6 +349,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      // Status transition: the next agent start re-injects the goal reminder.
+      reminderInjectedForGoalId = undefined;
       ctx.ui.notify("Goal resumed.", "info");
       await sendGoalKickoff(pi, ctx, activeGoal);
     },
@@ -290,6 +391,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      // Goal text changed: the injected reminder is stale — re-inject next start.
+      reminderInjectedForGoalId = undefined;
       ctx.ui.notify(`Goal edited and resumed: ${activeGoal.goal}`, "info");
       await sendGoalKickoff(pi, ctx, activeGoal);
     },
@@ -304,6 +407,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         return;
       }
       if (activeGoal?.status === "checking") resetCheckerRuntime(checkerRun, true);
+      if (activeGoal) retireReminder(activeGoal, "cleared");
       const cleared = clearGoal(activeGoal);
       persistGoal(cleared);
       activeGoal = undefined;
@@ -318,6 +422,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     resetCheckerRuntime(checkerRun, true);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session reload; run /goal_resume to continue");
     if (activeGoal?.lastTransitionReason?.includes("session reload")) persistGoal(activeGoal);
+    reminderInjectedForGoalId = findInjectedReminderGoalId(ctx.sessionManager.getBranch());
+    retireStaleReminderAfterLoad();
     clearPendingContinuation();
     setStatus(ctx);
   });
@@ -327,8 +433,19 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     resetCheckerRuntime(checkerRun, true);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session navigation; run /goal_resume to continue");
     if (activeGoal?.lastTransitionReason?.includes("session navigation")) persistGoal(activeGoal);
+    reminderInjectedForGoalId = findInjectedReminderGoalId(ctx.sessionManager.getBranch());
+    retireStaleReminderAfterLoad();
     clearPendingContinuation();
     setStatus(ctx);
+  });
+
+  pi.on("session_compact", (_event, ctx) => {
+    // Compaction usually summarizes the reminder out of LLM context (a full
+    // cache reset anyway, so re-injecting is free) — but a reminder inside the
+    // compaction's kept window survives verbatim and must not be duplicated.
+    // Recompute liveness from the branch, which now carries the compaction
+    // entry with its firstKeptEntryId.
+    reminderInjectedForGoalId = findInjectedReminderGoalId(ctx.sessionManager.getBranch());
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
@@ -346,6 +463,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      // Status transition: re-anchor the reminder on this activation.
+      reminderInjectedForGoalId = undefined;
     }
     if (activeGoal.status !== "active") return;
 
@@ -360,7 +479,18 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     }
     clearPendingContinuation();
 
-    return { systemPrompt: `${event.systemPrompt}\n\n${buildActiveGoalSystemPrompt(activeGoal)}` };
+    // Never touch event.systemPrompt: the reminder rides as a persistent
+    // appended message so goal lifecycle changes cannot break the prompt cache.
+    if (reminderInjectedForGoalId === activeGoal.id) return;
+    reminderInjectedForGoalId = activeGoal.id;
+    return {
+      message: {
+        customType: REMINDER_MESSAGE_TYPE,
+        content: buildActiveGoalSystemPrompt(activeGoal),
+        display: false,
+        details: { goalId: activeGoal.id },
+      },
+    };
   });
 
   pi.on("agent_end", async (event, ctx) => {
@@ -384,6 +514,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      retireReminder(activeGoal, "budget-limited");
       ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal budget reached.", "warning");
       return;
     }
@@ -428,6 +559,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
 
       if (activeGoal.status === "complete") {
         clearPendingContinuation();
+        retireReminder(activeGoal, "complete");
         ctx.ui.notify(`Goal complete: ${verdict.reason}`, "info");
         return;
       }
@@ -438,6 +570,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       }
       if (activeGoal.status === "blocked") {
         clearPendingContinuation();
+        retireReminder(activeGoal, "blocked");
         ctx.ui.notify(`Goal blocked: ${activeGoal.lastTransitionReason ?? verdict.reason}`, "warning");
         return;
       }

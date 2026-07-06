@@ -91,6 +91,35 @@ credentials or environment setup are missing, stop as blocked and report exactly
 
 Goal text may reference files, docs, issues, or plans for context. Prefer not to rely on those files as the only place where success is defined; the checker should be able to understand what “done” means from the goal text itself.
 
+## Goal reminder delivery (prompt-cache friendly)
+
+While a goal is active, the worker gets a standing reminder (goal text + rules)
+as a **persistent appended context message**, injected once per goal activation
+and re-injected on resume transitions — never as a system-prompt override.
+System-prompt churn invalidates the provider prompt cache from the head
+(Anthropic re-bills system + all messages, ~$6 per goal transition at large
+contexts); appended messages extend the cached prefix for free. Checker
+continuation prompts carry the goal block each iteration as before.
+
+Lifecycle handling keeps the reminder truthful across the goal's life:
+
+- `/goal_edit` refreshes it (the next agent start injects the updated text).
+- Compaction summarizes it out of context, so the next agent start re-injects
+  it (compaction is a full cache reset anyway — the re-inject is free). A
+  reminder inside the compaction's kept tail survives verbatim and is not
+  duplicated.
+- Terminal transitions (complete, blocked, budget-limited, cleared) and
+  superseding a stopped goal with a new one append a short **retraction
+  message** so a dead goal's instructions never keep governing the session; a
+  paused goal keeps its reminder because resume is the expected next step.
+  Retractions ride the next user prompt (never a steering delivery, which would
+  trigger an unprompted continuation turn from inside agent_end). Reload
+  re-checks this: a reminder recovered from the session whose goal is no longer
+  active work is retracted on load (covers retractions lost before a next
+  prompt arrived).
+- The injected/retracted state is recovered from the session on reload, so
+  reloads never duplicate the reminder or resurrect a retracted one.
+
 ## Completion behavior
 
 On each completed worker turn, the controller:
