@@ -183,6 +183,54 @@ test("/cache labels breaks without a retained fingerprint as entry-correlation o
   assert.match(text, /no fingerprint retained for this turn — predates this process or pruned; entry-correlation only/);
 });
 
+test("/cache overlay supports wheel, page keys, and mouse-mode lifecycle", async () => {
+  // Long branch so the report overflows the viewport.
+  const branch: SessionEntryLike[] = [];
+  for (let i = 0; i < 80; i++) branch.push(assistantEntry(i, 10, 10, 10));
+  const harness = createHarness(branch);
+
+  const writes: string[] = [];
+  harness.ctx.ui.custom = async (factory: any) => {
+    const recording = createRecordingTheme();
+    const tui = { requestRender() {}, terminal: { write: (data: string) => writes.push(data), rows: 40 } };
+    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => {});
+    return undefined;
+  };
+  await harness.commands.get("cache")!.handler("", harness.ctx);
+  const overlay = harness.ctx.lastOverlay;
+
+  assert.ok(writes.some((w) => w.includes("\x1b[?1006h")), "SGR mouse reporting enabled on open");
+
+  const windowOf = (rendered: string[]) => rendered.join("\n").match(/\((\d+)-\d+\/\d+\)/)?.[1];
+  assert.equal(windowOf(overlay.render(100)), "1");
+
+  // Wheel down: one notch scrolls 3 lines.
+  overlay.handleInput("\x1b[<65;10;5M");
+  assert.equal(windowOf(overlay.render(100)), "4");
+  // Wheel up returns to the top (clamped).
+  overlay.handleInput("\x1b[<64;10;5M");
+  overlay.handleInput("\x1b[<64;10;5M");
+  assert.equal(windowOf(overlay.render(100)), "1");
+
+  // PageDown/PageUp jump by a full viewport.
+  overlay.handleInput("\x1b[6~");
+  const afterPageDown = Number(windowOf(overlay.render(100)));
+  assert.ok(afterPageDown > 10, `page down jumps a viewport (got ${afterPageDown})`);
+  overlay.handleInput("\x1b[5~");
+  assert.equal(windowOf(overlay.render(100)), "1");
+
+  // Click sequences are ignored (no scroll, no close).
+  overlay.handleInput("\x1b[<0;10;5M");
+  assert.equal(windowOf(overlay.render(100)), "1");
+
+  // Closing (q) disables mouse reporting; dispose is idempotent.
+  overlay.handleInput("q");
+  assert.ok(writes.some((w) => w.includes("\x1b[?1006l")), "SGR mouse reporting disabled on close");
+  const disableCount = writes.filter((w) => w.includes("\x1b[?1006l")).length;
+  overlay.dispose();
+  assert.equal(writes.filter((w) => w.includes("\x1b[?1006l")).length, disableCount, "dispose after close does not double-disable");
+});
+
 test("fingerprint state stores hashes only and stays bounded to 500 pairs", async () => {
   const turns = 600;
   const branch: SessionEntryLike[] = [];

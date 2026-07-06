@@ -21,6 +21,7 @@ interface UsageLike {
   input?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cost?: { total?: number };
 }
 
 interface MessageLike {
@@ -54,6 +55,8 @@ export interface TurnCacheStats {
   prompt: number;
   /** read / prompt (0 when prompt is 0). */
   rate: number;
+  /** Total cost of this turn in dollars (0 when the model has no pricing). */
+  cost: number;
 }
 
 export interface SessionCacheStats {
@@ -62,6 +65,8 @@ export interface SessionCacheStats {
   totalRead: number;
   totalWrite: number;
   totalPrompt: number;
+  /** Sum of per-turn costs in dollars (0 when the model has no pricing). */
+  totalCost: number;
   /** totalRead / totalPrompt (0 when no prompt tokens). */
   sessionRate: number;
   /** Show the footer metric only when true. */
@@ -103,6 +108,7 @@ export function collectTurnStats(branch: readonly SessionEntryLike[]): TurnCache
       write,
       prompt,
       rate: prompt > 0 ? read / prompt : 0,
+      cost: usage.cost?.total ?? 0,
     });
   });
   return turns;
@@ -126,10 +132,12 @@ export function computeSessionCacheStats(branch: readonly SessionEntryLike[]): S
   let totalInput = 0;
   let totalRead = 0;
   let totalWrite = 0;
+  let totalCost = 0;
   for (const turn of turns) {
     totalInput += turn.input;
     totalRead += turn.read;
     totalWrite += turn.write;
+    totalCost += turn.cost;
   }
   const totalPrompt = totalInput + totalRead + totalWrite;
   const latest = turns[turns.length - 1];
@@ -139,6 +147,7 @@ export function computeSessionCacheStats(branch: readonly SessionEntryLike[]): S
     totalInput,
     totalRead,
     totalWrite,
+    totalCost,
     totalPrompt,
     sessionRate: totalPrompt > 0 ? totalRead / totalPrompt : 0,
     // Data-driven visibility: enough traffic AND the provider actually reports cache fields.
@@ -390,6 +399,11 @@ export function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
 
+/** Dollar cost (shared by the footer and the /cache report). */
+export function formatCost(value: number): string {
+  return `$${value.toFixed(value >= 1 ? 2 : 3)}`;
+}
+
 /** 10-cell hit-rate bar for the /cache report (█ filled, ░ empty). */
 export function hitBar(rate: number): string {
   const slots = 10;
@@ -434,15 +448,21 @@ export function buildCacheReport(args: CacheReportArgs): CacheReport {
     return { stats, rows, lines };
   }
 
+  // Cost data is only meaningful when the model has pricing configured.
+  const showCost = stats.totalCost > 0;
   lines.push({
-    text: `Session cache rate: ${pct(stats.sessionRate)}  ${hitBar(stats.sessionRate)}  read ${formatTokens(stats.totalRead)} / prompt ${formatTokens(stats.totalPrompt)} · write ${formatTokens(stats.totalWrite)}`,
+    text: `Session cache rate: ${pct(stats.sessionRate)}  ${hitBar(stats.sessionRate)}  read ${formatTokens(stats.totalRead)} / prompt ${formatTokens(stats.totalPrompt)} · write ${formatTokens(stats.totalWrite)}${showCost ? ` · cost ${formatCost(stats.totalCost)}` : ""}`,
     tone: "text",
   });
   lines.push({ text: "", tone: "text" });
-  lines.push({ text: `${"turn".padEnd(6)}${"hit".padEnd(17)}${"prompt".padEnd(9)}${"read".padEnd(9)}${"write".padEnd(9)}`, tone: "muted" });
+  lines.push({
+    text: `${"turn".padEnd(6)}${"hit".padEnd(17)}${"prompt".padEnd(9)}${"read".padEnd(9)}${"write".padEnd(9)}${showCost ? "cost".padEnd(9) : ""}`,
+    tone: "muted",
+  });
   for (const row of rows) {
     const t = row.turn;
-    const base = `${`#${t.turn + 1}`.padEnd(6)}${hitBar(t.rate)} ${pct(t.rate).padEnd(6)}${formatTokens(t.prompt).padEnd(9)}${formatTokens(t.read).padEnd(9)}${formatTokens(t.write).padEnd(9)}`;
+    const cost = showCost ? formatCost(t.cost).padEnd(9) : "";
+    const base = `${`#${t.turn + 1}`.padEnd(6)}${hitBar(t.rate)} ${pct(t.rate).padEnd(6)}${formatTokens(t.prompt).padEnd(9)}${formatTokens(t.read).padEnd(9)}${formatTokens(t.write).padEnd(9)}${cost}`;
     lines.push({ text: `${base}${row.isBreak ? "BREAK" : ""}`.trimEnd(), tone: row.isBreak ? "warning" : "text" });
     for (const cause of row.causes) {
       lines.push({ text: `      └ ${formatCause(cause)}`, tone: "muted" });

@@ -10,7 +10,8 @@ from prompt cache (total cache reads divided by total non-cached input + cache
 reads + cache writes over all assistant turns). It converges as the session
 progresses instead of bouncing with each turn. The token appears once the
 branch has meaningful prompt traffic (≥1024 tokens) and the provider actually
-reports cache usage. `W<count>` is the cumulative cache-write total.
+reports cache usage. Cache-write totals live in the `/cache` report, not the
+footer.
 
 When the latest turn **breaks** the cache — it reads back less than half of the
 prefix established by the previous turn (only checked once that prefix is

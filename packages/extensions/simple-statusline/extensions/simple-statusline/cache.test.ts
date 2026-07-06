@@ -59,6 +59,7 @@ function turn(args: Partial<TurnCacheStats> & { prompt?: number }): TurnCacheSta
     write,
     prompt,
     rate: prompt > 0 ? read / prompt : 0,
+    cost: args.cost ?? 0,
   };
 }
 
@@ -393,6 +394,27 @@ test("buildCacheReport rows carry per-turn hit bars", () => {
   assert.ok(rowLine, "turn row present");
   assert.match(rowLine.text, /[█░]{10}/, "row includes a 10-cell hit bar");
   assert.match(report.lines[0]!.text, /Session cache rate: \d+%\s+[█░]{10}/, "headline includes a bar");
+});
+
+test("buildCacheReport shows a per-turn cost column and headline total when cost data exists", () => {
+  const entry = assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000 });
+  (entry.message!.usage as { cost?: { total?: number } }).cost = { total: 0.042 };
+  const entry2 = assistantEntry({ id: "a2", timestamp: 2_000, input: 1_000, read: 9_000 });
+  (entry2.message!.usage as { cost?: { total?: number } }).cost = { total: 1.5 };
+
+  const report = buildCacheReport({ branch: [entry, entry2] });
+  const text = report.lines.map((line) => line.text).join("\n");
+  assert.match(text, /cost \$1\.54/, "headline shows the summed session cost");
+  assert.match(text, /turn\s+hit\s+prompt\s+read\s+write\s+cost/, "cost column header present");
+  assert.match(text, /#1.*\$0\.042/, "turn 1 cost shown");
+  assert.match(text, /#2.*\$1\.50/, "turn 2 cost shown");
+});
+
+test("buildCacheReport hides the cost column when the model has no pricing", () => {
+  const report = buildCacheReport({ branch: [assistantEntry({ id: "a1", timestamp: 1_000, input: 5_000, read: 5_000 })] });
+  const text = report.lines.map((line) => line.text).join("\n");
+  assert.doesNotMatch(text, /cost/);
+  assert.doesNotMatch(text, /\$/);
 });
 
 test("buildCacheReport on an empty branch", () => {

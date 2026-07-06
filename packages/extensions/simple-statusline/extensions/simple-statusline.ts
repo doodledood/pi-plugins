@@ -12,6 +12,7 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 import {
   buildCacheReport,
   computeSessionCacheStats,
+  formatCost,
   formatTokens,
   pct,
   snapshotPayload,
@@ -141,7 +142,7 @@ export default function simpleStatusline(pi: any) {
       // Display-only overlay: the report never enters LLM context.
       await ctx.ui.custom(
         (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
-          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui)),
+          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui), tui?.terminal),
         { overlay: true },
       );
     },
@@ -156,6 +157,26 @@ function overlayViewportRows(tui: any): number {
   return Math.max(8, Math.min(30, rows - 6));
 }
 
+// SGR mouse reporting: enabled only while the overlay is open so the wheel
+// scrolls the report instead of the terminal scrollback. Always disabled on
+// close/dispose to restore native terminal selection behavior.
+const MOUSE_ENABLE = "\x1b[?1006h\x1b[?1000h";
+const MOUSE_DISABLE = "\x1b[?1000l\x1b[?1006l";
+const WHEEL_SCROLL_LINES = 3;
+
+/** Net wheel movement in an input chunk: negative = up, positive = down. */
+function wheelDelta(data: string): number {
+  let delta = 0;
+  const sequence = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
+  let match: RegExpExecArray | null;
+  while ((match = sequence.exec(data))) {
+    const base = Number(match[1]) & ~28; // strip shift/alt/ctrl modifier bits
+    if (base === 64) delta -= 1;
+    else if (base === 65) delta += 1;
+  }
+  return delta;
+}
+
 // Bordered report panel styled after the context-breakdown overlay: rounded
 // border, bold title, tone-tagged body rows, dim hint row inside the frame.
 class CacheReportOverlay {
@@ -163,24 +184,53 @@ class CacheReportOverlay {
   focused = false;
   private scroll = 0;
   private readonly viewport: number;
+  private mouseEnabled = false;
 
   constructor(
     private readonly theme: any,
     private readonly done: (result: undefined) => void,
     readonly lines: ReportLine[],
     viewport = 30,
+    private readonly terminal?: { write(data: string): void },
   ) {
     this.viewport = viewport;
+    if (this.terminal) {
+      this.terminal.write(MOUSE_ENABLE);
+      this.mouseEnabled = true;
+    }
+  }
+
+  private releaseMouse(): void {
+    if (this.mouseEnabled) {
+      this.terminal?.write(MOUSE_DISABLE);
+      this.mouseEnabled = false;
+    }
+  }
+
+  private scrollBy(delta: number): void {
+    const maxScroll = Math.max(0, this.lines.length - this.viewport);
+    this.scroll = Math.max(0, Math.min(maxScroll, this.scroll + delta));
   }
 
   handleInput(data: string): void {
+    const wheel = wheelDelta(data);
+    if (wheel !== 0) {
+      this.scrollBy(wheel * WHEEL_SCROLL_LINES);
+      return;
+    }
     if (matchesKey(data, "escape") || matchesKey(data, "return") || data === "q") {
+      this.releaseMouse();
       this.done(undefined);
       return;
     }
-    const maxScroll = Math.max(0, this.lines.length - this.viewport);
-    if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) this.scroll = Math.max(0, this.scroll - 1);
-    else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) this.scroll = Math.min(maxScroll, this.scroll + 1);
+    if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) this.scrollBy(-1);
+    else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) this.scrollBy(1);
+    else if (matchesKey(data, "pageUp")) this.scrollBy(-this.viewport);
+    else if (matchesKey(data, "pageDown")) this.scrollBy(this.viewport);
+  }
+
+  dispose(): void {
+    this.releaseMouse();
   }
 
   render(width: number): string[] {
@@ -201,7 +251,7 @@ class CacheReportOverlay {
     out.push(row(""));
     const hint =
       this.lines.length > this.viewport
-        ? `↑↓ scroll (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length}) • Esc close`
+        ? `↑↓/wheel scroll • PgUp/PgDn page (${this.scroll + 1}-${Math.min(this.scroll + this.viewport, this.lines.length)}/${this.lines.length}) • Esc close`
         : "Esc close";
     out.push(row(color(th, "dim", hint)));
     out.push(color(th, "border", `╰${"─".repeat(innerW)}╯`));
@@ -230,7 +280,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const level = runtime.thinkingLevel;
   const pct = usage?.percent;
   const ctxStr = formatContextUsage(usage, ctx.model?.contextWindow);
-  const costStr = totals.cost > 0 ? `$${totals.cost.toFixed(totals.cost >= 1 ? 2 : 3)}` : "";
+  const costStr = totals.cost > 0 ? formatCost(totals.cost) : "";
   const modelSignal = formatModelSignal(ctx.model, model, level, isGptPriorityEnabled(), theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
@@ -316,11 +366,10 @@ function getTokenTotals(ctx: any): TokenTotals {
 
 // Session cache rate (converging cumulative %) with a break flag: when the latest
 // turn read back far less than the established prefix, the token turns warning + "!".
-// Run /cache for per-turn history and why each break happened.
+// Write totals live in /cache, not here — the footer stays ambient.
 function formatCacheSignal(stats: SessionCacheStats, theme: any): ModelSignal {
   const breakMark = stats.latestBreak ? "!" : "";
-  const write = stats.totalWrite > 0 ? ` W${formatTokens(stats.totalWrite)}` : "";
-  const plain = `cache ${pct(stats.sessionRate)}${breakMark}${write}`;
+  const plain = `cache ${pct(stats.sessionRate)}${breakMark}`;
   return {
     plain,
     colored: color(theme, stats.latestBreak ? "warning" : "dim", plain),
