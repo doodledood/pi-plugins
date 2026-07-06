@@ -4,7 +4,7 @@ This is a copy/merge profile for Aviram's Pi setup. It is not a blind overwrite 
 
 ## What is included
 
-- `settings.upstream.example.json`: preferred setup for Aviram's live install. It loads this repo from the pinned upstream Git tag and keeps custom extensions out of bare local files.
+- `settings.upstream.example.json`: preferred setup for Aviram's live install. It loads this repo from the upstream Git `@main` branch (always latest) and keeps custom extensions out of bare local files.
 - `settings.local.example.json`: development setup using local paths after cloning this repo, plus external npm helper packages. It includes `npm:@amaster.ai/pi-image-gen` with `pi-image-gen.defaultModel` set to `gpt-image-2`. Replace `/ABSOLUTE/PATH/TO/pi-plugins` before use.
 - `mcp.example.json`: MCP setup template with placeholders for local wrapper paths, direct remote MCP URLs, `mcp-remote` command servers, proxy-style MCP URLs, proxy IDs, and API keys. Standalone Tavily MCP is intentionally omitted; use `pi-web-access` instead.
 - `web-search.example.json`: `pi-web-access` search-provider template. Copy to `~/.pi/web-search.json`, fill secrets locally, and keep permissions private.
@@ -22,7 +22,7 @@ This is a copy/merge profile for Aviram's Pi setup. It is not a blind overwrite 
 
 ## Upstream package setup
 
-`settings.upstream.example.json` pins this repo as `git:github.com/doodledood/pi-plugins@v0.7.0`. That is the preferred live setup: custom extensions come from the upstream Git package/tag, while local bare extension files remain reserved for external installers such as Herdr.
+`settings.upstream.example.json` pins this repo as `git:github.com/doodledood/pi-plugins@main`. That is the preferred live setup: custom extensions come from the upstream Git package/tag, while local bare extension files remain reserved for external installers such as Herdr.
 
 ## Local package setup
 

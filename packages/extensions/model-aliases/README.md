@@ -35,7 +35,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.7.0",
+      "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": ["packages/extensions/model-aliases/extensions/model-aliases/index.ts"],
       "skills": [],
       "prompts": [],

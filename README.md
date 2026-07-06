@@ -36,7 +36,7 @@ Global skills are intentionally not included in this repo.
 The root package lists all included resources. Installing it without filters loads every extension and theme declared in `package.json`:
 
 ```bash
-pi install git:github.com/doodledood/pi-plugins@v0.7.0
+pi install git:github.com/doodledood/pi-plugins@main
 ```
 
 Use this only when you want the full curated resource set.
@@ -51,7 +51,7 @@ Extension example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.7.0",
+      "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
       "prompts": [],
       "themes": []
@@ -67,7 +67,7 @@ Theme example:
 {
   "packages": [
     {
-      "source": "git:github.com/doodledood/pi-plugins@v0.7.0",
+      "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": [],
       "prompts": [],
       "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
@@ -76,7 +76,7 @@ Theme example:
 }
 ```
 
-Do not rely on undocumented Git subdirectory install syntax. The examples use the pinned `@v0.7.0` release tag. Use `@main` only when you intentionally want the latest development version.
+Do not rely on undocumented Git subdirectory install syntax. The examples track the `@main` branch so installs always follow the latest version. Pin a release tag (`@vX.Y.Z`, auto-created on every version bump) only when you intentionally want a frozen snapshot.
 
 ## Install one package from a local clone
 
@@ -101,7 +101,7 @@ Use this when you want the whole working setup: this repo's extensions/theme, ex
   "npm:pi-mcp-adapter",
   "npm:@gotgenes/pi-subagents",
   "git:github.com/doodledood/manifest-dev@main",
-  "git:github.com/doodledood/pi-plugins@v0.7.0",
+  "git:github.com/doodledood/pi-plugins@main",
   "npm:@juicesharp/rpiv-ask-user-question",
   "npm:@juicesharp/rpiv-todo",
   "npm:pi-web-access",
@@ -109,7 +109,7 @@ Use this when you want the whole working setup: this repo's extensions/theme, ex
 ]
 ```
 
-The `git:github.com/doodledood/pi-plugins@v0.7.0` package is this repo. The other entries are external packages installed alongside it.
+The `git:github.com/doodledood/pi-plugins@main` package is this repo. The other entries are external packages installed alongside it.
 
 The same settings template also enables the theme and package defaults:
 
@@ -169,7 +169,7 @@ for pkg in \
   npm:pi-mcp-adapter \
   npm:@gotgenes/pi-subagents \
   git:github.com/doodledood/manifest-dev@main \
-  git:github.com/doodledood/pi-plugins@v0.7.0 \
+  git:github.com/doodledood/pi-plugins@main \
   npm:@juicesharp/rpiv-ask-user-question \
   npm:@juicesharp/rpiv-todo \
   npm:pi-web-access \
@@ -181,7 +181,7 @@ done
 pi list
 ```
 
-Later, use `pi update --extensions` to update/reconcile installed package checkouts without changing pinned Git refs.
+Later, use `pi update --extensions` to reconcile installed package checkouts to the latest `main` without changing the configured refs.
 
 ### Existing profile: install the same plugins without overwriting settings
 
@@ -191,7 +191,7 @@ If you already have a `~/.pi/agent/settings.json` you care about, do not copy `s
 pi install npm:pi-mcp-adapter
 pi install npm:@gotgenes/pi-subagents
 pi install git:github.com/doodledood/manifest-dev@main
-pi install git:github.com/doodledood/pi-plugins@v0.7.0
+pi install git:github.com/doodledood/pi-plugins@main
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:@juicesharp/rpiv-todo
 pi install npm:pi-web-access
@@ -226,7 +226,7 @@ profiles/aviram/AGENTS.md        -> ~/.pi/agent/AGENTS.md
 profiles/aviram/APPEND_SYSTEM.md -> ~/.pi/agent/APPEND_SYSTEM.md
 ```
 
-Use `profiles/aviram/settings.local.example.json` only when developing this repo from a local clone; it points at local package paths under `/ABSOLUTE/PATH/TO/pi-plugins` instead of the pinned Git package.
+Use `profiles/aviram/settings.local.example.json` only when developing this repo from a local clone; it points at local package paths under `/ABSOLUTE/PATH/TO/pi-plugins` instead of the `@main`-tracking Git package.
 
 ### For agents helping a user configure this profile
 
@@ -239,8 +239,8 @@ Recommended probing questions:
    - Default: merge if the user already has settings; replace only with explicit confirmation.
 
 2. **Pinned release or local development?**
-   - "Should the `pi-plugins` resources come from the pinned Git release `git:github.com/doodledood/pi-plugins@v0.7.0`, or from a local clone you plan to edit?"
-   - Default: pinned Git release for normal use; local paths only for development.
+   - "Should the `pi-plugins` resources come from the upstream Git source `git:github.com/doodledood/pi-plugins@main`, or from a local clone you plan to edit?"
+   - Default: the `@main` Git source for normal use; local paths only for development.
 
 3. **External package set?**
    - "Do you want the full external package set from Aviram's profile — MCP adapter, subagents, manifest skills, ask-user-question, todo, web access, and image generation — or only a subset?"
