@@ -72,7 +72,10 @@ Goal state:
 ${state}
 
 Session navigation context:
-${sessionContext}`;
+${sessionContext}
+
+Output contract:
+Respond with exactly one JSON object matching the schema above and nothing else — no prose, no markdown fences, no preamble, and no verification summary before or after it. Record everything you inspected inside the "evidence" and "requirements" fields rather than narrating it outside the JSON. The JSON object is your entire final message.`;
 }
 
 export function buildCheckerSessionContext(

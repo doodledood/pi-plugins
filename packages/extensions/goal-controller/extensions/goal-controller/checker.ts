@@ -37,7 +37,7 @@ export class PiSubprocessCheckerRunner implements CheckerRunner {
       throw new Error(formatCheckerSubprocessFailure(result, input.config, elapsedMs));
     }
 
-    const finalText = finalAssistantTextFromJsonMode(result.stdout) || result.stdout.trim();
+    const finalText = verdictTextFromJsonMode(result.stdout) ?? result.stdout.trim();
     return parseCheckerVerdict(finalText);
   }
 }
@@ -116,8 +116,23 @@ function stringProperty(value: unknown, key: string): string | undefined {
   return typeof property === "string" && property.trim().length > 0 ? property.trim() : undefined;
 }
 
-function finalAssistantTextFromJsonMode(stdout: string): string | undefined {
-  let finalText: string | undefined;
+function verdictTextFromJsonMode(stdout: string): string | undefined {
+  const textBlocks = assistantTextBlocksFromJsonMode(stdout);
+  if (textBlocks.length === 0) return undefined;
+  // Prefer the last text block that actually carries a JSON object. A checker
+  // that inspected evidence sometimes appends a prose summary after (or emits
+  // it in a later turn than) the verdict; the final block alone would then miss
+  // the JSON. Fall back to the last block so a truly prose-only run still yields
+  // the informative parse error.
+  for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
+    const candidate = textBlocks[index];
+    if (candidate !== undefined && containsJsonObject(candidate)) return candidate;
+  }
+  return textBlocks.at(-1);
+}
+
+function assistantTextBlocksFromJsonMode(stdout: string): string[] {
+  const texts: string[] = [];
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const event = safeJsonParse(line);
@@ -128,11 +143,15 @@ function finalAssistantTextFromJsonMode(stdout: string): string | undefined {
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
-        finalText = block.text;
+        texts.push(block.text);
       }
     }
   }
-  return finalText;
+  return texts;
+}
+
+function containsJsonObject(text: string): boolean {
+  return isRecord(safeJsonParse(extractJsonObject(text)));
 }
 
 export function parseCheckerVerdict(text: string): CheckerVerdict {

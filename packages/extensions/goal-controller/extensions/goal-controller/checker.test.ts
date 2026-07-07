@@ -181,6 +181,62 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   assert.match(checkerPrompt, /Extension tools, prompt templates, context files, shell execution, and file mutation tools are unavailable/iu);
   assert.match(checkerPrompt, /you may inspect evidence needed for judgment/iu);
   assert.match(checkerPrompt, /Do not use checker-side tools to perform omitted primary success work on the worker's behalf/iu);
+  assert.match(checkerPrompt, /Output contract:/iu);
+  assert.match(checkerPrompt, /exactly one JSON object/iu);
+  assert.match(checkerPrompt, /no verification summary before or after it/iu);
+  assert.ok(
+    checkerPrompt.indexOf("Output contract:") > checkerPrompt.indexOf("Session navigation context:"),
+    "the JSON-only output contract must be the last thing the checker reads, after the data blobs",
+  );
+});
+
+test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summary block trails it", async () => {
+  const jsonVerdict = JSON.stringify({
+    decision: "complete",
+    complete: true,
+    reason: "all requirements proven",
+    evidence: ["npm run verify exited 0"],
+    requirements: [{ requirement: "verify", status: "satisfied", evidence: "exit 0" }],
+  });
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const verdictMessage = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: jsonVerdict }] },
+      });
+      const trailingProse = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: everything looks done to me." }] },
+      });
+      return { stdout: `${verdictMessage}\n${trailingProse}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  const verdict = await runner.run({
+    goal: createGoal("fake goal", DEFAULT_CONFIG, 0),
+    context: checkerContext("/tmp/pi-session.jsonl"),
+    config: DEFAULT_CONFIG,
+    cwd: "/tmp",
+    model: undefined,
+    thinkingLevel: "off",
+  });
+
+  assert.equal(verdict.complete, true);
+  assert.equal(verdict.reason, "all requirements proven");
+});
+
+test("PiSubprocessCheckerRunner surfaces the informative parse error when the checker emits only prose", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const proseOnly = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: looks complete to me." }] },
+      });
+      return { stdout: `${proseOnly}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /checker did not return a JSON object/iu);
 });
 
 test("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled", async () => {
