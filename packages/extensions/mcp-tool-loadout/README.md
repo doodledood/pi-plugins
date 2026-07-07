@@ -1,6 +1,6 @@
 # mcp-tool-loadout
 
-Usage-driven MCP tool loadout for Pi: compact catalog, budgeted active schemas, and wake-on-demand.
+Usage-driven MCP tool loadout for Pi: compact catalog, budgeted active schemas, and cache-safe schema loading for dormant tools.
 
 ## Install
 
@@ -57,18 +57,22 @@ the cost:
    repo's own history first; if it has little MCP usage, your pooled **global** usage
    (across all repos); and only then the configured prior. Stats are keyed by **repo
    name**, so all worktrees/clones of a repo share one history.
-4. **Wake on demand.** A `load_tools(["name", …])` tool re-activates dormant tools for
-   the rest of the session. One-off calls can also go straight through the `mcp` proxy.
+4. **Cache-safe schema loading.** A `load_tools` tool returns full schemas and exact
+   `mcp({ tool, args })` examples for dormant tools without changing the active tool
+   set. Set `direct:true` only when direct native function calling is worth the
+   prompt-cache rewrite.
 
 Built-in tools (read, bash, edit, grep, …), the `mcp` proxy, and `load_tools` are
 **never** gated — only `pi-mcp-adapter` tools are.
 
 ## Why it works this way
 
-- **Per-session-static.** Pi prompt-caches the system+tools prefix. Changing the active
-  set mid-session invalidates that cache, so the active set is chosen once at
-  `session_start` and held stable; `load_tools` wakes are intentional, bounded cache
-  misses. The injected catalog is byte-stable within a session for the same reason.
+- **Per-session-static by default.** Pi prompt-caches the system+tools prefix. Changing
+  the active set mid-session invalidates that cache, so the active set is chosen once
+  at `session_start` and held stable. Default `load_tools` calls do **not** mutate the
+  active set; they append schemas in the tool result and route calls through `mcp`,
+  keeping the cached prefix byte-stable. `direct:true` remains as an explicit hard-load
+  escape hatch.
 - **Awareness over blind search.** A pure proxy hides tool names and forces keyword
   search. Listing names (≈1–1.5k tokens) is far cheaper than the schemas (~20k+) and
   removes the discovery guesswork.
@@ -107,8 +111,11 @@ orders the set, and as you use tools the prior washes out.
 ## Usage from the model's side
 
 - Active tools: call directly.
-- `·dormant` tools: `load_tools(["tool_name"])`, then call it on the next turn — or
-  `mcp({ tool: "tool_name", args: "{…}" })` for a single one-off.
+- `·dormant` tools: call `load_tools` with `names: ["tool_name"]`. The result includes
+  the tool's description, parameter schema, and an exact proxy example. Then call it as
+  `mcp({ tool: "tool_name", args: "{…}" })`.
+- If direct native function calling is important enough to spend a cache rewrite, call
+  `load_tools` with `direct: true`; that hard-activates the tools for later direct calls.
 - `·proxy` tools (proxy-only servers, never registered as direct tools): call via
   `mcp({ tool, args })`.
 

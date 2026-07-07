@@ -6,9 +6,9 @@
 //   2. Cache keeper — stamps Anthropic's spare 4th cache_control breakpoint
 //      when a burst of appended blocks would push the previous cache write
 //      out of the provider's 20-block lookback window (keeper.ts).
-//   3. TTL keepalive — cheap prefix re-reads during long in-flight tool waits
-//      so the 5-minute Anthropic cache doesn't expire mid-turn; structurally
-//      bounded against runaway (keepalive.ts).
+//   3. TTL keepalive — cheap prefix re-reads during long foreground tool waits
+//      or idle background-work waits so the 5-minute Anthropic cache doesn't
+//      expire before the next request; structurally bounded against runaway (keepalive.ts).
 //
 // Privacy: fingerprint state is sha256 hashes only, in-memory only. The
 // keepalive re-sends a captured payload solely to its original provider
@@ -27,7 +27,7 @@ import {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyCacheKeeper, type KeeperState } from "./cache-optimization/keeper.ts";
-import { CacheKeepalive, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
+import { CacheKeepalive, hasBackgroundLaunchFlag, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
 
 // Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
 const MAX_FINGERPRINT_PAIRS = 500;
@@ -103,6 +103,10 @@ export function activate(
     }
   });
 
+  pi.on("session_tree", () => {
+    keepalive.branchSwitch();
+  });
+
   // One handler, three concerns: fingerprint the outgoing payload (hashes only),
   // let the keeper stamp its breakpoint when needed, and re-anchor the keepalive.
   pi.on("before_provider_request", (event: any, ctx: any) => {
@@ -159,10 +163,19 @@ export function activate(
   });
 
   pi.on("tool_execution_start", (event: any) => {
-    keepalive.toolStart(String(event?.toolCallId ?? event?.id ?? "tool"));
+    const id = toolExecutionId(event);
+    keepalive.toolStart(id);
+    if (hasBackgroundLaunchFlag(event?.args ?? event?.input)) keepalive.backgroundWorkStart(id);
+  });
+  pi.on("tool_call", (event: any) => {
+    const id = toolExecutionId(event);
+    if (hasBackgroundLaunchFlag(event?.input ?? event?.args)) keepalive.backgroundWorkStart(id);
   });
   pi.on("tool_execution_end", (event: any) => {
-    keepalive.toolEnd(String(event?.toolCallId ?? event?.id ?? "tool"));
+    keepalive.toolEnd(toolExecutionId(event));
+  });
+  pi.on("agent_end", () => {
+    keepalive.agentEnd();
   });
 
   pi.registerCommand?.("cache", {
@@ -194,6 +207,10 @@ export function activate(
 }
 
 /** Size the report viewport to the terminal so the tail stays reachable on short screens. */
+function toolExecutionId(event: any): string {
+  return String(event?.toolCallId ?? event?.id ?? "tool");
+}
+
 function overlayViewportRows(tui: any): number {
   const rows = tui?.terminal?.rows;
   if (typeof rows !== "number" || rows <= 0) return 30;

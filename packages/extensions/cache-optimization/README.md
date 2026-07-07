@@ -6,18 +6,18 @@ Prompt-cache efficiency toolkit for Pi. Three duties, one extension:
    attribution.
 2. **Cache keeper** — protects the Anthropic message-history cache span across
    large message bursts by stamping the spare 4th cache breakpoint.
-3. **TTL keepalive** — cheap prefix re-reads during long in-flight tool waits
-   so the 5-minute Anthropic cache doesn't expire mid-turn; structurally
-   bounded against runaway cost.
+3. **TTL keepalive** — cheap prefix re-reads during long foreground-tool waits
+   or idle background-work waits so the 5-minute Anthropic cache doesn't
+   expire before the next request; structurally bounded against runaway cost.
 
 Background: Pi places three Anthropic `cache_control` breakpoints (last tool,
 system block, last user message). Anthropic's cache lookup walks at most 20
 content blocks backward per breakpoint, and the 5-minute TTL refreshes free on
 every read. Both properties leak money in agent-heavy sessions — a >20-block
-burst (subagent notifications, parallel tool turns) silently re-bills the whole
-history as a cache write, and a >5-minute tool wait expires the cache (~$5-6
-per event at 500k-token contexts). This extension closes both gaps and explains
-every other break via `/cache`.
+burst (background notifications, parallel tool turns) silently re-bills the
+whole history as a cache write, and a >5-minute foreground-tool or background
+wait expires the cache (~$5-6 per event at 500k-token contexts). This extension
+closes both gaps and explains every other break via `/cache`.
 
 ## /cache report
 
@@ -59,16 +59,28 @@ copies Pi's own TTL shape onto the stamped marker.
 
 ## TTL keepalive
 
-While a tool or subagent runs longer than ~4.5 minutes with a large Anthropic
-prompt cached, the keepalive re-reads the prefix (`max_tokens: 1`) — a read at
-0.1× input price (~12.5× cheaper than the rewrite it prevents) that refreshes
-the 5-minute TTL for free.
+While a foreground tool is still running, or while the main agent is idle but
+waiting on background work that will wake a later request, the keepalive
+re-reads the prefix (`max_tokens: 1`) after ~4.5 minutes — a read at 0.1× input
+price (~12.5× cheaper than the rewrite it prevents) that refreshes the
+5-minute TTL for free.
+
+Background-work detection is deliberately **package-agnostic**. Any tool call
+whose arguments carry a truthy `run_in_background`-style flag (for example
+`run_in_background`, `runInBackground`, or `background_work`) counts as a
+background launch, regardless of the tool name or extension that provided it.
+No companion extension is required; cache-optimization can be installed on its
+own and still keeps the cache alive when other extensions follow the convention.
+Pending background work is armed after the current agent turn ends, consumed by
+the next real provider-request wake, cleared on branch/tree navigation or
+shutdown, and dropped by a fail-safe expiry that only removes stale work (never
+extends pinging).
 
 Runaway is prevented structurally, not by tuning:
 
-- **In-flight only**: pings fire only while a tool execution is in flight — the
-  one state where the next real request is near-certain. Idle at the prompt
-  (you walked away) = zero pings, ever.
+- **Work-only**: pings fire only while a foreground tool execution is in flight
+  or while there is armed pending background work. Idle at the prompt with no
+  pending work (you walked away) = zero pings, ever.
 - **Per-gap budget**: at most 6 pings between real requests (~0.5× the rewrite
   cost the pings try to prevent), then silence.
 - **Daily dollar cap** (default $3.00, estimated from read pricing) — sized to
@@ -111,9 +123,10 @@ Keepalive activity stays auditable: the `/cache` report ends with a status
 line (pings today, estimated spend, last-ping failure flag). The daily cap is
 per pi process — N concurrent sessions can each spend up to the cap.
 
-Tunables (constants at module top): cadence, per-gap cap, daily cap, and
-activation floor in `extensions/cache-optimization/keepalive.ts`; the scheduler
-tick interval in `extensions/cache-optimization.ts`.
+Tunables (constants at module top): cadence, per-gap cap, daily cap,
+background-work expiry, and activation floor in
+`extensions/cache-optimization/keepalive.ts`; the scheduler tick interval in
+`extensions/cache-optimization.ts`.
 
 ## Install
 

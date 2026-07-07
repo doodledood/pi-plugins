@@ -29,8 +29,12 @@ The cache-optimization behavior that stamps Anthropic's spare 4th cache_control 
 _Avoid_: Cache pinning, breakpoint hack.
 
 **TTL keepalive**:
-The cache-optimization behavior that re-reads a large cached Anthropic prefix (max_tokens 1, 0.1× input price) during long in-flight tool waits so the 5-minute cache TTL does not expire mid-turn; structurally bounded (in-flight only, per-gap ping cap, daily dollar cap, activation floor) and correctness-guarded (never pings thinking-enabled payloads or sessions routed through a different Anthropic identity/baseUrl).
+The cache-optimization behavior that re-reads a large cached Anthropic prefix (max_tokens 1, 0.1× input price) during long foreground-tool waits or idle waits on pending background work so the 5-minute cache TTL does not expire before the next request; structurally bounded (work-only arming, per-gap ping cap, daily dollar cap, activation floor, background expiry) and correctness-guarded (never pings thinking-enabled payloads or sessions routed through a different Anthropic identity/baseUrl).
 _Avoid_: Cache heartbeat, keep-warm when the bounded design is the point.
+
+**Background-wakeup TTL break**:
+A Cache break where a >5-minute gap ends at a background completion notification or other custom entry while no foreground tool execution is in flight. Historically this was not covered by a foreground-only TTL keepalive; the generalized TTL keepalive now covers background work launched through package-agnostic `run_in_background`-style tool arguments.
+_Avoid_: In-flight TTL break.
 
 **20-block lookback**:
 Anthropic's prompt-cache read behavior of checking at most 20 content-block positions backward from each cache breakpoint for a previously written prefix; appends larger than the window silently lose the message-history cache.
@@ -47,6 +51,10 @@ _Avoid_: Dot thingy.
 **Goal controller**:
 A Pi extension in this repo that manages one long-running session goal and delegates completion authority to an independent checker.
 _Avoid_: Goal mode when referring to the extension implementation.
+
+**Model aliases**:
+A Pi extension in this repo that registers selector-visible provider/model aliases and rewrites provider requests to configured upstream provider/model IDs.
+_Avoid_: Model override when referring to selector-visible aliases.
 
 **Goal checker**:
 An independent Pi subprocess run by the goal controller to assess whether the active goal's completion contract has been proven.
@@ -74,7 +82,8 @@ _Avoid_: Terminal goal when resumability matters.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
 - A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.
 - A **Cache break** is detected by comparing the latest turn's cache reads against the previously established prefix, with a collapsed **Latest cache hit rate** as its visible symptom; the **Session cache rate** tracks aggregate efficiency — the two are complementary, not interchangeable.
-- The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and in-flight TTL expiry); the /cache report in cache-optimization explains the rest after the fact.
+- The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and TTL expiry during active foreground/background work); the /cache report in cache-optimization explains the rest after the fact.
+- A **Background-wakeup TTL break** was historically outside the **TTL keepalive**'s foreground-only coverage; generalized background-work arming now covers launches that follow Pi's `run_in_background`-style convention, while idle-with-no-work remains zero-ping.
 - The **Goal reminder message** replaced the goal controller's system-prompt suffix precisely because system-prompt churn was a recurring **Cache break** cause.
 
 ## Flagged ambiguities

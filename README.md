@@ -11,15 +11,15 @@ This repo has two jobs:
 
 ### Extensions
 
-- `cache-optimization` — prompt-cache efficiency toolkit: `/cache` diagnostics with break attribution, Anthropic 4th-breakpoint cache keeper, and a runaway-proof TTL keepalive.
+- `cache-optimization` — prompt-cache efficiency toolkit: `/cache` diagnostics with break attribution, Anthropic 4th-breakpoint cache keeper, and a runaway-proof foreground/background TTL keepalive.
 - `goal-controller` — checker-only long-running goal controller.
-- `mcp-tool-loadout` — compact MCP catalog plus budgeted active tool schemas.
+- `mcp-tool-loadout` — compact MCP catalog, budgeted active tool schemas, and cache-safe schema loading for dormant tools.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle.
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `model-aliases` — configurable selector-visible model aliases that map back to existing upstream model IDs.
 - `message-stash` — single-slot input draft stash.
-- `simple-statusline` — ambient custom Pi footer/statusline with a session cache rate and cache-break flag (full `/cache` diagnostics live in `cache-optimization`).
+- `simple-statusline` — ambient custom Pi footer/statusline with context pressure, compact-at-boundary hint, session cache rate, and cache-break flag (full `/cache` diagnostics live in `cache-optimization`).
 - `skill-argument-hints` — phantom argument hints for skill commands.
 - `tool-activity-renderer` — compact rendering wrappers for built-in tools.
 

@@ -1,15 +1,16 @@
 // keepalive.ts — runaway-proof Anthropic prompt-cache TTL keepalive.
 //
 // Anthropic's 5-minute cache TTL refreshes free on every read. When the agent
-// loop stalls past the TTL mid-turn (long subagent runs, slow builds), the
-// next request rewrites the whole prefix at 1.25x input price (~$5-6 at 500k
-// context). A tiny re-read of the same prefix costs 0.1x — ~12.5x cheaper —
-// and resets the clock.
+// loop stalls past the TTL mid-turn (slow builds, background work that will
+// wake the agent later), the next request rewrites the whole prefix at 1.25x
+// input price (~$5-6 at 500k context). A tiny re-read of the same prefix costs
+// 0.1x — ~12.5x cheaper — and resets the clock.
 //
 // Runaway is prevented structurally, not by tuning:
-//   1. Pings fire only while at least one tool execution is in flight — the
-//      one state where the next real request is near-certain. Idle at the
-//      prompt (user walked away) => zero pings, ever.
+//   1. Pings fire only while at least one foreground tool execution is in
+//      flight OR while the agent is idle with pending background work that is
+//      expected to wake a later request. Idle at the prompt with no pending
+//      work (user walked away) => zero pings, ever.
 //   2. Per-gap budget: at most PER_GAP_MAX_PINGS pings between real provider
 //      requests (~0.5x the rewrite cost the pings try to prevent), then silence.
 //   3. Daily dollar cap across the whole session as a backstop for bugs.
@@ -46,6 +47,12 @@ export const PER_GAP_MAX_PINGS = 6;
 export const DAILY_BUDGET_USD = 3.0;
 /** Don't bother below this prompt size — the rewrite it saves is < ~$1. */
 export const MIN_PROMPT_TOKENS = 100_000;
+/**
+ * Background work without a wake expires before it can run past the normal
+ * per-gap ping horizon. This fail-safe biases toward fewer pings: expiry only
+ * removes pending work, never extends it.
+ */
+export const BACKGROUND_WORK_EXPIRE_MS = (PER_GAP_MAX_PINGS + 1) * PING_AFTER_IDLE_MS;
 
 /**
  * Fallback cache-read $/MTok by model substring (Anthropic list prices; 0.1x
@@ -136,8 +143,44 @@ export function isPingableRoute(route: RequestRoute | undefined): boolean {
   if (!route) return false;
   if (route.provider !== "anthropic") return false;
   if (route.nonApiKeyAuth) return false;
-  if (route.baseUrl && !String(route.baseUrl).startsWith(ANTHROPIC_BASE_URL)) return false;
+  if (route.baseUrl && routeOrigin(route.baseUrl) !== ANTHROPIC_BASE_URL) return false;
   return true;
+}
+
+function truthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === "number") return value !== 0 && Number.isFinite(value);
+  if (typeof value !== "string") return false;
+  return /^(true|1|yes|on)$/iu.test(value.trim());
+}
+
+function isBackgroundFlagKey(key: string): boolean {
+  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
+  return normalized === "runinbackground" || normalized === "runbackground" || normalized === "backgroundwork";
+}
+
+/**
+ * Generic convention for tools that launch work and return before that work is
+ * done. Package names are intentionally irrelevant: any tool carrying a truthy
+ * run-in-background-style argument counts.
+ */
+export function hasBackgroundLaunchFlag(input: unknown, depth = 0): boolean {
+  if (depth > 4) return false;
+  if (Array.isArray(input)) return input.some((item) => hasBackgroundLaunchFlag(item, depth + 1));
+  if (!isDict(input)) return false;
+  for (const [key, value] of Object.entries(input)) {
+    if (isBackgroundFlagKey(key) && truthyFlag(value)) return true;
+    if ((Array.isArray(value) || isDict(value)) && hasBackgroundLaunchFlag(value, depth + 1)) return true;
+  }
+  return false;
+}
+
+function routeOrigin(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 function collectCacheMarkers(payload: Dict): Array<{ ttl?: unknown }> {
@@ -169,6 +212,7 @@ export class CacheKeepalive {
   private dayKey = "";
   private lastPingOk: boolean | undefined;
   private readonly inFlightTools = new Set<string>();
+  private readonly backgroundWork = new Map<string, { startedAt: number; wakeArmed: boolean }>();
   private pingInFlight = false;
 
   constructor(private readonly deps: KeepaliveDeps) {}
@@ -179,6 +223,7 @@ export class CacheKeepalive {
   noteProviderRequest(payload: unknown, route?: RequestRoute): void {
     this.lastActivityAt = this.deps.now();
     this.gapPings = 0;
+    this.completeOneBackgroundWake();
     this.lastPayload = isPingableRoute(route) && isPingablePayload(payload) ? (payload as Dict) : undefined;
     this.lastReadPricePerMTok =
       typeof route?.cacheReadPricePerMTok === "number" && route.cacheReadPricePerMTok > 0 ? route.cacheReadPricePerMTok : undefined;
@@ -199,8 +244,34 @@ export class CacheKeepalive {
     this.inFlightTools.delete(id);
   }
 
+  /** A tool launched background work by generic convention. Idempotent per tool call id. */
+  backgroundWorkStart(id: string): void {
+    if (!this.backgroundWork.has(id)) {
+      this.backgroundWork.set(id, { startedAt: this.deps.now(), wakeArmed: false });
+    }
+  }
+
+  /** The current agent turn ended; launched background work may now wake a later request. */
+  agentEnd(): void {
+    const now = this.deps.now();
+    for (const work of this.backgroundWork.values()) {
+      if (!work.wakeArmed) {
+        work.startedAt = now;
+        work.wakeArmed = true;
+      }
+    }
+  }
+
+  /** Branch/tree navigation rewrites the prefix; any pending work belongs to the old branch. */
+  branchSwitch(): void {
+    this.inFlightTools.clear();
+    this.backgroundWork.clear();
+    this.lastPayload = undefined;
+  }
+
   shutdown(): void {
     this.inFlightTools.clear();
+    this.backgroundWork.clear();
     this.lastPayload = undefined;
     // A new session in the same process must re-earn the activation floor;
     // stale prompt sizes would misprice pings and defeat the floor.
@@ -208,9 +279,20 @@ export class CacheKeepalive {
   }
 
   /** Diagnostic surface consumed by the /cache report footer line and tests. */
-  get state(): { inFlight: number; gapPings: number; dayPings: number; daySpendUsd: number; lastPingOk: boolean | undefined } {
+  get state(): {
+    inFlight: number;
+    pendingBackground: number;
+    armedBackground: number;
+    gapPings: number;
+    dayPings: number;
+    daySpendUsd: number;
+    lastPingOk: boolean | undefined;
+  } {
+    this.expireBackgroundWork(this.deps.now());
     return {
       inFlight: this.inFlightTools.size,
+      pendingBackground: this.backgroundWork.size,
+      armedBackground: this.armedBackgroundCount(),
       gapPings: this.gapPings,
       dayPings: this.dayPings,
       daySpendUsd: this.daySpendUsd,
@@ -226,11 +308,12 @@ export class CacheKeepalive {
   async tick(): Promise<"pinged" | "skipped"> {
     const now = this.deps.now();
     this.rollDay(now);
+    this.expireBackgroundWork(now);
     const apiKey = this.deps.env.ANTHROPIC_API_KEY;
     const estimate = this.estimatePingCostUsd();
     if (
       this.pingInFlight ||
-      this.inFlightTools.size === 0 || // idle at the prompt: never ping
+      this.armedWorkCount() === 0 || // idle at the prompt with no work: never ping
       !this.lastPayload ||
       !apiKey ||
       this.lastPromptTokens < MIN_PROMPT_TOKENS ||
@@ -283,6 +366,33 @@ export class CacheKeepalive {
       this.pingInFlight = false;
     }
     return "pinged";
+  }
+
+  private armedWorkCount(): number {
+    return this.inFlightTools.size + this.armedBackgroundCount();
+  }
+
+  private armedBackgroundCount(): number {
+    let count = 0;
+    for (const work of this.backgroundWork.values()) {
+      if (work.wakeArmed) count += 1;
+    }
+    return count;
+  }
+
+  private completeOneBackgroundWake(): void {
+    for (const [id, work] of this.backgroundWork.entries()) {
+      if (work.wakeArmed) {
+        this.backgroundWork.delete(id);
+        return;
+      }
+    }
+  }
+
+  private expireBackgroundWork(now: number): void {
+    for (const [id, work] of this.backgroundWork.entries()) {
+      if (now - work.startedAt >= BACKGROUND_WORK_EXPIRE_MS) this.backgroundWork.delete(id);
+    }
   }
 
   private estimatePingCostUsd(): number {

@@ -2,6 +2,18 @@
 
 Aviram's ambient custom Pi footer/statusline.
 
+## Context metric
+
+The footer shows context usage as a percentage of the active model's context
+window plus compact token counts, e.g. `49% 98k/200k`. If Pi reports only token
+usage, the statusline computes the percentage from the model window.
+
+At **50%** of the window, the context segment turns warning-colored and appends
+`compact at boundary`. This is a display-only planning hint: it does not compact
+automatically, does not write session entries, and never enters model context.
+The hint refreshes with normal footer state after compaction or branch/tree
+navigation.
+
 ## Cache metric
 
 The footer's `cache NN%` token is the **session cache rate**: across the active

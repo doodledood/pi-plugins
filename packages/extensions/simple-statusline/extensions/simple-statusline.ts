@@ -2,8 +2,8 @@
 // Design goal: ambient, low-hierarchy footer. No emoji, no tool activity.
 // Left side is quiet location context; the π marker glows (accent) while the agent
 // works and rests dim when idle. Right side carries model/context/cache/cost —
-// grayscale at rest, color only under pressure (context ≥70% warning, ≥90% error;
-// cache turns warning + "!" when the latest turn broke the prompt cache).
+// grayscale at rest, color only under pressure (context ≥50% compact-boundary hint,
+// ≥90% error; cache turns warning + "!" when the latest turn broke the prompt cache).
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
 // live in the cache-optimization extension.
 
@@ -21,6 +21,8 @@ import {
 const STATUSLINE_KEY = "simple-statusline";
 const GPT_FAST_STATUS_KEY = "gpt-fast";
 const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
+/** First useful boundary where compaction planning beats waiting for overflow pressure. */
+const COMPACT_HINT_THRESHOLD_PERCENT = 50;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type TokenTotals = { input: number; output: number; cost: number };
@@ -31,6 +33,7 @@ type RuntimeState = {
   requestRender?: () => void;
 };
 type ModelSignal = { plain: string; colored: string };
+type ContextSignal = { plain: string; percent: number | undefined };
 
 export default function simpleStatusline(pi: any) {
   const runtime: RuntimeState = {
@@ -68,6 +71,7 @@ export default function simpleStatusline(pi: any) {
     installFooter(ctx);
     refresh();
   });
+  pi.on("session_compact", () => refresh());
   pi.on("session_shutdown", (_event: any, ctx: any) => {
     ctx.ui.setFooter(undefined);
     ctx.ui.setStatus(STATUSLINE_KEY, undefined);
@@ -100,8 +104,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const branch = footerData.getGitBranch?.() || "";
   const model = shortenModel(ctx.model?.id ?? "no-model");
   const level = runtime.thinkingLevel;
-  const pct = usage?.percent;
-  const ctxStr = formatContextUsage(usage, ctx.model?.contextWindow);
+  const contextSignal = formatContextUsage(usage, ctx.model?.contextWindow);
   const costStr = totals.cost > 0 ? formatCost(totals.cost) : "";
   const modelSignal = formatModelSignal(ctx.model, model, level, isGptPriorityEnabled(), theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
@@ -110,7 +113,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   // Right cluster: the operational signals. It gets priority, but the final line still clamps for narrow terminals.
   const rightTokens = [
     modelSignal.plain,
-    ctxStr,
+    contextSignal.plain,
     cacheSignal?.plain ?? "",
     costStr,
   ].filter((t) => t.length > 0);
@@ -139,7 +142,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
     (shownBranch ? color(theme, "dim", `  ${shownBranch}`) : "");
   const right = [
     modelSignal.colored,
-    ctxStr ? color(theme, contextColor(pct), ctxStr) : "",
+    contextSignal.plain ? color(theme, contextColor(contextSignal.percent), contextSignal.plain) : "",
     cacheSignal?.colored ?? "",
     costStr ? color(theme, "muted", costStr) : "",
   ]
@@ -249,11 +252,11 @@ function thinkingColor(level: ThinkingLevel): string {
   }
 }
 
-// Ambient at rest: color (and the bar) appear only when context pressure is actionable.
+// Ambient at rest: color (and the hint) appear only when context pressure is actionable.
 function contextColor(percent: number | null | undefined): string {
   if (percent == null) return "dim";
   if (percent >= 90) return "error";
-  if (percent >= 70) return "warning";
+  if (percent >= COMPACT_HINT_THRESHOLD_PERCENT) return "warning";
   return "dim";
 }
 
@@ -263,17 +266,19 @@ function contextBar(percent: number): string {
   return `${"▰".repeat(filled)}${"▱".repeat(slots - filled)}`;
 }
 
-function formatContextUsage(usage: any, fallbackContextWindow?: number): string {
+function formatContextUsage(usage: any, fallbackContextWindow?: number): ContextSignal {
   const contextWindow = usage?.contextWindow ?? fallbackContextWindow ?? 0;
-  if (!usage && contextWindow <= 0) return "";
+  if (!usage && contextWindow <= 0) return { plain: "", percent: undefined };
 
   const tokens = typeof usage?.tokens === "number" ? usage.tokens : undefined;
-  const percent = typeof usage?.percent === "number" ? usage.percent : undefined;
+  const explicitPercent = typeof usage?.percent === "number" ? usage.percent : undefined;
+  const computedPercent = explicitPercent ?? (tokens != null && contextWindow > 0 ? (tokens / contextWindow) * 100 : undefined);
   const tokenPair = `${tokens == null ? "?" : formatTokens(tokens)}/${contextWindow > 0 ? formatTokens(contextWindow) : "?"}`;
 
-  if (percent == null) return tokenPair;
-  const bar = percent >= 70 ? `${contextBar(percent)} ` : "";
-  return `${bar}${percent.toFixed(0)}% ${tokenPair}`;
+  if (computedPercent == null) return { plain: tokenPair, percent: undefined };
+  const bar = computedPercent >= 70 ? `${contextBar(computedPercent)} ` : "";
+  const hint = computedPercent >= COMPACT_HINT_THRESHOLD_PERCENT ? " · compact at boundary" : "";
+  return { plain: `${bar}${computedPercent.toFixed(0)}% ${tokenPair}${hint}`, percent: computedPercent };
 }
 
 function color(theme: any, tone: string, text: string): string {

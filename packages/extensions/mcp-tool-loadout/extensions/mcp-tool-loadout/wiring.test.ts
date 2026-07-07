@@ -80,7 +80,7 @@ test("session_start gates once: keeps all non-MCP + infra, drops over-budget MCP
   assert.ok(!set.has("alpha_a"), "over-budget MCP tool must be dormant");
 });
 
-test("before_agent_start appends a byte-identical catalog across turns (INV-G4 / AC-2.2)", async () => {
+test("before_agent_start appends a byte-identical catalog across turns and loads (INV-G4 / AC-5.1)", async () => {
   const dir = tmpDir();
   process.env.PI_CODING_AGENT_DIR = dir;
   writeCache(dir);
@@ -98,6 +98,13 @@ test("before_agent_start appends a byte-identical catalog across turns (INV-G4 /
 
   assert.ok(cat1.includes("MCP tool catalog"), "catalog injected");
   assert.equal(cat1, cat2, "appended catalog must be byte-identical across turns");
+
+  // Even if a later explicit hard load mutates the active tool set, this extension
+  // must not regenerate the session catalog mid-session and churn the cached prefix.
+  pi.setActiveTools([...pi.getActiveTools(), "alpha_a"]);
+  const r3 = await pi.handlers.before_agent_start?.({ systemPrompt: "BASE-THREE" }, ctx);
+  const cat3 = r3 && r3.systemPrompt ? r3.systemPrompt.slice("BASE-THREE".length) : "";
+  assert.equal(cat1, cat3, "catalog stays byte-identical after load-like active-set changes");
   assert.ok(r1?.systemPrompt?.startsWith("BASE-ONE"), "original system prompt preserved");
 });
 

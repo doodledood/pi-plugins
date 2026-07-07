@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "Aviram's Pi extensions, theme, and setup profiles.",
@@ -42,8 +42,8 @@
     "@earendil-works/pi-tui": "*",
     "@types/node": "*",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
-    "typebox": "*"
+    "typebox": "*",
+    "typescript": "^6.0.3"
   },
   "license": "MIT",
   "repository": {

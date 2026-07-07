@@ -38,6 +38,9 @@ test("groups by server and includes how-to header", () => {
   assert.match(out, /### alpha_mcp/);
   assert.match(out, /### warehouse_mcp/);
   assert.match(out, /load_tools/);
+  assert.match(out, /cache-safe/i);
+  assert.match(out, /mcp\(\{ tool, args \}\)/);
+  assert.match(out, /direct:true/);
 });
 
 test("catalog stays under ~1.5k tokens for a ~100-tool universe", () => {

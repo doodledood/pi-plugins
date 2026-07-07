@@ -14,8 +14,9 @@ export interface CatalogTool {
 const HEADER = "## MCP tool catalog (all available MCP tools — names always visible)";
 const HOWTO =
   "Unmarked tools are active and callable directly (full schema in the tool list). " +
-  '·dormant tools are not loaded — call `load_tools(["tool_name"])` then call next turn, ' +
-  "or `mcp({ tool, args })` for a one-off. ·proxy tools are not directly loadable — call via `mcp({ tool, args })`.";
+  '·dormant tools are cache-safe: call `load_tools({ names:["tool_name"] })` to get schemas, then call via `mcp({ tool, args })`; ' +
+  'use `load_tools({ names:["tool_name"], direct:true })` only when direct native calls are worth a prompt-cache rewrite. ' +
+  "·proxy tools are not directly loadable — call via `mcp({ tool, args })`.";
 
 /**
  * Render a deterministic, names-only markdown catalog grouped by server. `activeNames`

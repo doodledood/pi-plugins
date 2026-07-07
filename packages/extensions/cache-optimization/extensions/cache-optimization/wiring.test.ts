@@ -300,6 +300,126 @@ test("keepalive wiring: extension events actually arm and disarm the keepalive e
   harness.handlers.get("session_shutdown")!({}, ctx);
 });
 
+test("keepalive wiring: generic run_in_background tool_execution_start args arm idle background work", async (t) => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join: joinPath } = await import("node:path");
+  const fixtureDir = mkdtempSync(joinPath(tmpdir(), "cache-opt-bg-"));
+  writeFileSync(joinPath(fixtureDir, "auth.json"), "{}\n");
+  const savedDir = process.env.PI_CODING_AGENT_DIR;
+  const savedOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
+  process.env.PI_CODING_AGENT_DIR = fixtureDir;
+  delete process.env.ANTHROPIC_OAUTH_TOKEN;
+  t.after(() => {
+    if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedDir;
+    if (savedOauth !== undefined) process.env.ANTHROPIC_OAUTH_TOKEN = savedOauth;
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  const clock = { now: 1_700_000_000_000 };
+  const requests: string[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async (url) => {
+      requests.push(url);
+      return { ok: true };
+    },
+    env: { ANTHROPIC_API_KEY: "sk-test" },
+  });
+  const handlers = new Map<string, Handler>();
+  const ctx = { model: { provider: "anthropic", id: "claude-fable-5" }, sessionManager: { getBranch: () => [] }, ui: { async custom() {} } };
+  activate({ on: (e: string, h: Handler) => handlers.set(e, h), registerCommand() {} }, keepalive);
+  handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+  const CC = { type: "ephemeral" };
+  const payload = {
+    model: "claude-fable-5",
+    system: [{ type: "text", text: "sys", cache_control: { ...CC } }],
+    tools: [],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { ...CC } }] }],
+    max_tokens: 10,
+  };
+  handlers.get("before_provider_request")!({ payload }, ctx);
+  handlers.get("turn_end")!({ message: { role: "assistant", timestamp: 5, usage: { input: MIN_PROMPT_TOKENS, cacheRead: 0, cacheWrite: 0 } } }, ctx);
+
+  handlers.get("tool_execution_start")!({ toolCallId: "fake-1", toolName: "launch_widget", args: { run_in_background: true } }, ctx);
+  handlers.get("tool_execution_end")!({ toolCallId: "fake-1", toolName: "launch_widget" }, ctx);
+  handlers.get("agent_end")!({}, ctx);
+
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged", "generic fake tool background work arms with no foreground tool in flight");
+  assert.equal(requests.length, 1);
+
+  handlers.get("before_provider_request")!({ payload }, ctx);
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "skipped", "wake bookkeeping consumed the pending background work");
+
+  handlers.get("tool_execution_start")!({ toolCallId: "fake-2", toolName: "launch_widget", args: { run_in_background: true } }, ctx);
+  handlers.get("tool_execution_end")!({ toolCallId: "fake-2", toolName: "launch_widget" }, ctx);
+  handlers.get("agent_end")!({}, ctx);
+  handlers.get("session_tree")!({ newLeafId: "other" }, ctx);
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "skipped", "branch/tree navigation clears pending background work");
+
+  handlers.get("session_shutdown")!({}, ctx);
+});
+
+test("keepalive wiring: generic run_in_background tool_call input arms idle background work", async (t) => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join: joinPath } = await import("node:path");
+  const fixtureDir = mkdtempSync(joinPath(tmpdir(), "cache-opt-bg-input-"));
+  writeFileSync(joinPath(fixtureDir, "auth.json"), "{}\n");
+  const savedDir = process.env.PI_CODING_AGENT_DIR;
+  const savedOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
+  process.env.PI_CODING_AGENT_DIR = fixtureDir;
+  delete process.env.ANTHROPIC_OAUTH_TOKEN;
+  t.after(() => {
+    if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedDir;
+    if (savedOauth !== undefined) process.env.ANTHROPIC_OAUTH_TOKEN = savedOauth;
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  const clock = { now: 1_700_000_000_000 };
+  const requests: string[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async (url) => {
+      requests.push(url);
+      return { ok: true };
+    },
+    env: { ANTHROPIC_API_KEY: "sk-test" },
+  });
+  const handlers = new Map<string, Handler>();
+  const ctx = { model: { provider: "anthropic", id: "claude-fable-5" }, sessionManager: { getBranch: () => [] }, ui: { async custom() {} } };
+  activate({ on: (e: string, h: Handler) => handlers.set(e, h), registerCommand() {} }, keepalive);
+  handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+  const CC = { type: "ephemeral" };
+  const payload = {
+    model: "claude-fable-5",
+    system: [{ type: "text", text: "sys", cache_control: { ...CC } }],
+    tools: [],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { ...CC } }] }],
+    max_tokens: 10,
+  };
+  handlers.get("before_provider_request")!({ payload }, ctx);
+  handlers.get("turn_end")!({ message: { role: "assistant", timestamp: 5, usage: { input: MIN_PROMPT_TOKENS, cacheRead: 0, cacheWrite: 0 } } }, ctx);
+
+  handlers.get("tool_execution_start")!({ toolCallId: "fake-input", toolName: "launch_widget", args: {} }, ctx);
+  handlers.get("tool_call")!({ toolCallId: "fake-input", toolName: "launch_widget", input: { runInBackground: true } }, ctx);
+  handlers.get("tool_execution_end")!({ toolCallId: "fake-input", toolName: "launch_widget" }, ctx);
+  handlers.get("agent_end")!({}, ctx);
+
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged", "tool_call input path arms with no flagged tool_execution_start args");
+  assert.equal(requests.length, 1);
+
+  handlers.get("session_shutdown")!({}, ctx);
+});
+
 test("keepalive wiring: ANTHROPIC_OAUTH_TOKEN in the environment disables pings end to end", async (t) => {
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

@@ -2,12 +2,13 @@
 //
 // Keeps the model aware of every MCP tool (always-visible name catalog) while keeping
 // only a budgeted, usage-ranked subset of MCP tool *schemas* active in the prompt.
-// The rest are woken on demand via load_tools (or called one-off via the `mcp` proxy).
+// The rest are cache-safely loaded as schemas in a tool result and called via the
+// existing `mcp` proxy; direct activation is an explicit escape hatch.
 //
 // Design notes:
 // - The active set is chosen once per session_start and held stable, because changing
-//   it mid-session invalidates Pi's prompt cache. Wakes via load_tools are intentional,
-//   bounded cache misses.
+//   it mid-session invalidates Pi's prompt cache. Default load_tools wakes never mutate
+//   that set; direct activation is opt-in for cheap contexts or reliability-sensitive calls.
 // - Only pi-mcp-adapter tools are ever gated; built-ins and other tools always stay active.
 // - All event work is wrapped to fail safe: on any error the extension no-ops and leaves
 //   tools active rather than degrading the agent.
@@ -19,7 +20,7 @@ import { loadConfig, type LoadoutConfig } from "./config.ts";
 import { loadMcpUniverse } from "./mcp-detect.ts";
 import { StatsStore, attributeToolNames } from "./stats.ts";
 import { planActivation } from "./compute.ts";
-import { performLoadTools } from "./actions.ts";
+import { performCacheSafeLoadTools, performLoadTools } from "./actions.ts";
 import { resolveProjectKey } from "./project.ts";
 import type { LoadoutPi } from "./host.ts";
 
@@ -27,8 +28,14 @@ const STATUS_KEY = "mcp-loadout";
 
 const loadToolsSchema = Type.Object({
   names: Type.Array(Type.String(), {
-    description: "Exact tool names to load into context for the rest of the session.",
+    description: "Exact dormant tool names from the MCP catalog.",
   }),
+  direct: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, hard-activate tools so they can be called directly. Default false keeps the prompt cache stable and returns schemas for mcp proxy calls.",
+    }),
+  ),
 });
 type LoadToolsParams = Static<typeof loadToolsSchema>;
 
@@ -111,21 +118,21 @@ export default function mcpToolLoadout(pi: ExtensionAPI): void {
     name: "load_tools",
     label: "Load Tools",
     description:
-      "Activate dormant MCP tools for the rest of this session so they can be called " +
-      "directly. Pass exact tool names from the MCP tool catalog. After loading, call the " +
-      "tool on a subsequent turn. For a single one-off call you can instead use " +
-      "mcp({ tool, args }) without loading.",
-    promptSnippet: "Activate dormant MCP tools by name so they can be called directly",
+      "Cache-safely load dormant MCP tool schemas without changing the active tool set. " +
+      "Pass exact tool names from the MCP tool catalog; the result shows schemas and mcp({ tool, args }) examples. " +
+      "Set direct:true only when you deliberately want native direct calls and accept a prompt-cache rewrite.",
+    promptSnippet: "Load dormant MCP tool schemas cache-safely for proxy calls",
     promptGuidelines: [
-      "Use load_tools when you need an MCP tool shown as ·dormant in the catalog and expect to call it.",
+      "Use load_tools for dormant MCP tools when you need their schemas; by default it keeps the prompt cache stable and then you call the tool through mcp({ tool, args }).",
+      "Set load_tools direct:true only when direct native tool calling is worth the prompt-cache rewrite at the current context size.",
     ],
     parameters: loadToolsSchema,
     async execute(_toolCallId: string, params: LoadToolsParams) {
       const requested = Array.isArray(params?.names) ? params.names : [];
-      const outcome = performLoadTools(pi, requested);
+      const outcome = params?.direct ? performLoadTools(pi, requested) : performCacheSafeLoadTools(pi, requested);
       return {
         content: [{ type: "text" as const, text: outcome.message }],
-        details: { loadable: outcome.loadable, unknown: outcome.unknown },
+        details: { loadable: outcome.loadable, unknown: outcome.unknown, direct: params?.direct === true },
       };
     },
   });

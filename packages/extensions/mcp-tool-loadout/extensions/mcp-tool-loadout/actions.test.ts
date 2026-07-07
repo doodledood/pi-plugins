@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveLoadTools, performLoadTools, type ToolHost } from "./actions.ts";
+import { performCacheSafeLoadTools, resolveLoadTools, performLoadTools, type ToolHost } from "./actions.ts";
 
 test("resolveLoadTools splits loadable vs unknown and unions active", () => {
   const out = resolveLoadTools(["a", "x"], new Set(["a", "read"]), ["read"]);
@@ -8,7 +8,7 @@ test("resolveLoadTools splits loadable vs unknown and unions active", () => {
   assert.deepEqual(out.unknown, ["x"]);
   assert.deepEqual(out.nextActive, ["read", "a"]);
   assert.match(out.message, /Loaded: a\./);
-  assert.match(out.message, /Not directly loadable.*x/);
+  assert.match(out.message, /No registered schema available.*x/);
 });
 
 test("resolveLoadTools handles empty request", () => {
@@ -41,4 +41,29 @@ test("performLoadTools does not call setActiveTools when nothing is loadable", (
   const out = performLoadTools(host, ["ghost"]);
   assert.equal(calls.length, 0);
   assert.deepEqual(out.unknown, ["ghost"]);
+});
+
+test("performCacheSafeLoadTools returns schemas and proxy examples without changing active tools", () => {
+  const calls: string[][] = [];
+  const host: ToolHost = {
+    getAllTools: () => [
+      {
+        name: "alpha_a",
+        description: "alpha tool",
+        parameters: { type: "object", properties: { q: { type: "string" } } },
+      },
+      { name: "mcp", description: "proxy", parameters: {} },
+    ],
+    getActiveTools: () => ["mcp"],
+    setActiveTools: (names) => calls.push(names),
+  };
+
+  const out = performCacheSafeLoadTools(host, ["alpha_a"]);
+  assert.equal(calls.length, 0, "default cache-safe load must not mutate the active tool set");
+  assert.deepEqual(out.nextActive, ["mcp"], "active tool set stays unchanged");
+  assert.deepEqual(out.loadable, ["alpha_a"]);
+  assert.match(out.message, /Cache-safe load/);
+  assert.match(out.message, /"name": "alpha_a"/);
+  assert.match(out.message, /mcp\(\{ tool: "alpha_a", args:/);
+  assert.ok(out.message.includes('args: "{\\"q\\":\\"...\\"}"'), "proxy example carries JSON-string args");
 });

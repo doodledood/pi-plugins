@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  BACKGROUND_WORK_EXPIRE_MS,
   CacheKeepalive,
   DAILY_BUDGET_USD,
+  hasBackgroundLaunchFlag,
   isNonApiKeyAnthropicAuth,
   isPingablePayload,
   isPingableRoute,
@@ -70,6 +72,82 @@ test("keepalive: never pings while idle at the prompt (no tool in flight)", asyn
   f.keepalive.toolEnd("tool-1");
   assert.equal(await f.keepalive.tick(), "skipped");
   assert.equal(f.requests.length, 0);
+});
+
+test("keepalive: generic background-launch flag arms idle background work", async () => {
+  const f = createFixture();
+  f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
+  f.keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  f.keepalive.backgroundWorkStart("generic-tool-call");
+  f.keepalive.agentEnd();
+  f.clock.now += PING_AFTER_IDLE_MS + 1;
+
+  assert.equal(await f.keepalive.tick(), "pinged", "no foreground tool is in flight; background work alone arms keepalive");
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.keepalive.state.armedBackground, 1);
+});
+
+test("keepalive: generic background wake bookkeeping disarms pending work", async () => {
+  const f = createFixture();
+  f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
+  f.keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  f.keepalive.backgroundWorkStart("generic-tool-call");
+  f.keepalive.agentEnd();
+  assert.equal(f.keepalive.state.armedBackground, 1);
+
+  f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
+  f.clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(f.keepalive.state.pendingBackground, 0, "wake consumed the pending background item");
+  assert.equal(await f.keepalive.tick(), "skipped", "pending-zero disarms keepalive");
+});
+
+test("keepalive: background expiry only removes work and cannot extend pinging", async () => {
+  const f = createFixture();
+  f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
+  f.keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  f.keepalive.backgroundWorkStart("generic-tool-call");
+  f.keepalive.agentEnd();
+  f.clock.now += BACKGROUND_WORK_EXPIRE_MS + 1;
+
+  assert.equal(f.keepalive.state.pendingBackground, 0, "expiry drops stale background work");
+  assert.equal(await f.keepalive.tick(), "skipped", "expired background work cannot keep pings alive");
+  assert.equal(f.requests.length, 0);
+});
+
+test("keepalive: later agent turns do not extend already-armed background expiry", async () => {
+  const f = createFixture();
+  f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
+  f.keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  f.keepalive.backgroundWorkStart("generic-tool-call");
+  f.keepalive.agentEnd();
+
+  f.clock.now += BACKGROUND_WORK_EXPIRE_MS - 1_000;
+  f.keepalive.agentEnd(); // unrelated later turn: must not move the original expiry horizon
+  f.clock.now += 1_001;
+
+  assert.equal(f.keepalive.state.pendingBackground, 0, "already-armed work expires on its original horizon");
+  assert.equal(await f.keepalive.tick(), "skipped");
+});
+
+test("keepalive: branch switch clears foreground and background arming", async () => {
+  const f = createFixture();
+  arm(f);
+  f.keepalive.backgroundWorkStart("generic-tool-call");
+  f.keepalive.agentEnd();
+  f.keepalive.branchSwitch();
+
+  assert.equal(f.keepalive.state.inFlight, 0);
+  assert.equal(f.keepalive.state.pendingBackground, 0);
+  assert.equal(await f.keepalive.tick(), "skipped");
+});
+
+test("keepalive: background-launch flag detection is package-agnostic", () => {
+  assert.equal(hasBackgroundLaunchFlag({ run_in_background: true }), true);
+  assert.equal(hasBackgroundLaunchFlag({ options: { runInBackground: "yes" } }), true);
+  assert.equal(hasBackgroundLaunchFlag({ background_work: 1 }), true);
+  assert.equal(hasBackgroundLaunchFlag({ run_in_background: false }), false);
+  assert.equal(hasBackgroundLaunchFlag({ background: true }), false, "plain background is too broad and not treated as a launch convention");
+  assert.equal(hasBackgroundLaunchFlag({ unrelated: { nested: true } }), false);
 });
 
 test("keepalive: respects the cadence — no ping until the cache is stale", async () => {
@@ -180,9 +258,11 @@ test("keepalive: auth.json predicate distinguishes env-indirected API keys from 
 test("keepalive: pings only ride the session's own direct API-key route", async () => {
   assert.equal(isPingableRoute({ provider: "anthropic" }), true, "direct anthropic, default baseUrl, api-key auth");
   assert.equal(isPingableRoute({ provider: "anthropic", baseUrl: "https://api.anthropic.com" }), true);
+  assert.equal(isPingableRoute({ provider: "anthropic", baseUrl: "https://api.anthropic.com/v1" }), true, "default origin with a path is same-route");
   assert.equal(isPingableRoute(undefined), false, "unknown route is never pinged");
   assert.equal(isPingableRoute({ provider: "bedrock" }), false, "non-anthropic provider");
   assert.equal(isPingableRoute({ provider: "anthropic", baseUrl: "https://proxy.example.com" }), false, "custom baseUrl = different cache namespace");
+  assert.equal(isPingableRoute({ provider: "anthropic", baseUrl: "https://api.anthropic.com.proxy.example" }), false, "prefix-confusable baseUrl is not the default origin");
   assert.equal(isPingableRoute({ provider: "anthropic", nonApiKeyAuth: true }), false, "OAuth session must not be pinged with the env API key");
 
   // End to end: an armed keepalive with an OAuth route never pings.

@@ -27,7 +27,12 @@ function createRecordingTheme(): { theme: any; calls: Array<{ tone: string; text
   };
 }
 
-const fakeTui = { requestRender() {} };
+const fakeTui = {
+  renderRequests: 0,
+  requestRender() {
+    this.renderRequests += 1;
+  },
+};
 const fakeFooterData = {
   getGitBranch: () => "main",
   getExtensionStatuses: () => undefined,
@@ -91,6 +96,56 @@ test("footer shows the cumulative session cache rate, not the latest turn's rate
   assert.doesNotMatch(line, /cache 49%!/, "no break flag when the latest turn hit cache");
 });
 
+test("footer computes context percent against the model window without a compact hint below threshold", () => {
+  const harness = createHarness([]);
+  harness.ctx.model.contextWindow = 200_000;
+  harness.ctx.getContextUsage = () => ({ tokens: 98_000 });
+
+  const line = renderFooter(harness);
+  assert.match(line, /49% 98k\/200k/);
+  assert.doesNotMatch(line, /compact at boundary/);
+});
+
+test("footer shows compact-at-boundary hint and warning tone at the threshold", () => {
+  const harness = createHarness([]);
+  harness.ctx.model.contextWindow = 200_000;
+  harness.ctx.getContextUsage = () => ({ tokens: 100_000 });
+
+  const line = renderFooter(harness);
+  assert.match(line, /50% 100k\/200k · compact at boundary/);
+  assert.ok(
+    harness.themeCalls.some((call) => call.tone === "warning" && /compact at boundary/.test(call.text)),
+    "context segment renders in warning tone once the boundary hint is active",
+  );
+});
+
+test("footer refresh hooks cover compaction and branch changes", () => {
+  const harness = createHarness([]);
+  assert.ok(harness.handlers.get("session_compact"), "post-compaction hook registered");
+  assert.ok(harness.handlers.get("session_tree"), "branch/tree hook registered");
+  harness.ctx.model.contextWindow = 100_000;
+  harness.ctx.getContextUsage = () => ({ tokens: 55_000 });
+  assert.match(renderFooter(harness), /compact at boundary/);
+
+  harness.ctx.getContextUsage = () => ({ tokens: 10_000 });
+  fakeTui.renderRequests = 0;
+  harness.handlers.get("session_compact")!({ reason: "manual" }, harness.ctx);
+  assert.equal(fakeTui.renderRequests, 1, "post-compaction hook requests a footer rerender");
+  assert.doesNotMatch(renderFooter(harness), /compact at boundary/, "compaction refresh reflects the reset/lower context");
+
+  harness.ctx.getContextUsage = () => ({ tokens: 55_000 });
+  fakeTui.renderRequests = 0;
+  harness.handlers.get("session_compact")!({ reason: "manual" }, harness.ctx);
+  assert.equal(fakeTui.renderRequests, 1, "post-compaction hook requests rerender after recrossing");
+  assert.match(renderFooter(harness), /compact at boundary/, "compaction hook re-arms the hint when context crosses again");
+
+  harness.ctx.getContextUsage = () => ({ tokens: 10_000 });
+  fakeTui.renderRequests = 0;
+  harness.handlers.get("session_tree")!({ newLeafId: "other" }, harness.ctx);
+  assert.ok(fakeTui.renderRequests >= 1, "branch/tree hook requests a footer rerender");
+  assert.doesNotMatch(renderFooter(harness), /compact at boundary/, "branch refresh reflects the reset/lower context");
+});
+
 test("footer flags a cache break with a warning tone and marker", () => {
   // Previous prompt 20k, latest read 100 < 50% of 20k -> break.
   const harness = createHarness([
@@ -111,8 +166,12 @@ test("footer omits the cache token when the branch has no cache data", () => {
   assert.doesNotMatch(line, /cache \d+%/);
 });
 
-test("statusline no longer owns /cache or payload fingerprinting (moved to cache-optimization)", () => {
+test("statusline remains footer-only and owns no model-context mutation surfaces", () => {
   const harness = createHarness([assistantEntry(1_000, 1_000, 1_000, 0)]);
   assert.equal(harness.commands.get("cache"), undefined, "no /cache command registered");
   assert.equal(harness.handlers.get("before_provider_request"), undefined, "no payload observation");
+  assert.equal(harness.handlers.get("before_agent_start"), undefined, "no system prompt mutation");
+  assert.equal(harness.handlers.get("context"), undefined, "no message/context injection");
+  assert.equal(harness.handlers.get("tool_result"), undefined, "no tool-result/session mutation");
+  assert.ok(harness.footerFactory, "footer renderer installed");
 });
