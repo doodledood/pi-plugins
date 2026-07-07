@@ -5,5 +5,12 @@
     "env": {
       "PI_CACHE_RETENTION": "long"
     }
+  },
+  "openai-1m": {
+    "type": "api_key",
+    "key": "$OPENAI_API_KEY",
+    "env": {
+      "PI_CACHE_RETENTION": "long"
+    }
   }
 }
