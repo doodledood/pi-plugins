@@ -89,26 +89,35 @@ Runaway is prevented structurally, not by tuning:
 - **Activation floor**: no pings below 100k prompt tokens.
 - **Anthropic 5m-TTL only**: payloads carrying 1h markers
   (`PI_CACHE_RETENTION=long`) or non-Anthropic payloads are never pinged.
-- **Thinking-off payloads only**: Anthropic invalidates the messages-level
-  cache when extended-thinking settings change, and a 1-token ping cannot carry
-  the original thinking budget — so no cheap identical-prefix read exists for
-  thinking-enabled requests, and the keepalive never pings them. Pi's explicit
-  `thinking: { type: "disabled" }` marker (sent on reasoning models with
-  thinking off) stays pingable — the ping replays it byte-identically.
+- **Thinking-safe payloads only**: no-thinking and Pi's explicit
+  `thinking: { type: "disabled" }` marker use the cheap non-streaming
+  1-token read. Modern Anthropic adaptive-thinking payloads
+  (`thinking: { type: "adaptive" }`, plus `output_config.effort` when present)
+  use a stricter streaming refresh: the exact captured provider body is
+  replayed opaquely with only `max_tokens: 1` and `stream: true` changed, the
+  stream is cancelled after Anthropic's `message_start`, and success is counted
+  only when usage proves a cache read (`cache_read_input_tokens > 0` and no
+  cache creation). Budget-style extended thinking
+  (`thinking: { type: "enabled", budget_tokens: ... }`) remains excluded because
+  `max_tokens: 1` is invalid and changing the budget changes the message-cache
+  parameters. GPT/OpenAI is never part of this path.
 - **Same-route only**: pings fire only when the session itself talks to the
-  default Anthropic API with plain API-key auth (provider `anthropic`, default
-  baseUrl, no OAuth entry in `auth.json`, no `ANTHROPIC_OAUTH_TOKEN` in the
-  environment, no CLI `--api-key` runtime override — an override's key can't be
-  compared, so its presence disables pings). Anthropic caches are isolated per
-  org/workspace, so a ping through a different identity or URL would refresh
-  nothing the session reads.
+  default Anthropic Messages API through the same plain process
+  `ANTHROPIC_API_KEY` the keepalive will use (provider `anthropic`, API adapter
+  `anthropic-messages`, default baseUrl, API key is not an OAuth-looking
+  `sk-ant-oat...` token, no Anthropic entry
+  in `auth.json`, no provider/model API-key or auth-header override, no
+  `ANTHROPIC_OAUTH_TOKEN` in the environment, no CLI `--api-key` runtime
+  override — an override's key can't be compared, so its presence disables
+  pings). Anthropic caches are isolated per org/workspace, so a ping through a
+  different identity or URL would refresh nothing the session reads.
 
-Load-order assumption: the keepalive replays the payload as *this extension*
-observed it in `before_provider_request`. If another payload-rewriting
-extension is loaded after cache-optimization, the actual request may differ
-from the replayed one; load cache-optimization last among payload-rewriting
-extensions (this repo's root manifest and profile templates already order it
-last).
+Load-order assumption: the keepalive replays the provider body exactly as *this
+extension* observed it in `before_provider_request`; it never forks or rebuilds
+the Pi conversation. If another payload-rewriting extension is loaded after
+cache-optimization, the actual request may differ from the replayed one; load
+cache-optimization last among payload-rewriting extensions (this repo's root
+manifest and profile templates already order it last).
 
 Worst case ever: one hung tool costs ~half of one rewrite in pings and then the
 rewrite anyway — bounded at ~1.5× one break, once. **For Anthropic**,

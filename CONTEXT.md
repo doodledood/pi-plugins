@@ -29,7 +29,7 @@ The cache-optimization behavior that stamps Anthropic's spare 4th cache_control 
 _Avoid_: Cache pinning, breakpoint hack.
 
 **TTL keepalive**:
-The cache-optimization behavior that re-reads a large cached Anthropic prefix (max_tokens 1, 0.1× input price) during long foreground-tool waits or idle waits on pending background work so the 5-minute cache TTL does not expire before the next request; structurally bounded (work-only arming, per-gap ping cap, daily dollar cap, activation floor, background expiry) and correctness-guarded (never pings thinking-enabled payloads or sessions routed through a different Anthropic identity/baseUrl).
+The cache-optimization behavior that re-reads a large cached Anthropic prefix (max_tokens 1, 0.1× input price) during long foreground-tool waits or idle waits on pending background work so the 5-minute cache TTL does not expire before the next request; structurally bounded (work-only arming, per-gap ping cap, daily dollar cap, activation floor, background expiry) and correctness-guarded (direct Anthropic API-key route only, adaptive-thinking refresh must replay the exact captured provider payload and prove cache-read usage, budget-style thinking and GPT/OpenAI are excluded).
 _Avoid_: Cache heartbeat, keep-warm when the bounded design is the point.
 
 **Background-wakeup TTL break**:

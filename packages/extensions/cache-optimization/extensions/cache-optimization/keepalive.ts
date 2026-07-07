@@ -19,10 +19,14 @@
 //   5. Anthropic 5m-TTL only: payloads with 1h markers (PI_CACHE_RETENTION=long)
 //      or non-Anthropic payloads are never pinged — the 1h TTL already covers
 //      these gaps, and other providers have no marker-based TTL to keep alive.
-//   6. Extended-thinking payloads are never pinged: Anthropic invalidates the
-//      messages-level cache when thinking parameters change, and max_tokens=1
-//      cannot carry the original thinking budget — a stripped ping would miss
-//      the real cache entirely and write a parallel entry at full price.
+//   6. Thinking safety is payload-specific. No-thinking and
+//      `thinking: { type: "disabled" }` payloads use the existing cheap
+//      non-streaming 1-token read. Modern adaptive-thinking payloads use exact
+//      captured-provider-payload replay with only max_tokens/stream changed,
+//      then prove success from Anthropic `message_start` cache-read usage.
+//      Budget-style `thinking: { type: "enabled", budget_tokens }` stays
+//      excluded because max_tokens=1 is invalid and changing the budget changes
+//      message-cache parameters.
 //   7. Same-route only: pings fire only when the session's own request went to
 //      the default Anthropic API with API-key auth (caller-supplied route
 //      metadata) — caches are isolated per org/workspace, so pinging through a
@@ -75,16 +79,26 @@ const READ_PRICE_PER_MTOK: ReadonlyArray<readonly [string, number]> = [
 const DEFAULT_READ_PRICE_PER_MTOK = 1.0;
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+const ANTHROPIC_MESSAGES_URL = `${ANTHROPIC_BASE_URL}/v1/messages`;
+const CACHEABLE_MESSAGE_BLOCK_TYPES = new Set(["text", "image", "tool_result", "tool_use", "document"]);
 
 type Dict = Record<string, unknown>;
+export type KeepalivePingKind = "standard" | "adaptive";
 
 function isDict(value: unknown): value is Dict {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export interface KeepaliveFetchResponse {
+  ok: boolean;
+  status?: number;
+  body?: ReadableStream<Uint8Array> | null;
+  text?(): Promise<string>;
+}
+
 export interface KeepaliveDeps {
   now(): number;
-  fetch(url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }): Promise<{ ok: boolean }>;
+  fetch(url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }): Promise<KeepaliveFetchResponse>;
   env: Record<string, string | undefined>;
 }
 
@@ -92,30 +106,40 @@ export interface KeepaliveDeps {
 const PING_TIMEOUT_MS = 30_000;
 
 /**
- * Inspect a captured payload: is this an Anthropic request whose cache markers
- * carry the default 5-minute TTL, with extended thinking off? 1h markers mean
- * retention is handled upstream (PI_CACHE_RETENTION=long). An *enabled*
- * thinking param makes the payload unpingable: thinking-setting changes
- * invalidate the messages-level cache, and a 1-token ping cannot reproduce the
- * original thinking budget — so no cheap identical-prefix read exists. Pi
- * sends an explicit `thinking: { type: "disabled" }` marker on every
- * reasoning-capable Claude model when thinking is off; the ping replays it
- * byte-identically, so disabled-marker payloads stay pingable.
+ * Classify a captured Anthropic Messages payload by the keepalive strategy that
+ * can replay it safely. The body itself is treated as opaque: a refresh may only
+ * change max_tokens/stream, so future provider fields ride through unchanged.
  */
-export function isPingablePayload(payload: unknown): boolean {
-  if (!isDict(payload) || !Array.isArray(payload.messages)) return false;
-  if (typeof payload.model !== "string" || !/claude/i.test(payload.model)) return false;
+export function classifyPingablePayload(payload: unknown): KeepalivePingKind | undefined {
+  if (!isDict(payload) || !Array.isArray(payload.messages)) return undefined;
+  if (typeof payload.model !== "string" || !/claude/i.test(payload.model)) return undefined;
+  const markerScan = collectCacheMarkers(payload);
+  if (markerScan.invalidMarker) return undefined;
+  if (markerScan.markers.length === 0) return undefined; // caching not enabled on this request
+  if (!markerScan.markers.every(isFiveMinuteEphemeralMarker)) return undefined;
+
   const thinking = payload.thinking;
-  if (thinking !== undefined && !(isDict(thinking) && thinking.type === "disabled")) return false;
-  const markers = collectCacheMarkers(payload);
-  if (markers.length === 0) return false; // caching not enabled on this request
-  return markers.every((marker) => marker.ttl === undefined || marker.ttl === "5m");
+  if (thinking === undefined) return "standard";
+  if (!isDict(thinking)) return undefined;
+  if (thinking.type === "disabled") return "standard";
+  if (thinking.type === "adaptive") return "adaptive";
+  return undefined;
+}
+
+export function isPingablePayload(payload: unknown): boolean {
+  return classifyPingablePayload(payload) !== undefined;
+}
+
+export function isAnthropicOAuthToken(value: unknown): boolean {
+  return typeof value === "string" && value.includes("sk-ant-oat");
 }
 
 /** Route metadata for the request that produced a captured payload. */
 export interface RequestRoute {
   /** Pi provider id, e.g. "anthropic" (not bedrock/vertex/proxies). */
   provider?: string;
+  /** Pi provider API adapter; keepalive only matches Anthropic Messages requests. */
+  api?: string;
   /** Model baseUrl override; undefined/default means api.anthropic.com. */
   baseUrl?: string;
   /** True when the session authenticates to Anthropic with something other than a plain API key (e.g. OAuth). */
@@ -133,17 +157,21 @@ export interface RequestRoute {
 export function isNonApiKeyAnthropicAuth(parsedAuth: unknown): boolean {
   if (!isDict(parsedAuth)) return false;
   const entry = parsedAuth.anthropic;
-  if (entry === undefined || entry === null) return false; // env-key auth: same key the keepalive uses
-  if (!isDict(entry)) return true;
-  return entry.type !== "api_key" || (typeof entry.key === "string" && entry.key !== "$ANTHROPIC_API_KEY");
+  if (entry === undefined || entry === null) return false; // no entry -> Pi falls back to the same process env key the keepalive uses
+  // Any configured Anthropic credential wins over process-env fallback in Pi's
+  // auth resolution. Even an env-indirected api_key entry can carry a
+  // provider-scoped env object, so fail closed unless there is no Anthropic
+  // auth entry at all.
+  return true;
 }
 
 /** Pings only make sense when they land in the same cache namespace the session reads. */
 export function isPingableRoute(route: RequestRoute | undefined): boolean {
   if (!route) return false;
   if (route.provider !== "anthropic") return false;
+  if (route.api !== "anthropic-messages") return false;
   if (route.nonApiKeyAuth) return false;
-  if (route.baseUrl && routeOrigin(route.baseUrl) !== ANTHROPIC_BASE_URL) return false;
+  if (route.baseUrl && !isDefaultAnthropicBaseUrl(route.baseUrl)) return false;
   return true;
 }
 
@@ -175,35 +203,86 @@ export function hasBackgroundLaunchFlag(input: unknown, depth = 0): boolean {
   return false;
 }
 
-function routeOrigin(baseUrl: string): string | undefined {
+function isDefaultAnthropicBaseUrl(baseUrl: string): boolean {
   try {
-    return new URL(baseUrl).origin;
+    const url = new URL(baseUrl);
+    return url.origin === ANTHROPIC_BASE_URL && (url.pathname === "" || url.pathname === "/") && url.search === "" && url.hash === "";
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function collectCacheMarkers(payload: Dict): Array<{ ttl?: unknown }> {
-  const markers: Array<{ ttl?: unknown }> = [];
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
+function collectCacheMarkers(payload: Dict): { markers: Array<{ type?: unknown; ttl?: unknown }>; invalidMarker: boolean } {
+  const markers: Array<{ type?: unknown; ttl?: unknown }> = [];
+  let invalidMarker = false;
+  const recordMarker = (value: Dict, cacheable: boolean): void => {
+    if (!isDict(value.cache_control)) return;
+    if (!cacheable) {
+      invalidMarker = true;
       return;
     }
-    if (!isDict(value)) return;
-    if (isDict(value.cache_control)) {
-      markers.push({ ttl: value.cache_control.ttl });
-    }
-    for (const key of ["messages", "content", "system", "tools"]) {
-      if (key in value) visit(value[key]);
-    }
+    markers.push({ type: value.cache_control.type, ttl: value.cache_control.ttl });
   };
-  visit(payload);
-  return markers;
+
+  const system = payload.system;
+  if (Array.isArray(system)) {
+    for (const block of system) {
+      if (isDict(block)) recordMarker(block, block.type === "text");
+    }
+  }
+  const tools = payload.tools;
+  if (Array.isArray(tools)) {
+    for (const tool of tools) {
+      if (isDict(tool)) recordMarker(tool, true);
+    }
+  }
+  const messages = payload.messages;
+  if (Array.isArray(messages)) {
+    for (const message of messages) {
+      if (!isDict(message)) continue;
+      const content = message.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (isDict(block)) recordMarker(block, typeof block.type === "string" && CACHEABLE_MESSAGE_BLOCK_TYPES.has(block.type));
+      }
+    }
+  }
+  if (countCacheControlKeys(payload) !== markers.length) invalidMarker = true;
+  return { markers, invalidMarker };
+}
+
+function countCacheControlKeys(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countCacheControlKeys(item), 0);
+  if (!isDict(value)) return 0;
+  let count = 0;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "cache_control") {
+      count += 1;
+    } else if (key !== "input_schema") {
+      // Tool input_schema is user JSON Schema; a parameter named
+      // `cache_control` is not an Anthropic cache marker.
+      count += countCacheControlKeys(child);
+    }
+  }
+  return count;
+}
+
+function isFiveMinuteEphemeralMarker(marker: { type?: unknown; ttl?: unknown }): boolean {
+  return marker.type === "ephemeral" && (marker.ttl === undefined || marker.ttl === "5m");
+}
+
+interface CapturedPayload {
+  payload: Dict;
+  kind: KeepalivePingKind;
+}
+
+interface AnthropicUsage {
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number | null;
 }
 
 export class CacheKeepalive {
-  private lastPayload?: Dict;
+  private lastCapture?: CapturedPayload;
   private lastActivityAt = 0;
   private lastPromptTokens = 0;
   private gapPings = 0;
@@ -224,9 +303,16 @@ export class CacheKeepalive {
     this.lastActivityAt = this.deps.now();
     this.gapPings = 0;
     this.completeOneBackgroundWake();
-    this.lastPayload = isPingableRoute(route) && isPingablePayload(payload) ? (payload as Dict) : undefined;
+    this.lastCapture = undefined;
+    const kind = isPingableRoute(route) ? classifyPingablePayload(payload) : undefined;
+    this.lastCapture = kind && isDict(payload) ? { payload, kind } : undefined;
     this.lastReadPricePerMTok =
       typeof route?.cacheReadPricePerMTok === "number" && route.cacheReadPricePerMTok > 0 ? route.cacheReadPricePerMTok : undefined;
+  }
+
+  /** Explicitly abandon the current captured provider payload after a fail-closed wiring error. */
+  clearCapture(): void {
+    this.lastCapture = undefined;
   }
 
   /** Latest turn's total prompt tokens (input + cacheRead + cacheWrite). */
@@ -266,13 +352,13 @@ export class CacheKeepalive {
   branchSwitch(): void {
     this.inFlightTools.clear();
     this.backgroundWork.clear();
-    this.lastPayload = undefined;
+    this.lastCapture = undefined;
   }
 
   shutdown(): void {
     this.inFlightTools.clear();
     this.backgroundWork.clear();
-    this.lastPayload = undefined;
+    this.lastCapture = undefined;
     // A new session in the same process must re-earn the activation floor;
     // stale prompt sizes would misprice pings and defeat the floor.
     this.lastPromptTokens = 0;
@@ -314,8 +400,9 @@ export class CacheKeepalive {
     if (
       this.pingInFlight ||
       this.armedWorkCount() === 0 || // idle at the prompt with no work: never ping
-      !this.lastPayload ||
+      !this.lastCapture ||
       !apiKey ||
+      isAnthropicOAuthToken(apiKey) ||
       this.lastPromptTokens < MIN_PROMPT_TOKENS ||
       now - this.lastActivityAt < PING_AFTER_IDLE_MS ||
       this.gapPings >= PER_GAP_MAX_PINGS ||
@@ -329,43 +416,70 @@ export class CacheKeepalive {
     this.daySpendUsd += estimate;
     this.pingInFlight = true;
     // Snapshot what we ping: a real provider request can land while the fetch
-    // is in flight and re-arm lastPayload for a NEW gap — a stale failure must
+    // is in flight and re-arm lastCapture for a NEW gap — a stale failure must
     // abandon only the gap it belongs to, never the freshly captured one.
-    const pinged = this.lastPayload;
+    const pinged = this.lastCapture;
     try {
-      // Pingable payloads carry no thinking or only the explicit disabled
-      // marker (isPingablePayload), replayed unchanged — the only deltas vs the
-      // cached request are max_tokens/stream, neither of which is hashed into
-      // the cache prefix, so this is a pure identical-prefix read.
-      const body: Dict = { ...pinged, max_tokens: 1, stream: false };
-      const response = await this.deps.fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(body),
-        signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(PING_TIMEOUT_MS) : undefined,
-      });
-      this.lastPingOk = response.ok;
-      if (response.ok) {
-        // Only a confirmed read refreshes the TTL clock.
+      const success = await this.pingCapturedPayload(pinged, apiKey);
+      this.lastPingOk = success;
+      if (success) {
+        // Only a confirmed cache read refreshes the TTL clock.
         this.lastActivityAt = this.deps.now();
-      } else if (this.lastPayload === pinged) {
+      } else if (this.lastCapture === pinged) {
         // The real cache may expire while we believe otherwise — a later "ping"
         // against a cold cache would be a full-price write, not a cheap read.
         // Abandon the gap; the next real request pays the normal rewrite.
-        this.lastPayload = undefined;
+        this.lastCapture = undefined;
       }
     } catch {
       // Keepalive is best-effort; a failed ping must never disturb the session.
       this.lastPingOk = false;
-      if (this.lastPayload === pinged) this.lastPayload = undefined;
+      if (this.lastCapture === pinged) this.lastCapture = undefined;
     } finally {
       this.pingInFlight = false;
     }
     return "pinged";
+  }
+
+  private async pingCapturedPayload(captured: CapturedPayload, apiKey: string): Promise<boolean> {
+    if (captured.kind === "adaptive") return this.pingAdaptivePayload(captured.payload, apiKey);
+    return this.pingStandardPayload(captured.payload, apiKey);
+  }
+
+  private async pingStandardPayload(payload: Dict, apiKey: string): Promise<boolean> {
+    // Standard payloads carry no thinking or only the explicit disabled marker,
+    // replayed unchanged — the only deltas vs the cached request are
+    // max_tokens/stream, neither of which is hashed into the cache prefix.
+    const body: Dict = { ...payload, max_tokens: 1, stream: false };
+    const response = await this.deps.fetch(ANTHROPIC_MESSAGES_URL, {
+      method: "POST",
+      headers: directAnthropicHeaders(apiKey),
+      body: JSON.stringify(body),
+      signal: timeoutSignal(),
+    });
+    return response.ok;
+  }
+
+  private async pingAdaptivePayload(payload: Dict, apiKey: string): Promise<boolean> {
+    // Adaptive-thinking refreshes must preserve the exact captured provider body
+    // and prove that the request read the existing cache. A 200 that writes a new
+    // entry is not a keepalive; it is the cold-cache rewrite we are avoiding.
+    const body: Dict = { ...payload, max_tokens: 1, stream: true };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
+    try {
+      const response = await this.deps.fetch(ANTHROPIC_MESSAGES_URL, {
+        method: "POST",
+        headers: directAnthropicHeaders(apiKey),
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!response.ok) return false;
+      const usage = await readMessageStartUsage(response, () => controller.abort());
+      return usage.cache_read_input_tokens !== undefined && usage.cache_read_input_tokens > 0 && (usage.cache_creation_input_tokens === 0 || usage.cache_creation_input_tokens === null);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private armedWorkCount(): number {
@@ -399,7 +513,7 @@ export class CacheKeepalive {
     if (this.lastReadPricePerMTok !== undefined) {
       return (this.lastPromptTokens / 1_000_000) * this.lastReadPricePerMTok;
     }
-    const model = typeof this.lastPayload?.model === "string" ? this.lastPayload.model : "";
+    const model = typeof this.lastCapture?.payload.model === "string" ? this.lastCapture.payload.model : "";
     const priceEntry = READ_PRICE_PER_MTOK.find(([needle]) => model.toLowerCase().includes(needle));
     const price = priceEntry ? priceEntry[1] : DEFAULT_READ_PRICE_PER_MTOK;
     return (this.lastPromptTokens / 1_000_000) * price;
@@ -413,4 +527,83 @@ export class CacheKeepalive {
       this.dayPings = 0;
     }
   }
+}
+
+function directAnthropicHeaders(apiKey: string): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+  };
+}
+
+function timeoutSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(PING_TIMEOUT_MS) : undefined;
+}
+
+async function readMessageStartUsage(response: KeepaliveFetchResponse, abort: () => void): Promise<AnthropicUsage> {
+  if (!response.body) return {};
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return {};
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = consumeSseEvents(buffer);
+      buffer = parsed.rest;
+      for (const event of parsed.events) {
+        if (event.event === "error") return {};
+        const data = safeJsonParse(event.data);
+        if (isDict(data) && data.type === "message_start") {
+          const message = data.message;
+          const usage = isDict(message) && isDict(message.usage) ? message.usage : undefined;
+          await reader.cancel().catch(() => undefined);
+          abort();
+          return isDict(usage)
+            ? {
+                cache_read_input_tokens: numberValue(usage.cache_read_input_tokens),
+                cache_creation_input_tokens: usage.cache_creation_input_tokens === null ? null : numberValue(usage.cache_creation_input_tokens),
+              }
+            : {};
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function consumeSseEvents(buffer: string): { events: Array<{ event: string; data: string }>; rest: string } {
+  const normalized = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const chunks = normalized.split("\n\n");
+  const rest = chunks.pop() ?? "";
+  const events: Array<{ event: string; data: string }> = [];
+  for (const chunk of chunks) {
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of chunk.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice("event:".length).trim();
+      if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trimStart());
+    }
+    if (dataLines.length > 0) events.push({ event, data: dataLines.join("\n") });
+  }
+  return { events, rest };
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

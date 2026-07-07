@@ -24,10 +24,10 @@ import {
   type ReportLine,
   type SnapshotPair,
 } from "./cache-optimization/cache.ts";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyCacheKeeper, type KeeperState } from "./cache-optimization/keeper.ts";
-import { CacheKeepalive, hasBackgroundLaunchFlag, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
+import { CacheKeepalive, hasBackgroundLaunchFlag, isAnthropicOAuthToken, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
 
 // Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
 const MAX_FINGERPRINT_PAIRS = 500;
@@ -55,16 +55,50 @@ function anthropicUsesNonApiKeyAuth(): boolean {
   // env key a ping would use. We can't read the override's value, so the
   // presence of the flag disables pings outright.
   if (process.argv.includes("--api-key")) return true;
-  // Pi's env fallback prefers ANTHROPIC_OAUTH_TOKEN over ANTHROPIC_API_KEY:
-  // with both set, the session authenticates as OAuth while a ping would use
-  // the API key — a different billing identity and cache namespace.
-  if (process.env.ANTHROPIC_OAUTH_TOKEN) return true;
+  // Pi's env fallback prefers ANTHROPIC_OAUTH_TOKEN over ANTHROPIC_API_KEY,
+  // and Anthropic OAuth tokens can also appear in ANTHROPIC_API_KEY
+  // (`sk-ant-oat...`). Keepalive sends x-api-key, so either shape is a
+  // different auth route and must disable pings.
+  if (process.env.ANTHROPIC_OAUTH_TOKEN || isAnthropicOAuthToken(process.env.ANTHROPIC_API_KEY)) return true;
+  const dir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent");
+  const authPath = join(dir, "auth.json");
+  if (!existsSync(authPath)) return false;
   try {
-    const dir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent");
-    return isNonApiKeyAnthropicAuth(JSON.parse(readFileSync(join(dir, "auth.json"), "utf8")));
+    return isNonApiKeyAnthropicAuth(JSON.parse(readFileSync(authPath, "utf8")));
   } catch {
-    return false;
+    return true;
   }
+}
+
+function hasAnthropicRequestOverrides(modelRegistry: unknown, model: unknown): boolean {
+  if (!model || typeof model !== "object") return true;
+  const provider = (model as { provider?: unknown }).provider;
+  const id = (model as { id?: unknown }).id;
+  if (provider !== "anthropic") return false;
+  if (typeof id !== "string") return true;
+  const headers = (model as { headers?: unknown }).headers;
+  if (headers && typeof headers === "object" && Object.keys(headers).length > 0) return true;
+  if (!modelRegistry || typeof modelRegistry !== "object") return true;
+  const authStorage = (modelRegistry as { authStorage?: unknown }).authStorage;
+  if (!isPlainEnvAnthropicAuthStorage(authStorage)) return true;
+  const providerConfigs = (modelRegistry as { providerRequestConfigs?: unknown }).providerRequestConfigs;
+  const modelHeaders = (modelRegistry as { modelRequestHeaders?: unknown }).modelRequestHeaders;
+  if (!(providerConfigs instanceof Map) || !(modelHeaders instanceof Map)) return true;
+  if (providerConfigs.has("anthropic")) return true;
+  if (modelHeaders.has(`anthropic:${id}`)) return true;
+  return false;
+}
+
+function isPlainEnvAnthropicAuthStorage(authStorage: unknown): boolean {
+  if (!authStorage || typeof authStorage !== "object") return false;
+  const runtimeOverrides = (authStorage as { runtimeOverrides?: unknown }).runtimeOverrides;
+  const data = (authStorage as { data?: unknown }).data;
+  const loadError = (authStorage as { loadError?: unknown }).loadError;
+  if (loadError !== null && loadError !== undefined) return false;
+  if (!(runtimeOverrides instanceof Map)) return false;
+  if (runtimeOverrides.has("anthropic")) return false;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  return !("anthropic" in data);
 }
 
 export default function cacheOptimization(pi: any) {
@@ -82,13 +116,11 @@ export function activate(
 ) {
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
   let keeperState: KeeperState = {};
-  let anthropicNonApiKeyAuth = false;
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   pi.on("session_start", () => {
     fingerprints = { byTimestamp: new Map() };
     keeperState = {};
-    anthropicNonApiKeyAuth = anthropicUsesNonApiKeyAuth();
     if (!keepaliveTimer) {
       keepaliveTimer = setInterval(() => void keepalive.tick(), KEEPALIVE_TICK_MS);
       keepaliveTimer.unref?.();
@@ -129,13 +161,14 @@ export function activate(
     try {
       const route: RequestRoute = {
         provider: ctx?.model?.provider,
+        api: ctx?.model?.api,
         baseUrl: ctx?.model?.baseUrl,
-        nonApiKeyAuth: anthropicNonApiKeyAuth,
+        nonApiKeyAuth: anthropicUsesNonApiKeyAuth() || hasAnthropicRequestOverrides(ctx?.modelRegistry, ctx?.model),
         cacheReadPricePerMTok: ctx?.model?.cost?.cacheRead,
       };
       keepalive.noteProviderRequest(outgoing, route);
     } catch {
-      // best-effort
+      keepalive.clearCapture();
     }
     return replacement;
   });
