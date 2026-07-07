@@ -6,6 +6,7 @@ import type {
   ExecResult,
   ExtensionCommandContext,
   ExtensionContext,
+  EventBus,
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
@@ -20,6 +21,7 @@ export type HostThinkingLevel = ThinkingLevel;
 type Handler<E, R = void> = (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void;
 
 export interface GoalControllerHost {
+  events: EventBus;
   registerTool<TParams extends TSchema>(tool: ToolDefinition<TParams>): void;
   registerCommand(name: string, options: { description?: string; handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void }): void;
   on(event: "session_start", handler: Handler<SessionStartEvent>): void;

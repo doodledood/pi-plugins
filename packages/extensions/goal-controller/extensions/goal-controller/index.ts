@@ -20,6 +20,15 @@ import {
   updateUsage,
 } from "./controller.ts";
 import { PiSubprocessCheckerRunner, type CheckerRunner } from "./checker.ts";
+import {
+  CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
+  CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
+  checkerModelBootstrapRegistration,
+  checkerModelBootstrapRequest,
+  normalizeCheckerModelBootstrapPaths,
+  trustedCheckerModelBootstrapPath,
+  type CheckerModelBootstrapRegistration,
+} from "./checker-model-bootstrap.ts";
 import { buildActiveGoalSystemPrompt, buildCheckerSessionContext, buildContinuationPrompt, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
 import type { GoalControllerHost } from "./host.ts";
 import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike, SessionEntryLike } from "./types.ts";
@@ -74,6 +83,23 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   let activeStatusTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingContinuationGoalId: string | undefined;
   let pendingContinuationPrompt: string | undefined;
+  const checkerModelBootstrapRegistrations = new Map<string, CheckerModelBootstrapRegistration>();
+  const collectCheckerModelBootstrap = (data: unknown): void => {
+    const registration = checkerModelBootstrapRegistration(data);
+    if (!registration) return;
+    checkerModelBootstrapRegistrations.set(`${registration.packageName}\0${registration.extensionPath}`, registration);
+  };
+  const requestCheckerModelBootstraps = (): void => {
+    pi.events.emit(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, checkerModelBootstrapRequest());
+  };
+  const trustedCheckerModelBootstrapPaths = (): string[] =>
+    normalizeCheckerModelBootstrapPaths(
+      [...checkerModelBootstrapRegistrations.values()].map((registration) =>
+        trustedCheckerModelBootstrapPath(registration, loadedConfig.config.checker.trustedModelBootstrapPackages),
+      ),
+    );
+  const unsubscribeCheckerModelBootstrap = pi.events.on(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, collectCheckerModelBootstrap);
+  requestCheckerModelBootstraps();
   // Goal id whose reminder message is already in the session context. Injection
   // happens at most once per (goal, activation): cleared on resume transitions
   // and recovered from the session on reload so it is never duplicated.
@@ -418,6 +444,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   });
 
   pi.on("session_start", (_event, ctx) => {
+    requestCheckerModelBootstraps();
     reloadConfig(ctx);
     resetCheckerRuntime(checkerRun, true);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session reload; run /goal_resume to continue");
@@ -429,6 +456,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   });
 
   pi.on("session_tree", (_event, ctx) => {
+    requestCheckerModelBootstraps();
     reloadConfig(ctx);
     resetCheckerRuntime(checkerRun, true);
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session navigation; run /goal_resume to continue");
@@ -449,6 +477,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    unsubscribeCheckerModelBootstrap();
+    checkerModelBootstrapRegistrations.clear();
     resetCheckerRuntime(checkerRun, true);
     stopActiveStatusTimer();
     if (activeGoal) persistGoal(activeGoal.status === "checking" ? pauseGoal(activeGoal, "checker interrupted by session shutdown; run /goal_resume to continue") : activeGoal);
@@ -535,6 +565,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     else ctx.signal?.addEventListener("abort", forwardAbort, { once: true });
 
     try {
+      requestCheckerModelBootstraps();
       const context = buildCheckerSessionContext(
         ctx.sessionManager.getBranch(),
         ctx.sessionManager.getSessionFile(),
@@ -549,6 +580,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
         cwd: ctx.cwd,
         model: ctx.model,
         thinkingLevel: pi.getThinkingLevel(),
+        checkerModelBootstrapPaths: trustedCheckerModelBootstrapPaths(),
         signal: run.controller.signal,
       });
 

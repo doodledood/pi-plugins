@@ -111,6 +111,12 @@ Because `targetProvider` defaults to `provider` and `targetModel` defaults to `i
 
 See `config/model-aliases.example.json` for a fuller example.
 
+## goal-controller checker integration
+
+When `@doodledood/pi-goal-controller` is installed too, no extra config is needed for goal checkers to inherit aliased models. `model-aliases` advertises its dedicated no-tools checker bootstrap entrypoint over Pi's shared extension event bus; `goal-controller` validates the package/path against its trusted model-bootstrap list, then launches its checker subprocess with normal extension discovery disabled plus an explicit `-e <model-aliases checker-bootstrap.ts>` model-bootstrap exception.
+
+That explicit bootstrap lets the checker subprocess register the same alias models and run the same provider payload rewrite, so an inherited selector such as `openai-1m/gpt-5.5-1m` remains available while the upstream API still receives `gpt-5.5`. The checker does not gain model-aliases tools from this integration; it only loads the trusted model/provider bootstrap code needed to execute the inherited model.
+
 ## Alias fields
 
 | Field | Required | Description |

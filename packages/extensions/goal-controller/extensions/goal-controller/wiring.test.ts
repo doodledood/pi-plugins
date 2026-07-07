@@ -1,9 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentEndEvent, BeforeAgentStartEvent, ExtensionCommandContext, ExtensionContext, SessionStartEvent, SessionTreeEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { registerCheckerModelBootstrap as registerRealModelAliasesBootstrap } from "../../../model-aliases/extensions/model-aliases/index.ts";
+import realModelAliasesCheckerBootstrap from "../../../model-aliases/extensions/model-aliases/checker-bootstrap.ts";
+import { createEventBus, type AgentEndEvent, type BeforeAgentStartEvent, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent, type SessionTreeEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { activate, activeStatusRefreshDelayMs, formatStatus } from "./index.ts";
+import {
+  CHECKER_MODEL_BOOTSTRAP_KIND,
+  CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION,
+  CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
+  CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
+  CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE,
+} from "./checker-model-bootstrap.ts";
 import type { CheckerRunner, CheckerRunInput } from "./checker.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { createGoal, markChecking } from "./controller.ts";
@@ -50,6 +59,7 @@ class DeferredChecker implements CheckerRunner {
 }
 
 class FakeHost implements GoalControllerHost {
+  public readonly events = createEventBus();
   public readonly handlers: CapturedHandlers = {};
   public readonly tools: ToolDefinition[] = [];
   public readonly commandHandlers = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void> | void>();
@@ -305,6 +315,132 @@ test("extension registers one model-facing goal tool and user-only lifecycle com
   assert.equal(host.tools[0]?.description.includes("never updates, edits, clears, pauses, resumes, or completes a live goal"), true);
   assert.equal(host.tools[0]?.promptGuidelines?.some((guideline) => guideline.includes("completed goals are not live")), true);
 });
+
+function validCheckerBootstrapRegistration(extensionPath = "/tmp/packages/extensions/model-aliases/extensions/model-aliases/checker-bootstrap.ts") {
+  return {
+    protocolVersion: CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION,
+    kind: CHECKER_MODEL_BOOTSTRAP_KIND,
+    toolSurface: CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE,
+    packageName: "@doodledood/pi-model-aliases",
+    extensionPath,
+  };
+}
+
+test("checker model bootstrap registrations are collected before or after activation and passed to checker runs", async () => {
+  assert.deepEqual(await checkerBootstrapPathsForLoadOrder("before-activate"), ["/tmp/packages/extensions/model-aliases/extensions/model-aliases/checker-bootstrap.ts"]);
+  assert.deepEqual(await checkerBootstrapPathsForLoadOrder("after-activate"), ["/tmp/packages/extensions/model-aliases/extensions/model-aliases/checker-bootstrap.ts"]);
+});
+
+test("checker runs continue without bootstrap registrations when no provider advertises one", async () => {
+  const host = new FakeHost();
+  const checker = new FakeChecker([
+    {
+      decision: "complete",
+      complete: true,
+      reason: "all evidence proven",
+      evidence: ["fake"],
+      requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+    },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+
+  await host.commandHandler?.("goal without model aliases", ctx);
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+
+  assert.deepEqual(checker.inputs[0]?.checkerModelBootstrapPaths, []);
+  assert.equal(latestGoal(host)?.status, "complete");
+});
+
+test("real model-aliases bootstrap producer advertises a path goal-controller trusts end-to-end", async () => {
+  // Wire the REAL producer and REAL consumer on one shared event bus so the two
+  // independently installed packages must actually agree on channel names and
+  // registration shape — isolated per-package tests would miss a channel drift.
+  const host = new FakeHost();
+  registerRealModelAliasesBootstrap({ events: host.events });
+  const checker = new FakeChecker([
+    {
+      decision: "complete",
+      complete: true,
+      reason: "all evidence proven",
+      evidence: ["fake"],
+      requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+    },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+
+  await host.commandHandler?.("goal using real alias bootstrap", ctx);
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+
+  const paths = checker.inputs[0]?.checkerModelBootstrapPaths ?? [];
+  assert.equal(paths.length, 1);
+  const bootstrapPath = paths[0]!;
+  assert.equal(bootstrapPath.replaceAll("\\", "/").endsWith("/extensions/model-aliases/checker-bootstrap.ts"), true);
+  // The advertised entrypoint must be a real, loadable extension factory (not a
+  // stale/missing/no-op path) or the checker subprocess `-e` load would fail.
+  assert.equal(existsSync(bootstrapPath), true);
+  assert.equal(typeof realModelAliasesCheckerBootstrap, "function");
+  // Guard against a no-op entrypoint regression: the bootstrap must actually
+  // activate model aliases in the checker subprocess.
+  assert.match(readFileSync(bootstrapPath, "utf8"), /activateModelAliases/u);
+});
+
+test("session_shutdown detaches checker bootstrap registration listener", async () => {
+  const host = new FakeHost();
+  const checker = new FakeChecker([
+    {
+      decision: "complete",
+      complete: true,
+      reason: "all evidence proven",
+      evidence: ["fake"],
+      requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+    },
+  ]);
+  activate(host, checker);
+  const ctx = makeCtx();
+
+  await host.handlers.session_shutdown?.({ type: "session_shutdown", reason: "reload" } as never, ctx as ExtensionContext);
+  host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, validCheckerBootstrapRegistration());
+  await host.commandHandler?.("old activation should ignore bootstrap after shutdown", ctx);
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+
+  assert.deepEqual(checker.inputs[0]?.checkerModelBootstrapPaths, []);
+});
+
+async function checkerBootstrapPathsForLoadOrder(order: "before-activate" | "after-activate"): Promise<readonly string[] | undefined> {
+  const host = new FakeHost();
+  const advertiseBootstrap = (): void => {
+    host.events.on(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, () => {
+      const registration = validCheckerBootstrapRegistration();
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, registration);
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, registration);
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, { ...registration, extensionPath: "   " });
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, { ...registration, packageName: "untrusted-package" });
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, { ...registration, extensionPath: "/tmp/untrusted/index.ts" });
+      host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, { notExtensionPath: "/tmp/ignored.ts" });
+    });
+  };
+  if (order === "before-activate") advertiseBootstrap();
+  const checker = new FakeChecker([
+    {
+      decision: "complete",
+      complete: true,
+      reason: "all evidence proven",
+      evidence: ["fake"],
+      requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake" }],
+    },
+  ]);
+  activate(host, checker);
+  if (order === "after-activate") advertiseBootstrap();
+  const ctx = makeCtx();
+
+  await host.commandHandler?.("goal using alias model", ctx);
+  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+
+  assert.equal(latestGoal(host)?.status, "complete");
+  return checker.inputs[0]?.checkerModelBootstrapPaths;
+}
 
 test("goal command supersedes a stopped paused goal with a fresh active goal", async () => {
   const host = new FakeHost();

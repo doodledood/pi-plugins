@@ -183,7 +183,13 @@ Default installed config:
     "mode": "llm",
     "model": "inherit",
     "thinking": "inherit",
-    "timeoutMs": 300000
+    "timeoutMs": 300000,
+    "trustedModelBootstrapPackages": [
+      {
+        "packageName": "@doodledood/pi-model-aliases",
+        "extensionPathSuffixes": ["/extensions/model-aliases/checker-bootstrap.ts"]
+      }
+    ]
   },
   "continuation": {
     "noToolContinuationLimit": 3
@@ -194,6 +200,14 @@ Default installed config:
 Budget fields are user-editable and default to unbounded. `defaultTokenBudget`, `defaultTurnBudget`, and `defaultTimeBudgetSeconds` may be positive numbers to add token, turn, or wall-clock limits for new goals; set them to `null` or omit them to leave that dimension unbounded.
 
 The checker subprocess capability profile is fixed: it can use built-in `read`, `grep`, `find`, and `ls`, and it can discover and activate skills. Extension tools, prompt templates, context files, `bash`, `edit`, and `write` are disabled so the checker remains an auditor rather than a worker substitute.
+
+### Checker model bootstrap integration
+
+When another installed extension advertises itself as a checker model-bootstrap provider, `goal-controller` validates the registration against `checker.trustedModelBootstrapPackages` and then passes that package's explicit bootstrap entrypoint to the checker subprocess with `-e <path>`. This is how inherited extension-defined models, such as aliases from `@doodledood/pi-model-aliases`, stay executable inside the checker without extra `goal-controller` config.
+
+By default, `@doodledood/pi-model-aliases` is trusted only for its dedicated no-tools checker bootstrap entrypoint at `/extensions/model-aliases/checker-bootstrap.ts`. Future model/provider bootstrap extensions can be trusted by adding their package name and optional entrypoint suffixes to `checker.trustedModelBootstrapPackages`.
+
+The checker still launches with normal extension discovery disabled (`--no-extensions`) and keeps the fixed `read,grep,find,ls` tool allowlist. Bootstrap extensions are trusted code exceptions for model/provider registration and request rewriting only; they must advertise `toolSurface: "none"`, and their extension tools are not added to the checker tool surface by this mechanism.
 
 If an existing local config still contains `checker.toolMode`, remove that field. It no longer changes checker behavior; the loader warns that it is unsupported and uses the fixed audit-only profile.
 

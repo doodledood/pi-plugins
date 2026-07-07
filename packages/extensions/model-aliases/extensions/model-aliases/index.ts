@@ -1,4 +1,5 @@
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
+import { AuthStorage, ModelRegistry, type EventBus } from "@earendil-works/pi-coding-agent";
 
 import { loadConfig, type ModelAliasConfig, type ModelAliasesConfig } from "./config.ts";
 
@@ -24,7 +25,49 @@ interface ProviderRegistration {
 
 type AliasLookup = Map<string, ModelAliasConfig>;
 
+type ModelAliasesHost = {
+  events?: Pick<EventBus, "emit" | "on">;
+  on?: (event: "session_shutdown", handler: () => void) => void;
+};
+
+export const CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION = 1;
+export const CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL = "goal-controller:checker-model-bootstrap:request";
+export const CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL = "goal-controller:checker-model-bootstrap:register";
+export const CHECKER_MODEL_BOOTSTRAP_KIND = "model-provider-bootstrap";
+export const CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE = "none";
+export const MODEL_ALIASES_PACKAGE_NAME = "@doodledood/pi-model-aliases";
+
+export function registerCheckerModelBootstrap(
+  pi: ModelAliasesHost,
+  extensionPath = fileURLToPath(new URL("./checker-bootstrap.ts", import.meta.url)),
+): void {
+  const events = pi.events;
+  const normalizedPath = extensionPath.trim();
+  if (!events || normalizedPath.length === 0) return;
+
+  const unsubscribe = events.on(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, () => {
+    events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, {
+      protocolVersion: CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION,
+      kind: CHECKER_MODEL_BOOTSTRAP_KIND,
+      toolSurface: CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE,
+      packageName: MODEL_ALIASES_PACKAGE_NAME,
+      extensionPath: normalizedPath,
+    });
+  });
+  let subscribed = true;
+  pi.on?.("session_shutdown", () => {
+    if (!subscribed) return;
+    subscribed = false;
+    unsubscribe();
+  });
+}
+
 export default function modelAliases(pi: any) {
+  registerCheckerModelBootstrap(pi);
+  activateModelAliases(pi);
+}
+
+export function activateModelAliases(pi: any): void {
   const config = loadConfig();
   if (!config.enabled) return;
 

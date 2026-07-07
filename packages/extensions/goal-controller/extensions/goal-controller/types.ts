@@ -5,6 +5,11 @@ export type CheckerMode = "llm";
 export type CheckerModelSetting = "inherit" | string;
 export type CheckerThinkingSetting = "inherit" | ThinkingLevel;
 
+export interface CheckerTrustedModelBootstrapPackage {
+  packageName: string;
+  extensionPathSuffixes?: string[];
+}
+
 export interface CheckerSessionContext {
   sessionFormat: "pi-jsonl-tree";
   sessionFile?: string;
@@ -33,6 +38,7 @@ export interface GoalControllerConfig {
     model: CheckerModelSetting;
     thinking: CheckerThinkingSetting;
     timeoutMs: number;
+    trustedModelBootstrapPackages: CheckerTrustedModelBootstrapPackage[];
   };
   continuation: {
     noToolContinuationLimit: number;

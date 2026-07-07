@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ActiveGoal, CheckerDecision, CheckerSessionContext, CheckerVerdict, GoalControllerConfig, ThinkingLevel } from "./types.ts";
 import { buildCheckerPrompt } from "./prompts.ts";
 import { CHECKER_AUDIT_TOOLS_ARG, CHECKER_DISABLED_RESOURCE_ARGS } from "./checker-profile.ts";
+import { normalizeCheckerModelBootstrapPaths } from "./checker-model-bootstrap.ts";
 
 export interface CheckerRunInput {
   goal: ActiveGoal;
@@ -10,6 +11,7 @@ export interface CheckerRunInput {
   cwd: string;
   model: ExtensionContext["model"];
   thinkingLevel: ThinkingLevel;
+  checkerModelBootstrapPaths?: readonly string[];
   signal?: AbortSignal;
 }
 
@@ -72,9 +74,42 @@ function outputDiagnostics(result: ExecResult): string | undefined {
 
 function formatOutputTail(label: string, value: string): string | undefined {
   if (!value) return undefined;
+  // Redact before tailing so a token near the cut boundary cannot survive as a
+  // partial secret. A bootstrap extension that fails to load can echo provider
+  // config (apiKey/headers/bearer tokens) to stderr, and this diagnostic is
+  // persisted in goal state and shown in the UI, so it must not carry secrets.
+  const redacted = redactSecrets(value);
   const maxChars = 2_000;
-  const tail = value.length > maxChars ? `…${value.slice(-maxChars)}` : value;
+  const tail = redacted.length > maxChars ? `…${redacted.slice(-maxChars)}` : redacted;
   return `${label}:\n${tail}`;
+}
+
+const REDACTED = "[REDACTED]";
+const SECRET_KEY_PATTERN = "api[_-]?key|apikey|secret|token|password|passwd|passphrase|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret";
+
+// Redaction is intentionally quote-agnostic: a failing bootstrap extension often
+// renders provider config with Node's `util.inspect`, whose default is
+// single-quoted strings (`{ apiKey: 'sk-...' }`), so both quote styles must be
+// scrubbed. Auth-scheme stripping is anchored to an `authorization` header so
+// ordinary prose like "basic validation failed" is not mangled.
+export function redactSecrets(value: string): string {
+  return value
+    // Authorization headers: keep the header name and auth scheme word, drop the
+    // credential (which may contain spaces, e.g. `Bearer <jwt>`).
+    .replace(
+      /\b((?:proxy-)?authorization\s*[:=]\s*)['"]?((?:bearer|basic|digest)\s+)?[^\r\n'"}]+/gi,
+      (_match, prefix: string, scheme = "") => `${prefix}${scheme}${REDACTED}`,
+    )
+    // Standalone bearer tokens outside an Authorization header.
+    .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]{6,}/gi, `$1 ${REDACTED}`)
+    // `key: value` / `key=value` / `"key":"value"` / `'key':'value'` for known
+    // secret carriers, with either quote style (or none).
+    .replace(
+      new RegExp(`(['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)(['"]?)([^\\s"',}]+)(['"]?)`, "gi"),
+      (_match, prefix: string, openQuote: string, _secret: string, closeQuote: string) => `${prefix}${openQuote}${REDACTED}${closeQuote}`,
+    )
+    // OpenAI-style secret keys anywhere else in the text.
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED);
 }
 
 function formatDuration(ms: number): string {
@@ -92,6 +127,10 @@ function checkerArgs(input: CheckerRunInput, prompt: string): string[] {
     CHECKER_AUDIT_TOOLS_ARG,
     ...CHECKER_DISABLED_RESOURCE_ARGS,
   ];
+
+  for (const extensionPath of normalizeCheckerModelBootstrapPaths(input.checkerModelBootstrapPaths)) {
+    args.push("-e", extensionPath);
+  }
 
   const model = resolveModelPattern(input.config.checker.model, input.model);
   if (model) args.push("--model", model);

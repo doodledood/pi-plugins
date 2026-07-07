@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { isAbsolute } from "node:path";
 import { test } from "node:test";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 
 import {
+  CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
+  CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
+  MODEL_ALIASES_PACKAGE_NAME,
   buildAliasLookup,
   buildProviderRegistrations,
   getAliasForModel,
+  registerCheckerModelBootstrap,
   rewriteModelAliasPayload,
 } from "./index.ts";
 import type { ModelAliasesConfig } from "./config.ts";
@@ -36,6 +42,47 @@ const existingModels = [
     cost: { input: 15, output: 120, cacheRead: 1.5, cacheWrite: 0 },
   },
 ];
+
+test("registerCheckerModelBootstrap emits this extension entrypoint when requested", () => {
+  const events = createEventBus();
+  const registrations: unknown[] = [];
+  events.on(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, (data) => registrations.push(data));
+
+  registerCheckerModelBootstrap({ events });
+  events.emit(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, { protocolVersion: 1 });
+
+  assert.equal(registrations.length, 1);
+  const registration = registrations[0];
+  assert.equal(typeof registration, "object");
+  assert.notEqual(registration, null);
+  const payload = registration as { kind?: unknown; toolSurface?: unknown; packageName?: unknown; extensionPath?: unknown };
+  assert.equal(payload.kind, "model-provider-bootstrap");
+  assert.equal(payload.toolSurface, "none");
+  assert.equal(payload.packageName, MODEL_ALIASES_PACKAGE_NAME);
+  assert.equal(typeof payload.extensionPath, "string");
+  assert.equal(isAbsolute(payload.extensionPath as string), true);
+  assert.equal((payload.extensionPath as string).replaceAll("\\", "/").endsWith("extensions/model-aliases/checker-bootstrap.ts"), true);
+});
+
+test("registerCheckerModelBootstrap unsubscribes its request listener on session shutdown", () => {
+  const events = createEventBus();
+  const registrations: unknown[] = [];
+  let shutdown: (() => void) | undefined;
+  events.on(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, (data) => registrations.push(data));
+
+  registerCheckerModelBootstrap({
+    events,
+    on(event, handler) {
+      assert.equal(event, "session_shutdown");
+      shutdown = handler;
+    },
+  });
+  events.emit(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, { protocolVersion: 1 });
+  shutdown?.();
+  events.emit(CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL, { protocolVersion: 1 });
+
+  assert.equal(registrations.length, 1);
+});
 
 test("buildProviderRegistrations registers synthetic aliases by inheriting from the target model", () => {
   const config: ModelAliasesConfig = {

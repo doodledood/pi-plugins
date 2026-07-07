@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCheckerVerdict, PiSubprocessCheckerRunner } from "./checker.ts";
+import { parseCheckerVerdict, PiSubprocessCheckerRunner, redactSecrets, type CheckerRunInput } from "./checker.ts";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { createGoal } from "./controller.ts";
 import type { CheckerSessionContext, GoalControllerConfig } from "./types.ts";
@@ -243,6 +243,33 @@ test("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled
   assertAuditOnlyCheckerArgs(await captureCheckerArgs(DEFAULT_CONFIG));
 });
 
+test("PiSubprocessCheckerRunner includes explicit model bootstrap extensions without expanding checker tools", async () => {
+  const capturedArgs = await captureCheckerArgs(DEFAULT_CONFIG, {
+    checkerModelBootstrapPaths: ["/tmp/model-aliases.ts", "  ", "/tmp/model-aliases.ts", "/tmp/other-bootstrap.ts"],
+    model: {
+      id: "gpt-5.5-1m",
+      name: "GPT 5.5 1M",
+      api: "openai-responses",
+      provider: "openai-1m",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
+    thinkingLevel: "xhigh",
+  });
+
+  const extensionIndexes = capturedArgs.flatMap((arg, index) => (arg === "-e" ? [index] : []));
+  assert.deepEqual(extensionIndexes.map((index) => capturedArgs[index + 1]), ["/tmp/model-aliases.ts", "/tmp/other-bootstrap.ts"]);
+  assert.ok(extensionIndexes.every((index) => index > capturedArgs.indexOf("--no-extensions")), "bootstrap paths are explicit exceptions after --no-extensions");
+  assert.ok(extensionIndexes.every((index) => index < capturedArgs.length - 1), "bootstrap paths stay before the checker prompt");
+  assert.equal(capturedArgs[capturedArgs.indexOf("--model") + 1], "openai-1m/gpt-5.5-1m");
+  assert.equal(capturedArgs[capturedArgs.indexOf("--thinking") + 1], "xhigh");
+  assertAuditOnlyCheckerArgs(capturedArgs);
+});
+
 test("removed checker capability config cannot expand audit-only subprocess tools", async () => {
   const dir = mkdtempSync(join(tmpdir(), "goal-controller-checker-"));
   const configPath = join(dir, "config.json");
@@ -299,7 +326,57 @@ test("PiSubprocessCheckerRunner preserves exit-code and output diagnostics for n
   );
 });
 
-async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[]> {
+test("PiSubprocessCheckerRunner redacts secrets from checker subprocess diagnostics", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return {
+        stdout: "apiKey=sk-livesecretstdout00000 in stdout",
+        stderr: "[model-aliases] load failed for /tmp/model-aliases/checker-bootstrap.ts\nAuthorization: Bearer sk-topsecretbearer1234567890\napiKey: sk-anothersecretkey0987654321",
+        code: 1,
+        killed: false,
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      // Operational diagnostics survive so the failure is diagnosable...
+      assert.match(error.message, /exited with code 1/iu);
+      assert.match(error.message, /checker-bootstrap\.ts/iu);
+      // ...but no secret material leaks into persisted/notified checker state.
+      assert.doesNotMatch(error.message, /sk-[A-Za-z0-9_-]{8,}/u);
+      assert.doesNotMatch(error.message, /Bearer\s+sk-/iu);
+      assert.match(error.message, /\[REDACTED\]/u);
+      return true;
+    },
+  );
+});
+
+test("redactSecrets scrubs common secret carriers while preserving surrounding text", () => {
+  assert.equal(redactSecrets("apiKey=sk-abcdef123456"), "apiKey=[REDACTED]");
+  assert.equal(redactSecrets('"api_key": "sk-abcdef123456"'), '"api_key": "[REDACTED]"');
+  assert.equal(redactSecrets("Authorization: Bearer sk-abcdef123456"), "Authorization: Bearer [REDACTED]");
+  assert.equal(redactSecrets("loaded /tmp/checker-bootstrap.ts fine"), "loaded /tmp/checker-bootstrap.ts fine");
+});
+
+test("redactSecrets scrubs single-quoted util.inspect config and non-sk secrets", () => {
+  // Node's util.inspect (backing console.log(obj) and inlined error objects)
+  // defaults to single-quoted strings, which must not leak.
+  assert.equal(redactSecrets("apiKey: 'azuresecret123456'"), "apiKey: '[REDACTED]'");
+  assert.equal(redactSecrets("password: 'hunter2hunter2'"), "password: '[REDACTED]'");
+  const inspected = redactSecrets("{ apiKey: 'gsk_live_abc123def', headers: { 'x-api-key': 'plain_secret_1' } }");
+  assert.doesNotMatch(inspected, /gsk_live_abc123def/u);
+  assert.doesNotMatch(inspected, /plain_secret_1/u);
+  assert.match(inspected, /\[REDACTED\]/u);
+  // Basic auth credentials (base64, no sk- prefix) are still scrubbed.
+  assert.equal(redactSecrets("Authorization: Basic dXNlcjpwYXNzd29yZA=="), "Authorization: Basic [REDACTED]");
+  // Ordinary prose containing scheme-like words is left intact.
+  assert.equal(redactSecrets("basic validation failed for token refresh path"), "basic validation failed for token refresh path");
+});
+
+async function captureCheckerArgs(config: GoalControllerConfig, overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel">> = {}): Promise<string[]> {
   let capturedArgs: string[] = [];
   const runner = new PiSubprocessCheckerRunner({
     async exec(_command, args) {
@@ -330,11 +407,15 @@ async function captureCheckerArgs(config: GoalControllerConfig): Promise<string[
     },
   });
 
-  await runChecker(runner, config);
+  await runChecker(runner, config, overrides);
   return capturedArgs;
 }
 
-async function runChecker(runner: PiSubprocessCheckerRunner, config: GoalControllerConfig): Promise<void> {
+async function runChecker(
+  runner: PiSubprocessCheckerRunner,
+  config: GoalControllerConfig,
+  overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel">> = {},
+): Promise<void> {
   await runner.run({
     goal: createGoal("fake goal", config, 0),
     context: checkerContext(undefined),
@@ -342,5 +423,6 @@ async function runChecker(runner: PiSubprocessCheckerRunner, config: GoalControl
     cwd: "/tmp",
     model: undefined,
     thinkingLevel: "off",
+    ...overrides,
   });
 }
