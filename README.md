@@ -124,6 +124,8 @@ The same settings template also enables the theme and package defaults:
 }
 ```
 
+The profile config bundle also includes `profiles/aviram/configs/subagents.json`, which raises `@gotgenes/pi-subagents` background concurrency from its upstream default 4 to 10 when copied to `~/.pi/agent/subagents.json`.
+
 ### Fresh profile: copy the full setup
 
 Use this path for a new machine/profile, or when you intentionally want to replace your current Pi settings with Aviram's profile.
@@ -248,39 +250,43 @@ Recommended probing questions:
    - "Do you want the full external package set from Aviram's profile — MCP adapter, subagents, manifest skills, ask-user-question, todo, web access, and image generation — or only a subset?"
    - Default: install the full set when the user asked for Aviram's profile.
 
-4. **Theme and visual defaults?**
+4. **Subagents concurrency?**
+   - "Should I apply Aviram's `@gotgenes/pi-subagents` concurrency default of 10 background agents, or preserve your existing `~/.pi/agent/subagents.json` setting?"
+   - Default: apply `profiles/aviram/configs/subagents.json` for the full profile; preserve the user's current setting when merging unless they opt in.
+
+5. **Theme and visual defaults?**
    - "Should I set the active Pi theme to `deep-focus-pi`?"
    - Default: yes for the full profile; preserve the user's current theme when merging unless they opt in.
 
-5. **Model/provider defaults?**
+6. **Model/provider defaults?**
    - "Which default provider/model should Pi use, and do you have access to the enabled models listed in the profile?"
    - Default: copy the profile values for a fresh setup; preserve current provider/model when merging unless the user asks for Aviram's defaults.
 
-6. **Image generation?**
+7. **Image generation?**
    - "Do you want `@amaster.ai/pi-image-gen` installed, and should its default model be `gpt-image-2`?"
    - Default: yes for the full profile. Do not ask the user to paste API keys into chat; tell them to configure provider credentials locally.
 
-7. **Web search provider?**
+8. **Web search provider?**
    - "Do you want `pi-web-access` configured with Tavily as in `profiles/aviram/web-search.example.json`, or a different search provider?"
    - Default: copy the template, then have the user fill `~/.pi/web-search.json` locally.
 
-8. **MCP servers?**
+9. **MCP servers?**
    - "Which MCP servers should be enabled: Chrome DevTools, direct remote MCP URLs, `mcp-remote` command servers, proxy MCP servers, or only a subset?"
    - Default: copy `profiles/aviram/mcp.example.json` as a template, then remove unused placeholder servers and fill real local/private values outside the repo.
 
-9. **Chrome DevTools MCP?**
-   - "Do you want managed Chrome DevTools MCP enabled on this machine?"
-   - Default: yes if the user wants browser tools. Use the managed wrapper path `~/.local/bin/chrome-devtools-mcp-managed`; if unsure, ask the user to run `/managed-chrome doctor` inside Pi after installing.
+10. **Chrome DevTools MCP?**
+    - "Do you want managed Chrome DevTools MCP enabled on this machine?"
+    - Default: yes if the user wants browser tools. Use the managed wrapper path `~/.local/bin/chrome-devtools-mcp-managed`; if unsure, ask the user to run `/managed-chrome doctor` inside Pi after installing.
 
-10. **Prompt/profile posture?**
+11. **Prompt/profile posture?**
     - "Do you want Aviram's `AGENTS.md` and `APPEND_SYSTEM.md` behavior profile merged into your agent instructions?"
     - Default: ask before merging. These files affect agent behavior and should not be silently overwritten.
 
-11. **Secrets and private endpoints?**
+12. **Secrets and private endpoints?**
     - "Which required values will you fill locally — API keys, MCP hosts, proxy IDs, OAuth material, or local wrapper paths?"
     - Default: never collect secrets in chat. Leave placeholders in copied templates and tell the user exactly which files to edit locally.
 
-12. **Verification expectation?**
+13. **Verification expectation?**
     - "After setup, should I run package verification commands such as `pi list` and inspect copied config files for remaining placeholders?"
     - Default: yes. At minimum, confirm packages are listed and call out any placeholders still needing user input.
 
