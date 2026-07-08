@@ -1,0 +1,44 @@
+{
+  "name": "@doodledood/pi-openai-max-output-floor",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Floors OpenAI Responses max_output_tokens to the provider minimum (16), preventing hard 400s when Pi's context-aware clamp goes below it near the context window.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/openai-max-output-floor/*.test.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "openai",
+    "openai-responses",
+    "max-output-tokens"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/openai-max-output-floor.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/openai-max-output-floor"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/openai-max-output-floor#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}
