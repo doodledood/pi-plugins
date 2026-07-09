@@ -10,7 +10,7 @@ test("normalizeConfig accepts a minimal alias without forcing model defaults bef
   const config = normalizeConfig({
     aliases: [
       {
-        provider: "openai-1m",
+        provider: "openai",
         id: "gpt-5.5-1m",
       },
     ],
@@ -19,10 +19,10 @@ test("normalizeConfig accepts a minimal alias without forcing model defaults bef
   assert.equal(config.enabled, true);
   assert.deepEqual(config.aliases, [
     {
-      provider: "openai-1m",
+      provider: "openai",
       providerName: undefined,
       id: "gpt-5.5-1m",
-      targetProvider: "openai-1m",
+      targetProvider: "openai",
       targetModel: "gpt-5.5-1m",
       name: undefined,
       api: undefined,

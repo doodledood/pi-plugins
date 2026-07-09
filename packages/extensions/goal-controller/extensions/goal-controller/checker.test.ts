@@ -250,7 +250,7 @@ test("PiSubprocessCheckerRunner includes explicit model bootstrap extensions wit
       id: "gpt-5.5-1m",
       name: "GPT 5.5 1M",
       api: "openai-responses",
-      provider: "openai-1m",
+      provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: true,
       input: ["text"],
@@ -265,7 +265,7 @@ test("PiSubprocessCheckerRunner includes explicit model bootstrap extensions wit
   assert.deepEqual(extensionIndexes.map((index) => capturedArgs[index + 1]), ["/tmp/model-aliases.ts", "/tmp/other-bootstrap.ts"]);
   assert.ok(extensionIndexes.every((index) => index > capturedArgs.indexOf("--no-extensions")), "bootstrap paths are explicit exceptions after --no-extensions");
   assert.ok(extensionIndexes.every((index) => index < capturedArgs.length - 1), "bootstrap paths stay before the checker prompt");
-  assert.equal(capturedArgs[capturedArgs.indexOf("--model") + 1], "openai-1m/gpt-5.5-1m");
+  assert.equal(capturedArgs[capturedArgs.indexOf("--model") + 1], "openai/gpt-5.5-1m");
   assert.equal(capturedArgs[capturedArgs.indexOf("--thinking") + 1], "xhigh");
   assertAuditOnlyCheckerArgs(capturedArgs);
 });

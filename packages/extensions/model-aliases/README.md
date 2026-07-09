@@ -1,19 +1,23 @@
 # model-aliases
 
-Configurable model aliases for Pi: show custom model/provider ids in the selector while sending an existing upstream model id in the provider payload.
+Configurable model aliases for Pi: show custom model ids in the selector while routing all model calls to an existing upstream provider/model.
 
-Use this when you want variants such as `openai-1m/gpt-5.5-1m` or a future `openai-1m/gpt-5.6-1m` without writing a new extension for each model release.
+Use this when you want variants such as `openai/gpt-5.5-1m` or a future `openai/gpt-5.6-1m` without writing a new extension for each model release.
 
 ## Why this exists
 
-Pi currently uses the model `id` as the primary selector/footer label and also sends that `id` as `payload.model` to the provider. A plain model override can change context-window metadata, but it cannot make the selector show `gpt-5.5-1m` while the API receives `gpt-5.5`.
+Pi uses the selected model `provider/id` for UI, context-window metadata, session identity, and provider calls. A plain model override can change context-window metadata, but it cannot make the selector show `gpt-5.5-1m` while the upstream API receives `gpt-5.5`.
 
 This extension makes that split configurable:
 
 - Pi UI / scoped model cycle sees the configured alias model id.
-- The provider request payload is rewritten so `model` is the configured `targetModel`.
+- The alias model routes through a hidden `model-aliases` stream API that delegates every LLM call to the configured `targetProvider` / `targetModel`.
+- Normal chat turns, compaction, branch summaries, and other Pi-owned model calls share the same alias routing because the model itself owns the delegation.
+- Streamed/session assistant messages are mapped back to the selected alias identity, so session history still records the visible alias.
 - Context-window, max-token, cost, input, reasoning, and compatibility metadata can be inherited from an existing target model and overridden per alias.
 - If the configured `provider/id` already exists, the configured entry wins and the provider's other models are preserved.
+
+A `before_provider_request` payload rewrite is still registered as a compatibility fallback for call paths that expose Pi's payload hook, but alias routing does not depend on that hook.
 
 ## Install
 
@@ -64,8 +68,7 @@ Higher-priority files override lower-priority fields. After editing config, run 
   "enabled": true,
   "aliases": [
     {
-      "provider": "openai-1m",
-      "providerName": "OpenAI 1M Context",
+      "provider": "openai",
       "id": "gpt-5.5-1m",
       "name": "GPT-5.5 1M",
       "targetProvider": "openai",
@@ -84,12 +87,12 @@ Then include the alias in `~/.pi/agent/settings.json` if you want it in the scop
 {
   "enabledModels": [
     "openai/gpt-5.5:xhigh",
-    "openai-1m/gpt-5.5-1m:xhigh"
+    "openai/gpt-5.5-1m:xhigh"
   ]
 }
 ```
 
-To add a later GPT-5.6 1M variant, add another alias with `id: "gpt-5.6-1m"`, `targetProvider: "openai"`, and `targetModel: "gpt-5.6"`. No extension code change is needed.
+To add a later GPT-5.6 1M variant, add another alias with `provider: "openai"`, `id: "gpt-5.6-1m"`, `targetProvider: "openai"`, and `targetModel: "gpt-5.6"`. No extension code change is needed.
 
 ### Override an existing model in place
 
@@ -115,36 +118,36 @@ See `config/model-aliases.example.json` for a fuller example.
 
 When `@doodledood/pi-goal-controller` is installed too, no extra config is needed for goal checkers to inherit aliased models. `model-aliases` advertises its dedicated no-tools checker bootstrap entrypoint over Pi's shared extension event bus; `goal-controller` validates the package/path against its trusted model-bootstrap list, then launches its checker subprocess with normal extension discovery disabled plus an explicit `-e <model-aliases checker-bootstrap.ts>` model-bootstrap exception.
 
-That explicit bootstrap lets the checker subprocess register the same alias models and run the same provider payload rewrite, so an inherited selector such as `openai-1m/gpt-5.5-1m` remains available while the upstream API still receives `gpt-5.5`. The checker does not gain model-aliases tools from this integration; it only loads the trusted model/provider bootstrap code needed to execute the inherited model.
+That explicit bootstrap lets the checker subprocess register the same alias models and hidden alias stream API, so an inherited selector such as `openai/gpt-5.5-1m` remains available while the upstream API still receives `gpt-5.5`. The checker does not gain model-aliases tools from this integration; it only loads the trusted model/provider bootstrap code needed to execute the inherited model.
 
 ## Alias fields
 
 | Field | Required | Description |
 |---|---:|---|
-| `provider` | yes | Provider id shown by Pi. Use a synthetic provider such as `openai-1m` for a new selector-visible alias, or an existing provider such as `openai` to override an existing model id. |
-| `providerName` | no | Display name for the synthetic provider. Defaults to `provider`. |
+| `provider` | yes | Provider id shown by Pi. Prefer the real provider, such as `openai`, so aliases reuse the normal provider auth/login surface. |
+| `providerName` | no | Optional display name for non-standard/synthetic provider ids. Normally omit this when `provider` is a built-in provider such as `openai`. |
 | `id` | yes | Selector-visible alias model id, for example `gpt-5.5-1m`. |
-| `targetProvider` | no | Existing provider to inherit model metadata from. Defaults to `provider`. Legacy key `actualProvider` is also accepted. |
-| `targetModel` | no | Upstream model id written into `payload.model`, for example `gpt-5.5`. Defaults to `id`. Legacy keys `actualModelId` and `model` are also accepted. |
+| `targetProvider` | no | Existing provider to inherit model metadata from and route upstream calls to. Defaults to `provider`. Legacy key `actualProvider` is also accepted. |
+| `targetModel` | no | Upstream model id sent to the target provider, for example `gpt-5.5`. Defaults to `id`. Legacy keys `actualModelId` and `model` are also accepted. |
 | `name` | no | Human-friendly model name. Defaults to `id`. |
-| `api` | no | Pi provider API type, such as `openai-responses` or `anthropic-messages`. Required in practice for custom synthetic providers. |
-| `baseUrl` | no | Provider base URL. Required in practice for custom synthetic providers. |
-| `apiKey` | no | Env interpolation, shell command, or literal key using Pi provider config syntax, e.g. `$OPENAI_API_KEY`. |
-| `headers` | no | Extra provider headers. |
+| `api` | no | Target Pi provider API type, such as `openai-responses` or `anthropic-messages`, when it cannot be inherited from `targetProvider` / `targetModel`. |
+| `baseUrl` | no | Target provider base URL when it cannot be inherited. |
+| `apiKey` | no | Env interpolation, shell command, or literal key using Pi provider config syntax, e.g. `$OPENAI_API_KEY`. This is a fallback; normal auth storage for `provider` wins first. |
+| `headers` | no | Extra provider/model headers. |
 | `authHeader` | no | Add `Authorization: Bearer <key>` for non-standard providers. |
-| `reasoning` | no | Whether the alias supports Pi thinking levels. Defaults to `false`. |
+| `reasoning` | no | Whether the alias supports Pi thinking levels. Defaults to inherited target metadata or `false`. |
 | `thinkingLevelMap` | no | Per-level provider values / `null` for hidden unsupported levels. |
-| `input` | no | `text` or `text,image`. Defaults to `text`. |
-| `contextWindow` | no | Context-window metadata. Defaults to `128000`. |
-| `maxTokens` | no | Max output metadata. Defaults to `16384`. |
-| `cost` | no | Cost metadata per million tokens. Defaults to zeros. |
-| `compat` | no | Provider compatibility overrides passed through to Pi. |
+| `input` | no | `text` or `text,image`. Defaults to inherited target metadata or `text`. |
+| `contextWindow` | no | Context-window metadata. Defaults to inherited target metadata or `128000`. |
+| `maxTokens` | no | Max output metadata. Defaults to inherited target metadata or `16384`. |
+| `cost` | no | Cost metadata per million tokens. Defaults to inherited target metadata or zeros. |
+| `compat` | no | Provider compatibility overrides passed through to the target provider. |
 
-## Auth caveat
+## Auth behavior
 
-When `provider/id` clashes with an existing model, the configured entry wins. The extension builds a full provider registration that preserves the provider's other current models, then replaces the clashing model with your configured metadata.
+Aliases under a real provider id, such as `openai/gpt-5.5-1m`, use that provider's normal auth lookup. `/login openai`, `auth.json`'s `openai` entry, and provider-scoped environment settings apply as usual. The alias `apiKey` field is only a fallback when no auth storage entry exists.
 
-Synthetic providers such as `openai-1m` do not automatically reuse `/login openai` OAuth/subscription credentials. Configure `apiKey` (usually `$OPENAI_API_KEY`) or another provider-specific auth mechanism in settings. Existing-provider overrides such as `openai/gpt-5.5` continue to use that provider's normal auth, with `apiKey` as an optional fallback.
+Synthetic providers still work for unusual setups, but they have their own provider id and therefore their own auth/cache-retention surface. Prefer same-provider aliases unless you intentionally need a separate auth boundary.
 
 ## Local state
 

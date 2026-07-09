@@ -12,9 +12,9 @@ export interface ModelAliasCost {
 }
 
 export interface ModelAliasConfig {
-  /** Synthetic provider id shown in Pi, e.g. `openai-1m`. */
+  /** Provider id shown in Pi, usually the real provider such as `openai`. */
   provider: string;
-  /** Optional synthetic provider display name. */
+  /** Optional provider display name override. Usually omitted for built-in providers. */
   providerName?: string;
   /** Selector-visible model id, e.g. `gpt-5.5-1m`. */
   id: string;

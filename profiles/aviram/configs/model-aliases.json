@@ -2,8 +2,7 @@
   "enabled": true,
   "aliases": [
     {
-      "provider": "openai-1m",
-      "providerName": "OpenAI 1M Context",
+      "provider": "openai",
       "id": "gpt-5.5-1m",
       "name": "GPT-5.5 1M",
       "targetProvider": "openai",

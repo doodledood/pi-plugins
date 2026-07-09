@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-model-aliases",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Configurable model aliases for Pi: show custom model ids while sending existing upstream model ids.",
   "scripts": {
@@ -17,6 +17,9 @@
     "extensions": [
       "./extensions/model-aliases/index.ts"
     ]
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "*"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

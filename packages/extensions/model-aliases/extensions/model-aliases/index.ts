@@ -1,5 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { AuthStorage, ModelRegistry, type EventBus } from "@earendil-works/pi-coding-agent";
+import { streamSimple as streamSimpleCompat } from "@earendil-works/pi-ai/compat";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 
 import { loadConfig, type ModelAliasConfig, type ModelAliasesConfig } from "./config.ts";
 
@@ -16,6 +25,7 @@ interface ExistingModel {
   contextWindow?: number;
   maxTokens?: number;
   compat?: Record<string, unknown>;
+  headers?: Record<string, string | null>;
 }
 
 interface ProviderRegistration {
@@ -24,6 +34,12 @@ interface ProviderRegistration {
 }
 
 type AliasLookup = Map<string, ModelAliasConfig>;
+type TargetModelLookup = Map<string, ExistingModel>;
+type AliasStreamDelegate = (
+  model: Model<any>,
+  context: Context,
+  options?: SimpleStreamOptions,
+) => AssistantMessageEventStream;
 
 type ModelAliasesHost = {
   events?: Pick<EventBus, "emit" | "on">;
@@ -36,6 +52,7 @@ export const CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL = "goal-controller:checker
 export const CHECKER_MODEL_BOOTSTRAP_KIND = "model-provider-bootstrap";
 export const CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE = "none";
 export const MODEL_ALIASES_PACKAGE_NAME = "@doodledood/pi-model-aliases";
+export const MODEL_ALIASES_API = "model-aliases";
 
 export function registerCheckerModelBootstrap(
   pi: ModelAliasesHost,
@@ -74,8 +91,10 @@ export function activateModelAliases(pi: any): void {
   const currentRegistry = ModelRegistry.create(AuthStorage.create());
   const existingModels = currentRegistry.getAll() as ExistingModel[];
   const aliasLookup = buildAliasLookup(config);
+  const targetLookup = buildTargetModelLookup(config, existingModels);
+  const aliasStreamSimple = createAliasStreamSimple(aliasLookup, targetLookup);
 
-  for (const registration of buildProviderRegistrations(config, existingModels)) {
+  for (const registration of buildProviderRegistrations(config, existingModels, aliasStreamSimple)) {
     try {
       pi.registerProvider(registration.provider, registration.config);
     } catch (error) {
@@ -87,6 +106,10 @@ export function activateModelAliases(pi: any): void {
     }
   }
 
+  // Compatibility fallback for provider calls that still run Pi's payload hook.
+  // The hidden MODEL_ALIASES_API stream below is the primary aliasing mechanism,
+  // because Pi-owned calls such as compaction and branch summaries may not pass
+  // before_provider_request/onPayload hooks.
   pi.on("before_provider_request", (event: any, ctx: any) => {
     const alias = getAliasForModel(aliasLookup, ctx.model);
     if (!alias) return undefined;
@@ -97,6 +120,10 @@ export function activateModelAliases(pi: any): void {
 export function buildProviderRegistrations(
   config: ModelAliasesConfig,
   existingModels: ExistingModel[] = [],
+  aliasStreamSimple: AliasStreamDelegate = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+  ),
 ): ProviderRegistration[] {
   if (!config.enabled) return [];
 
@@ -107,9 +134,10 @@ export function buildProviderRegistrations(
     grouped.set(alias.provider, aliases);
   }
 
+  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+
   return [...grouped.entries()].map(([provider, aliases]) => {
     const providerExistingModels = existingModels.filter((model) => model.provider === provider);
-    const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
     const modelById = new Map<string, Record<string, unknown>>();
 
     for (const model of providerExistingModels) {
@@ -117,9 +145,7 @@ export function buildProviderRegistrations(
     }
 
     for (const alias of aliases) {
-      const inherited =
-        targetModelByKey.get(modelKey(alias.targetProvider, alias.targetModel)) ??
-        targetModelByKey.get(modelKey(alias.provider, alias.id));
+      const inherited = inheritedModelForAlias(alias, targetModelByKey);
       modelById.set(alias.id, aliasToProviderModel(alias, inherited));
     }
 
@@ -131,10 +157,11 @@ export function buildProviderRegistrations(
     return {
       provider,
       config: pruneUndefined({
-        name: firstAlias.providerName ?? provider,
+        name: providerDisplayName(firstAlias),
         baseUrl: firstAlias.baseUrl ?? firstModel?.baseUrl,
         apiKey: firstAlias.apiKey ?? defaultApiKeyForProvider(firstAlias.targetProvider),
-        api: firstAlias.api ?? firstModel?.api,
+        api: MODEL_ALIASES_API,
+        streamSimple: aliasStreamSimple,
         headers: firstAlias.headers,
         authHeader: firstAlias.authHeader,
         models: [...modelById.values()],
@@ -154,9 +181,42 @@ export function buildAliasLookup(config: ModelAliasesConfig): AliasLookup {
   return lookup;
 }
 
+export function buildTargetModelLookup(
+  config: ModelAliasesConfig,
+  existingModels: ExistingModel[] = [],
+): TargetModelLookup {
+  const lookup: TargetModelLookup = new Map();
+  if (!config.enabled) return lookup;
+
+  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+  for (const alias of config.aliases) {
+    const inherited = inheritedModelForAlias(alias, targetModelByKey);
+    lookup.set(modelKey(alias.provider, alias.id), aliasToTargetModel(alias, inherited));
+  }
+
+  return lookup;
+}
+
 export function getAliasForModel(lookup: AliasLookup, model: any): ModelAliasConfig | undefined {
   if (!model?.provider || !model?.id) return undefined;
   return lookup.get(modelKey(model.provider, model.id));
+}
+
+export function createAliasStreamSimple(
+  aliasLookup: AliasLookup,
+  targetLookup: TargetModelLookup,
+  delegate: AliasStreamDelegate = streamSimpleCompat as AliasStreamDelegate,
+): AliasStreamDelegate {
+  return (model, context, options) => {
+    const alias = getAliasForModel(aliasLookup, model);
+    const target = targetLookup.get(modelKey(model.provider, model.id));
+    if (!alias || !target) {
+      throw new Error(`No model alias target registered for ${model.provider}/${model.id}`);
+    }
+
+    const source = delegate(target as Model<any>, context, options);
+    return wrapAliasIdentityStream(source, model);
+  };
 }
 
 export function rewriteModelAliasPayload(payload: unknown, targetModel: string): unknown | undefined {
@@ -168,20 +228,48 @@ export function rewriteModelAliasPayload(payload: unknown, targetModel: string):
   };
 }
 
+function inheritedModelForAlias(
+  alias: ModelAliasConfig,
+  targetModelByKey: Map<string, ExistingModel>,
+): ExistingModel | undefined {
+  return (
+    targetModelByKey.get(modelKey(alias.targetProvider, alias.targetModel)) ??
+    targetModelByKey.get(modelKey(alias.provider, alias.id))
+  );
+}
+
 function aliasToProviderModel(alias: ModelAliasConfig, inherited: ExistingModel | undefined): Record<string, unknown> {
   return pruneUndefined({
     id: alias.id,
     name: alias.name ?? inherited?.name ?? alias.id,
-    api: alias.api ?? inherited?.api,
+    api: MODEL_ALIASES_API,
     baseUrl: alias.baseUrl ?? inherited?.baseUrl,
     reasoning: alias.reasoning ?? inherited?.reasoning ?? false,
     thinkingLevelMap: alias.thinkingLevelMap ?? inherited?.thinkingLevelMap,
-    input: alias.input ?? inherited?.input ?? ["text"],
+    input: alias.input ?? inherited?.input ?? defaultInput(),
     contextWindow: alias.contextWindow ?? inherited?.contextWindow ?? 128_000,
     maxTokens: alias.maxTokens ?? inherited?.maxTokens ?? 16_384,
     cost: alias.cost ?? inherited?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: alias.compat ?? inherited?.compat,
     headers: alias.headers,
+  });
+}
+
+function aliasToTargetModel(alias: ModelAliasConfig, inherited: ExistingModel | undefined): ExistingModel {
+  return pruneUndefined({
+    id: alias.targetModel,
+    name: inherited?.name ?? alias.targetModel,
+    api: alias.api ?? inherited?.api,
+    provider: alias.targetProvider,
+    baseUrl: alias.baseUrl ?? inherited?.baseUrl,
+    reasoning: alias.reasoning ?? inherited?.reasoning ?? false,
+    thinkingLevelMap: alias.thinkingLevelMap ?? inherited?.thinkingLevelMap,
+    input: alias.input ?? inherited?.input ?? defaultInput(),
+    contextWindow: alias.contextWindow ?? inherited?.contextWindow ?? 128_000,
+    maxTokens: alias.maxTokens ?? inherited?.maxTokens ?? 16_384,
+    cost: alias.cost ?? inherited?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    compat: alias.compat ?? inherited?.compat,
+    headers: alias.headers ?? inherited?.headers,
   });
 }
 
@@ -193,12 +281,57 @@ function existingModelToProviderModel(model: ExistingModel): Record<string, unkn
     baseUrl: model.baseUrl,
     reasoning: model.reasoning ?? false,
     thinkingLevelMap: model.thinkingLevelMap,
-    input: model.input ?? ["text"],
+    input: model.input ?? defaultInput(),
     contextWindow: model.contextWindow ?? 128_000,
     maxTokens: model.maxTokens ?? 16_384,
     cost: model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: model.compat,
+    headers: model.headers,
   });
+}
+
+function wrapAliasIdentityStream(
+  source: AssistantMessageEventStream,
+  aliasModel: Model<any>,
+): AssistantMessageEventStream {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for await (const event of source) {
+        yield aliasMessageEvent(event, aliasModel);
+      }
+    },
+    async result() {
+      return aliasAssistantMessage(await source.result(), aliasModel);
+    },
+  } as unknown as AssistantMessageEventStream;
+}
+
+function aliasMessageEvent(event: AssistantMessageEvent, aliasModel: Model<any>): AssistantMessageEvent {
+  if (event.type === "done") {
+    return { ...event, message: aliasAssistantMessage(event.message, aliasModel) };
+  }
+  if (event.type === "error") {
+    return { ...event, error: aliasAssistantMessage(event.error, aliasModel) };
+  }
+  return { ...event, partial: aliasAssistantMessage(event.partial, aliasModel) };
+}
+
+function aliasAssistantMessage(message: AssistantMessage, aliasModel: Model<any>): AssistantMessage {
+  return {
+    ...message,
+    provider: aliasModel.provider,
+    model: aliasModel.id,
+  };
+}
+
+function providerDisplayName(firstAlias: ModelAliasConfig): string | undefined {
+  if (firstAlias.providerName) return firstAlias.providerName;
+  if (firstAlias.provider !== firstAlias.targetProvider) return firstAlias.provider;
+  return undefined;
+}
+
+function defaultInput(): ("text" | "image")[] {
+  return ["text"];
 }
 
 function defaultApiKeyForProvider(provider: string): string {

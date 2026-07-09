@@ -53,7 +53,7 @@ A Pi extension in this repo that manages one long-running session goal and deleg
 _Avoid_: Goal mode when referring to the extension implementation.
 
 **Model aliases**:
-A Pi extension in this repo that registers selector-visible provider/model aliases and rewrites provider requests to configured upstream provider/model IDs.
+A Pi extension in this repo that registers selector-visible provider/model aliases and routes aliased model calls through a hidden stream API to configured upstream provider/model IDs while preserving the selected alias identity in session history.
 _Avoid_: Model override when referring to selector-visible aliases.
 
 **OpenAI max-output floor**:
@@ -61,7 +61,7 @@ A Pi extension in this repo that raises `max_output_tokens` to the OpenAI Respon
 _Avoid_: Token limiter, max-tokens cap (it is a floor, not a cap).
 
 **Context-clamp output underflow**:
-The condition where Pi's `clampMaxTokensToContext` returns a value below the OpenAI Responses minimum (as low as 1) because the estimated context leaves almost no room in the window, which unfixed produces `max_output_tokens: 1` and a provider 400. A large-context alias (e.g. `openai-1m/gpt-5.5-1m`) avoids it by leaving budget headroom; the OpenAI max-output floor covers the regular provider.
+The condition where Pi's `clampMaxTokensToContext` returns a value below the OpenAI Responses minimum (as low as 1) because the estimated context leaves almost no room in the window, which unfixed produces `max_output_tokens: 1` and a provider 400. A large-context alias (e.g. `openai/gpt-5.5-1m`) avoids it by leaving budget headroom; the OpenAI max-output floor covers regular OpenAI requests near the smaller built-in context window.
 _Avoid_: Context overflow (that is a different, input-side condition).
 
 **Goal checker**:
@@ -93,6 +93,6 @@ _Avoid_: Terminal goal when resumability matters.
 - The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and TTL expiry during active foreground/background work); the /cache report in cache-optimization explains the rest after the fact.
 - A **Background-wakeup TTL break** was historically outside the **TTL keepalive**'s foreground-only coverage; generalized background-work arming now covers launches that follow Pi's `run_in_background`-style convention, while idle-with-no-work remains zero-ping.
 - The **Goal reminder message** replaced the goal controller's system-prompt suffix precisely because system-prompt churn was a recurring **Cache break** cause.
-- **Context-clamp output underflow** is what the **OpenAI max-output floor** neutralizes: the clamp still returns a tiny budget, but the floor raises it to 16 before send so the provider accepts the request. **Model aliases** with large context windows sidestep the underflow entirely, which is why the bug appeared only on the regular OpenAI provider.
+- **Context-clamp output underflow** is what the **OpenAI max-output floor** neutralizes: the clamp still returns a tiny budget, but the floor raises it to 16 before send so the provider accepts the request. **Model aliases** with large context windows sidestep the underflow when selected, while same-provider aliases such as `openai/gpt-5.5-1m` keep normal OpenAI auth/cache-retention behavior.
 
 ## Flagged ambiguities

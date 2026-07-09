@@ -39,8 +39,8 @@ Responses / Azure OpenAI Responses payloads carry the snake_case
 touched, without inspecting the model or provider.
 
 Load-order note: the handler keys on the outgoing payload, so it composes with
-other payload-rewriting extensions (e.g. `model-aliases`) in any order — it only
-adjusts `max_output_tokens` and leaves every other field intact.
+other payload-rewriting extensions in any order — it only adjusts
+`max_output_tokens` and leaves every other field intact.
 
 ## Install
 
