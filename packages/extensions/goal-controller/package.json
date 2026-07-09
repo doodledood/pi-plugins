@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-goal-controller",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "description": "Pi goal controller with model-callable goal start and checker-only completion.",
   "keywords": [
@@ -25,8 +25,8 @@
     "@earendil-works/pi-coding-agent": "*",
     "@types/node": "*",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
-    "typebox": "*"
+    "typebox": "*",
+    "typescript": "^6.0.3"
   },
   "license": "MIT",
   "repository": {

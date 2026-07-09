@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-openai-max-output-floor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Floors OpenAI Responses max_output_tokens to the provider minimum (16), preventing hard 400s when Pi's context-aware clamp goes below it near the context window.",
   "scripts": {
