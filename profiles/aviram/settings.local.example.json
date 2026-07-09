@@ -22,6 +22,7 @@
     "npm:@juicesharp/rpiv-todo",
     "npm:pi-web-access",
     "npm:@amaster.ai/pi-image-gen",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/advisor-consult",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/context-breakdown",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/goal-controller",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/gpt-fast-toggle",

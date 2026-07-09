@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const errors = [];
-const expectedExtensions = ["cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
+const expectedExtensions = ["advisor-consult", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
 const expectedSkills = [];
 const expectedThemes = ["deep-focus-pi"];
 
@@ -54,7 +54,7 @@ if (rootPkg) {
   for (const p of rootPkg.pi?.themes ?? []) mustExist(join(root, p));
 }
 for (const name of expectedExtensions) {
-  const path = ["goal-controller", "mcp-tool-loadout", "model-aliases"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;
+  const path = ["advisor-consult", "goal-controller", "mcp-tool-loadout", "model-aliases"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;
   verifyPackage(join(root, "packages", "extensions", name), "extensions", path);
 }
 if (existsSync(join(root, "packages", "skills"))) errors.push("packages/skills: global skills are intentionally excluded");

@@ -1,0 +1,51 @@
+{
+  "name": "@doodledood/pi-advisor-consult",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi advisor-consult: an invisible, independent second-opinion advisor the model can consult on risky, uncertain, or high-leverage work.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/advisor-consult/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/advisor-consult/*.test.ts",
+    "smoke": "tsx extensions/advisor-consult/smoke.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typebox": "*",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/advisor-consult"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/advisor-consult#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

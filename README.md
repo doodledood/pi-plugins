@@ -11,6 +11,7 @@ This repo has two jobs:
 
 ### Extensions
 
+- `advisor-consult` — invisible independent second-opinion advisor (`advisor_consult`) that runs a high-capability `pi` subprocess for a fresh read on risky, uncertain, or high-leverage work.
 - `cache-optimization` — prompt-cache efficiency toolkit: `/cache` diagnostics with break attribution, Anthropic 4th-breakpoint cache keeper, and a runaway-proof foreground/background TTL keepalive.
 - `goal-controller` — checker-only long-running goal controller.
 - `mcp-tool-loadout` — compact MCP catalog, budgeted active tool schemas, and cache-safe schema loading for dormant tools.

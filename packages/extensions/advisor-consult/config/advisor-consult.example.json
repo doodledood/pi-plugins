@@ -1,0 +1,8 @@
+{
+  "defaultModel": "anthropic/claude-fable-5",
+  "defaultThinking": "xhigh",
+  "defaultTimeoutMs": 600000,
+  "minTimeoutMs": 30000,
+  "maxTimeoutMs": 1800000,
+  "excludedTools": ["goal", "subagent", "get_subagent_result", "steer_subagent"]
+}
