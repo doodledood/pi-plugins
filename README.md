@@ -27,6 +27,7 @@ When a user says “sync my Pi setup from this repo,” do this:
 4. **Copy or merge templates**
    - `setup/settings.example.json` → `~/.pi/agent/settings.json`
    - `setup/configs/*.json` → `~/.pi/agent/`
+   - `setup/agents/*.md` → `~/.pi/agent/agents/`
    - `setup/AGENTS.md` and `setup/APPEND_SYSTEM.md` → merge into `~/.pi/agent/`
    - `setup/auth.example.json` → merge into `~/.pi/agent/auth.json`
    - `setup/mcp.example.json` → `~/.pi/agent/mcp.json`
@@ -69,6 +70,8 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 
 The setup enables `openai/gpt-5.6-sol` as the default model and keeps `openai/gpt-5.6-terra` available as a second OpenAI option. The `model-aliases` extension stays installed for custom selector-visible aliases, but [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) intentionally starts with an empty `aliases` list.
 
+The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna`, and asks for conclusion-first, evidence-backed findings.
+
 The setup installs these package sources:
 
 ```json
@@ -91,7 +94,7 @@ Use this only when the user wants this setup to replace the target Pi config.
 ```bash
 git clone git@github.com:doodledood/pi-plugins.git
 cd pi-plugins
-mkdir -p ~/.pi/agent ~/.pi
+mkdir -p ~/.pi/agent/agents ~/.pi
 
 for file in settings mcp auth; do
   [ -f ~/.pi/agent/$file.json ] && cp ~/.pi/agent/$file.json ~/.pi/agent/$file.json.bak.$(date +%Y%m%d%H%M%S)
@@ -100,6 +103,7 @@ done
 
 cp setup/settings.example.json ~/.pi/agent/settings.json
 cp setup/configs/*.json ~/.pi/agent/
+cp setup/agents/*.md ~/.pi/agent/agents/
 cp setup/auth.example.json ~/.pi/agent/auth.json
 chmod 600 ~/.pi/agent/auth.json
 cp setup/mcp.example.json ~/.pi/agent/mcp.json
@@ -164,7 +168,9 @@ Then merge the portable defaults the user wants from `setup/settings.example.jso
 Copy optional setup files with interactive prompts:
 
 ```bash
+mkdir -p ~/.pi/agent/agents
 cp -i setup/configs/*.json ~/.pi/agent/
+cp -i setup/agents/*.md ~/.pi/agent/agents/
 cp -i setup/auth.example.json ~/.pi/agent/auth.json
 chmod 600 ~/.pi/agent/auth.json
 cp -i setup/mcp.example.json ~/.pi/agent/mcp.json
@@ -183,6 +189,10 @@ setup/APPEND_SYSTEM.md -> ~/.pi/agent/APPEND_SYSTEM.md
 Use [`setup/settings.local.example.json`](setup/settings.local.example.json) only when editing this repo locally. Replace every `/ABSOLUTE/PATH/TO/pi-plugins` placeholder with the clone path. Normal installed setups should use the upstream Git source from `setup/settings.example.json`.
 
 ## Resources included
+
+### Agents
+
+- `Explore` — setup-only global override for `@gotgenes/pi-subagents`; read-only exploration on `openai/gpt-5.6-luna` with evidence-oriented reporting. Copy it from `setup/agents/Explore.md` to `~/.pi/agent/agents/Explore.md`.
 
 ### Extensions
 

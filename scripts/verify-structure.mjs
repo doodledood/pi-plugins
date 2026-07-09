@@ -6,6 +6,7 @@ const errors = [];
 const expectedExtensions = ["advisor-consult", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];
+const expectedSetupAgents = ["Explore"];
 
 function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); }
@@ -60,6 +61,26 @@ for (const name of expectedExtensions) {
 if (existsSync(join(root, "packages", "skills"))) errors.push("packages/skills: global skills are intentionally excluded");
 if (rootPkg?.pi?.skills && rootPkg.pi.skills.length > 0) errors.push("root package.json must not declare pi.skills");
 for (const name of expectedThemes) verifyPackage(join(root, "packages", "themes", name), "themes", `./themes/${name}.json`);
+const setupAgentsDir = join(root, "setup", "agents");
+const actualSetupAgents = existsSync(setupAgentsDir)
+  ? readdirSync(setupAgentsDir).filter((entry) => entry.endsWith(".md")).map((entry) => entry.slice(0, -3)).sort()
+  : [];
+if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents].sort())) {
+  errors.push(`setup/agents inventory mismatch: expected ${expectedSetupAgents.join(", ")}; found ${actualSetupAgents.join(", ")}`);
+}
+const readme = readFileSync(join(root, "README.md"), "utf8");
+const agentsSection = readme.match(/### Agents\n\n([\s\S]*?)(?=\n### |\n## |$)/)?.[1] ?? "";
+for (const name of expectedSetupAgents) {
+  const path = join(setupAgentsDir, `${name}.md`);
+  mustExist(path);
+  if (!agentsSection.includes(`- \`${name}\``)) errors.push(`README.md: Agents section missing ${name}`);
+  if (existsSync(path)) {
+    const content = readFileSync(path, "utf8");
+    if (!content.includes("tools: read, bash, grep, find, ls")) errors.push(`${path}: setup agent must stay read-only`);
+    if (!content.includes("model: openai/gpt-5.6-luna")) errors.push(`${path}: unexpected model override`);
+    if (!content.includes("prompt_mode: replace")) errors.push(`${path}: expected replace prompt mode`);
+  }
+}
 
 for (const path of walkFiles(join(root, "packages"), (p) => p.endsWith(".json"))) readJson(path);
 for (const path of walkFiles(join(root, "setup"), (p) => p.endsWith(".json"))) readJson(path);
@@ -79,4 +100,4 @@ if (errors.length) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
-console.log(`structure ok: ${expectedExtensions.length} extensions, ${expectedSkills.length} project skill, ${expectedThemes.length} theme`);
+console.log(`structure ok: ${expectedExtensions.length} extensions, ${expectedSkills.length} project skill, ${expectedThemes.length} theme, ${expectedSetupAgents.length} setup agent`);
