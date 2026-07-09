@@ -2,6 +2,8 @@
 
 This directory is Aviram's portable Pi setup source of truth. It is a merge/copy template set, not a blind overwrite bundle.
 
+For agent-guided replication onto another computer—including target inspection, the customization questions, merge policy, authentication choices, and completion checks—follow [the root README](../README.md#replicate-this-setup-with-an-agent). The flow below assumes those choices have already been made.
+
 ## Files
 
 - `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, sets `openai/gpt-5.6-sol` as the default model, enables `openai/gpt-5.6-terra` as an alternate OpenAI model, enables `deep-focus-pi`, and configures image generation to use `gpt-image-2`.

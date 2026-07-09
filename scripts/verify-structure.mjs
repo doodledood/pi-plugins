@@ -69,6 +69,27 @@ if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents
   errors.push(`setup/agents inventory mismatch: expected ${expectedSetupAgents.join(", ")}; found ${actualSetupAgents.join(", ")}`);
 }
 const readme = readFileSync(join(root, "README.md"), "utf8");
+const replicationSources = [
+  "setup/README.md",
+  "setup/settings.example.json",
+  "setup/settings.local.example.json",
+  "setup/configs/*.json",
+  "setup/agents/*.md",
+  "setup/AGENTS.md",
+  "setup/APPEND_SYSTEM.md",
+  "setup/auth.example.json",
+  "setup/mcp.example.json",
+  "setup/web-search.example.json",
+  "setup/models.example.json",
+];
+const replicationSection = readme.match(/## Replicate this setup with an agent\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? "";
+if (!replicationSection) errors.push("README.md: missing agent replication runbook");
+if (!replicationSection.includes("Guide the user through full vs. partial sync")) errors.push("README.md: replication runbook must guide full vs. partial customization");
+if (!replicationSection.includes("full portable sync (default)")) errors.push("README.md: replication runbook must default to full portable sync");
+if (!replicationSection.includes("individual items in that category")) errors.push("README.md: partial sync must support individual resource selection");
+for (const source of replicationSources) {
+  if (!replicationSection.includes(source)) errors.push(`README.md: replication runbook missing ${source}`);
+}
 const agentsSection = readme.match(/### Agents\n\n([\s\S]*?)(?=\n### |\n## |$)/)?.[1] ?? "";
 for (const name of expectedSetupAgents) {
   const path = join(setupAgentsDir, `${name}.md`);

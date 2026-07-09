@@ -4,47 +4,120 @@ Aviram's portable Pi setup plus the Pi extensions and theme it installs.
 
 The main use case is agentic setup sync: point an agent at this repo and ask it to make a machine's Pi configuration match this setup. The agent should use `setup/` as the source of truth, preserve local/private values as placeholders, and verify the result.
 
-## Quick start for an agent
+## Replicate this setup with an agent
 
-When a user says “sync my Pi setup from this repo,” do this:
+Give an agent this repo and ask: **“Configure Pi on this computer from this repository. Default to the full portable setup, but first inspect what is already installed and ask me which parts to keep, omit, or customize. Apply the result safely and verify it.”**
 
-1. **Inspect before editing**
-   - Read this README, `setup/README.md`, `setup/settings.example.json`, `setup/configs/*.json`, and `AGENTS.md`.
-   - Inspect the target machine's existing `~/.pi/agent/settings.json` if it exists.
+The agent's completion contract is:
 
-2. **Ask only load-bearing questions**
-   - Fresh setup or merge into existing config?
-   - Use upstream Git packages (`@main`) or local development paths?
-   - Apply Aviram's defaults for model/theme/agent instructions, or preserve current local choices?
-   - Which local integrations should be enabled: MCP, web search, image generation, browser tools?
+- the target machine has the selected subset of Aviram's Pi defaults, packages, extension configs, agent definitions, and operating instructions;
+- unrelated existing settings and credentials remain intact unless the user explicitly chose replacement;
+- private values stay local—nothing secret is copied from another machine, printed in chat, or committed;
+- the agent verifies the effective installation and reports what changed, what was preserved, and what still needs local input.
 
-   Default to merge when existing settings are present. Replace files only after explicit confirmation or after making timestamped backups.
+Unless the user asks for a narrower scope, default to a **full portable sync**: settings defaults, package list, bundled extensions/theme, non-secret extension configs, agent definitions, and portable operating instructions. On a machine with existing config, full sync still means merge-and-preserve—not blind replacement. Authentication, private endpoints, credentials, and machine-specific paths always require local choices. Every part can be excluded or customized during questioning.
 
-3. **Install/update packages**
-   - Normal setup tracks `git:github.com/doodledood/pi-plugins@main` and external npm helpers listed in `setup/settings.example.json`.
-   - Use `setup/settings.local.example.json` only when developing this repo from a local clone.
+### Guided agent workflow
 
-4. **Copy or merge templates**
-   - `setup/settings.example.json` → `~/.pi/agent/settings.json`
-   - `setup/configs/*.json` → `~/.pi/agent/`
-   - `setup/agents/*.md` → `~/.pi/agent/agents/`
-   - `setup/AGENTS.md` and `setup/APPEND_SYSTEM.md` → merge into `~/.pi/agent/`
-   - `setup/auth.example.json` → merge into `~/.pi/agent/auth.json`
-   - `setup/mcp.example.json` → `~/.pi/agent/mcp.json`
-   - `setup/web-search.example.json` → `~/.pi/web-search.json`
-   - `setup/models.example.json` → `~/.pi/agent/models.json` only if a models file is needed
+1. **Inspect before asking or editing**
+   - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/` and `setup/agents/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` and `setup/APPEND_SYSTEM.md` before explaining the agent-behavior option.
+   - Check `node --version`, `npm --version`, `git --version`, and `pi --version`. If Pi is missing, ask before installing it with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
+   - Detect existing target files under `~/.pi/agent/` and `~/.pi/`. Inspect ordinary JSON and instruction files as needed. **Do not use raw file reads, `cat`, `grep`, or similar content-printing commands on `auth.json`, `mcp.json`, or `web-search.json`.** Inspect only structural key paths with a targeted script such as the one below.
+   - Discover whether this is fresh or existing setup; do not ask questions the filesystem already answers.
 
-5. **Do not collect secrets in chat**
-   - Leave placeholders or env references in copied templates.
-   - Tell the user which local files to edit for API keys, MCP endpoints, proxy IDs, OAuth material, and local wrapper paths.
-   - Do not commit filled `auth.json`, `mcp.json`, `web-search.json`, runtime state, sessions, caches, logs, or package caches.
+   ```bash
+   node <<'NODE'
+   const fs = require("node:fs");
+   const os = require("node:os");
+   const path = require("node:path");
+   const files = {
+     "auth.json": path.join(os.homedir(), ".pi/agent/auth.json"),
+     "mcp.json": path.join(os.homedir(), ".pi/agent/mcp.json"),
+     "web-search.json": path.join(os.homedir(), ".pi/web-search.json"),
+   };
+   function keyPaths(value, prefix = "", out = []) {
+     if (Array.isArray(value)) { out.push(`${prefix}[]`); return out; }
+     if (value && typeof value === "object") {
+       for (const key of Object.keys(value)) keyPaths(value[key], prefix ? `${prefix}.${key}` : key, out);
+     } else if (prefix) out.push(prefix);
+     return out;
+   }
+   for (const [label, file] of Object.entries(files)) {
+     if (!fs.existsSync(file)) continue;
+     const shape = keyPaths(JSON.parse(fs.readFileSync(file, "utf8")));
+     console.log(`${label}: ${shape.join(", ")}`);
+   }
+   NODE
+   ```
 
-6. **Verify**
-   - Run `pi list` after installs/updates.
-   - Check copied local files for remaining placeholders and tell the user what must be filled.
-   - In this repo, run `npm run verify:structure` after setup-template or resource changes.
+2. **Guide the user through full vs. partial sync**
+   First summarize what was discovered on the target machine and make a recommendation:
 
-A good final agent summary says: fresh vs merge, package sources installed, files copied/merged, placeholders still requiring local edits, and verification results.
+   - recommend **full portable sync** when Pi is fresh or the user wants this machine to match Aviram's setup closely;
+   - recommend **partial sync** when the target already has intentional model, theme, agent, or integration choices, or the user wants only specific capabilities;
+   - offer **dry run** when the user wants to inspect the proposed delta before anything changes.
+
+   Never ask “full or partial?” without explaining what that choice would change on this machine. Ask the smallest useful set of grouped questions, skipping choices the user already answered. When partial sync is plausible, include the part selection with the scope question when the interface supports it; otherwise ask one focused follow-up:
+
+   - **Change strategy:** merge and preserve existing values (recommended when config exists), replace selected files after timestamped backups, or dry run only.
+   - **Sync scope:** full portable sync (default), or choose parts. In a full sync, ask what to opt out of rather than forcing the user to select every item.
+   - **Existing conflicts:** for each selected part whose target differs, apply Aviram's portable default, preserve the current value, or customize it.
+   - **Agent behavior:** apply `setup/AGENTS.md`, `setup/APPEND_SYSTEM.md`, and the Luna-backed `Explore` override; preserve current behavior; or choose these individually.
+   - **Optional integrations:** configure web search, MCP servers, managed browser tools, image generation, or none. Preserve working local integrations by default.
+
+   When the user chooses parts, explain and offer these independently:
+
+   - **Pi defaults** — default provider/model, thinking level, enabled model cycle, theme, telemetry, and message delivery behavior.
+   - **Packages and resources** — the installed helper packages plus this repo's extensions and `deep-focus-pi` theme.
+   - **Extension tuning** — non-secret settings such as subagent concurrency, rendering mode, GPT fast mode, aliases, and MCP tool-catalog behavior.
+   - **Agent behavior** — global operating instructions, appended system guidance, and the read-only Explore agent on GPT-5.6 Luna.
+   - **Integrations** — web search, MCP/browser connections, and image generation; these may require target-local paths, login, or secrets.
+
+   If the user chooses a category rather than full sync, continue to the individual items in that category and use the descriptions under [Resources included](#resources-included) to explain their purpose. Do not force all extensions or configs in a selected category.
+
+   Default normal installs to Git package sources tracking `@main`. Ask about local development paths only when the user is working from a local clone. Preserve existing authentication; if none is usable, guide the user to provider `/login` or local environment-variable authentication. Never ask for a raw credential in chat.
+
+3. **Translate the answers into an explicit plan**
+   - Name every target file that will be created, merged, replaced, or left alone.
+   - Name every package that will be installed or updated.
+   - Explain any unresolved placeholder or machine-specific path before applying it.
+   - Pause only for destructive replacement, credential/authentication work performed as the user, or another genuinely external side effect. Reversible merges and package preparation may proceed after the choices are clear.
+
+4. **Apply the selected profile safely**
+   - Before changing an existing file, create a timestamped backup beside it.
+   - For `settings.json`, preserve unknown keys, merge nested objects, and union package entries by package identity instead of duplicating them. Apply model, thinking, theme, telemetry, and delivery defaults only when selected.
+   - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
+   - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
+   - Do not overwrite working `auth.json`, `mcp.json`, or `web-search.json`. Start from an example only when the integration is selected and no usable local file exists.
+
+| Portable source | Target | Apply when |
+| --- | --- | --- |
+| `setup/settings.example.json` | `~/.pi/agent/settings.json` | Normal installed setup; merge selected defaults when a file exists |
+| `setup/settings.local.example.json` | `~/.pi/agent/settings.json` | Local development only, after replacing the absolute-path placeholders |
+| `setup/configs/*.json` | `~/.pi/agent/` | The matching extension/config is selected |
+| `setup/agents/*.md` | `~/.pi/agent/agents/` | The matching agent override is selected |
+| `setup/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Aviram's operating posture is selected |
+| `setup/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | Aviram's appended system guidance is selected |
+| `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
+| `setup/mcp.example.json` | `~/.pi/agent/mcp.json` | MCP/browser integration is selected; fill placeholders locally |
+| `setup/web-search.example.json` | `~/.pi/web-search.json` | Web search is selected; fill the provider secret locally |
+| `setup/models.example.json` | `~/.pi/agent/models.json` | A custom provider override is actually needed; the current template is intentionally empty |
+
+5. **Install and reconcile packages**
+   - Use the package list in `setup/settings.example.json` as the normal source of truth.
+   - Install missing packages with `pi install <source>` and reconcile installed Git packages with `pi update --extensions` when appropriate.
+   - Package installation does **not** copy the files under `setup/`; perform both the package and file-merge steps.
+
+6. **Verify the effective setup**
+   - Parse every JSON file changed without printing credential-bearing contents.
+   - Run `pi list` and compare package identities with the selected package list.
+   - Run `pi --list-models`; for the full profile confirm `openai/gpt-5.6-sol` and `openai/gpt-5.6-luna` are available.
+   - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` without displaying unrelated local content.
+   - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
+   - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
+   - When editing this repository itself, also run `npm run verify:structure` and the secret-safety scans from the `sync-pi-setup` skill.
+
+The final report must state: selected strategy/profile/integrations, packages installed or preserved, files created/merged/replaced plus backup paths, defaults applied or preserved, unresolved local placeholders, and verification results.
 
 ## Setup defaults
 
@@ -87,39 +160,37 @@ The setup installs these package sources:
 ]
 ```
 
-## Fresh setup commands
+## Reference recipe: fresh full profile
 
-Use this only when the user wants this setup to replace the target Pi config.
+Use this recipe only after the user selects the full profile and inspection confirms there is no Pi setup to preserve. HTTPS cloning is the portable default; use SSH only when the target already has GitHub SSH access.
 
 ```bash
-git clone git@github.com:doodledood/pi-plugins.git
+set -euo pipefail
+command -v pi >/dev/null || { echo "Pi is not installed; return to the prerequisite step." >&2; exit 1; }
+if { [ -d "$HOME/.pi/agent" ] && [ -n "$(find "$HOME/.pi/agent" -mindepth 1 -maxdepth 2 -type f -print -quit 2>/dev/null)" ]; } || [ -e "$HOME/.pi/web-search.json" ]; then
+  echo "Existing Pi state detected; stop and use the merge recipe." >&2
+  exit 1
+fi
+
+git clone https://github.com/doodledood/pi-plugins.git
 cd pi-plugins
 mkdir -p ~/.pi/agent/agents ~/.pi
-
-for file in settings mcp auth; do
-  [ -f ~/.pi/agent/$file.json ] && cp ~/.pi/agent/$file.json ~/.pi/agent/$file.json.bak.$(date +%Y%m%d%H%M%S)
-done
-[ -f ~/.pi/web-search.json ] && cp ~/.pi/web-search.json ~/.pi/web-search.json.bak.$(date +%Y%m%d%H%M%S)
 
 cp setup/settings.example.json ~/.pi/agent/settings.json
 cp setup/configs/*.json ~/.pi/agent/
 cp setup/agents/*.md ~/.pi/agent/agents/
-cp setup/auth.example.json ~/.pi/agent/auth.json
-chmod 600 ~/.pi/agent/auth.json
-cp setup/mcp.example.json ~/.pi/agent/mcp.json
-cp setup/web-search.example.json ~/.pi/web-search.json
+cp setup/AGENTS.md ~/.pi/agent/AGENTS.md
+cp setup/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
 ```
 
-Then have the user fill local placeholders and credentials locally. Do not ask them to paste secrets into chat.
+Choose authentication rather than assuming it:
 
-```bash
-$EDITOR ~/.pi/agent/mcp.json
-$EDITOR ~/.pi/web-search.json
-```
+- For provider subscription auth, start Pi and use `/login`; do not create `auth.json` from the API-key example.
+- For environment-based OpenAI auth, copy `setup/auth.example.json` to `~/.pi/agent/auth.json`, set mode `0600`, and have the user provide `OPENAI_API_KEY` in their local environment.
+- Copy `mcp.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
+- Do not copy `models.example.json` for the normal profile; it is intentionally empty.
 
-`setup/auth.example.json` expects `OPENAI_API_KEY` to be provided in the local environment; keep the real key out of the repo and chat transcript.
-
-Install/reconcile packages:
+Install the selected packages:
 
 ```bash
 for pkg in \
@@ -140,55 +211,48 @@ pi list
 
 Later, `pi update --extensions` reconciles installed Git checkouts to their configured refs.
 
-## Merge into an existing setup
+## Reference recipe: merge into an existing setup
 
-When `~/.pi/agent/settings.json` already exists and the user wants to keep it, install packages first:
+Merge is the default when target configuration exists. Do not run the fresh-profile copy block over an existing machine.
 
-```bash
-pi install npm:pi-mcp-adapter
-pi install npm:@gotgenes/pi-subagents
-pi install git:github.com/doodledood/manifest-dev@main
-pi install git:github.com/doodledood/pi-plugins@main
-pi install npm:@juicesharp/rpiv-ask-user-question
-pi install npm:@juicesharp/rpiv-todo
-pi install npm:pi-web-access
-pi install npm:@amaster.ai/pi-image-gen
-```
+1. Back up each file that the selected plan will touch, using a shared timestamp. At minimum, back up `settings.json` before any `pi install` command because package installation updates that file.
+2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths.
+3. Install only missing selected packages. `pi install` updates the package entry while preserving unrelated settings.
+4. Compare each selected `setup/configs/*.json` file with its target and merge extension settings intentionally. When MCP server names differ, update the matching `prior` keys in `mcp-tool-loadout.json`.
+5. Copy the Explore definition only if the user selected the Luna-backed override. Merge `AGENTS.md` and `APPEND_SYSTEM.md` by concept rather than blindly appending duplicate rules.
+6. Preserve existing auth and private integration files. If a selected integration is absent, create its local file from the example and leave unresolved private values for the user to fill locally.
 
-Then merge the portable defaults the user wants from `setup/settings.example.json`, especially:
+The full-profile defaults available for an explicit merge are:
 
 - `defaultProvider: "openai"`
 - `defaultModel: "gpt-5.6-sol"`
 - `defaultThinkingLevel: "xhigh"`
-- `enabledModels`
-- `followUpMode` / `steeringMode`
+- the `enabledModels` list from `setup/settings.example.json`
+- `enableInstallTelemetry: false`
+- `followUpMode: "all"` and `steeringMode: "all"`
 - `theme: "deep-focus-pi"`
 - `pi-image-gen.defaultModel: "gpt-image-2"`
-
-Copy optional setup files with interactive prompts:
-
-```bash
-mkdir -p ~/.pi/agent/agents
-cp -i setup/configs/*.json ~/.pi/agent/
-cp -i setup/agents/*.md ~/.pi/agent/agents/
-cp -i setup/auth.example.json ~/.pi/agent/auth.json
-chmod 600 ~/.pi/agent/auth.json
-cp -i setup/mcp.example.json ~/.pi/agent/mcp.json
-cp -i setup/web-search.example.json ~/.pi/web-search.json
-```
-
-Merge instruction files only after the user confirms they want Aviram's operating posture:
-
-```text
-setup/AGENTS.md        -> ~/.pi/agent/AGENTS.md
-setup/APPEND_SYSTEM.md -> ~/.pi/agent/APPEND_SYSTEM.md
-```
+- the non-secret extension configs under `setup/configs/`
+- the agent behavior files selected during questioning
 
 ## Local development setup
 
 Use [`setup/settings.local.example.json`](setup/settings.local.example.json) only when editing this repo locally. Replace every `/ABSOLUTE/PATH/TO/pi-plugins` placeholder with the clone path. Normal installed setups should use the upstream Git source from `setup/settings.example.json`.
 
 ## Resources included
+
+Use these descriptions when guiding a partial sync. The user may select individual packages/resources; dependencies required by a selected feature should be included automatically and explained.
+
+### External helper packages
+
+- `pi-mcp-adapter` — connects configured MCP servers to Pi.
+- `@gotgenes/pi-subagents` — foreground/background specialized agents with custom agent definitions.
+- `doodledood/manifest-dev` — figure-out, planning, execution, review, and PR workflow skills.
+- `@juicesharp/rpiv-ask-user-question` — structured question UI for guided decisions.
+- `@juicesharp/rpiv-todo` — persistent task-list tooling for multi-step work.
+- `pi-web-access` — web search, content fetching, and source-backed library research.
+- `@amaster.ai/pi-image-gen` — image generation and image editing.
+- `doodledood/pi-plugins` — this repo's extension and theme bundle listed below.
 
 ### Agents
 
