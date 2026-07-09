@@ -52,8 +52,14 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 ```json
 {
   "defaultProvider": "openai",
-  "defaultModel": "gpt-5.5-1m",
+  "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "xhigh",
+  "enabledModels": [
+    "openai/gpt-5.6-sol:xhigh",
+    "openai/gpt-5.6-terra:xhigh",
+    "anthropic/claude-opus-4-8:xhigh",
+    "anthropic/claude-fable-5:xhigh"
+  ],
   "theme": "deep-focus-pi",
   "pi-image-gen": {
     "defaultModel": "gpt-image-2"
@@ -61,7 +67,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-`openai/gpt-5.5-1m` is provided by the `model-aliases` extension and configured in [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json). The alias routes to `openai/gpt-5.5` with a 1,050,000-token context window. Keep `openai/gpt-5.5` and `openai/gpt-5.5-1m` separate: the normal model remains unchanged, and the 1M-context variant is explicit.
+The setup enables `openai/gpt-5.6-sol` as the default model and keeps `openai/gpt-5.6-terra` available as a second OpenAI option. The `model-aliases` extension stays installed for custom selector-visible aliases, but [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) intentionally starts with an empty `aliases` list.
 
 The setup installs these package sources:
 
@@ -148,7 +154,7 @@ pi install npm:@amaster.ai/pi-image-gen
 Then merge the portable defaults the user wants from `setup/settings.example.json`, especially:
 
 - `defaultProvider: "openai"`
-- `defaultModel: "gpt-5.5-1m"`
+- `defaultModel: "gpt-5.6-sol"`
 - `defaultThinkingLevel: "xhigh"`
 - `enabledModels`
 - `followUpMode` / `steeringMode`
@@ -188,7 +194,7 @@ Use [`setup/settings.local.example.json`](setup/settings.local.example.json) onl
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible model aliases such as `openai/gpt-5.5-1m`.
+- `model-aliases` — selector-visible custom model aliases; the portable setup currently leaves aliases empty.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `simple-statusline` — compact Pi footer/statusline.
