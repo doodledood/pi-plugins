@@ -310,10 +310,10 @@ test("extension registers one model-facing goal tool and user-only lifecycle com
   assert.deepEqual(host.tools.map((tool) => tool.name), ["goal"]);
   assert.deepEqual([...host.commandHandlers.keys()].sort(), ["goal", "goal_clear", "goal_edit", "goal_pause", "goal_resume"]);
   assert.equal(host.commandHandler !== undefined, true);
-  assert.equal(host.tools[0]?.description.includes("completed goals"), true);
-  assert.equal(host.tools[0]?.description.includes("stopped paused/blocked/budget-limited goals"), true);
-  assert.equal(host.tools[0]?.description.includes("never updates, edits, clears, pauses, resumes, or completes a live goal"), true);
-  assert.equal(host.tools[0]?.promptGuidelines?.some((guideline) => guideline.includes("completed goals are not live")), true);
+  assert.equal(host.tools[0]?.description.includes("always creates a fresh goal"), true);
+  assert.equal(host.tools[0]?.description.includes("prior non-live goal remains history"), true);
+  assert.equal(host.tools[0]?.description.includes("never updates, edits, clears, pauses, resumes, or completes any existing goal"), true);
+  assert.equal(host.tools[0]?.promptGuidelines?.some((guideline) => guideline.includes("Completed, paused, blocked, and budget-limited goals are not live")), true);
 });
 
 function validCheckerBootstrapRegistration(extensionPath = "/tmp/packages/extensions/model-aliases/extensions/model-aliases/checker-bootstrap.ts") {
