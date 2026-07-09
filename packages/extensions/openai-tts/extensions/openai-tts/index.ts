@@ -75,12 +75,14 @@ export default function openaiTtsExtension(pi: PiApi): void {
   pi.registerTool({
     name: "openai_tts_speak",
     label: "OpenAI TTS",
-    description: "Convert text to speech using OpenAI's Speech API and play the returned audio on the local machine running Pi.",
-    promptSnippet: "Speak short user-facing text aloud via OpenAI text-to-speech on the local machine.",
+    description: "Explicit-user-authorized text-to-speech: speak the supplied text aloud via OpenAI only when the user specifically asks for this audio output.",
+    promptSnippet: "Explicit-user-authorized OpenAI text-to-speech on the local machine; never self-initiate audio.",
     promptGuidelines: [
-      "Use openai_tts_speak only when the user asks for spoken audio, asks to read text aloud, or asks for an audible notification.",
-      "Keep openai_tts_speak text concise; do not speak code blocks, logs, diffs, secrets, or long technical output unless the user explicitly asks for that content aloud.",
-      "If openai_tts_speak fails, continue in text and briefly report the failure instead of repeatedly retrying.",
+      "Use openai_tts_speak only when the latest user instruction explicitly asks for this specific spoken audio, read-aloud, or audible-notification output.",
+      "Do not use openai_tts_speak for routine answers, progress updates, completion notices, background-agent status, or proactive alerts unless the user explicitly authorized that exact kind of speech in the current task.",
+      "Do not infer consent to speak from an active microphone, meeting context, prior successful tests, or the mere availability of the tool; silence is the safe default.",
+      "Keep openai_tts_speak text limited to the user-authorized content; do not speak code blocks, logs, diffs, secrets, or long technical output unless the user explicitly asks for that content aloud.",
+      "If openai_tts_speak fails, continue in text and briefly report the failure instead of repeatedly retrying or switching to another audio path.",
     ],
     parameters: TtsParamsSchema,
     async execute(_toolCallId: string, params: TtsParams, signal?: AbortSignal, onUpdate?: (partial: Record<string, unknown>) => void) {

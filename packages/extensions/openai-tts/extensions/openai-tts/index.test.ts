@@ -5,6 +5,8 @@ import openaiTtsExtension from "./index.ts";
 
 type RegisteredTool = {
   name: string;
+  description?: string;
+  promptSnippet?: string;
   parameters: unknown;
   promptGuidelines?: string[];
   execute: (toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal, onUpdate?: (update: unknown) => void, ctx?: unknown) => Promise<unknown>;
@@ -47,7 +49,10 @@ test("registers openai_tts_speak tool and /openai-tts command", () => {
   assert.deepEqual(tools.map((tool) => tool.name), ["openai_tts_speak"]);
   assert.deepEqual(commands.map((command) => command.name), ["openai-tts"]);
   assert.equal((tools[0]?.parameters as { type?: string }).type, "object");
-  assert.ok(tools[0]?.promptGuidelines?.some((line) => line.includes("openai_tts_speak")));
+  assert.match(tools[0]?.description ?? "", /explicit/i);
+  assert.match(String((tools[0] as { promptSnippet?: string }).promptSnippet), /never self-initiate audio/i);
+  assert.ok(tools[0]?.promptGuidelines?.some((line) => /latest user instruction explicitly asks/.test(line)));
+  assert.ok(tools[0]?.promptGuidelines?.some((line) => /routine answers, progress updates, completion notices, background-agent status/.test(line)));
 });
 
 test("sends OpenAI speech request, plays temp audio, and cleans it up", async () => {

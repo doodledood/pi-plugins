@@ -88,6 +88,7 @@ Install `ffmpeg` if your platform lacks a native player for the chosen audio for
 
 ## Safety notes
 
-- The tool guidance tells the model to use `openai_tts_speak` only when the user asks for spoken audio, read-aloud behavior, or an audible notification.
+- The tool guidance tells the model to use `openai_tts_speak` only when the latest user instruction explicitly asks for that specific spoken audio, read-aloud behavior, or audible notification.
+- The model is told not to self-initiate audio for routine answers, progress updates, completion notices, background-agent status, proactive alerts, meetings, or the mere availability of the tool.
 - The guidance asks the model not to speak code blocks, logs, diffs, secrets, or long technical output unless explicitly requested.
-- Failures are surfaced as actionable errors; the model should continue in text instead of repeatedly retrying.
+- Failures are surfaced as actionable errors; the model should continue in text instead of repeatedly retrying or switching to another audio path.
