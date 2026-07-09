@@ -42,6 +42,13 @@ export class PiSubprocessAdvisorRunner implements AdvisorRunner {
 
     const parsed = parseAdvisorOutput(result.stdout);
     if (!parsed.advice) {
+      // Pi exits 0 even when the model call itself errors (e.g. an unknown
+      // model id 404s): the failure rides on an assistant message with
+      // stopReason "error" and an errorMessage, not on the exit code. Surface
+      // that as the actual cause instead of a misleading "no advice" message.
+      if (parsed.errorMessage) {
+        return { ok: false, elapsedMs, model: parsed.model, error: formatModelError(parsed, input, elapsedMs, result) };
+      }
       return {
         ok: false,
         elapsedMs,
@@ -108,6 +115,30 @@ function configSummary(input: AdvisorRunInput): string {
   return `Advisor config: model=${input.model ?? "(inherited)"}, thinking=${input.thinking}, timeoutMs=${input.timeoutMs}.`;
 }
 
+// Matches provider "model not found / unknown model" failures across providers.
+const MODEL_NOT_FOUND_PATTERN = /not[_\s-]?found|unknown model|no such model|does not exist|\b404\b|invalid.*model|model.*(unavailable|not (found|available|supported))/i;
+const MODEL_LIST_HINT =
+  "To see the models available in this environment, run `pi --list-models` (or `/model` / Ctrl+P interactively). Then set advisorConsult.defaultModel or pass a valid `model` argument.";
+
+/**
+ * Format a clear, actionable error when the advisor subprocess ran but its
+ * model call errored (Pi reports this via stopReason "error" on exit code 0).
+ * For model-not-found failures, point the parent at how to list valid models.
+ */
+function formatModelError(parsed: ParsedAdvisorOutput, input: AdvisorRunInput, elapsedMs: number, result: ExecResult): string {
+  const detail = redactSecrets(parsed.errorMessage ?? "").trim().slice(0, 600) || "unknown model/provider error";
+  const lines = [
+    `Advisor produced no advice: the model call errored after ${formatDuration(elapsedMs)}. Treat this as "no advice available", not as a signal either way.`,
+    `Error: ${detail}`,
+    configSummary(input),
+    MODEL_NOT_FOUND_PATTERN.test(detail)
+      ? MODEL_LIST_HINT
+      : "This usually means the model is unavailable or misconfigured (no provider access, a rate limit, or a request the model rejected). Check the configured advisor model, provider auth, and the request size.",
+    diagnostics(result),
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
 function diagnostics(result: ExecResult): string | undefined {
   const parts = [outputTail("stderr", result.stderr), outputTail("stdout tail", result.stdout)].filter(
     (part): part is string => part !== undefined,
@@ -126,29 +157,43 @@ function outputTail(label: string, value: string): string | undefined {
 export interface ParsedAdvisorOutput {
   advice?: string;
   model?: string;
+  /** Provider/model error text from an assistant message with stopReason "error". */
+  errorMessage?: string;
 }
 
 /**
- * Extract the advisor's final advice and the model it ran on from Pi JSON-mode
- * output. Advice is the text of the last assistant message that carries any,
- * so a trailing tool-only turn does not blank out the result.
+ * Extract the advisor's final advice, the model it ran on, and any provider
+ * error from Pi JSON-mode output. Advice is the text of the last assistant
+ * message that carries any, so a trailing tool-only turn does not blank out the
+ * result. `errorMessage` captures a failed model call (Pi surfaces these on an
+ * assistant message with stopReason "error", still on exit code 0).
  */
 export function parseAdvisorOutput(stdout: string): ParsedAdvisorOutput {
   let advice: string | undefined;
-  let model: string | undefined;
+  let adviceModel: string | undefined;
+  let lastModel: string | undefined;
+  let errorMessage: string | undefined;
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const event = safeJsonParse(line);
     if (!isRecord(event) || event.type !== "message_end") continue;
     const message = event.message;
     if (!isRecord(message) || message.role !== "assistant") continue;
+    if (typeof message.model === "string" && message.model.trim()) lastModel = message.model.trim();
+    const errored = message.stopReason === "error";
     const text = assistantText(message.content);
-    if (text) {
+    // Text on an errored message is partial/truncated (Pi keeps the accumulated
+    // content and tags the message stopReason "error"), so it must NOT be
+    // returned as complete advice — route it to the error path instead.
+    if (text && !errored) {
       advice = text;
-      if (typeof message.model === "string" && message.model.trim()) model = message.model.trim();
+      adviceModel = lastModel;
+    }
+    if (errored && typeof message.errorMessage === "string" && message.errorMessage.trim()) {
+      errorMessage = message.errorMessage.trim();
     }
   }
-  return { advice, model };
+  return { advice, model: adviceModel ?? lastModel, errorMessage };
 }
 
 function assistantText(content: unknown): string | undefined {

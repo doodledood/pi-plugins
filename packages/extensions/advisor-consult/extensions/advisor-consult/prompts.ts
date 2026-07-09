@@ -63,7 +63,8 @@ export const TIMEOUT_FIELD_DESCRIPTION =
 /** Parent-facing tool description — the primary driver of when/how to consult. */
 export const ADVISOR_TOOL_DESCRIPTION = `Consult an independent, high-capability advisor for a second read on the current work. It runs as its own agent — inspecting files, running read-only commands, and searching as needed — and returns advice for you to weigh, not actions taken on your behalf. It is invisible to the user, never asks the user anything, and makes no durable or external changes.
 
-Reach for it when the work is genuinely risky, uncertain, or high-leverage and a fresh, independent perspective would change how much you trust your own:
+Reach for it when the work is genuinely risky, uncertain, or high-leverage — or when you're stuck — and a fresh, independent perspective would change how much you trust your own:
+- you're stuck: repeated attempts aren't converging, you're looping without progress, or a blocker resists your usual fixes, and a fresh angle could get you unblocked;
 - validating a plan or a conclusion before you commit to it;
 - an adversarial review of your own reasoning, design, or diagnosis;
 - deriving a hard result independently to check yours against;
@@ -80,7 +81,7 @@ export const ADVISOR_PROMPT_SNIPPET = "Consult an independent advisor for a seco
 
 /** Guideline lines injected into the parent's system prompt for this tool. */
 export const ADVISOR_TOOL_GUIDELINES = [
-  "Consult advisor_consult for a second, independent read when work is risky, uncertain, or high-leverage — validating a plan or conclusion, adversarially reviewing your own reasoning, hard diagnosis, security or edge cases, or a final check before an expensive or irreversible step. Skip it for routine low-risk work.",
+  "Consult advisor_consult for a second, independent read when work is risky, uncertain, or high-leverage, or when you're stuck — breaking a roadblock you keep failing to fix or a loop that isn't converging, validating a plan or conclusion, adversarially reviewing your own reasoning, hard diagnosis, security or edge cases, or a final check before an expensive or irreversible step. Skip it for routine low-risk work.",
   "Write the query as a context-rich neutral brief — objective, key facts, your current read/plan, the tensions and alternatives, and the decision — separating what you observed from your interpretation and inviting challenge; not a one-line question.",
   "Treat the advisor's answer as advice to weigh, not orders: it is invisible to the user, won't ask questions, and won't make durable changes — act on its reasoning yourself.",
 ];

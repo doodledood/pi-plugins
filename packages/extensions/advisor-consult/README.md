@@ -6,7 +6,7 @@ An invisible, independent **second-opinion advisor** the model can consult on ri
 
 ## Why this exists
 
-On hard calls — validating a plan, adversarially reviewing your own reasoning, a subtle diagnosis, a final gut-check before an expensive or irreversible step — a genuinely independent read is worth more than the model second-guessing itself in the same context. `advisor_consult` gives the parent that read on demand:
+On hard calls — validating a plan, adversarially reviewing your own reasoning, a subtle diagnosis, getting unstuck when you're looping on a blocker you can't fix, a final gut-check before an expensive or irreversible step — a genuinely independent read is worth more than the model second-guessing itself in the same context. `advisor_consult` gives the parent that read on demand:
 
 - **Independent** — its own process, its own (by default higher-capability) model, no shared context to anchor on. It treats the parent's brief as a hypothesis to test, not a conclusion to confirm.
 - **Broad but bounded** — it keeps the parent's normal tool surface (files, search, MCP, scratch space) so it can gather evidence, but a small hard denylist keeps the invisible advisor from recursing, questioning the user, or orchestrating other agents.
@@ -122,7 +122,7 @@ Each consult spawns `pi --mode json -p --no-session` with:
 - `-e <child-bootstrap>` to broaden the active non-MCP tool set after the child's extensions load;
 - `--model` / `--thinking` resolved from config and per-call overrides.
 
-The runner parses JSON-mode output for the advisor's final message, redacts secrets from any diagnostics, and returns a clear result for success, empty output, nonzero exit, or timeout.
+The runner parses JSON-mode output for the advisor's final message, redacts secrets from any diagnostics, and returns a clear result for success, empty output, nonzero exit, timeout, or a model/provider error. Pi reports a failed model call (e.g. an unknown model id) on an assistant message with `stopReason: "error"` while still exiting 0, so the runner surfaces that error explicitly; for model-not-found it points you at `pi --list-models` to see what's available in this environment.
 
 ## Tool selection note
 

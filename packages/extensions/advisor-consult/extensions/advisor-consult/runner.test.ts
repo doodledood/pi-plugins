@@ -24,6 +24,14 @@ function messageEnd(text: string | null, model = "anthropic/claude-fable-5"): st
   return JSON.stringify({ type: "message_end", message: { role: "assistant", model, content } });
 }
 
+function messageEndError(errorMessage: string, model = "anthropic/does-not-exist", partialText?: string): string {
+  const content = partialText ? [{ type: "text", text: partialText }] : [];
+  return JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", model, content, stopReason: "error", errorMessage },
+  });
+}
+
 function fakeExec(result: ExecResult, capture?: { args?: string[] }): { exec: (c: string, a: string[]) => Promise<ExecResult> } {
   return {
     exec: async (_cmd: string, args: string[]) => {
@@ -127,4 +135,61 @@ test("run reports empty output as no advice", async () => {
   const result = await runner.run(baseInput());
   assert.equal(result.ok, false);
   assert.match(result.error ?? "", /no advice text/i);
+  // A plain silent turn is NOT a model error, so it must not emit the model hint.
+  assert.doesNotMatch(result.error ?? "", /pi --list-models/);
+});
+
+test("parseAdvisorOutput captures a model/provider error and the model id", () => {
+  const stdout = messageEndError('404 {"type":"error","error":{"type":"not_found_error","message":"model: nope"}}', "anthropic/nope");
+  const parsed = parseAdvisorOutput(stdout);
+  assert.equal(parsed.advice, undefined);
+  assert.equal(parsed.model, "anthropic/nope");
+  assert.match(parsed.errorMessage ?? "", /not_found_error/);
+});
+
+test("run surfaces a model-not-found error with a list-models hint (Pi exits 0)", async () => {
+  const stdout = messageEndError("404 not_found_error model: definitely-not-real", "anthropic/definitely-not-real");
+  const runner = new PiSubprocessAdvisorRunner(
+    fakeExec({ code: 0, killed: false, stderr: 'Warning: Model "definitely-not-real" not found', stdout }),
+  );
+  const result = await runner.run(baseInput({ model: "anthropic/definitely-not-real" }));
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /model call errored/i);
+  assert.match(result.error ?? "", /not_found/i);
+  assert.match(result.error ?? "", /pi --list-models/);
+  assert.equal(result.model, "anthropic/definitely-not-real");
+});
+
+test("run does NOT return truncated advice when the advice-bearing message errored", async () => {
+  // Pi keeps partial streamed text on a message it then tags stopReason "error".
+  const stdout = messageEndError(
+    "429 rate_limit_error: stream interrupted",
+    "anthropic/claude-fable-5",
+    "My read: ship it behind a flag because the migrat",
+  );
+  const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
+  const result = await runner.run(baseInput());
+  assert.equal(result.ok, false); // must not surface truncated text as complete advice
+  assert.equal(result.advice, undefined);
+  assert.match(result.error ?? "", /model call errored/i);
+  assert.match(result.error ?? "", /429|rate.limit/i);
+});
+
+test("run gives generic guidance (no list-models hint) for a non-not-found model error", async () => {
+  const stdout = messageEndError("429 rate_limit_error: too many requests", "anthropic/claude-fable-5");
+  const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
+  const result = await runner.run(baseInput());
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /model call errored/i);
+  assert.doesNotMatch(result.error ?? "", /pi --list-models/);
+  assert.match(result.error ?? "", /unavailable or misconfigured/i);
+});
+
+test("run redacts secrets echoed in a model error", async () => {
+  const stdout = messageEndError("auth failed { apiKey: 'sk-supersecret999value' }", "anthropic/claude-fable-5");
+  const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
+  const result = await runner.run(baseInput());
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /\[REDACTED\]/);
+  assert.doesNotMatch(result.error ?? "", /supersecret999/);
 });

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-advisor-consult",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Pi advisor-consult: an invisible, independent second-opinion advisor the model can consult on risky, uncertain, or high-leverage work.",
   "keywords": [
