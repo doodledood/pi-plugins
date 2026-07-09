@@ -20,6 +20,7 @@ This repo has two jobs:
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `model-aliases` — configurable selector-visible model aliases that map back to existing upstream model IDs.
 - `openai-max-output-floor` — floors OpenAI Responses `max_output_tokens` to the provider minimum (16), preventing hard 400s when Pi's context-aware clamp drops below it near the context window.
+- `openai-tts` — OpenAI Speech API text-to-speech tool (`openai_tts_speak`) and `/openai-tts` command that play generated audio locally.
 - `message-stash` — single-slot input draft stash.
 - `simple-statusline` — ambient custom Pi footer/statusline with context pressure, compact-at-boundary hint, session cache rate, and cache-break flag (full `/cache` diagnostics live in `cache-optimization`).
 - `skill-argument-hints` — phantom argument hints for skill commands.

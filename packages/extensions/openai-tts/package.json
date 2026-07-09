@@ -1,0 +1,46 @@
+{
+  "name": "@doodledood/pi-openai-tts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenAI Speech API text-to-speech tool for Pi that plays audio locally.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/openai-tts/*.test.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "openai",
+    "tts",
+    "text-to-speech",
+    "speech-synthesis",
+    "audio"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/openai-tts/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/openai-tts"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/openai-tts#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

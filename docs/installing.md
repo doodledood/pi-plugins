@@ -45,6 +45,22 @@ Theme example:
 }
 ```
 
+For example, to load only the OpenAI TTS tool:
+
+```json
+{
+  "packages": [
+    {
+      "source": "git:github.com/doodledood/pi-plugins@main",
+      "extensions": ["packages/extensions/openai-tts/extensions/openai-tts/index.ts"],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    }
+  ]
+}
+```
+
 Do not rely on undocumented Git subdirectory install syntax.
 
 The examples track the `@main` branch so `pi update --extensions` always reconciles to the latest version. Pin a release tag (`@vX.Y.Z`, auto-created on every version bump) only when you intentionally want a frozen snapshot.
