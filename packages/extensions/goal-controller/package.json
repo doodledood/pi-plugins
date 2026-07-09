@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-goal-controller",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "description": "Pi goal controller with model-callable goal start and checker-only completion.",
   "keywords": [

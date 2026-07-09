@@ -9,4 +9,4 @@ This repo intentionally excludes live local state:
 - live MCP config files containing credential-bearing URLs
 - generated `node_modules` directories
 
-Profile files under `profiles/` are examples/templates. Copy and edit them locally; do not commit filled-in secrets.
+Files under `setup/` are examples/templates. Copy and edit them locally; do not commit filled-in secrets.

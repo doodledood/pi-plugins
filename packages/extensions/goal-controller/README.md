@@ -28,7 +28,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-See `config/` for a safe example config. Aviram's profile intentionally ships no goal-controller override right now; the package defaults are the current setup defaults unless you create `~/.pi/agent/goal-controller.config.json` locally.
+See `config/` for a safe example config. Aviram's setup intentionally ships no goal-controller override right now; the package defaults are the current setup defaults unless you create `~/.pi/agent/goal-controller.config.json` locally.
 
 ## Original extension notes
 

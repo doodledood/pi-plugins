@@ -40,4 +40,4 @@ For Anthropic models, it can call Anthropic's `count_tokens` API for exact token
 - `ANTHROPIC_API_KEY` — required for exact Anthropic token counts.
 - `ANTHROPIC_BASE_URL` — optional; defaults to `https://api.anthropic.com`.
 
-When the active model is not Anthropic, or when `ANTHROPIC_API_KEY` is absent, the extension falls back to an estimated breakdown and labels it as estimated. Do not commit API keys in repo/profile files.
+When the active model is not Anthropic, or when `ANTHROPIC_API_KEY` is absent, the extension falls back to an estimated breakdown and labels it as estimated. Do not commit API keys in repo/setup files.

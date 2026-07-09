@@ -117,7 +117,7 @@ extension* observed it in `before_provider_request`; it never forks or rebuilds
 the Pi conversation. If another payload-rewriting extension is loaded after
 cache-optimization, the actual request may differ from the replayed one; load
 cache-optimization last among payload-rewriting extensions (this repo's root
-manifest and profile templates already order it last).
+manifest and setup templates already order it last).
 
 Worst case ever: one hung tool costs ~half of one rewrite in pings and then the
 rewrite anyway — bounded at ~1.5× one break, once. **For Anthropic**,

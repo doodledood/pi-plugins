@@ -10,7 +10,7 @@ coverage/
 pi-debug.log
 pi-crash.log
 
-# Secrets and local overlays
+# Secrets and local machine files
 .env
 .env.*
 *.local.json
@@ -45,19 +45,25 @@ mcp-npx-cache.json
 **/Cookies
 **/Cookies-journal
 
-# Never commit live profile state; commit templates/examples only.
-profiles/**/.pi/
-profiles/**/git/
-profiles/**/npm/
-profiles/**/mcp.json
-profiles/**/mcp-onboarding.json
-profiles/**/web-search.json
-profiles/**/mcp.json.pre-*.bak
-profiles/**/auth.json
-profiles/**/settings.json
-profiles/**/models.json
-!profiles/**/*.example.json
-!profiles/**/*.template.json
+# Never commit live setup state; commit templates/examples only.
+setup/**/.pi/
+setup/**/git/
+setup/**/npm/
+setup/**/mcp.json
+setup/**/mcp-onboarding.json
+setup/**/web-search.json
+setup/**/mcp.json.pre-*.bak
+setup/**/auth.json
+setup/**/settings.json
+setup/**/models.json
+!setup/**/*.example.json
+!setup/**/*.template.json
+
+# Allow only the shared Claude skill symlink in repo-local Claude config.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/sync-pi-setup
 
 # OS/editor
 .DS_Store

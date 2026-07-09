@@ -20,7 +20,7 @@
 
 ## Prompt Work
 
-- For prompt-related work (skills, agents, system prompts, CLAUDE.md files), invoke a prompt-engineering skill if one is separately installed; otherwise apply the calibration inline before suggesting or making changes.
+- Invoke prompt-engineering skill for ALL prompt-related work (skills, agents, system prompts, CLAUDE.md files) BEFORE suggesting or making changes.
 
 # Implementation
 
@@ -32,6 +32,11 @@
 
 - Use conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
 - Branch naming: `feature/*`, `fix/*` by default (project CLAUDE.md can override).
+
+## PR Bot Comments
+
+- Arnica bot comments on GitHub are often over-broad. Address them only when the issue is truly critical or materially exposed in the changed path and the fix does not overcomplicate the code.
+- If an Arnica finding is not relevant or the proposed fix is not worth the complexity, comment back with the reasoning and resolve the thread rather than changing code just to satisfy the bot.
 
 # Verification
 

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-gpt-fast-toggle",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "Toggle OpenAI GPT priority service tier from Pi without changing reasoning level.",
   "keywords": [

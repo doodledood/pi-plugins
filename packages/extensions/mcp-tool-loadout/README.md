@@ -28,7 +28,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-See `config/` for safe example config and `profiles/aviram/configs/` for Aviram's current non-secret defaults.
+See `config/` for safe example config and `setup/configs/` for Aviram's current non-secret defaults.
 
 ## Original extension notes
 
@@ -101,7 +101,7 @@ Default prior is neutral:
 {}
 ```
 
-Put workflow-specific priors in your user config, for example in `~/.pi/agent/mcp-tool-loadout.json` or a profile template.
+Put workflow-specific priors in your user config, for example in `~/.pi/agent/mcp-tool-loadout.json` or a setup template.
 
 Scoring: `score(tool) = Σ exp(-ln2 · age / halfLife)` over recent usage `+ prior(tool)`.
 The usage events come from this repo when it has `≥ minProjectEvents` MCP-tool usages,

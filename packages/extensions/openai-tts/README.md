@@ -34,7 +34,7 @@ pi install git:github.com/doodledood/pi-plugins@main
 
 ## Configuration
 
-The extension reads configuration from environment variables in the process that starts Pi. Do not commit API keys to this repo or to profile templates.
+The extension reads configuration from environment variables in the process that starts Pi. Do not commit API keys to this repo or to setup templates.
 
 | Variable | Default | Description |
 | --- | --- | --- |

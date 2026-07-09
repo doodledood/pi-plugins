@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
 const errors = [];
 const expectedExtensions = ["advisor-consult", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
-const expectedSkills = [];
+const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];
 
 function readJson(path) {
@@ -62,11 +62,21 @@ if (rootPkg?.pi?.skills && rootPkg.pi.skills.length > 0) errors.push("root packa
 for (const name of expectedThemes) verifyPackage(join(root, "packages", "themes", name), "themes", `./themes/${name}.json`);
 
 for (const path of walkFiles(join(root, "packages"), (p) => p.endsWith(".json"))) readJson(path);
-for (const path of walkFiles(join(root, "profiles"), (p) => p.endsWith(".json"))) readJson(path);
+for (const path of walkFiles(join(root, "setup"), (p) => p.endsWith(".json"))) readJson(path);
+for (const name of expectedSkills) {
+  mustExist(join(root, ".agents", "skills", name, "SKILL.md"));
+  const claudeSkillPath = join(root, ".claude", "skills", name);
+  mustExist(claudeSkillPath);
+  if (existsSync(claudeSkillPath)) {
+    const st = lstatSync(claudeSkillPath);
+    if (!st.isSymbolicLink()) errors.push(`${claudeSkillPath}: expected symlink to .agents/skills/${name}`);
+    else if (readlinkSync(claudeSkillPath) !== `../../.agents/skills/${name}`) errors.push(`${claudeSkillPath}: symlink target must be ../../.agents/skills/${name}`);
+  }
+}
 ensureNoForbiddenNames();
 
 if (errors.length) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
-console.log(`structure ok: ${expectedExtensions.length} extensions, no skills, ${expectedThemes.length} theme`);
+console.log(`structure ok: ${expectedExtensions.length} extensions, ${expectedSkills.length} project skill, ${expectedThemes.length} theme`);

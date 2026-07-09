@@ -64,4 +64,4 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 It reads `~/.pi/agent/gpt-fast-toggle.json` when present so the footer can show whether the separately installed `gpt-fast-toggle` extension is in priority mode. If that file is absent or invalid, the statusline simply omits the GPT priority indicator.
 
-This is a read-only dependency on local Pi state. Do not commit a live `gpt-fast-toggle.json`; use `packages/extensions/gpt-fast-toggle/config/gpt-fast-toggle.example.json` or `profiles/aviram/configs/gpt-fast-toggle.json` as a safe example.
+This is a read-only dependency on local Pi state. Do not commit a live `gpt-fast-toggle.json`; use `packages/extensions/gpt-fast-toggle/config/gpt-fast-toggle.example.json` or `setup/configs/gpt-fast-toggle.json` as a safe example.

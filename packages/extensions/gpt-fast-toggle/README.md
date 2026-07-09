@@ -28,4 +28,4 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-See `config/` for safe example config and `profiles/aviram/configs/` for Aviram's current non-secret defaults.
+See `config/` for safe example config and `setup/configs/` for Aviram's current non-secret defaults.
