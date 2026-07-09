@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { AuthStorage, ModelRegistry, type EventBus } from "@earendil-works/pi-coding-agent";
-import { streamSimple as streamSimpleCompat } from "@earendil-works/pi-ai/compat";
+import * as piAiCompat from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -40,6 +40,13 @@ type AliasStreamDelegate = (
   context: Context,
   options?: SimpleStreamOptions,
 ) => AssistantMessageEventStream;
+type PiAiCompatModule = {
+  streamSimple?: AliasStreamDelegate;
+  lazyStream?: (
+    model: Model<any>,
+    setup: () => Promise<AsyncIterable<AssistantMessageEvent>> | AsyncIterable<AssistantMessageEvent>,
+  ) => AssistantMessageEventStream;
+};
 
 type ModelAliasesHost = {
   events?: Pick<EventBus, "emit" | "on">;
@@ -205,7 +212,7 @@ export function getAliasForModel(lookup: AliasLookup, model: any): ModelAliasCon
 export function createAliasStreamSimple(
   aliasLookup: AliasLookup,
   targetLookup: TargetModelLookup,
-  delegate: AliasStreamDelegate = streamSimpleCompat as AliasStreamDelegate,
+  delegate: AliasStreamDelegate = defaultAliasStreamDelegate,
 ): AliasStreamDelegate {
   return (model, context, options) => {
     const alias = getAliasForModel(aliasLookup, model);
@@ -217,6 +224,34 @@ export function createAliasStreamSimple(
     const source = delegate(target as Model<any>, context, options);
     return wrapAliasIdentityStream(source, model);
   };
+}
+
+function defaultAliasStreamDelegate(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+  const compatModule = piAiCompat as PiAiCompatModule;
+  if (typeof compatModule.streamSimple === "function") {
+    return compatModule.streamSimple(model, context, options);
+  }
+  if (typeof compatModule.lazyStream === "function") {
+    return compatModule.lazyStream(model, async () => {
+      const streamSimple = await loadCompatStreamSimple();
+      return streamSimple(model, context, options);
+    });
+  }
+  throw new Error(
+    "model-aliases could not resolve pi-ai streamSimple. Load this extension through Pi's extension loader or provide an explicit stream delegate.",
+  );
+}
+
+async function loadCompatStreamSimple(): Promise<AliasStreamDelegate> {
+  // Keep this fallback dynamic and constructed: Pi's extension loader aliases the
+  // package root safely, while static package-subpath imports are the load-time
+  // failure mode this extension avoids.
+  const compatSpecifier = `${"@earendil-works/pi-ai"}/compat`;
+  const compatModule = (await import(compatSpecifier)) as PiAiCompatModule;
+  if (typeof compatModule.streamSimple !== "function") {
+    throw new Error("model-aliases could not resolve pi-ai compat streamSimple.");
+  }
+  return compatModule.streamSimple;
 }
 
 export function rewriteModelAliasPayload(payload: unknown, targetModel: string): unknown | undefined {

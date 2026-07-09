@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { isAbsolute } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { test } from "node:test";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
   CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
@@ -45,6 +47,78 @@ const existingModels = [
     cost: { input: 15, output: 120, cacheRead: 1.5, cacheWrite: 0 },
   },
 ];
+
+test("Pi extension loader loads model-aliases and registers the hidden alias API", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-model-aliases-loader-"));
+  const previousPiAgentHome = process.env.PI_AGENT_HOME;
+  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+
+  try {
+    process.env.PI_AGENT_HOME = dir;
+    writeFileSync(
+      join(dir, "model-aliases.json"),
+      JSON.stringify({
+        enabled: true,
+        aliases: [
+          {
+            provider: "openai",
+            id: "gpt-5.5-1m",
+            targetProvider: "openai",
+            targetModel: "gpt-5.5",
+            apiKey: "$OPENAI_API_KEY",
+            contextWindow: 1050000,
+            maxTokens: 128000,
+          },
+        ],
+      }),
+    );
+    mkdirSync(join(dir, ".pi"));
+
+    const loader = new DefaultResourceLoader({
+      cwd: dir,
+      agentDir: dir,
+      additionalExtensionPaths: [new URL("./index.ts", import.meta.url).pathname],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+    const loaded = loader.getExtensions();
+
+    assert.deepEqual(loaded.errors, []);
+    assert.equal(
+      loaded.extensions.some((extension) => extension.path.replaceAll("\\", "/").endsWith("extensions/model-aliases/index.ts")),
+      true,
+    );
+
+    ({ session } = await createAgentSession({
+      cwd: dir,
+      agentDir: dir,
+      sessionManager: SessionManager.inMemory(dir),
+      resourceLoader: loader,
+      tools: [],
+    }));
+
+    const alias = session.modelRegistry.find("openai", "gpt-5.5-1m");
+    const target = session.modelRegistry.find("openai", "gpt-5.5");
+
+    assert.ok(alias);
+    assert.equal(alias.api, MODEL_ALIASES_API);
+    assert.equal(alias.contextWindow, 1050000);
+    assert.equal(alias.maxTokens, 128000);
+    assert.ok(target);
+    assert.equal(target.api, "openai-responses");
+  } finally {
+    session?.dispose();
+    if (previousPiAgentHome === undefined) {
+      delete process.env.PI_AGENT_HOME;
+    } else {
+      process.env.PI_AGENT_HOME = previousPiAgentHome;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("registerCheckerModelBootstrap emits this extension entrypoint when requested", () => {
   const events = createEventBus();
@@ -221,6 +295,30 @@ test("buildAliasLookup and getAliasForModel find configured aliases only", () =>
 
   assert.equal(getAliasForModel(lookup, { provider: "openai", id: "gpt-5.5-1m" })?.targetModel, "gpt-5.5");
   assert.equal(getAliasForModel(lookup, { provider: "openai", id: "gpt-5.5" }), undefined);
+});
+
+test("default alias stream delegate lazily resolves compat outside Pi's extension loader", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "probe",
+        id: "alias",
+        targetProvider: "probe",
+        targetModel: "target",
+      },
+    ],
+  };
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, [{ provider: "probe", id: "target", api: "no-such-api" }]),
+  );
+
+  const stream = streamSimple({ provider: "probe", id: "alias", api: MODEL_ALIASES_API } as any, { messages: [] } as any);
+  const result = await stream.result();
+
+  assert.equal(result.stopReason, "error");
+  assert.equal(result.errorMessage, "No API provider registered for api: no-such-api");
 });
 
 test("hidden alias stream delegates to the target model without relying on payload hooks", async () => {

@@ -149,6 +149,12 @@ Aliases under a real provider id, such as `openai/gpt-5.5-1m`, use that provider
 
 Synthetic providers still work for unusual setups, but they have their own provider id and therefore their own auth/cache-retention surface. Prefer same-provider aliases unless you intentionally need a separate auth boundary.
 
+## Troubleshooting
+
+If normal chat appears to work but `/compact` or automatic compaction fails with an upstream `model_not_found` error for the alias id (for example `gpt-5.5-1m`), check that the `model-aliases` extension actually loaded after updating packages. Compaction and branch summaries rely on the hidden `model-aliases` stream API; the compatibility payload rewrite hook is only a fallback for provider call paths that expose Pi's payload hook.
+
+For Git installs that track `main`, run `pi update --extensions` (or otherwise fast-forward the installed package clone), then `/reload` or restart Pi.
+
 ## Local state
 
 This extension does not read or write local runtime state. It reads Pi settings and registers configured models in memory.
