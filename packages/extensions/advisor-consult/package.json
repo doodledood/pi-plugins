@@ -1,8 +1,8 @@
 {
   "name": "@doodledood/pi-advisor-consult",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Pi advisor-consult: an invisible, independent second-opinion advisor the model can consult on risky, uncertain, or high-leverage work.",
+  "description": "Pi advisor-consult: an independent second-opinion advisor with inspectable invocation details for risky, uncertain, or high-leverage work.",
   "keywords": [
     "pi-package",
     "pi-extension"
@@ -14,6 +14,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "scripts": {
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "@types/node": "*",
     "tsx": "^4.22.4",
     "typebox": "*",

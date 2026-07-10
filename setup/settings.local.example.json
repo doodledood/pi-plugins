@@ -18,6 +18,7 @@
   "packages": [
     "npm:pi-mcp-adapter",
     "npm:@gotgenes/pi-subagents",
+    "git:github.com/doodledood/manifest-dev@main",
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@juicesharp/rpiv-todo",
     "npm:pi-web-access",

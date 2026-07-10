@@ -1,8 +1,8 @@
 # advisor-consult
 
-An invisible, independent **second-opinion advisor** the model can consult on risky, uncertain, or high-leverage work.
+An independent **second-opinion advisor** the model can consult on risky, uncertain, or high-leverage work.
 
-`advisor_consult` runs a fresh, high-capability `pi` agent in its own subprocess — it can read files, run read-only commands, and search — then returns advice for the calling ("parent") model to weigh. The advisor is invisible to the user, never asks the user anything, and makes no durable or external changes.
+`advisor_consult` runs a fresh, high-capability `pi` agent in its own subprocess — it can read files, run read-only commands, and search — then returns advice for the calling ("parent") model to weigh. The subprocess is invisible to the user, never asks the user anything, and makes no durable or external changes. The parent tool row remains visible so you can inspect what was sent and which settings were requested.
 
 ## Why this exists
 
@@ -38,6 +38,8 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 Once published to npm: `pi install npm:@doodledood/pi-advisor-consult`.
 
+After updating an installed Git package with `pi update git:github.com/doodledood/pi-plugins@main`, run `/reload` or start a new Pi process so the active session instantiates the new extension code.
+
 ## Tool API
 
 ```ts
@@ -55,6 +57,17 @@ advisor_consult({
 - **`timeout_ms`** — per-call override, clamped into `[minTimeoutMs, maxTimeoutMs]`. Defaults to ~10 minutes.
 
 The result is advice for the parent to weigh, prefixed with a compact `[advisor · model: … · duration]` header. It is **not** an action taken on the user's behalf.
+
+### Invocation display
+
+The tool row shows invocation details before the advisor returns:
+
+- **Collapsed:** a width-bounded model/effort/timeout summary and one-line query preview.
+- **Expanded:** labeled values with their provenance (`requested`, `configured default`, or `clamped`) and the complete multiline query.
+
+Configured defaults are a renderer-time preview, not a claim about the subprocess's eventual model. `inherit` is shown as `parent model`; the completed result header remains authoritative for the model that actually ran and surfaces any requested/actual mismatch.
+
+The query is visible in the local transcript and stored with the tool call, so do not put credentials or other secrets in an advisory brief. The renderer visibly escapes terminal control and bidirectional override characters instead of executing or silently hiding them; it does not heuristically redact ordinary text.
 
 ### Example queries
 
@@ -134,7 +147,13 @@ If you have an MCP tool whose native direct schema should always be loaded (not 
 
 ## Rollback
 
-Remove the package from `settings.json` (or `pi` package config) and delete `~/.pi/agent/advisor-consult.json` if you created one. No other persistent state is written.
+For the Git root bundle, restore the previous implementation in a new commit while keeping release versions monotonic: bump the root and advisor package patch versions, regenerate `package-lock.json`, run `npm run verify`, then push `main` and update the installed rolling package:
+
+```bash
+pi update git:github.com/doodledood/pi-plugins@main
+```
+
+Run `/reload` or restart Pi afterward. This forward-versioned rollback restores the previous code without disabling the repo's other extensions or theme, reusing an immutable release tag, or regressing package history; package filters remain intact. If advisor-consult was installed as its standalone package instead, remove that package from `settings.json` (or Pi package config). Delete `~/.pi/agent/advisor-consult.json` only if you also want to remove its optional configuration; no other persistent state is written.
 
 ## Decision record
 

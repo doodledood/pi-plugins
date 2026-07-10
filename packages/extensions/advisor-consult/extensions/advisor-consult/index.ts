@@ -1,8 +1,10 @@
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { clampTimeout, loadConfig } from "./config.ts";
 import { resolveExcludedTools } from "./child-profile.ts";
+import { formatDuration } from "./format.ts";
 import { PiSubprocessAdvisorRunner } from "./runner.ts";
 import {
   ADVISOR_PROMPT_SNIPPET,
@@ -13,8 +15,15 @@ import {
   QUERY_FIELD_DESCRIPTION,
   TIMEOUT_FIELD_DESCRIPTION,
 } from "./prompts.ts";
-import type { AdvisorConsultConfig, AdvisorResult, AdvisorRunner, ThinkingLevel } from "./types.ts";
-import { INHERIT_MODEL } from "./types.ts";
+import {
+  INHERIT_MODEL,
+  THINKING_LEVELS,
+  isThinkingLevel,
+  type AdvisorConsultConfig,
+  type AdvisorResult,
+  type AdvisorRunner,
+  type ThinkingLevel,
+} from "./types.ts";
 import type { AdvisorConsultHost } from "./host.ts";
 
 /** Absolute path to the child bootstrap, passed to the subprocess via `-e`. */
@@ -24,21 +33,50 @@ const advisorSchema = Type.Object({
   query: Type.String({ description: QUERY_FIELD_DESCRIPTION }),
   model: Type.Optional(Type.String({ description: MODEL_FIELD_DESCRIPTION })),
   thinking: Type.Optional(
-    Type.Union(
-      [
-        Type.Literal("off"),
-        Type.Literal("minimal"),
-        Type.Literal("low"),
-        Type.Literal("medium"),
-        Type.Literal("high"),
-        Type.Literal("xhigh"),
-      ],
-      { description: "Optional advisor reasoning effort (Pi-native names). Defaults to the configured level (xhigh)." },
-    ),
+    Type.Enum(THINKING_LEVELS, {
+      description: "Optional advisor reasoning effort (Pi-native names). Defaults to the configured level (xhigh).",
+    }),
   ),
   timeout_ms: Type.Optional(Type.Number({ description: TIMEOUT_FIELD_DESCRIPTION })),
 });
 type AdvisorParams = Static<typeof advisorSchema>;
+
+type AdvisorCallArgs = Partial<Record<keyof AdvisorParams, unknown>>;
+
+interface DisplayField {
+  value: string;
+  provenance: "requested" | "configured default" | "clamped" | "pending" | "invalid";
+}
+
+interface AdvisorCallPresentation {
+  collapsedHeader: string;
+  collapsedQuery: string;
+  expanded: string;
+}
+
+class AdvisorCallView {
+  private collapsedHeader = "";
+  private collapsedQuery = "";
+  private readonly expandedText = new Text("", 0, 0);
+  private expanded = false;
+
+  update(presentation: AdvisorCallPresentation, expanded: boolean): void {
+    this.collapsedHeader = presentation.collapsedHeader;
+    this.collapsedQuery = presentation.collapsedQuery;
+    this.expandedText.setText(presentation.expanded);
+    this.expanded = expanded;
+  }
+
+  render(width: number): string[] {
+    if (width <= 0) return [];
+    if (this.expanded) return this.expandedText.render(width).map((line) => truncateToWidth(line, width));
+    return [truncateToWidth(this.collapsedHeader, width), truncateToWidth(this.collapsedQuery, width)];
+  }
+
+  invalidate(): void {
+    this.expandedText.invalidate();
+  }
+}
 
 export interface ConsultDeps {
   runner: AdvisorRunner;
@@ -168,14 +206,147 @@ export function modelsDiffer(requested: string, actual: string): boolean {
   return norm(requested) !== norm(actual);
 }
 
-function formatDuration(ms: number): string {
-  if (ms >= 60_000) {
-    const minutes = Math.floor(ms / 60_000);
-    const seconds = Math.round((ms % 60_000) / 1_000);
-    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+function presentAdvisorCall(
+  rawArgs: unknown,
+  config: AdvisorConsultConfig,
+  argsComplete: boolean,
+  theme: Theme,
+): AdvisorCallPresentation {
+  const args = isRecord(rawArgs) ? (rawArgs as AdvisorCallArgs) : {};
+  const model = displayModel(args.model, config, argsComplete);
+  const thinking = displayThinking(args.thinking, config, argsComplete);
+  const timeout = displayTimeout(args.timeout_ms, config, argsComplete);
+  const query = displayQuery(args.query, argsComplete);
+  const separator = theme.fg("dim", " · ");
+
+  return {
+    collapsedHeader: [
+      theme.fg("toolTitle", theme.bold("Advisor Consult")),
+      theme.fg("accent", model.value),
+      theme.fg("accent", thinking.value),
+      theme.fg("accent", timeout.value),
+    ].join(separator),
+    collapsedQuery: `${theme.fg("dim", "query: ")}${theme.fg("toolOutput", query.collapsed)}`,
+    expanded: [
+      theme.fg("toolTitle", theme.bold("Advisor Consult")),
+      renderDisplayField("model", model, theme),
+      renderDisplayField("effort", thinking, theme),
+      renderDisplayField("timeout", timeout, theme),
+      theme.fg("dim", "query:"),
+      theme.fg("toolOutput", query.expanded),
+    ].join("\n"),
+  };
+}
+
+function displayModel(value: unknown, config: AdvisorConsultConfig, argsComplete: boolean): DisplayField {
+  if (!argsComplete) return pendingField(partialString(value));
+  if (value !== undefined && typeof value !== "string") return invalidField();
+  const requested = typeof value === "string" ? value.trim() : "";
+  const resolved = resolveModel(requested || undefined, config, undefined);
+  return {
+    value: resolved.inherited ? "parent model" : escapeDisplayText(resolved.model ?? config.defaultModel),
+    provenance: requested ? "requested" : "configured default",
+  };
+}
+
+function displayThinking(value: unknown, config: AdvisorConsultConfig, argsComplete: boolean): DisplayField {
+  if (!argsComplete) return pendingField(partialString(value));
+  if (value !== undefined) {
+    if (!isThinkingLevel(value)) return invalidField();
+    return { value, provenance: "requested" };
   }
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
-  return `${ms}ms`;
+  return { value: config.defaultThinking, provenance: "configured default" };
+}
+
+function displayTimeout(value: unknown, config: AdvisorConsultConfig, argsComplete: boolean): DisplayField {
+  if (!argsComplete) {
+    const partial = typeof value === "number" && Number.isFinite(value) ? `${value}ms` : "…";
+    return pendingField(partial);
+  }
+  if (value !== undefined) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return invalidField();
+    const resolved = resolveTimeout(value, config);
+    return {
+      value: formatDuration(resolved.timeoutMs),
+      provenance: value <= 0 ? "configured default" : resolved.timeoutMs === Math.floor(value) ? "requested" : "clamped",
+    };
+  }
+  return { value: formatDuration(config.defaultTimeoutMs), provenance: "configured default" };
+}
+
+function displayQuery(value: unknown, argsComplete: boolean): { collapsed: string; expanded: string } {
+  if (!argsComplete) {
+    const partial = typeof value === "string" ? value.trim() : "";
+    if (!partial) return { collapsed: "…", expanded: "…" };
+    return {
+      collapsed: escapeDisplayText(partial, false).replace(/\s+/gu, " "),
+      expanded: escapeDisplayText(partial, true),
+    };
+  }
+  if (value === undefined) return { collapsed: "[missing query]", expanded: "[missing query]" };
+  if (typeof value !== "string") return { collapsed: "[invalid query]", expanded: "[invalid query]" };
+  const query = value.trim();
+  if (!query) return { collapsed: "[empty query]", expanded: "[empty query]" };
+  return {
+    collapsed: escapeDisplayText(query, false).replace(/\s+/gu, " "),
+    expanded: escapeDisplayText(query, true),
+  };
+}
+
+function renderDisplayField(label: string, field: DisplayField, theme: Theme): string {
+  return `${theme.fg("dim", `${label}: `)}${theme.fg("accent", field.value)}${theme.fg("dim", ` (${field.provenance})`)}`;
+}
+
+function pendingField(value = "…"): DisplayField {
+  return { value, provenance: "pending" };
+}
+
+function partialString(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) return "…";
+  return escapeDisplayText(value.trim());
+}
+
+function invalidField(): DisplayField {
+  return { value: "[invalid]", provenance: "invalid" };
+}
+
+function escapeDisplayText(value: string, preserveNewlines = false): string {
+  let escaped = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint === 0x0a) {
+      escaped += preserveNewlines ? "\n" : " ";
+    } else if (isTerminalControl(codePoint)) {
+      escaped += `\\x${codePoint.toString(16).padStart(2, "0")}`;
+    } else if (isLoneSurrogate(codePoint) || isDirectionalControl(codePoint)) {
+      escaped += `\\u${codePoint.toString(16).padStart(4, "0")}`;
+    } else {
+      escaped += character;
+    }
+  }
+  return escaped;
+}
+
+function isTerminalControl(codePoint: number): boolean {
+  return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f);
+}
+
+function isLoneSurrogate(codePoint: number): boolean {
+  return codePoint >= 0xd800 && codePoint <= 0xdfff;
+}
+
+function isDirectionalControl(codePoint: number): boolean {
+  return (
+    codePoint === 0x061c ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveModelPattern(model: ExtensionContext["model"]): string | undefined {
@@ -191,7 +362,11 @@ function stringProperty(value: unknown, key: string): string | undefined {
   return typeof property === "string" && property.trim().length > 0 ? property.trim() : undefined;
 }
 
-export function activate(pi: AdvisorConsultHost, runner: AdvisorRunner): void {
+export function activate(
+  pi: AdvisorConsultHost,
+  runner: AdvisorRunner,
+  configLoader: typeof loadConfig = loadConfig,
+): void {
   pi.registerTool({
     name: "advisor_consult",
     label: "Advisor Consult",
@@ -199,8 +374,15 @@ export function activate(pi: AdvisorConsultHost, runner: AdvisorRunner): void {
     promptSnippet: ADVISOR_PROMPT_SNIPPET,
     promptGuidelines: [...ADVISOR_TOOL_GUIDELINES],
     parameters: advisorSchema,
+    renderCall(args, theme, context) {
+      const loaded = configLoader();
+      const view = context.lastComponent instanceof AdvisorCallView ? context.lastComponent : new AdvisorCallView();
+      const argsSettled = context.argsComplete || context.executionStarted || (!context.isPartial && !context.isError);
+      view.update(presentAdvisorCall(args, loaded.config, argsSettled, theme), context.expanded);
+      return view;
+    },
     async execute(_toolCallId: string, params: AdvisorParams, signal, _onUpdate, ctx: ExtensionContext) {
-      const loaded = loadConfig();
+      const loaded = configLoader();
       if (loaded.warning) ctx.ui.notify(loaded.warning, "warning");
       const output = await consult(params, {
         runner,

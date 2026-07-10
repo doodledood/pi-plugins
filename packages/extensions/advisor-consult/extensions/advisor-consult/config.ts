@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_ORCHESTRATION_DENYLIST } from "./child-profile.ts";
-import type { AdvisorConsultConfig, LoadedConfig, ThinkingLevel } from "./types.ts";
+import { isThinkingLevel, type AdvisorConsultConfig, type LoadedConfig, type ThinkingLevel } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes
 const MIN_TIMEOUT_MS = 30_000; // 30 seconds
@@ -15,8 +15,6 @@ const SUPPORTED_FIELDS = new Set([
   "maxTimeoutMs",
   "excludedTools",
 ]);
-
-const THINKING_LEVELS: ReadonlySet<string> = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 export const CONFIG_PATH = join(
   process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
@@ -117,7 +115,7 @@ function stringOrDefault(value: unknown, defaultValue: string, field: string, wa
 
 function thinkingOrDefault(value: unknown, defaultValue: ThinkingLevel, field: string, warnings: string[]): ThinkingLevel {
   if (value === undefined || value === null) return defaultValue;
-  if (typeof value === "string" && THINKING_LEVELS.has(value)) return value as ThinkingLevel;
+  if (isThinkingLevel(value)) return value;
   warnings.push(field);
   return defaultValue;
 }

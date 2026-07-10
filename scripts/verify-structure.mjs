@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const root = process.cwd();
 const errors = [];
@@ -53,6 +54,19 @@ if (rootPkg) {
   for (const p of rootPkg.pi?.extensions ?? []) mustExist(join(root, p));
   for (const p of rootPkg.pi?.skills ?? []) mustExist(join(root, p));
   for (const p of rootPkg.pi?.themes ?? []) mustExist(join(root, p));
+}
+
+const installedSettings = readJson(join(root, "setup", "settings.example.json"));
+const localSettings = readJson(join(root, "setup", "settings.local.example.json"));
+if (installedSettings && localSettings) {
+  errors.push(
+    ...validateLocalSettings({
+      installedPackages: installedSettings.packages ?? [],
+      localPackages: localSettings.packages ?? [],
+      expectedExtensions,
+      expectedThemes,
+    }),
+  );
 }
 for (const name of expectedExtensions) {
   const path = ["advisor-consult", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;

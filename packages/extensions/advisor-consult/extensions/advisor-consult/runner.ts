@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AdvisorResult, AdvisorRunInput, AdvisorRunner } from "./types.ts";
+import { formatDuration } from "./format.ts";
 import { buildAdvisorUserPrompt } from "./prompts.ts";
 import { redactSecrets } from "./redact.ts";
 
@@ -205,16 +206,6 @@ function assistantText(content: unknown): string | undefined {
     }
   }
   return texts.length > 0 ? texts.join("\n\n") : undefined;
-}
-
-function formatDuration(ms: number): string {
-  if (ms >= 60_000) {
-    const minutes = Math.floor(ms / 60_000);
-    const seconds = Math.round((ms % 60_000) / 1_000);
-    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
-  }
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
-  return `${ms}ms`;
 }
 
 function safeJsonParse(value: string): unknown {
