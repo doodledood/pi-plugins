@@ -21,7 +21,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: npm ci
+      - name: Prepare portable Pi test settings
+        run: |
+          agent_dir="$RUNNER_TEMP/pi-agent"
+          mkdir -p "$agent_dir"
+          cp setup/settings.example.json "$agent_dir/settings.json"
+          echo "PI_CODING_AGENT_DIR=$agent_dir" >> "$GITHUB_ENV"
       - run: npm run verify
 
   tag-release:
@@ -71,19 +77,21 @@ jobs:
 
             if [ "$(jq -r '.verifyCandidate' <<<"$plan")" = "true" ]; then
               candidate_dir=$(mktemp -d)
+              candidate_agent_dir=$(mktemp -d)
               git worktree add --detach "$candidate_dir" "$commit"
+              cp "$candidate_dir/setup/settings.example.json" "$candidate_agent_dir/settings.json"
               if ! (
                 cd "$candidate_dir"
-                npm ci --ignore-scripts
-                npm run verify
+                npm ci
+                PI_CODING_AGENT_DIR="$candidate_agent_dir" npm run verify
               ); then
                 git worktree remove --force "$candidate_dir"
-                rm -rf "$candidate_dir"
+                rm -rf "$candidate_dir" "$candidate_agent_dir"
                 echo "::error::Refusing to backfill $tag because $commit failed verification"
                 exit 1
               fi
               git worktree remove --force "$candidate_dir"
-              rm -rf "$candidate_dir"
+              rm -rf "$candidate_dir" "$candidate_agent_dir"
             fi
 
             if [ "$(jq -r '.createTag' <<<"$plan")" = "true" ]; then
