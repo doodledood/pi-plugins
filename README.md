@@ -70,7 +70,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - **Pi defaults** — default provider/model, thinking level, enabled model cycle, theme, telemetry, and message delivery behavior.
    - **Packages and resources** — the installed helper packages plus this repo's extensions and `deep-focus-pi` theme.
    - **Extension tuning** — non-secret settings such as subagent concurrency, rendering mode, GPT fast mode, aliases, and MCP tool-catalog behavior.
-   - **Agent behavior** — global operating instructions, appended system guidance, and the read-only Explore agent on GPT-5.6 Luna.
+   - **Agent behavior** — global operating instructions, appended system guidance, and the read-only Explore agent on GPT-5.6 Luna with medium thinking.
    - **Integrations** — web search, MCP/browser connections, and image generation; these may require target-local paths, login, or secrets.
 
    If the user chooses a category rather than full sync, continue to the individual items in that category and use the descriptions under [Resources included](#resources-included) to explain their purpose. Do not force all extensions or configs in a selected category.
@@ -112,7 +112,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
    - Run `pi --list-models`; for the full profile confirm `openai/gpt-5.6-sol`, `openai/gpt-5.6-sol-1m`, and `openai/gpt-5.6-luna` are available.
-   - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` without displaying unrelated local content.
+   - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
    - When editing this repository itself, also run `npm run verify:structure` and the secret-safety scans from the `sync-pi-setup` skill.
@@ -143,7 +143,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 
 The setup makes `openai/gpt-5.6-sol-1m` the default model while keeping standard `openai/gpt-5.6-sol` available. The alias is configured by the `model-aliases` extension in [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json); it routes to `openai/gpt-5.6-sol` with a 1,050,000-token context window, leaving the standard model unchanged.
 
-The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna`, and asks for conclusion-first, evidence-backed findings.
+The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
 The setup installs these package sources:
 
@@ -256,7 +256,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 
 ### Agents
 
-- `Explore` — setup-only global override for `@gotgenes/pi-subagents`; read-only exploration on `openai/gpt-5.6-luna` with evidence-oriented reporting. Copy it from `setup/agents/Explore.md` to `~/.pi/agent/agents/Explore.md`.
+- `Explore` — setup-only global override for `@gotgenes/pi-subagents`; read-only exploration on `openai/gpt-5.6-luna` with medium thinking and evidence-oriented reporting. Copy it from `setup/agents/Explore.md` to `~/.pi/agent/agents/Explore.md`.
 
 ### Extensions
 

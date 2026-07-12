@@ -113,6 +113,7 @@ for (const name of expectedSetupAgents) {
     const content = readFileSync(path, "utf8");
     if (!content.includes("tools: read, bash, grep, find, ls")) errors.push(`${path}: setup agent must stay read-only`);
     if (!content.includes("model: openai/gpt-5.6-luna")) errors.push(`${path}: unexpected model override`);
+    if (!content.includes("thinking: medium")) errors.push(`${path}: expected medium thinking level`);
     if (!content.includes("prompt_mode: replace")) errors.push(`${path}: expected replace prompt mode`);
   }
 }
