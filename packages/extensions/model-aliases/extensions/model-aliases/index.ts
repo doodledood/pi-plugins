@@ -300,7 +300,7 @@ function aliasToTargetModel(alias: ModelAliasConfig, inherited: ExistingModel | 
     reasoning: alias.reasoning ?? inherited?.reasoning ?? false,
     thinkingLevelMap: alias.thinkingLevelMap ?? inherited?.thinkingLevelMap,
     input: alias.input ?? inherited?.input ?? defaultInput(),
-    contextWindow: alias.contextWindow ?? inherited?.contextWindow ?? 128_000,
+    contextWindow: alias.targetContextWindow ?? alias.contextWindow ?? inherited?.contextWindow ?? 128_000,
     maxTokens: alias.maxTokens ?? inherited?.maxTokens ?? 16_384,
     cost: alias.cost ?? inherited?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: alias.compat ?? inherited?.compat,

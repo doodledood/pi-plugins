@@ -2,7 +2,7 @@
 
 Configurable model aliases for Pi: show custom model ids in the selector while routing all model calls to an existing upstream provider/model.
 
-Use this when you want variants such as `openai/gpt-5.5-1m` or a future `openai/gpt-5.6-1m` without writing a new extension for each model release.
+Use this when you want variants such as a 1M model alias, or when Pi should compact against a smaller visible operating window without clamping provider requests to that artificial boundary.
 
 ## Why this exists
 
@@ -14,7 +14,7 @@ This extension makes that split configurable:
 - The alias model routes through a hidden `model-aliases` stream API that delegates every LLM call to the configured `targetProvider` / `targetModel`.
 - Normal chat turns, compaction, branch summaries, and other Pi-owned model calls share the same alias routing because the model itself owns the delegation.
 - Streamed/session assistant messages are mapped back to the selected alias identity, so session history still records the visible alias.
-- Context-window, max-token, cost, input, reasoning, and compatibility metadata can be inherited from an existing target model and overridden per alias.
+- Visible context-window metadata can differ from the hard target context window used to clamp delegated provider requests; max-token, cost, input, reasoning, and compatibility metadata can also be inherited or overridden per alias.
 - If the configured `provider/id` already exists, the configured entry wins and the provider's other models are preserved.
 
 A `before_provider_request` payload rewrite is still registered as a compatibility fallback for call paths that expose Pi's payload hook, but alias routing does not depend on that hook.
@@ -75,6 +75,7 @@ Higher-priority files override lower-priority fields. After editing config, run 
       "targetModel": "gpt-5.5",
       "apiKey": "$OPENAI_API_KEY",
       "contextWindow": 1050000,
+      "targetContextWindow": 1050000,
       "maxTokens": 128000
     }
   ]
@@ -92,25 +93,31 @@ Then include the alias in `~/.pi/agent/settings.json` if you want it in the scop
 }
 ```
 
-To add a later GPT-5.6 1M variant, add another alias with `provider: "openai"`, `id: "gpt-5.6-1m"`, `targetProvider: "openai"`, and `targetModel: "gpt-5.6"`. No extension code change is needed.
+Additional model variants only require config entries; no extension code change is needed.
 
-### Override an existing model in place
+### Override an existing model with separate visible and target windows
 
-If `provider/id` already exists, your configured entry wins and sibling models remain available. For example, this keeps the selector label as `openai/gpt-5.5` but overrides its context-window metadata:
+If `provider/id` already exists, your configured entry wins and sibling models remain available. This is also the safe way to expose an early compaction boundary for a model whose provider accepts a larger hard window:
 
 ```json
 {
   "aliases": [
     {
       "provider": "openai",
-      "id": "gpt-5.5",
-      "contextWindow": 1050000
+      "id": "gpt-5.6-sol",
+      "targetProvider": "openai",
+      "targetModel": "gpt-5.6-sol",
+      "contextWindow": 372000,
+      "targetContextWindow": 1050000,
+      "maxTokens": 128000
     }
   ]
 }
 ```
 
-Because `targetProvider` defaults to `provider` and `targetModel` defaults to `id`, the upstream request still sends `model: "gpt-5.5"`.
+Pi uses `contextWindow` for display and automatic-compaction accounting. The hidden alias stream delegates with `targetContextWindow`, so Pi's provider request clamp still reserves output against the model's real hard capacity. Without this split, an artificially small `contextWindow` can reduce `max_output_tokens` to the provider minimum during a long tool loop before Pi gets a chance to compact.
+
+Because `targetProvider` defaults to `provider` and `targetModel` defaults to `id`, the upstream request still sends the original model id.
 
 See `config/model-aliases.example.json` for a fuller example.
 
@@ -138,7 +145,8 @@ That explicit bootstrap lets the checker subprocess register the same alias mode
 | `reasoning` | no | Whether the alias supports Pi thinking levels. Defaults to inherited target metadata or `false`. |
 | `thinkingLevelMap` | no | Per-level provider values / `null` for hidden unsupported levels. |
 | `input` | no | `text` or `text,image`. Defaults to inherited target metadata or `text`. |
-| `contextWindow` | no | Context-window metadata. Defaults to inherited target metadata or `128000`. |
+| `contextWindow` | no | Pi-visible context window used for display and compaction accounting. Defaults to inherited target metadata or `128000`. |
+| `targetContextWindow` | no | Hard context window used by the delegated provider request and its output-token clamp. Defaults to `contextWindow`, preserving prior behavior. Set this explicitly when the visible window is an earlier operating/compaction boundary. |
 | `maxTokens` | no | Max output metadata. Defaults to inherited target metadata or `16384`. |
 | `cost` | no | Cost metadata per million tokens. Defaults to inherited target metadata or zeros. |
 | `compat` | no | Provider compatibility overrides passed through to the target provider. |
@@ -152,6 +160,8 @@ Synthetic providers still work for unusual setups, but they have their own provi
 ## Troubleshooting
 
 If normal chat appears to work but `/compact` or automatic compaction fails with an upstream `model_not_found` error for the alias id (for example `gpt-5.5-1m`), check that the `model-aliases` extension actually loaded after updating packages. Compaction and branch summaries rely on the hidden `model-aliases` stream API; the compatibility payload rewrite hook is only a fallback for provider call paths that expose Pi's payload hook.
+
+If a deliberately smaller visible window causes repeated `maximum output token limit` stops immediately before compaction, set `targetContextWindow` to the provider's real hard capacity. Do not represent an early compaction boundary by lowering both the visible and target windows.
 
 For Git installs that track `main`, run `pi update --extensions` (or otherwise fast-forward the installed package clone), then `/reload` or restart Pi.
 

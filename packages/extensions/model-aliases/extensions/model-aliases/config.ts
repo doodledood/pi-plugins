@@ -34,6 +34,8 @@ export interface ModelAliasConfig {
   thinkingLevelMap?: Partial<Record<ThinkingLevelName, string | null>>;
   input?: ModelInputType[];
   contextWindow?: number;
+  /** Hard context window used by the delegated provider request when it differs from the Pi-visible compaction window. */
+  targetContextWindow?: number;
   maxTokens?: number;
   cost?: ModelAliasCost;
   compat?: Record<string, unknown>;
@@ -112,6 +114,7 @@ export function normalizeAlias(raw: unknown): ModelAliasConfig | undefined {
     thinkingLevelMap: thinkingLevelMapValue(raw.thinkingLevelMap),
     input: inputValue(raw.input),
     contextWindow: positiveIntegerValue(raw.contextWindow),
+    targetContextWindow: positiveIntegerValue(raw.targetContextWindow),
     maxTokens: positiveIntegerValue(raw.maxTokens),
     cost: costValue(raw.cost),
     compat: plainObjectValue(raw.compat),

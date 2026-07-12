@@ -1,8 +1,8 @@
 {
   "name": "@doodledood/pi-model-aliases",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "type": "module",
-  "description": "Configurable model aliases for Pi: show custom model ids while sending existing upstream model ids.",
+  "description": "Configurable Pi model aliases with separate visible and provider-target metadata.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test extensions/model-aliases/*.test.ts"

@@ -34,11 +34,28 @@ test("normalizeConfig accepts a minimal alias without forcing model defaults bef
       thinkingLevelMap: undefined,
       input: undefined,
       contextWindow: undefined,
+      targetContextWindow: undefined,
       maxTokens: undefined,
       cost: undefined,
       compat: undefined,
     },
   ]);
+});
+
+test("normalizeConfig accepts distinct visible and target context windows", () => {
+  const config = normalizeConfig({
+    aliases: [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        contextWindow: 372000,
+        targetContextWindow: 1050000,
+      },
+    ],
+  });
+
+  assert.equal(config.aliases[0]?.contextWindow, 372000);
+  assert.equal(config.aliases[0]?.targetContextWindow, 1050000);
 });
 
 test("normalizeConfig drops invalid aliases and honors enabled:false", () => {

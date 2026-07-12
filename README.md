@@ -101,7 +101,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
 | `setup/mcp.example.json` | `~/.pi/agent/mcp.json` | MCP/browser integration is selected; fill placeholders locally |
 | `setup/web-search.example.json` | `~/.pi/web-search.json` | Web search is selected; fill the provider secret locally |
-| `setup/models.example.json` | `~/.pi/agent/models.json` | The full profile is selected; merge the 372K regular-Sol override while preserving unrelated providers and overrides |
+| `setup/models.example.json` | `~/.pi/agent/models.json` | A custom provider override is actually needed; the current full profile intentionally keeps this template empty |
 
 5. **Install and reconcile packages**
    - Use the package list in `setup/settings.example.json` as the normal source of truth.
@@ -111,7 +111,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 6. **Verify the effective setup**
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
-   - Run `pi --list-models`; for the full profile confirm regular `openai/gpt-5.6-sol` reports 372K context, `openai/gpt-5.6-sol-1m` reports approximately 1.1M, and `openai/gpt-5.6-luna` is available.
+   - Run `pi --list-models`; for the full profile confirm regular `openai/gpt-5.6-sol` reports 372K context, `openai/gpt-5.6-sol-1m` reports approximately 1.1M, and `openai/gpt-5.6-luna` is available. Also confirm `model-aliases.json` gives regular Sol a 1,050,000-token target window.
    - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
@@ -141,7 +141,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes regular `openai/gpt-5.6-sol` the default at high thinking and gives it a 372,000-token context window through [`setup/models.example.json`](setup/models.example.json). The `model-aliases` extension adds `openai/gpt-5.6-sol-1m` at high thinking through [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json); that explicit deep-context profile routes to regular Sol with a 1,050,000-token window.
+The setup makes regular `openai/gpt-5.6-sol` the default at high thinking. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) replaces it in place with a dual-window alias: Pi sees a 372,000-token operating window for display and compaction, while delegated provider requests use Sol's real 1,050,000-token target window so Pi does not clamp output at the artificial boundary. The same config adds `openai/gpt-5.6-sol-1m` at high thinking with 1,050,000 tokens for both visible and target windows.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
@@ -177,7 +177,6 @@ cd pi-plugins
 mkdir -p ~/.pi/agent/agents ~/.pi
 
 cp setup/settings.example.json ~/.pi/agent/settings.json
-cp setup/models.example.json ~/.pi/agent/models.json
 cp setup/configs/*.json ~/.pi/agent/
 cp setup/agents/*.md ~/.pi/agent/agents/
 cp setup/AGENTS.md ~/.pi/agent/AGENTS.md
@@ -189,7 +188,7 @@ Choose authentication rather than assuming it:
 - For provider subscription auth, start Pi and use `/login`; do not create `auth.json` from the API-key example.
 - For environment-based OpenAI auth, copy `setup/auth.example.json` to `~/.pi/agent/auth.json`, set mode `0600`, and have the user provide `OPENAI_API_KEY` in their local environment.
 - Copy `mcp.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
-- For the full profile, copy `models.example.json` so regular Sol uses the 372K working window. When merging into an existing setup, preserve unrelated providers and model overrides.
+- Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Regular Sol's dual-window behavior comes from `configs/model-aliases.json`.
 
 Install the selected packages:
 
@@ -217,7 +216,7 @@ Later, `pi update --extensions` reconciles installed Git checkouts to their conf
 Merge is the default when target configuration exists. Do not run the fresh-profile copy block over an existing machine.
 
 1. Back up each file that the selected plan will touch, using a shared timestamp. At minimum, back up `settings.json` before any `pi install` command because package installation updates that file.
-2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths. For the full profile, also merge the regular-Sol 372K override from `setup/models.example.json` into `models.json` without replacing unrelated providers or overrides.
+2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths. Remove an obsolete `models.json` context-window override for regular Sol when adopting the full profile; the selected `model-aliases.json` config now owns its dual-window behavior.
 3. Install only missing selected packages. `pi install` updates the package entry while preserving unrelated settings.
 4. Compare each selected `setup/configs/*.json` file with its target and merge extension settings intentionally. When MCP server names differ, update the matching `prior` keys in `mcp-tool-loadout.json`.
 5. Copy the Explore definition only if the user selected the Luna-backed override. Merge `AGENTS.md` and `APPEND_SYSTEM.md` by concept rather than blindly appending duplicate rules.
@@ -269,7 +268,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases; the portable setup defines `openai/gpt-5.6-sol-1m` as a 1.05M-context alias of standard Sol.
+- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; the portable setup defines regular Sol as a 372K/1.05M dual-window alias and `openai/gpt-5.6-sol-1m` as a 1.05M/1.05M deep-context alias.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `simple-statusline` — compact Pi footer/statusline.

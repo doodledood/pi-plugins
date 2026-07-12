@@ -83,8 +83,20 @@ if (installedSettings && localSettings) {
   }
 }
 const setupModels = readJson(join(root, "setup", "models.example.json"));
-if (setupModels?.providers?.openai?.modelOverrides?.["gpt-5.6-sol"]?.contextWindow !== 372000) {
-  errors.push("setup/models.example.json: regular Sol contextWindow must be 372000");
+if (setupModels && Object.keys(setupModels.providers ?? {}).length !== 0) {
+  errors.push("setup/models.example.json: full profile must not use model-provider overrides");
+}
+const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
+if (setupModelAliases) {
+  const aliases = new Map((setupModelAliases.aliases ?? []).map((alias) => [alias.id, alias]));
+  const regularSol = aliases.get("gpt-5.6-sol");
+  const deepSol = aliases.get("gpt-5.6-sol-1m");
+  if (regularSol?.contextWindow !== 372000 || regularSol?.targetContextWindow !== 1050000) {
+    errors.push("setup/configs/model-aliases.json: regular Sol must expose 372K and target 1.05M");
+  }
+  if (deepSol?.contextWindow !== 1050000 || deepSol?.targetContextWindow !== 1050000) {
+    errors.push("setup/configs/model-aliases.json: Sol 1M must expose and target 1.05M");
+  }
 }
 for (const name of expectedExtensions) {
   const path = ["advisor-consult", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;

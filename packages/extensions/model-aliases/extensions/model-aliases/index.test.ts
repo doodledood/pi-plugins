@@ -226,7 +226,7 @@ test("buildProviderRegistrations registers same-provider aliases with a hidden a
   });
 });
 
-test("configured alias wins when provider/id clashes with an existing model and preserves sibling models", () => {
+test("configured dual-window alias wins when provider/id clashes and preserves sibling models", () => {
   const config: ModelAliasesConfig = {
     enabled: true,
     aliases: [
@@ -236,7 +236,8 @@ test("configured alias wins when provider/id clashes with an existing model and 
         targetProvider: "openai",
         targetModel: "gpt-5.5",
         name: "GPT-5.5 Local Override",
-        contextWindow: 1050000,
+        contextWindow: 372000,
+        targetContextWindow: 1050000,
       },
     ],
   };
@@ -260,7 +261,7 @@ test("configured alias wins when provider/id clashes with an existing model and 
         reasoning: true,
         thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
         input: ["text", "image"],
-        contextWindow: 1050000,
+        contextWindow: 372000,
         maxTokens: 128000,
         cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
       },
@@ -277,6 +278,26 @@ test("configured alias wins when provider/id clashes with an existing model and 
       },
     ],
   });
+});
+
+test("target context window falls back to the visible alias window", () => {
+  const targets = buildTargetModelLookup(
+    {
+      enabled: true,
+      aliases: [
+        {
+          provider: "openai",
+          id: "gpt-5.5-compact",
+          targetProvider: "openai",
+          targetModel: "gpt-5.5",
+          contextWindow: 64000,
+        },
+      ],
+    },
+    existingModels,
+  );
+
+  assert.equal(targets.get("openai/gpt-5.5-compact")?.contextWindow, 64000);
 });
 
 test("buildAliasLookup and getAliasForModel find configured aliases only", () => {
@@ -321,7 +342,7 @@ test("default alias stream delegate lazily resolves compat outside Pi's extensio
   assert.equal(result.errorMessage, "No API provider registered for api: no-such-api");
 });
 
-test("hidden alias stream delegates to the target model without relying on payload hooks", async () => {
+test("hidden alias stream delegates with the target context window without payload hooks", async () => {
   const config: ModelAliasesConfig = {
     enabled: true,
     aliases: [
@@ -330,15 +351,22 @@ test("hidden alias stream delegates to the target model without relying on paylo
         id: "gpt-5.5-1m",
         targetProvider: "openai",
         targetModel: "gpt-5.5",
-        contextWindow: 1050000,
+        contextWindow: 372000,
+        targetContextWindow: 1050000,
       },
     ],
   };
   const aliasLookup = buildAliasLookup(config);
   const targetLookup = buildTargetModelLookup(config, existingModels);
-  const calls: Array<{ provider: string; id: string; api?: string; optionKeys: string[] }> = [];
+  const calls: Array<{ provider: string; id: string; api?: string; contextWindow?: number; optionKeys: string[] }> = [];
   const streamSimple = createAliasStreamSimple(aliasLookup, targetLookup, (model, _context, options) => {
-    calls.push({ provider: model.provider, id: model.id, api: model.api, optionKeys: Object.keys(options ?? {}).sort() });
+    calls.push({
+      provider: model.provider,
+      id: model.id,
+      api: model.api,
+      contextWindow: model.contextWindow,
+      optionKeys: Object.keys(options ?? {}).sort(),
+    });
     return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
   });
 
@@ -354,6 +382,7 @@ test("hidden alias stream delegates to the target model without relying on paylo
       provider: "openai",
       id: "gpt-5.5",
       api: "openai-responses",
+      contextWindow: 1050000,
       optionKeys: ["apiKey", "maxTokens"],
     },
   ]);
