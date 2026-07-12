@@ -111,7 +111,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 6. **Verify the effective setup**
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
-   - Run `pi --list-models`; for the full profile confirm `openai/gpt-5.6-sol` and `openai/gpt-5.6-luna` are available.
+   - Run `pi --list-models`; for the full profile confirm `openai/gpt-5.6-sol`, `openai/gpt-5.6-sol-1m`, and `openai/gpt-5.6-luna` are available.
    - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
@@ -126,11 +126,11 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 ```json
 {
   "defaultProvider": "openai",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultModel": "gpt-5.6-sol-1m",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "openai/gpt-5.6-sol:xhigh",
-    "openai/gpt-5.6-terra:xhigh",
+    "openai/gpt-5.6-sol-1m:xhigh",
     "anthropic/claude-opus-4-8:xhigh",
     "anthropic/claude-fable-5:xhigh"
   ],
@@ -141,7 +141,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup enables `openai/gpt-5.6-sol` as the default model and keeps `openai/gpt-5.6-terra` available as a second OpenAI option. The `model-aliases` extension stays installed for custom selector-visible aliases, but [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) intentionally starts with an empty `aliases` list.
+The setup makes `openai/gpt-5.6-sol-1m` the default model while keeping standard `openai/gpt-5.6-sol` available. The alias is configured by the `model-aliases` extension in [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json); it routes to `openai/gpt-5.6-sol` with a 1,050,000-token context window, leaving the standard model unchanged.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna`, and asks for conclusion-first, evidence-backed findings.
 
@@ -225,7 +225,7 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 The full-profile defaults available for an explicit merge are:
 
 - `defaultProvider: "openai"`
-- `defaultModel: "gpt-5.6-sol"`
+- `defaultModel: "gpt-5.6-sol-1m"`
 - `defaultThinkingLevel: "xhigh"`
 - the `enabledModels` list from `setup/settings.example.json`
 - `enableInstallTelemetry: false`
@@ -268,7 +268,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases; the portable setup currently leaves aliases empty.
+- `model-aliases` — selector-visible custom model aliases; the portable setup defines `openai/gpt-5.6-sol-1m` as a 1.05M-context alias of standard Sol.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `simple-statusline` — compact Pi footer/statusline.
