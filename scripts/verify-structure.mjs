@@ -8,6 +8,12 @@ const expectedExtensions = ["advisor-consult", "cache-optimization", "goal-contr
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
+const expectedEnabledModels = [
+  "openai/gpt-5.6-sol:high",
+  "openai/gpt-5.6-sol-1m:high",
+  "anthropic/claude-fable-5:xhigh",
+  "anthropic/claude-opus-4-8:xhigh",
+];
 
 function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); }
@@ -67,6 +73,18 @@ if (installedSettings && localSettings) {
       expectedThemes,
     }),
   );
+  for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
+    if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
+    if (settings.defaultModel !== "gpt-5.6-sol") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol`);
+    if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
+    if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
+      errors.push(`setup ${label} settings: enabledModels must match the full profile`);
+    }
+  }
+}
+const setupModels = readJson(join(root, "setup", "models.example.json"));
+if (setupModels?.providers?.openai?.modelOverrides?.["gpt-5.6-sol"]?.contextWindow !== 372000) {
+  errors.push("setup/models.example.json: regular Sol contextWindow must be 372000");
 }
 for (const name of expectedExtensions) {
   const path = ["advisor-consult", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;
