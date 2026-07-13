@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "private": true,
   "type": "module",
   "description": "Aviram's portable Pi setup, extensions, and theme.",
@@ -36,7 +36,8 @@
     ]
   },
   "scripts": {
-    "test": "npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "test": "npm run test:mouse-overlays && npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "test:mouse-overlays": "tsx --test scripts/mouse-overlay-integration.test.ts",
     "typecheck": "npm run typecheck --workspace @doodledood/pi-advisor-consult && npm run typecheck --workspace @doodledood/pi-btw && npm run typecheck --workspace @doodledood/pi-cache-optimization && npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-openai-max-output-floor && npm run typecheck --workspace @doodledood/pi-openai-tts && npm run typecheck --workspace @doodledood/pi-simple-statusline && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
     "verify:structure": "node --test scripts/*.test.mjs && node scripts/verify-structure.mjs",
     "verify": "npm run verify:structure && npm run typecheck && npm test"

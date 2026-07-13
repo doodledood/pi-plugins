@@ -133,6 +133,27 @@ test("/cache labels breaks without a retained fingerprint as entry-correlation o
   assert.match(text, /no fingerprint retained for this turn — predates this process or pruned; entry-correlation only/);
 });
 
+test("session shutdown releases an active cache overlay when the host skips component disposal", async () => {
+  const harness = createHarness([assistantEntry(1_000, 10, 10, 10)]);
+  const writes: string[] = [];
+  harness.ctx.ui.custom = async (factory: any) => {
+    const recording = createRecordingTheme();
+    const tui = { requestRender() {}, terminal: { write: (data: string) => writes.push(data), rows: 40 } };
+    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => {});
+    return undefined;
+  };
+
+  await harness.commands.get("cache")!.handler("", harness.ctx);
+  assert.deepEqual(writes, ["\x1b[?1000h", "\x1b[?1006h"]);
+
+  // Pi resetExtensionUI() can hide the component without invoking dispose().
+  shutdown(harness);
+  assert.deepEqual(writes.slice(-2), ["\x1b[?1006l", "\x1b[?1000l"]);
+
+  harness.ctx.lastOverlay.dispose();
+  assert.equal(writes.length, 4, "late component disposal remains idempotent");
+});
+
 test("/cache overlay supports wheel, page keys, and mouse-mode lifecycle", async () => {
   const branch: SessionEntryLike[] = [];
   for (let i = 0; i < 80; i++) branch.push(assistantEntry(i, 10, 10, 10));

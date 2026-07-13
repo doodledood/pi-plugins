@@ -1,10 +1,12 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import {
+  acquireSharedMouseLease,
+  hasOtherSharedMouseOwner,
+  SHARED_MOUSE_SEQUENCES,
+  type SharedMouseLease,
+} from "./mouse-lease.ts";
 
-const ENABLE_BUTTON_REPORTING = "\x1b[?1000h";
-const DISABLE_BUTTON_REPORTING = "\x1b[?1000l";
-const ENABLE_SGR_REPORTING = "\x1b[?1006h";
-const DISABLE_SGR_REPORTING = "\x1b[?1006l";
 const SGR_MOUSE_PREFIX = "\x1b[<";
 const LEGACY_MOUSE_PREFIX = "\x1b[M";
 const SGR_MOUSE_PATTERN = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
@@ -88,8 +90,8 @@ export function enableBtwMouseInput(options: {
   focusBtw(): void;
   focusMain(): void;
 }): BtwMouseInputScope {
-  let buttonReportingEnabled = false;
-  let sgrReportingEnabled = false;
+  const owner = {};
+  let lease: SharedMouseLease | undefined;
   let unsubscribe: (() => void) | undefined;
   let disposed = false;
 
@@ -97,30 +99,20 @@ export function enableBtwMouseInput(options: {
     if (disposed) return;
     disposed = true;
 
-    // Disable reporting before removing the consumer so no reported event can
-    // leak into an editor during teardown. Attempt every cleanup independently.
-    if (sgrReportingEnabled) {
-      sgrReportingEnabled = false;
-      try {
-        options.tui.terminal.write(DISABLE_SGR_REPORTING);
-      } catch {
-        // Continue restoring the remaining mode and listener.
-      }
-    }
-    if (buttonReportingEnabled) {
-      buttonReportingEnabled = false;
-      try {
-        options.tui.terminal.write(DISABLE_BUTTON_REPORTING);
-      } catch {
-        // Continue removing the listener.
-      }
-    }
+    // Remove BTW's raw consumer before releasing the shared terminal mode.
+    // Attempt every cleanup independently and make repeated disposal harmless.
     try {
       unsubscribe?.();
     } catch {
-      // Teardown is best-effort and idempotent across all resources.
+      // Continue releasing the shared mouse owner.
     }
     unsubscribe = undefined;
+    try {
+      lease?.release();
+    } catch {
+      // Teardown is best-effort and idempotent across all resources.
+    }
+    lease = undefined;
   };
 
   try {
@@ -132,6 +124,10 @@ export function enableBtwMouseInput(options: {
         // that raw control sequence into an editor; focus routing remains SGR-only.
         return data.startsWith(LEGACY_MOUSE_PREFIX) ? { consume: true } : undefined;
       }
+
+      // Another cooperative overlay owns normal focused-component routing.
+      // Defer all SGR-looking input so Pi can deliver it there unchanged.
+      if (hasOtherSharedMouseOwner(owner)) return undefined;
 
       if (event.kind === "primary-press") {
         const bounds = options.getBounds();
@@ -150,14 +146,11 @@ export function enableBtwMouseInput(options: {
         }
       }
 
-      // Consume valid, non-click, and malformed SGR-looking mouse input so no
-      // terminal mouse escape sequence reaches either editor.
+      // As sole owner, consume valid, non-click, and malformed SGR-looking
+      // mouse input so no terminal escape sequence reaches either editor.
       return { consume: true };
     });
-    buttonReportingEnabled = true;
-    options.tui.terminal.write(ENABLE_BUTTON_REPORTING);
-    sgrReportingEnabled = true;
-    options.tui.terminal.write(ENABLE_SGR_REPORTING);
+    lease = acquireSharedMouseLease(options.tui.terminal, owner);
   } catch (error) {
     dispose();
     throw error;
@@ -166,9 +159,4 @@ export function enableBtwMouseInput(options: {
   return { dispose };
 }
 
-export const BTW_MOUSE_SEQUENCES = {
-  enableButtonReporting: ENABLE_BUTTON_REPORTING,
-  disableButtonReporting: DISABLE_BUTTON_REPORTING,
-  enableSgrReporting: ENABLE_SGR_REPORTING,
-  disableSgrReporting: DISABLE_SGR_REPORTING,
-} as const;
+export const BTW_MOUSE_SEQUENCES = SHARED_MOUSE_SEQUENCES;

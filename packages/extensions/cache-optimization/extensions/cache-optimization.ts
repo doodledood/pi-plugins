@@ -28,6 +28,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyCacheKeeper, type KeeperState } from "./cache-optimization/keeper.ts";
 import { CacheKeepalive, hasBackgroundLaunchFlag, isAnthropicOAuthToken, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
+import {
+  acquireSharedMouseLease,
+  type SharedMouseLease,
+} from "./cache-optimization/mouse-lease.ts";
 
 // Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
 const MAX_FINGERPRINT_PAIRS = 500;
@@ -117,6 +121,7 @@ export function activate(
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
   let keeperState: KeeperState = {};
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+  const activeCacheOverlays = new Set<CacheReportOverlay>();
 
   pi.on("session_start", () => {
     fingerprints = { byTimestamp: new Map() };
@@ -128,6 +133,8 @@ export function activate(
   });
 
   pi.on("session_shutdown", () => {
+    for (const overlay of activeCacheOverlays) overlay.dispose();
+    activeCacheOverlays.clear();
     keepalive.shutdown();
     if (keepaliveTimer) {
       clearInterval(keepaliveTimer);
@@ -231,8 +238,22 @@ export function activate(
       });
       // Display-only overlay: the report never enters LLM context.
       await ctx.ui.custom(
-        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
-          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui), tui?.terminal),
+        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) => {
+          let overlay!: CacheReportOverlay;
+          overlay = new CacheReportOverlay(
+            theme,
+            (result) => {
+              activeCacheOverlays.delete(overlay);
+              done(result);
+            },
+            report.lines,
+            overlayViewportRows(tui),
+            tui?.terminal,
+            () => activeCacheOverlays.delete(overlay),
+          );
+          activeCacheOverlays.add(overlay);
+          return overlay;
+        },
         { overlay: true },
       );
     },
@@ -251,11 +272,8 @@ function overlayViewportRows(tui: any): number {
   return Math.max(8, Math.min(30, rows - 6));
 }
 
-// SGR mouse reporting: enabled only while the overlay is open so the wheel
-// scrolls the report instead of the terminal scrollback. Always disabled on
-// close/dispose to restore native terminal selection behavior.
-const MOUSE_ENABLE = "\x1b[?1006h\x1b[?1000h";
-const MOUSE_DISABLE = "\x1b[?1000l\x1b[?1006l";
+// SGR mouse reporting is held through the process-global cooperative lease so
+// overlapping extensions cannot disable reporting out from under one another.
 const WHEEL_SCROLL_LINES = 3;
 
 /** Net wheel movement in an input chunk: negative = up, positive = down. */
@@ -273,32 +291,29 @@ function wheelDelta(data: string): number {
 
 // Bordered report panel styled after the context-breakdown overlay: rounded
 // border, bold title, tone-tagged body rows, dim hint row inside the frame.
-class CacheReportOverlay {
+export class CacheReportOverlay {
   readonly width = 78;
   focused = false;
   private scroll = 0;
   private readonly viewport: number;
-  private mouseEnabled = false;
+  private mouseLease: SharedMouseLease | undefined;
 
   constructor(
     private readonly theme: any,
     private readonly done: (result: undefined) => void,
     readonly lines: ReportLine[],
     viewport = 30,
-    private readonly terminal?: { write(data: string): void },
+    terminal?: { write(data: string): void },
+    private readonly onDispose?: () => void,
   ) {
     this.viewport = viewport;
-    if (this.terminal) {
-      this.terminal.write(MOUSE_ENABLE);
-      this.mouseEnabled = true;
-    }
+    if (terminal) this.mouseLease = acquireSharedMouseLease(terminal, this);
   }
 
   private releaseMouse(): void {
-    if (this.mouseEnabled) {
-      this.terminal?.write(MOUSE_DISABLE);
-      this.mouseEnabled = false;
-    }
+    const lease = this.mouseLease;
+    this.mouseLease = undefined;
+    lease?.release();
   }
 
   private scrollBy(delta: number): void {
@@ -325,6 +340,7 @@ class CacheReportOverlay {
 
   dispose(): void {
     this.releaseMouse();
+    this.onDispose?.();
   }
 
   render(width: number): string[] {
