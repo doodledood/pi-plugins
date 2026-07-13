@@ -44,6 +44,14 @@ test("loadConfig merges valid user overrides", () => {
   assert.equal(loaded.config.continuation.noToolContinuationLimit, 5);
 });
 
+test("loadConfig accepts Pi's max thinking level for the checker", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "goal-controller-config-")), "config.json");
+  writeFileSync(path, JSON.stringify({ checker: { thinking: "max" } }));
+  const loaded = loadConfig(path);
+  assert.equal(loaded.config.checker.thinking, "max");
+  assert.equal(loaded.warning, undefined);
+});
+
 test("loadConfig falls back safely on invalid JSON", () => {
   const path = join(mkdtempSync(join(tmpdir(), "goal-controller-config-")), "config.json");
   writeFileSync(path, "not json");
