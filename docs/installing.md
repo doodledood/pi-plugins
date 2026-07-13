@@ -19,7 +19,7 @@ Pi's documented Git source installs the repo package. To load one resource from 
   "packages": [
     {
       "source": "git:github.com/doodledood/pi-plugins@main",
-      "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
+      "extensions": ["packages/extensions/btw/index.ts"],
       "skills": [],
       "prompts": [],
       "themes": []
@@ -45,7 +45,7 @@ Theme example:
 }
 ```
 
-For example, to load only the OpenAI TTS tool:
+The BTW example uses the package-root `index.ts` entry declared by `@doodledood/pi-btw`. For example, to load only the OpenAI TTS tool:
 
 ```json
 {
@@ -69,6 +69,7 @@ The examples track the `@main` branch so `pi update --extensions` always reconci
 
 ```bash
 git clone git@github.com:doodledood/pi-plugins.git
+pi install /path/to/pi-plugins/packages/extensions/btw
 pi install /path/to/pi-plugins/packages/extensions/goal-controller
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
 ```

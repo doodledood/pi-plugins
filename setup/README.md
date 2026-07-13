@@ -7,7 +7,7 @@ For agent-guided replication onto another computer—including target inspection
 ## Files
 
 - `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to regular `openai/gpt-5.6-sol` at high thinking with a 372K visible / 1.05M target window, keeps the 1.05M-context Sol alias at high, enables `deep-focus-pi`, and configures image generation to use `gpt-image-2`.
-- `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use.
+- `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use. It lists each local extension package—including BTW—and the theme separately, replacing rather than duplicating the root Git bundle.
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename, for example `configs/model-aliases.json` → `~/.pi/agent/model-aliases.json`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
 - `mcp.example.json` — MCP template with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
@@ -19,7 +19,7 @@ For agent-guided replication onto another computer—including target inspection
 ## Sync flow
 
 1. Back up existing local files before replacing anything.
-2. Use `settings.example.json` for normal installs and `settings.local.example.json` only while developing this repo.
+2. Use `settings.example.json` for normal installs and `settings.local.example.json` only while developing this repo. The normal root Git bundle already includes BTW; do not add a duplicate BTW source there.
 3. Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Remove any obsolete regular-Sol context override from an existing `models.json` while preserving unrelated providers and overrides.
 4. Copy or merge `configs/*.json` into `~/.pi/agent/` after reviewing them. The regular-Sol entry in `configs/model-aliases.json` exposes 372K to Pi while delegating requests with a 1.05M target window.
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults.

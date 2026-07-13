@@ -22,7 +22,7 @@ test("loadConfig merges valid user overrides", () => {
       defaultTimeBudgetSeconds: 456,
       checker: {
         model: "openai/gpt-5.5",
-        thinking: "xhigh",
+        thinking: "max",
         timeoutMs: 77_000,
         trustedModelBootstrapPackages: [
           { packageName: "custom-model-bootstrap", extensionPathSuffixes: ["/extensions/custom/checker-bootstrap.ts"] },
@@ -36,7 +36,7 @@ test("loadConfig merges valid user overrides", () => {
   assert.equal(loaded.config.defaultTurnBudget, 9);
   assert.equal(loaded.config.defaultTimeBudgetSeconds, 456);
   assert.equal(loaded.config.checker.model, "openai/gpt-5.5");
-  assert.equal(loaded.config.checker.thinking, "xhigh");
+  assert.equal(loaded.config.checker.thinking, "max");
   assert.equal(loaded.config.checker.timeoutMs, 77_000);
   assert.deepEqual(loaded.config.checker.trustedModelBootstrapPackages, [
     { packageName: "custom-model-bootstrap", extensionPathSuffixes: ["/extensions/custom/checker-bootstrap.ts"] },

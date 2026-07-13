@@ -261,6 +261,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 ### Extensions
 
 - `advisor-consult` — independent second-opinion advisor tool.
+- `btw` — `/btw` side conversations with ephemeral child history and a shared project workspace.
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `goal-controller` — checker-only long-running goal controller.
@@ -289,14 +290,14 @@ Install the root bundle when you want all included extensions and the theme:
 pi install git:github.com/doodledood/pi-plugins@main
 ```
 
-To load only one resource from the Git repo, use package filters in `~/.pi/agent/settings.json`:
+To load only one resource from the Git repo, use package filters in `~/.pi/agent/settings.json`. For example, BTW's package-root entry is:
 
 ```json
 {
   "packages": [
     {
       "source": "git:github.com/doodledood/pi-plugins@main",
-      "extensions": ["packages/extensions/message-stash/extensions/message-stash.ts"],
+      "extensions": ["packages/extensions/btw/index.ts"],
       "prompts": [],
       "themes": []
     }
@@ -338,4 +339,4 @@ npm run typecheck
 npm test
 ```
 
-`npm run verify` runs structure checks, typechecks, and the mature package test suites.
+`npm run verify` runs structure checks, typechecks, and package test suites, including BTW's deterministic child-runtime and TUI coverage.

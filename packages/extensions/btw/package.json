@@ -1,0 +1,63 @@
+{
+  "name": "@doodledood/pi-btw",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "/btw side conversations for Pi with ephemeral isolated history and a shared project workspace.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "btw",
+    "side-conversation",
+    "agent-session",
+    "tui"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "verify": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typebox": "*",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/btw"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/btw#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "test",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

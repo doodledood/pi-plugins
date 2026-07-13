@@ -144,7 +144,7 @@ function thinkingOrDefault(
   warnings: string[],
 ): GoalControllerConfig["checker"]["thinking"] {
   if (value === undefined || value === null) return defaultValue;
-  if (value === "inherit" || value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
+  if (value === "inherit" || value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") {
     return value;
   }
   warnings.push(field);

@@ -190,6 +190,48 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   );
 });
 
+test("PiSubprocessCheckerRunner maps configured and inherited max thinking to subprocess args", async () => {
+  const captured: string[][] = [];
+  const runner = new PiSubprocessCheckerRunner({
+    async exec(_command, args) {
+      captured.push(args);
+      return {
+        stdout: JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                decision: "continue",
+                complete: false,
+                reason: "more work remains",
+              }),
+            }],
+          },
+        }) + "\n",
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+  const baseInput = {
+    goal: createGoal("fake goal", DEFAULT_CONFIG, 0),
+    context: checkerContext(undefined),
+    cwd: "/tmp",
+    model: undefined,
+    checkerModelBootstrapPaths: [],
+  } satisfies Omit<CheckerRunInput, "config" | "thinkingLevel">;
+
+  await runner.run({ ...baseInput, config: { ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, thinking: "max" } }, thinkingLevel: "off" });
+  await runner.run({ ...baseInput, config: DEFAULT_CONFIG, thinkingLevel: "max" });
+
+  for (const args of captured) {
+    assert.equal(args[args.indexOf("--thinking") + 1], "max");
+  }
+});
+
 test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summary block trails it", async () => {
   const jsonVerdict = JSON.stringify({
     decision: "complete",

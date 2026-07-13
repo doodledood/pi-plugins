@@ -4,7 +4,9 @@ import { validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const root = process.cwd();
 const errors = [];
-const expectedExtensions = ["advisor-consult", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
+const expectedExtensions = ["advisor-consult", "btw", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
+const directoryEntryExtensions = new Set(["advisor-consult", "btw", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts"]);
+const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
@@ -42,21 +44,44 @@ function ensureNoForbiddenNames(dir = root) {
     if (st.isDirectory()) ensureNoForbiddenNames(path);
   }
 }
+function expectedExtensionPath(name) {
+  if (packageRootEntryExtensions.has(name)) return "./index.ts";
+  if (directoryEntryExtensions.has(name)) return `./extensions/${name}/index.ts`;
+  return `./extensions/${name}.ts`;
+}
 function verifyPackage(pkgDir, resourceType, expectedPath) {
   mustExist(join(pkgDir, "package.json"));
   mustExist(join(pkgDir, "README.md"));
   const pkg = readJson(join(pkgDir, "package.json"));
   if (!pkg) return;
-  if (!pkg.name || !pkg.version || pkg.type !== "module") errors.push(`${pkgDir}: package metadata incomplete`);
+  const relativePkgDir = pkgDir.slice(root.length + 1);
+  if (!pkg.name || !pkg.version || pkg.type !== "module" || !pkg.description) errors.push(`${pkgDir}: package metadata incomplete`);
   if (!pkg.keywords?.includes("pi-package")) errors.push(`${pkgDir}: missing pi-package keyword`);
+  if (!Array.isArray(pkg.files) || pkg.files.length === 0) errors.push(`${pkgDir}: missing publish files`);
+  if (pkg.repository?.directory !== relativePkgDir) errors.push(`${pkgDir}: repository.directory must be ${relativePkgDir}`);
+  if (!pkg.homepage || !pkg.bugs?.url || pkg.publishConfig?.access !== "public") errors.push(`${pkgDir}: publish metadata incomplete`);
   if (Array.isArray(pkg.pi?.skills) && pkg.pi.skills.length > 0) errors.push(`${pkgDir}: package must not declare pi.skills`);
   const piPaths = pkg.pi?.[resourceType];
   if (!Array.isArray(piPaths) || !piPaths.includes(expectedPath)) errors.push(`${pkgDir}: missing pi.${resourceType} ${expectedPath}`);
+  const publishRoot = expectedPath.replace(/^\.\//, "").split("/")[0];
+  if (!pkg.files?.includes(publishRoot)) errors.push(`${pkgDir}: files must publish ${publishRoot}`);
   mustExist(join(pkgDir, expectedPath));
+}
+
+const extensionsDir = join(root, "packages", "extensions");
+const actualExtensions = readdirSync(extensionsDir)
+  .filter((entry) => statSync(join(extensionsDir, entry)).isDirectory())
+  .sort();
+if (JSON.stringify(actualExtensions) !== JSON.stringify([...expectedExtensions].sort())) {
+  errors.push(`extension inventory mismatch: expected ${expectedExtensions.join(", ")}; found ${actualExtensions.join(", ")}`);
 }
 
 const rootPkg = readJson(join(root, "package.json"));
 if (rootPkg) {
+  for (const name of expectedExtensions) {
+    const rootPath = `./packages/extensions/${name}/${expectedExtensionPath(name).slice(2)}`;
+    if (!rootPkg.pi?.extensions?.includes(rootPath)) errors.push(`root package.json: missing pi.extensions ${rootPath}`);
+  }
   for (const p of rootPkg.pi?.extensions ?? []) mustExist(join(root, p));
   for (const p of rootPkg.pi?.skills ?? []) mustExist(join(root, p));
   for (const p of rootPkg.pi?.themes ?? []) mustExist(join(root, p));
@@ -99,8 +124,7 @@ if (setupModelAliases) {
   }
 }
 for (const name of expectedExtensions) {
-  const path = ["advisor-consult", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts"].includes(name) ? `./extensions/${name}/index.ts` : `./extensions/${name}.ts`;
-  verifyPackage(join(root, "packages", "extensions", name), "extensions", path);
+  verifyPackage(join(root, "packages", "extensions", name), "extensions", expectedExtensionPath(name));
 }
 if (existsSync(join(root, "packages", "skills"))) errors.push("packages/skills: global skills are intentionally excluded");
 if (rootPkg?.pi?.skills && rootPkg.pi.skills.length > 0) errors.push("root package.json must not declare pi.skills");

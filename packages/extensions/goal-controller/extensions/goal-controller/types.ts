@@ -1,4 +1,4 @@
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type GoalStatus = "active" | "checking" | "waiting_for_user" | "paused" | "blocked" | "budget_limited" | "complete" | "cleared";
 export type CheckerMode = "llm";
