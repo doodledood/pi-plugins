@@ -72,6 +72,22 @@ _Avoid_: Audit log when the Pi session file is meant.
 A hard cap on consecutive MC releases to one session without user contact, forcing escalation so individually reversible releases cannot compound into a committed trajectory.
 _Avoid_: Rate limit.
 
+**Multi-LLM ensemble**:
+A planned Pi extension that, while toggled on, answers every user message by fanning the prompt and serialized history out to configured models and having the live turn weigh their answers.
+_Avoid_: Model council, multi-agent (no agent runs are involved).
+
+**Ensemble member**:
+One forked, out-of-session raw completion of the user message plus serialized branch history by a single configured model (the current model included by default), with no tools and no effect on session history.
+_Avoid_: Advisor (that is advisor-consult's model-invoked subprocess), subagent.
+
+**Candidate injection**:
+The single custom context message carrying all ensemble members' labeled answers plus weighing instructions, injected via before_agent_start's message channel right after the user message so the prompt-cache prefix is extended, never invalidated.
+_Avoid_: System prompt injection.
+
+**Synthesis turn**:
+The main agent turn that reasons over the injected candidates with full tools and produces the user-visible answer; it is the ensemble's judge in the recommended design.
+_Avoid_: Judge call when the separate forked digest-judge variant is meant.
+
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
@@ -129,6 +145,7 @@ _Avoid_: Terminal goal when resumability matters.
 - The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and TTL expiry during active foreground/background work); the /cache report in cache-optimization explains the rest after the fact.
 - A **Background-wakeup TTL break** was historically outside the **TTL keepalive**'s foreground-only coverage; generalized background-work arming now covers launches that follow Pi's `run_in_background`-style convention, while idle-with-no-work remains zero-ping.
 - The **Goal reminder message** replaced the goal controller's system-prompt suffix precisely because system-prompt churn was a recurring **Cache break** cause.
+- A **Multi-LLM ensemble** turn is: N **Ensemble member** completions → one **Candidate injection** → one **Synthesis turn**; members never write to the session, and only the injection and the synthesis turn's answer persist in LLM context.
 - The **OpenAI max-output floor** prevents a hard provider 400 during **Context-clamp output underflow**, but at an **Artificial context boundary** the accepted 16-token response can still stop for length; a durable alias must keep Pi's visible compaction window separate from the target model metadata used for provider clamping.
 
 ## Flagged ambiguities
