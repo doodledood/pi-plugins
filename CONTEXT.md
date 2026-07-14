@@ -44,6 +44,34 @@ _Avoid_: Cache window when the context-window could be meant.
 The goal controller's persistent appended context message carrying the active goal text and rules, injected once per goal activation (and on resume transitions) instead of a system-prompt override, so goal lifecycle changes never invalidate the provider prompt cache head.
 _Avoid_: Goal system prompt.
 
+**Mission control (MC)**:
+A planned supervisory layer — an automated agent plus a global sensor/actuator extension — that triages unattended Pi sessions' stop points and engages the user only where user judgment is load-bearing.
+_Avoid_: Orchestrator, hub, inbox (earlier rejected designs).
+
+**Release (MC move)**:
+MC's reply unblocking a stopped session with "proceed with your recommendation", optionally injecting user tastes, always carrying a self-guarding reversibility clause.
+_Avoid_: Nudge, approve.
+
+**Escalation (MC move)**:
+MC routing a stop point to the user with a re-entry ramp; the user rejoins the conversation in the session's own tab, never answers from a compressed queue item.
+_Avoid_: Notification when the triage decision is meant.
+
+**Re-entry ramp**:
+A belief-register-style summary (leading read, settled points, open threads, the pending question) whose purpose is fast return to full immersion — explicitly not a decision brief for answering in place.
+_Avoid_: Brief, capsule.
+
+**Session posture**:
+A per-session engagement mode: live/paired (user drives per-step, MC only shields) or supervised (run to natural stop, then MC compiles a review report); the default is supervised.
+_Avoid_: Mode when Pi UI modes could be meant.
+
+**On-behalf ledger**:
+MC's per-session record of every release and policy-cited answer it made in the user's stead, surfaced at review with in-transcript provenance badges (rendered, never entering worker LLM context).
+_Avoid_: Audit log when the Pi session file is meant.
+
+**Release-loop budget**:
+A hard cap on consecutive MC releases to one session without user contact, forcing escalation so individually reversible releases cannot compound into a committed trajectory.
+_Avoid_: Rate limit.
+
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
@@ -89,6 +117,10 @@ A goal controller goal with status complete that is not live and may be resumed 
 _Avoid_: Terminal goal when resumability matters.
 
 ## Relationships
+
+- **Mission control** classifies each stop point into a **Release (MC move)**, a policy-cited answer, or an **Escalation (MC move)**; the **Release-loop budget** bounds consecutive releases.
+- A **Session posture** of live/paired suspends MC action on that session (user attention is the supervision); supervised posture ends in a review built from the **On-behalf ledger** plus a **Re-entry ramp**.
+- Irreversible execution actions escalate in real time regardless of **Session posture**.
 
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
