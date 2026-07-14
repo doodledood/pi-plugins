@@ -59,12 +59,6 @@ setup/**/models.json
 !setup/**/*.example.json
 !setup/**/*.template.json
 
-# Allow only the shared Claude skill symlink in repo-local Claude config.
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/sync-pi-setup
-
 # OS/editor
 .DS_Store
 .idea/

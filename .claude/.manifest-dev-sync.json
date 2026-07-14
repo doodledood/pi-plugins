@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "last_synced_at": "2026-07-14T16:42:40Z",
+  "agents": [],
+  "hooks": [],
+  "skills": [
+    "auto",
+    "check-pr",
+    "define",
+    "do",
+    "done",
+    "escalate",
+    "figure-out",
+    "figure-out-team",
+    "poll-slack",
+    "review-code",
+    "babysit-pr",
+    "handoff",
+    "prompt-engineering",
+    "review-pr",
+    "review-prompt",
+    "teach-me",
+    "walk-pr"
+  ]
+}
