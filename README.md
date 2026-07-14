@@ -20,7 +20,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 ### Guided agent workflow
 
 1. **Inspect before asking or editing**
-   - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/` and `setup/agents/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` and `setup/APPEND_SYSTEM.md` before explaining the agent-behavior option.
+   - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/`, `setup/agents/`, and `setup/skills/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` and `setup/APPEND_SYSTEM.md` before explaining the agent-behavior option.
    - Check `node --version`, `npm --version`, `git --version`, and `pi --version`. If Pi is missing, ask before installing it with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
    - Detect existing target files under `~/.pi/agent/` and `~/.pi/`. Inspect ordinary JSON and instruction files as needed. **Do not use raw file reads, `cat`, `grep`, or similar content-printing commands on `auth.json`, `mcp.json`, or `web-search.json`.** Inspect only structural key paths with a targeted script such as the one below.
    - Discover whether this is fresh or existing setup; do not ask questions the filesystem already answers.
@@ -88,6 +88,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - For `settings.json`, preserve unknown keys, merge nested objects, and union package entries by package identity instead of duplicating them. Apply model, thinking, theme, telemetry, and delivery defaults only when selected.
    - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
    - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
+   - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`.
    - Do not overwrite working `auth.json`, `mcp.json`, or `web-search.json`. Start from an example only when the integration is selected and no usable local file exists.
 
 | Portable source | Target | Apply when |
@@ -96,6 +97,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/settings.local.example.json` | `~/.pi/agent/settings.json` | Local development only, after replacing the absolute-path placeholders |
 | `setup/configs/*.json` | `~/.pi/agent/` | The matching extension/config is selected |
 | `setup/agents/*.md` | `~/.pi/agent/agents/` | The matching agent override is selected |
+| `setup/skills/*` | `~/.agents/skills/` | The matching global skill is selected |
 | `setup/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Aviram's operating posture is selected |
 | `setup/APPEND_SYSTEM.md` | `~/.pi/agent/APPEND_SYSTEM.md` | Aviram's appended system guidance is selected |
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
@@ -174,11 +176,12 @@ fi
 
 git clone https://github.com/doodledood/pi-plugins.git
 cd pi-plugins
-mkdir -p ~/.pi/agent/agents ~/.pi
+mkdir -p ~/.pi/agent/agents ~/.pi ~/.agents/skills
 
 cp setup/settings.example.json ~/.pi/agent/settings.json
 cp setup/configs/*.json ~/.pi/agent/
 cp setup/agents/*.md ~/.pi/agent/agents/
+cp -R setup/skills/* ~/.agents/skills/
 cp setup/AGENTS.md ~/.pi/agent/AGENTS.md
 cp setup/APPEND_SYSTEM.md ~/.pi/agent/APPEND_SYSTEM.md
 ```
@@ -219,7 +222,7 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths. Remove an obsolete `models.json` context-window override for regular Sol when adopting the full profile; the selected `model-aliases.json` config now owns its dual-window behavior.
 3. Install only missing selected packages. `pi install` updates the package entry while preserving unrelated settings.
 4. Compare each selected `setup/configs/*.json` file with its target and merge extension settings intentionally. When MCP server names differ, update the matching `prior` keys in `mcp-tool-loadout.json`.
-5. Copy the Explore definition only if the user selected the Luna-backed override. Merge `AGENTS.md` and `APPEND_SYSTEM.md` by concept rather than blindly appending duplicate rules.
+5. Copy the Explore definition only if the user selected the Luna-backed override. Copy selected global skills from `setup/skills/` to `~/.agents/skills/` as whole skill directories, backing up any same-named skill first. Merge `AGENTS.md` and `APPEND_SYSTEM.md` by concept rather than blindly appending duplicate rules.
 6. Preserve existing auth and private integration files. If a selected integration is absent, create its local file from the example and leave unresolved private values for the user to fill locally.
 
 The full-profile defaults available for an explicit merge are:
@@ -280,7 +283,11 @@ Use these descriptions when guiding a partial sync. The user may select individu
 
 - `deep-focus-pi`
 
-Global skills are intentionally not packaged as installable Pi resources. This repo does include a project-local maintenance skill, [`sync-pi-setup`](.agents/skills/sync-pi-setup/SKILL.md), for syncing current local Pi setup changes back into `setup/`. It is also symlinked into `.claude/skills/` for harnesses that discover Claude-style project skills.
+### Skills
+
+- `deletion-pass` — portable global audit skill. Runs an ordered "deletion pass" (question requirements, delete or absorb parts, simplify only what survives, accelerate/automate last) over a plan, design, architecture, or process and reports what to cut and what to question — audit only, it never rewrites the artifact. Ships as a setup template; copy `setup/skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level.
+
+Global skills are intentionally not packaged as installable Pi *package* resources (no `packages/skills`, no `pi.skills`). Portable global skills instead ship under `setup/skills/` and are copied to the user level during replication, exactly like `setup/agents/`. This repo also includes a project-local maintenance skill, [`sync-pi-setup`](.agents/skills/sync-pi-setup/SKILL.md), for syncing current local Pi setup changes back into `setup/`; it is symlinked into `.claude/skills/` for harnesses that discover Claude-style project skills.
 
 ## Installing individual resources
 

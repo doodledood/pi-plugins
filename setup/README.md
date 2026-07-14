@@ -10,6 +10,7 @@ For agent-guided replication onto another computer—including target inspection
 - `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use. It lists each local extension package—including BTW—and the theme separately, replacing rather than duplicating the root Git bundle.
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename, for example `configs/model-aliases.json` → `~/.pi/agent/model-aliases.json`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
+- `skills/` — portable global skills. Copy a skill directory such as `skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level (harness-agnostic home; Pi also discovers `~/.pi/agent/skills/`). `deletion-pass` is an audit-only "deletion pass" over a plan/design/architecture/process — it reports what to cut and question, never rewrites.
 - `mcp.example.json` — MCP template with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
 - `web-search.example.json` — `pi-web-access` template. Copy to `~/.pi/web-search.json` and fill provider secrets locally.
 - `models.example.json` — empty model-provider template. The full profile keeps regular Sol's dual-window configuration in `configs/model-aliases.json` instead of using a model-provider override.
@@ -22,7 +23,7 @@ For agent-guided replication onto another computer—including target inspection
 2. Use `settings.example.json` for normal installs and `settings.local.example.json` only while developing this repo. The normal root Git bundle already includes BTW; do not add a duplicate BTW source there.
 3. Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Remove any obsolete regular-Sol context override from an existing `models.json` while preserving unrelated providers and overrides.
 4. Copy or merge `configs/*.json` into `~/.pi/agent/` after reviewing them. The regular-Sol entry in `configs/model-aliases.json` exposes 372K to Pi while delegating requests with a 1.05M target window.
-5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults.
+5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
 7. Merge `AGENTS.md` / `APPEND_SYSTEM.md` only when the user wants Aviram's agent behavior.
 8. Copy `mcp.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.

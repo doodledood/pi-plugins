@@ -10,6 +10,7 @@ const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
+const expectedSetupSkills = ["deletion-pass"];
 const expectedEnabledModels = [
   "openai/gpt-5.6-sol:high",
   "openai/gpt-5.6-sol-1m:high",
@@ -136,6 +137,9 @@ const actualSetupAgents = existsSync(setupAgentsDir)
 if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents].sort())) {
   errors.push(`setup/agents inventory mismatch: expected ${expectedSetupAgents.join(", ")}; found ${actualSetupAgents.join(", ")}`);
 }
+for (const name of expectedSetupSkills) {
+  mustExist(join(root, "setup", "skills", name, "SKILL.md"));
+}
 const readme = readFileSync(join(root, "README.md"), "utf8");
 const replicationSources = [
   "setup/README.md",
@@ -143,6 +147,7 @@ const replicationSources = [
   "setup/settings.local.example.json",
   "setup/configs/*.json",
   "setup/agents/*.md",
+  "setup/skills/*",
   "setup/AGENTS.md",
   "setup/APPEND_SYSTEM.md",
   "setup/auth.example.json",
@@ -190,4 +195,4 @@ if (errors.length) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
-console.log(`structure ok: ${expectedExtensions.length} extensions, ${expectedSkills.length} project skill, ${expectedThemes.length} theme, ${expectedSetupAgents.length} setup agent`);
+console.log(`structure ok: ${expectedExtensions.length} extensions, ${expectedSkills.length} project skill, ${expectedThemes.length} theme, ${expectedSetupAgents.length} setup agent, ${expectedSetupSkills.length} setup skill`);
