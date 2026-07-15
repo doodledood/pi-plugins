@@ -17,13 +17,26 @@ import { enableBtwMouseInput, type BtwMouseInputScope } from "./src/mouse.ts";
 import { BTW_OVERLAY_OPTIONS, BtwOverlay } from "./src/ui.ts";
 
 const EXTENSION_ROOT = dirname(fileURLToPath(import.meta.url));
-export const SUPPORTED_PI_VERSION = "0.80.6";
+export const MINIMUM_PI_VERSION = "0.80.6";
+
+/** Compare dotted numeric versions (prerelease/build metadata ignored) like a comparator. */
+export function comparePiVersions(a: string, b: string): number {
+  const parse = (value: string): number[] =>
+    value.split(/[-+]/)[0].split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 export function assertSupportedPiVersion(version = VERSION): void {
-  if (version !== SUPPORTED_PI_VERSION) {
+  if (comparePiVersions(version, MINIMUM_PI_VERSION) < 0) {
     throw new Error(
-      `@doodledood/pi-btw requires Pi ${SUPPORTED_PI_VERSION}; running Pi is ${version}. ` +
-      "BTW is version-bound because prompt cancellation relies on Pi's preflightResult behavior.",
+      `@doodledood/pi-btw requires Pi ${MINIMUM_PI_VERSION} or newer; running Pi is ${version}. ` +
+      "BTW relies on Pi's preflightResult behavior for prompt cancellation.",
     );
   }
 }

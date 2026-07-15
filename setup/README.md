@@ -6,7 +6,7 @@ For agent-guided replication onto another computer—including target inspection
 
 ## Files
 
-- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to regular `openai/gpt-5.6-sol` at high thinking with a 372K visible / 1.05M target window, keeps the 1.05M-context Sol alias at high, enables `deep-focus-pi`, and configures image generation to use `gpt-image-2`.
+- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to `openai/gpt-5.6-sol-1m` at high thinking (full 1.05M visible / 1.05M target window), keeps regular `openai/gpt-5.6-sol` available as a 372K visible / 1.05M target dual-window alias, enables `deep-focus-pi`, and configures image generation to use `gpt-image-2`.
 - `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use. It lists each local extension package—including BTW—and the theme separately, replacing rather than duplicating the root Git bundle.
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename, for example `configs/model-aliases.json` → `~/.pi/agent/model-aliases.json`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.

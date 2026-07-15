@@ -128,13 +128,14 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 ```json
 {
   "defaultProvider": "openai",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultModel": "gpt-5.6-sol-1m",
   "defaultThinkingLevel": "high",
   "enabledModels": [
     "openai/gpt-5.6-sol:high",
     "openai/gpt-5.6-sol-1m:high",
     "anthropic/claude-fable-5:xhigh",
-    "anthropic/claude-opus-4-8:xhigh"
+    "anthropic/claude-opus-4-8:xhigh",
+    "anthropic/claude-sonnet-5:xhigh"
   ],
   "theme": "deep-focus-pi",
   "pi-image-gen": {
@@ -143,7 +144,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes regular `openai/gpt-5.6-sol` the default at high thinking. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) replaces it in place with a dual-window alias: Pi sees a 372,000-token operating window for display and compaction, while delegated provider requests use Sol's real 1,050,000-token target window so Pi does not clamp output at the artificial boundary. The same config adds `openai/gpt-5.6-sol-1m` at high thinking with 1,050,000 tokens for both visible and target windows.
+The setup makes `openai/gpt-5.6-sol-1m` the default at high thinking — the deep-context alias that exposes Sol's full 1,050,000-token window for both visible and target. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) also defines regular `openai/gpt-5.6-sol` as a dual-window alias: Pi sees a 372,000-token operating window for display and compaction, while delegated provider requests use Sol's real 1,050,000-token target window so Pi does not clamp output at the artificial boundary.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
@@ -228,7 +229,7 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 The full-profile defaults available for an explicit merge are:
 
 - `defaultProvider: "openai"`
-- `defaultModel: "gpt-5.6-sol"`
+- `defaultModel: "gpt-5.6-sol-1m"`
 - `defaultThinkingLevel: "high"`
 - the `enabledModels` list from `setup/settings.example.json`
 - `enableInstallTelemetry: false`

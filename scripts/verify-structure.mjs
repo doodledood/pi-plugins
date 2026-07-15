@@ -16,6 +16,7 @@ const expectedEnabledModels = [
   "openai/gpt-5.6-sol-1m:high",
   "anthropic/claude-fable-5:xhigh",
   "anthropic/claude-opus-4-8:xhigh",
+  "anthropic/claude-sonnet-5:xhigh",
 ];
 
 function readJson(path) {
@@ -101,7 +102,7 @@ if (installedSettings && localSettings) {
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
     if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
-    if (settings.defaultModel !== "gpt-5.6-sol") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol`);
+    if (settings.defaultModel !== "gpt-5.6-sol-1m") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol-1m`);
     if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
