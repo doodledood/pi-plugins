@@ -128,11 +128,12 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 ```json
 {
   "defaultProvider": "openai",
-  "defaultModel": "gpt-5.5",
-  "defaultThinkingLevel": "xhigh",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "high",
   "enabledModels": [
     "openai/gpt-5.5:xhigh",
     "openai/gpt-5.5-1m:xhigh",
+    "openai/gpt-5.6-sol:high",
     "openai/gpt-5.6-sol-1m:high",
     "anthropic/claude-fable-5:xhigh",
     "anthropic/claude-opus-4-8:xhigh",
@@ -145,7 +146,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes native `openai/gpt-5.5` the default at xhigh thinking. The rotation also keeps `openai/gpt-5.6-sol-1m` (the deep-context alias that exposes Sol's full 1,050,000-token window for both visible and target) plus the `openai/gpt-5.5-1m` 1.05M alias and the Anthropic models. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) also defines regular `openai/gpt-5.6-sol` as a dual-window alias — Pi sees a 372,000-token operating window for display and compaction, while delegated provider requests use Sol's real 1,050,000-token target window so Pi does not clamp output at the artificial boundary — and it remains selectable via `/model` even though it is not in the default rotation.
+The setup makes regular `openai/gpt-5.6-sol` the default at high thinking. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) defines it as a dual-window alias — Pi sees a 372,000-token operating window for display and compaction, while delegated provider requests use Sol's real 1,050,000-token target window so Pi does not clamp output at the artificial boundary. The rotation also keeps `openai/gpt-5.6-sol-1m` (the deep-context alias that exposes Sol's full 1,050,000-token window for both visible and target) plus native `openai/gpt-5.5`, the `openai/gpt-5.5-1m` 1.05M alias, and the Anthropic models.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
@@ -230,8 +231,8 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 The full-profile defaults available for an explicit merge are:
 
 - `defaultProvider: "openai"`
-- `defaultModel: "gpt-5.5"`
-- `defaultThinkingLevel: "xhigh"`
+- `defaultModel: "gpt-5.6-sol"`
+- `defaultThinkingLevel: "high"`
 - the `enabledModels` list from `setup/settings.example.json`
 - `enableInstallTelemetry: false`
 - `followUpMode: "all"` and `steeringMode: "all"`
