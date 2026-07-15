@@ -101,9 +101,9 @@ if (installedSettings && localSettings) {
     }),
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
-    if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
-    if (settings.defaultModel !== "gpt-5.6-sol-1m") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol-1m`);
-    if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
+    if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
+    if (settings.defaultModel !== "claude-opus-4-8") errors.push(`setup ${label} settings: defaultModel must be claude-opus-4-8`);
+    if (settings.defaultThinkingLevel !== "xhigh") errors.push(`setup ${label} settings: defaultThinkingLevel must be xhigh`);
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
     }
