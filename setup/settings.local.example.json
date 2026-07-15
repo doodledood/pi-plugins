@@ -1,6 +1,6 @@
 {
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-8",
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.5",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "openai/gpt-5.5:xhigh",
