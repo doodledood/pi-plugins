@@ -21,7 +21,7 @@ import {
   type Terminal,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { assertSupportedPiVersion, BtwController, SUPPORTED_PI_VERSION } from "../index.ts";
+import { assertSupportedPiVersion, BtwController, MINIMUM_PI_VERSION } from "../index.ts";
 import { BTW_MOUSE_SEQUENCES } from "../src/mouse.ts";
 import type { ChildRuntimeHandle, CreateChildRuntimeInput } from "../src/runtime.ts";
 import {
@@ -34,11 +34,14 @@ import {
 
 initTheme("dark", false);
 
-test("runtime version guard accepts only the supported Pi host", () => {
-  assert.doesNotThrow(() => assertSupportedPiVersion(SUPPORTED_PI_VERSION));
+test("runtime version guard accepts the minimum Pi host and newer", () => {
+  assert.doesNotThrow(() => assertSupportedPiVersion(MINIMUM_PI_VERSION));
+  assert.doesNotThrow(() => assertSupportedPiVersion("0.80.7"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("0.81.0"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("1.0.0"));
   assert.throws(
-    () => assertSupportedPiVersion("0.80.7"),
-    /requires Pi 0\.80\.6; running Pi is 0\.80\.7/,
+    () => assertSupportedPiVersion("0.80.5"),
+    /requires Pi 0\.80\.6 or newer; running Pi is 0\.80\.5/,
   );
 });
 

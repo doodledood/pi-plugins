@@ -22,7 +22,7 @@ export const MINIMUM_PI_VERSION = "0.80.6";
 /** Compare dotted numeric versions (prerelease/build metadata ignored) like a comparator. */
 export function comparePiVersions(a: string, b: string): number {
   const parse = (value: string): number[] =>
-    value.split(/[-+]/)[0].split(".").map((part) => Number.parseInt(part, 10) || 0);
+    (value.split(/[-+]/)[0] ?? "").split(".").map((part) => Number.parseInt(part, 10) || 0);
   const left = parse(a);
   const right = parse(b);
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {

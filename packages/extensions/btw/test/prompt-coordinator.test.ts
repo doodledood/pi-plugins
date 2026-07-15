@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AgentSession, VERSION, type PromptOptions } from "@earendil-works/pi-coding-agent";
+import { comparePiVersions, MINIMUM_PI_VERSION } from "../index.ts";
 import {
   ChildPromptCoordinator,
   type ChildPromptSessionPort,
@@ -54,14 +55,17 @@ const announcement = (parentHeadId: string): ParentUpdateAnnouncement => ({
   completedIds: [parentHeadId],
 });
 
-test("installed Pi 0.80.6 exposes and invokes preflightResult before model work", () => {
+test("installed Pi (0.80.6+) exposes and invokes preflightResult before model work", () => {
   let accepted: boolean | undefined;
   const options = {
     preflightResult(success: boolean) { accepted = success; },
   } satisfies PromptOptions;
   options.preflightResult(true);
   assert.equal(accepted, true, "the installed declaration accepts the hook used by the coordinator");
-  assert.equal(VERSION, "0.80.6");
+  assert.ok(
+    comparePiVersions(VERSION, MINIMUM_PI_VERSION) >= 0,
+    `installed Pi ${VERSION} must be at least ${MINIMUM_PI_VERSION}`,
+  );
 
   const promptRuntime = AgentSession.prototype.prompt.toString();
   assert.match(promptRuntime, /preflightResult/);

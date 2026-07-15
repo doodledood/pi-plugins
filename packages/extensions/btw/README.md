@@ -2,7 +2,7 @@
 
 A `/btw` side conversation for Pi. BTW opens one ephemeral child `AgentSession` in a Pi-owned right overlay so you can ask or try something without adding the child conversation or its tool results to the parent history.
 
-BTW requires Pi 0.80.6 and its interactive TUI. It refuses to register under another Pi host version with an actionable compatibility error, because prompt cancellation depends on Pi 0.80.6's `preflightResult` behavior. It does not open in RPC, JSON, or print mode.
+BTW requires Pi 0.80.6 or newer and its interactive TUI. It refuses to register under an older Pi host with an actionable compatibility error, because prompt cancellation depends on Pi's `preflightResult` behavior (introduced in 0.80.6). It does not open in RPC, JSON, or print mode.
 
 The child starts from the parent's latest complete, compaction-aware active branch and inherits its model, thinking level, working directory, and best-effort active tool set. Parent and child histories remain separate, but they intentionally share the same project workspace.
 
@@ -93,14 +93,14 @@ BTW is a focused ask/try workspace, not a nested copy of Pi's complete interacti
 - Resources reload in-process with this BTW extension filtered out to prevent recursion.
 - Runtime-only SDK tool identity cannot be inherited exactly. Requested active tool names may resolve to another discoverable definition; missing names fail visibly rather than silently reducing capability.
 - Third-party child extensions can enqueue public `nextTurn` context that Pi's API cannot clear on abort. BTW-owned prompts and parent-update notices avoid that queue; closing disposes the child runtime.
-- This experiment is explicitly version-bound to Pi **0.80.6**. Its prompt-cancellation admission uses the exported-but-internal `PromptOptions.preflightResult` RPC hook and relies on 0.80.6 calling it immediately before model work (or with `false` on preflight failure). Treat a Pi upgrade as a compatibility review, not an assumed-safe update.
+- This experiment requires Pi **0.80.6 or newer**. Its prompt-cancellation admission uses the exported-but-internal `PromptOptions.preflightResult` RPC hook and relies on Pi calling it immediately before model work (or with `false` on preflight failure). A test asserts that this behavior still holds on the installed Pi, so treat a failing `prompt-coordinator` test after a Pi upgrade as a compatibility signal, not a flaky test.
 - Child prompts use the parent's configured model and can incur normal model cost. Automated tests use controlled local providers and make no network requests.
 
 If extension/provider interference or runtime non-fidelity is unacceptable, close or uninstall BTW.
 
 ## Troubleshooting
 
-- **Unsupported Pi version:** install/use Pi 0.80.6 for this package version. BTW refuses to register under other host versions rather than relying on an unverified internal prompt hook.
+- **Unsupported Pi version:** install/use Pi 0.80.6 or newer for this package version. BTW refuses to register under older host versions rather than relying on an unverified internal prompt hook.
 - **No active parent model:** select or configure a model in the parent session, then run `/btw` again.
 - **Missing inherited tools or model/thinking/cwd mismatch:** BTW fails visibly instead of opening with silently reduced capabilities. Close the pane, reload/restart Pi, and retry after confirming the parent tools and model are available from installed resources. Runtime-only SDK tool overrides may require using the parent session instead.
 - **Overlay or child startup failure:** the error notification names the failing stage. Run `/btw done` if a pane remains, then `/reload` or restart Pi. If a stateful provider/extension conflicts with the in-process child, uninstall BTW rather than relying on that combination.
