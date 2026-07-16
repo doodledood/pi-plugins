@@ -31,8 +31,14 @@ function assistantEntry(timestamp: number, input: number, read: number, write: n
   return { type: "message", message: { role: "assistant", timestamp, usage: { input, cacheRead: read, cacheWrite: write } } };
 }
 
-function directAnthropicModelRegistry(): { providerRequestConfigs: Map<string, unknown>; modelRequestHeaders: Map<string, unknown>; authStorage: { runtimeOverrides: Map<string, unknown>; data: Record<string, unknown>; loadError: null } } {
-  return { providerRequestConfigs: new Map(), modelRequestHeaders: new Map(), authStorage: { runtimeOverrides: new Map(), data: {}, loadError: null } };
+function directAnthropicModelRegistry(): {
+  getRegisteredProviderConfig: (provider: string) => unknown;
+  getProviderAuthStatus: (provider: string) => { configured: boolean; source: string };
+} {
+  return {
+    getRegisteredProviderConfig: () => undefined,
+    getProviderAuthStatus: () => ({ configured: true, source: "environment" }),
+  };
 }
 
 function createHarness(branch: SessionEntryLike[]): Harness {
@@ -345,13 +351,19 @@ test("keepalive wiring: Anthropic provider/model request overrides disable pings
   });
 
   for (const modelRegistry of [
-    { ...directAnthropicModelRegistry(), providerRequestConfigs: new Map([["anthropic", { apiKey: "$OTHER_KEY" }]]) },
-    { ...directAnthropicModelRegistry(), modelRequestHeaders: new Map([["anthropic:claude-fable-5", { Authorization: "Bearer other" }]]) },
-    { ...directAnthropicModelRegistry(), authStorage: { runtimeOverrides: new Map([["anthropic", "sk-other"]]), data: {}, loadError: null } },
-    { ...directAnthropicModelRegistry(), authStorage: { runtimeOverrides: new Map(), data: { anthropic: { type: "api_key", key: "$ANTHROPIC_API_KEY" } }, loadError: null } },
-    { ...directAnthropicModelRegistry(), authStorage: { runtimeOverrides: new Map(), data: {}, loadError: new Error("bad auth") } },
+    // Extension-registered anthropic provider config (alias routing / custom stream).
+    { ...directAnthropicModelRegistry(), getRegisteredProviderConfig: () => ({ apiKey: "$OTHER_KEY" }) },
+    // Auth from stored auth.json entry rather than the plain env key.
+    { ...directAnthropicModelRegistry(), getProviderAuthStatus: () => ({ configured: true, source: "stored" }) },
+    // Runtime API-key override.
+    { ...directAnthropicModelRegistry(), getProviderAuthStatus: () => ({ configured: true, source: "runtime" }) },
+    // models.json-supplied key/command.
+    { ...directAnthropicModelRegistry(), getProviderAuthStatus: () => ({ configured: true, source: "models_json_key" }) },
+    // Not configured at all.
+    { ...directAnthropicModelRegistry(), getProviderAuthStatus: () => ({ configured: false }) },
+    // Unknown registry shapes fail safe.
     {},
-    { providerRequestConfigs: {}, modelRequestHeaders: new Map(), authStorage: { runtimeOverrides: new Map(), data: {}, loadError: null } },
+    { getRegisteredProviderConfig: () => undefined },
   ]) {
     const clock = { now: 1_700_000_000_000 };
     const requests: string[] = [];

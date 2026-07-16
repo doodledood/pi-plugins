@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-mcp-tool-loadout",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Usage-driven MCP tool loadout for Pi: compact catalog, budgeted active schemas, and cache-safe dormant-tool schema loading.",
   "keywords": [
@@ -13,7 +13,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "typebox": "*"
   },
   "scripts": {
@@ -21,7 +21,7 @@
     "test": "tsx --test extensions/mcp-tool-loadout/*.test.ts"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@types/node": "*",
     "tsx": "^4.22.4",
     "typebox": "*",

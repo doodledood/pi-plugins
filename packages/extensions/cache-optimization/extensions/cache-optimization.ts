@@ -83,26 +83,26 @@ function hasAnthropicRequestOverrides(modelRegistry: unknown, model: unknown): b
   const headers = (model as { headers?: unknown }).headers;
   if (headers && typeof headers === "object" && Object.keys(headers).length > 0) return true;
   if (!modelRegistry || typeof modelRegistry !== "object") return true;
-  const authStorage = (modelRegistry as { authStorage?: unknown }).authStorage;
-  if (!isPlainEnvAnthropicAuthStorage(authStorage)) return true;
-  const providerConfigs = (modelRegistry as { providerRequestConfigs?: unknown }).providerRequestConfigs;
-  const modelHeaders = (modelRegistry as { modelRequestHeaders?: unknown }).modelRequestHeaders;
-  if (!(providerConfigs instanceof Map) || !(modelHeaders instanceof Map)) return true;
-  if (providerConfigs.has("anthropic")) return true;
-  if (modelHeaders.has(`anthropic:${id}`)) return true;
+  // pi >= 0.80.8: probe the public ModelRegistry surface instead of the removed
+  // internals (authStorage/providerRequestConfigs). Unknown shapes fail safe.
+  const registry = modelRegistry as {
+    getRegisteredProviderConfig?: (provider: string) => unknown;
+    getProviderAuthStatus?: (provider: string) => { configured?: boolean; source?: string } | undefined;
+  };
+  if (typeof registry.getRegisteredProviderConfig !== "function" || typeof registry.getProviderAuthStatus !== "function") {
+    return true;
+  }
+  try {
+    // Extension-registered provider config (alias routing, custom stream) = override.
+    if (registry.getRegisteredProviderConfig("anthropic") !== undefined) return true;
+    // Keepalive replays with the plain env API key: any other auth source (stored
+    // auth.json entry, runtime override, models.json key/command) is an override.
+    const status = registry.getProviderAuthStatus("anthropic");
+    if (!status || status.configured !== true || status.source !== "environment") return true;
+  } catch {
+    return true;
+  }
   return false;
-}
-
-function isPlainEnvAnthropicAuthStorage(authStorage: unknown): boolean {
-  if (!authStorage || typeof authStorage !== "object") return false;
-  const runtimeOverrides = (authStorage as { runtimeOverrides?: unknown }).runtimeOverrides;
-  const data = (authStorage as { data?: unknown }).data;
-  const loadError = (authStorage as { loadError?: unknown }).loadError;
-  if (loadError !== null && loadError !== undefined) return false;
-  if (!(runtimeOverrides instanceof Map)) return false;
-  if (runtimeOverrides.has("anthropic")) return false;
-  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-  return !("anthropic" in data);
 }
 
 export default function cacheOptimization(pi: any) {

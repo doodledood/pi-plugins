@@ -13,11 +13,12 @@ import {
   type StreamOptions,
   type ToolCall,
 } from "@earendil-works/pi-ai/compat";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -341,6 +342,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
   let parent: AgentSession | undefined;
   let child: ChildRuntimeHandle | undefined;
   let parentRegistry: ModelRegistry | undefined;
+  let parentRuntime: ModelRuntime | undefined;
 
   try {
     const parentManager = SessionManager.inMemory(workspace);
@@ -378,10 +380,10 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       noContextFiles: true,
     });
     await resourceLoader.reload();
-    const authStorage = AuthStorage.inMemory({
-      [PROVIDER]: { type: "api_key", key: "deterministic-test-key" },
-    });
-    parentRegistry = ModelRegistry.inMemory(authStorage);
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify(PROVIDER, async () => ({ type: "api_key", key: "deterministic-test-key" }));
+    parentRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    parentRegistry = new ModelRegistry(parentRuntime);
     const created = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -390,7 +392,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       tools: ["write"],
       sessionManager: parentManager,
       settingsManager,
-      modelRegistry: parentRegistry,
+      modelRuntime: parentRuntime,
       resourceLoader,
     });
     parent = created.session;
@@ -409,6 +411,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       parentIsIdle: () => parent?.isIdle ?? true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: parentRegistry,
+      modelRuntime: parentRuntime,
       agentDir,
       callbacks: {
         onEvent() {},

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-managed-chrome-devtools",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "Manage a persistent Chrome DevTools MCP browser profile and wrapper from Pi.",
   "keywords": [
@@ -13,7 +13,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.80.8"
   },
   "license": "MIT",
   "repository": {

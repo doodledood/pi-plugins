@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-cache-optimization",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "description": "Prompt-cache efficiency toolkit for Pi: /cache diagnostics, Anthropic 4th-breakpoint keeper, and a runaway-proof TTL keepalive.",
   "keywords": [
@@ -14,7 +14,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

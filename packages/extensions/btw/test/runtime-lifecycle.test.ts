@@ -4,15 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
-  AuthStorage,
   DefaultResourceLoader,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   type ExtensionUIContext,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+
+const testModelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
+const inMemoryRegistry = () => new ModelRegistry(testModelRuntime);
 import { selectCompletedBranch, type ForkSnapshot } from "../src/fork.ts";
 import {
   CHECK_PARENT_UPDATES_TOOL,
@@ -118,7 +122,8 @@ export default function (pi) {
       parentSessionManager: parent,
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
-      parentModelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
       agentDir,
       tempRoot,
       callbacks: {
@@ -173,7 +178,8 @@ export default function (pi) {
       parentSessionManager: parent,
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
-      parentModelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
         onEvent() {},
@@ -231,7 +237,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
     systemPromptOptions: { cwd: "/tmp/btw-runtime-test" },
     parentSessionFile: undefined,
   };
-  const parentRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  const parentRegistry = inMemoryRegistry();
   const ui = { theme: {} } as ExtensionUIContext;
   const childEvents: string[] = [];
   let parentIdle = true;
@@ -243,6 +249,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
       parentIsIdle: () => parentIdle,
       parentUI: ui,
       parentModelRegistry: parentRegistry,
+      modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
         onEvent(event) { childEvents.push(event.type); },
@@ -497,7 +504,8 @@ test("deterministic child turn streams without touching parent history", async (
       parentSessionManager: parent,
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
-      parentModelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
         onEvent(event) {

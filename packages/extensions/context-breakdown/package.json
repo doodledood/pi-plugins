@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-context-breakdown",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "Claude-Code-style /context command for Pi showing context-window usage by category.",
   "keywords": [
@@ -13,7 +13,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*"
   },
   "license": "MIT",

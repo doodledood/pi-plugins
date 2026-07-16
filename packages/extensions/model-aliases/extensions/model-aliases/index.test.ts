@@ -100,8 +100,8 @@ test("Pi extension loader loads model-aliases and registers the hidden alias API
       tools: [],
     }));
 
-    const alias = session.modelRegistry.find("openai", "gpt-5.5-1m");
-    const target = session.modelRegistry.find("openai", "gpt-5.5");
+    const alias = session.modelRuntime.getModel("openai", "gpt-5.5-1m");
+    const target = session.modelRuntime.getModel("openai", "gpt-5.5");
 
     assert.ok(alias);
     assert.equal(alias.api, MODEL_ALIASES_API);

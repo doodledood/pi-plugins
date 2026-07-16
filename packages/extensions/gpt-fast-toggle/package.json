@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-gpt-fast-toggle",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "Toggle OpenAI GPT priority service tier from Pi without changing reasoning level.",
   "keywords": [
@@ -30,5 +30,8 @@
     "config",
     "README.md",
     "package.json"
-  ]
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.8"
+  }
 }

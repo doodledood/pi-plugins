@@ -10,6 +10,7 @@ import {
   defineTool,
   getAgentDir,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -58,6 +59,8 @@ export interface CreateChildRuntimeInput {
   parentIsIdle(): boolean;
   parentUI: ExtensionUIContext;
   parentModelRegistry: ModelRegistry;
+  /** Optional runtime override for tests; defaults to a fresh ModelRuntime from agentDir files. */
+  modelRuntime?: ModelRuntime;
   agentDir?: string;
   extensionRoot?: string;
   tempRoot?: string;
@@ -139,10 +142,11 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
 
     const settingsManager = SettingsManager.create(snapshot.cwd, agentDir);
     settingsManager.setProjectTrusted(snapshot.projectTrusted);
-    const modelRegistry = ModelRegistry.create(
-      input.parentModelRegistry.authStorage,
-      join(agentDir, "models.json"),
-    );
+    // pi >= 0.80.8: a fresh ModelRuntime from the same agentDir auth/models files
+    // (the child loads filtered extensions, so alias providers re-register there).
+    const modelRuntime =
+      input.modelRuntime ??
+      (await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") }));
     const promptOptions = snapshot.systemPromptOptions;
     const appendSystemPrompt = [promptOptions.appendSystemPrompt, CHILD_APPEND_PROMPT]
       .filter((value): value is string => Boolean(value?.trim()));
@@ -186,7 +190,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
       customTools: [updateTool],
       sessionManager,
       settingsManager,
-      modelRegistry,
+      modelRuntime,
       resourceLoader: loader,
     });
     session = created.session;

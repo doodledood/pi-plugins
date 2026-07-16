@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { AuthStorage, ModelRegistry, type EventBus } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime, VERSION, type EventBus } from "@earendil-works/pi-coding-agent";
 import * as piAiCompat from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
@@ -86,16 +86,29 @@ export function registerCheckerModelBootstrap(
   });
 }
 
-export default function modelAliases(pi: any) {
-  registerCheckerModelBootstrap(pi);
-  activateModelAliases(pi);
+/** Pi 0.80.8 reworked the model/auth runtime (ModelRuntime); older APIs are gone. */
+export function assertMinimumPiVersion(version: string, minimum = "0.80.8"): void {
+  const parse = (v: string) => v.split("-")[0]!.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const [a, b] = [parse(version), parse(minimum)];
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) > (b[i] ?? 0)) return;
+    if ((a[i] ?? 0) < (b[i] ?? 0)) throw new Error(`model-aliases requires pi >= ${minimum} (running ${version}) — update pi or the pi-plugins package`);
+  }
 }
 
-export function activateModelAliases(pi: any): void {
+export default async function modelAliases(pi: any) {
+  assertMinimumPiVersion(VERSION);
+  registerCheckerModelBootstrap(pi);
+  await activateModelAliases(pi);
+}
+
+export async function activateModelAliases(pi: any): Promise<void> {
   const config = loadConfig();
   if (!config.enabled) return;
 
-  const currentRegistry = ModelRegistry.create(AuthStorage.create());
+  // Async factories are awaited by pi before session_start and before queued
+  // pi.registerProvider() registrations are flushed, so this stays safe.
+  const currentRegistry = new ModelRegistry(await ModelRuntime.create());
   const existingModels = currentRegistry.getAll() as ExistingModel[];
   const aliasLookup = buildAliasLookup(config);
   const targetLookup = buildTargetModelLookup(config, existingModels);

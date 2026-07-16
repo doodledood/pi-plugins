@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-btw",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "type": "module",
   "description": "/btw side conversations for Pi with ephemeral isolated history and a shared project workspace.",
   "keywords": [
@@ -20,7 +20,7 @@
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
@@ -32,7 +32,7 @@
   "devDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*",
     "@types/node": "*",
     "tsx": "^4.22.4",

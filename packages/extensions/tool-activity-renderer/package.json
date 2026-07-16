@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-tool-activity-renderer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "Compact custom rendering wrappers for Pi built-in file and shell tools.",
   "scripts": {
@@ -17,7 +17,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*"
   },
   "license": "MIT",

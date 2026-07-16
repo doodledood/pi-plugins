@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.19.3",
+  "version": "0.20.0",
   "private": true,
   "type": "module",
   "description": "Aviram's portable Pi setup, extensions, and theme.",
@@ -43,8 +43,10 @@
     "verify": "npm run verify:structure && npm run typecheck && npm test"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-agent-core": ">=0.80.8",
+    "@earendil-works/pi-ai": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": ">=0.80.8",
     "@types/node": "*",
     "tsx": "^4.22.4",
     "typebox": "*",
