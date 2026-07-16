@@ -137,6 +137,65 @@ export default function (pi) {
   }
 });
 
+test("child re-asserts inherited active tools after an extension deactivates them at session_start", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "btw-repin-agent-"));
+  // A sibling extension that, on session_start, recomputes a narrower active set and drops
+  // inherited tools — mirroring how mcp-tool-loadout's budgeted setActiveTools override can
+  // deactivate tools the parent had active. The child must still inherit the full set.
+  const deactivatorDir = join(agentDir, "extensions", "tool-deactivator");
+  await mkdir(deactivatorDir, { recursive: true });
+  await writeFile(join(deactivatorDir, "index.ts"), `
+export default function (pi) {
+  pi.on("session_start", async () => {
+    // Keep only "read" active, dropping the other inherited tools (a budget recompute).
+    pi.setActiveTools(["read"]);
+  });
+}
+`, "utf8");
+
+  const parent = SessionManager.inMemory("/tmp/btw-repin-test");
+  const entries = parent.getBranch();
+
+  try {
+    const child = await createChildRuntime({
+      snapshot: {
+        cwd: "/tmp/btw-repin-test",
+        entries,
+        entryIds: entries.map((entry) => entry.id),
+        forkLeafId: null,
+        model,
+        thinkingLevel: "off",
+        activeToolNames: ["read", "write"],
+        projectTrusted: true,
+        systemPromptOptions: { cwd: "/tmp/btw-repin-test" },
+        parentSessionFile: undefined,
+      },
+      parentSessionManager: parent,
+      parentIsIdle: () => true,
+      parentUI: { theme: {} } as ExtensionUIContext,
+      parentModelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      agentDir,
+      callbacks: {
+        onEvent() {},
+        onNotice() {},
+        onChildStatus() {},
+        onRequestClose() {},
+      },
+    });
+
+    // The extension deactivated "write" and the child update tool at session_start, but BTW
+    // re-pins the inherited set after binding, so every inherited tool stays active and
+    // construction does not throw the "could not inherit active tool(s)" safety-net error.
+    assert.deepEqual(
+      new Set(child.session.getActiveToolNames()),
+      new Set(["read", "write", CHECK_PARENT_UPDATES_TOOL]),
+    );
+    await child.close();
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
 test("real child AgentSession is temp-backed, isolated, and cleans up idempotently without a model call", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "btw-agent-test-"));
   const parent = SessionManager.inMemory("/tmp/btw-runtime-test");

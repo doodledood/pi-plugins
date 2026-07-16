@@ -235,6 +235,12 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
       },
     });
 
+    // A child extension's session_start (e.g. mcp-tool-loadout) can recompute its own
+    // budgeted active set and deactivate part of the inherited set while binding. Re-assert
+    // the parent's active tools so the fork faithfully inherits them. The check below then
+    // only catches names that are genuinely unregistered in the child, not merely deactivated.
+    session.setActiveToolsByName(activeToolNames);
+
     const actualTools = new Set(session.getActiveToolNames());
     const missingTools = activeToolNames.filter((name) => !actualTools.has(name));
     if (missingTools.length > 0) {
