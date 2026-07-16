@@ -72,6 +72,14 @@ _Avoid_: Audit log when the Pi session file is meant.
 A hard cap on consecutive MC releases to one session without user contact, forcing escalation so individually reversible releases cannot compound into a committed trajectory.
 _Avoid_: Rate limit.
 
+**Figure-out watcher**:
+A planned external reasoning auditor — a different model in a fresh background SDK session — that reads a figure-out investigation log as it grows and interjects into the driver's chat when it finds reasoning holes; the figure-out skill is its audit standard, never its operating identity.
+_Avoid_: Fact-checker, reviewer agent.
+
+**Pre-read checkpoint**:
+The investigation-log entry (heading contains `PRE-READ CHECKPOINT`) a watched figure-out driver appends before naming its read; the watcher always answers it with an explicit verdict interject, and in autonomous runs the driver blocks on that verdict.
+_Avoid_: Gate tool (deleted design), sign-off.
+
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
@@ -121,6 +129,8 @@ _Avoid_: Terminal goal when resumability matters.
 - **Mission control** classifies each stop point into a **Release (MC move)**, a policy-cited answer, or an **Escalation (MC move)**; the **Release-loop budget** bounds consecutive releases.
 - A **Session posture** of live/paired suspends MC action on that session (user attention is the supervision); supervised posture ends in a review built from the **On-behalf ledger** plus a **Re-entry ramp**.
 - Irreversible execution actions escalate in real time regardless of **Session posture**.
+
+- A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.
 
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
