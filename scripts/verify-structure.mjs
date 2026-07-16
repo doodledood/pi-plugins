@@ -12,6 +12,8 @@ const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
 const expectedSetupSkills = ["deletion-pass"];
 const expectedEnabledModels = [
+  "openai/gpt-5.5:xhigh",
+  "openai/gpt-5.5-1m:xhigh",
   "openai/gpt-5.6-sol:high",
   "openai/gpt-5.6-sol-1m:high",
   "anthropic/claude-fable-5:xhigh",
@@ -101,9 +103,9 @@ if (installedSettings && localSettings) {
     }),
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
-    if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
-    if (settings.defaultModel !== "claude-opus-4-8") errors.push(`setup ${label} settings: defaultModel must be claude-opus-4-8`);
-    if (settings.defaultThinkingLevel !== "xhigh") errors.push(`setup ${label} settings: defaultThinkingLevel must be xhigh`);
+    if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
+    if (settings.defaultModel !== "gpt-5.6-sol") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol`);
+    if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
     }
