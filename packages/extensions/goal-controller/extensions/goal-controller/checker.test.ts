@@ -12,11 +12,16 @@ const JSON_ASSISTANT_FIELDS = {
   api: "openai-responses",
   provider: "openai",
   model: "gpt-test",
+  responseModel: "gpt-test-actual",
+  responseId: "response-1",
+  diagnostics: [{ type: "test", timestamp: 0, error: { message: "safe", code: "TEST" }, details: {} }],
   usage: {
     input: 0,
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
+    cacheWrite1h: 0,
+    reasoning: 0,
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   },
@@ -787,6 +792,26 @@ test("PiSubprocessCheckerRunner rejects malformed protocol before interpreting a
   );
 });
 
+test("PiSubprocessCheckerRunner rejects a retry-pending lifecycle without agent_settled", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const assistant = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]);
+      return {
+        stdout: [
+          { type: "message_end", message: assistant },
+          { type: "agent_end", messages: [assistant], willRetry: true },
+          { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
+        ].map((event) => JSON.stringify(event)).join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+});
+
 test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a verdict", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
@@ -814,6 +839,7 @@ for (const malformedEvent of [
   { name: "entry_appended with malformed custom message display", event: { type: "entry_appended", entry: { type: "custom_message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", customType: "test", content: "ok", display: "yes" } } },
   { name: "entry_appended with malformed label", event: { type: "entry_appended", entry: { type: "label", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", targetId: "target", label: 42 } } },
   { name: "entry_appended with malformed hook marker", event: { type: "entry_appended", entry: { type: "compaction", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, fromHook: "yes" } } },
+  { name: "entry_appended with malformed branch hook marker", event: { type: "entry_appended", entry: { type: "branch_summary", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", fromId: "entry-0", summary: "summary", fromHook: "yes" } } },
   { name: "session_info_changed with an invalid name", event: { type: "session_info_changed", name: 42 } },
   { name: "auto_retry_start with an invalid attempt", event: { type: "auto_retry_start", attempt: "1", maxAttempts: 3, delayMs: 100, errorMessage: "retry" } },
   { name: "auto_retry_end with an invalid success flag", event: { type: "auto_retry_end", success: "yes", attempt: 1 } },
@@ -825,8 +851,16 @@ for (const malformedEvent of [
   { name: "turn_end with a malformed message", event: { type: "turn_end", message: {}, toolResults: [] } },
   { name: "turn_end with a malformed tool result", event: { type: "turn_end", message: jsonAssistantMessage(), toolResults: [{ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: "invalid" }] } },
   { name: "message_start with malformed assistant content", event: { type: "message_start", message: { ...jsonAssistantMessage(), content: [{}] } } },
+  { name: "message_start with invalid text signature", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "text", text: "x", textSignature: 42 }]) } } },
+  { name: "message_start with invalid thinking metadata", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "thinking", thinking: "x", redacted: "yes" }]) } } },
+  { name: "message_start with invalid tool thought signature", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "toolCall", id: "call-1", name: "read", arguments: {}, thoughtSignature: 42 }]) } } },
   { name: "message_start with malformed assistant usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } } } },
-  { name: "message_start with invalid optional assistant fields", event: { type: "message_start", message: { ...jsonAssistantMessage(), errorMessage: 42, usage: { ...JSON_ASSISTANT_FIELDS.usage, reasoning: "bad" } } } },
+  { name: "message_start with invalid assistant errorMessage", event: { type: "message_start", message: { ...jsonAssistantMessage(), errorMessage: 42 } } },
+  { name: "message_start with invalid assistant responseModel", event: { type: "message_start", message: { ...jsonAssistantMessage(), responseModel: 42 } } },
+  { name: "message_start with invalid assistant responseId", event: { type: "message_start", message: { ...jsonAssistantMessage(), responseId: 42 } } },
+  { name: "message_start with invalid assistant diagnostics", event: { type: "message_start", message: { ...jsonAssistantMessage(), diagnostics: 42 } } },
+  { name: "message_start with invalid assistant reasoning usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, reasoning: "bad" } } } },
+  { name: "message_start with invalid assistant cacheWrite1h usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cacheWrite1h: "bad" } } } },
   { name: "message_start with invalid added tool names", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], addedToolNames: [42], isError: false, timestamp: 0 } } },
   { name: "message_start with malformed bash timestamp", event: { type: "message_start", message: { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: "invalid" } } },
   { name: "message_start with malformed compaction timestamp", event: { type: "message_start", message: { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: "invalid" } } },
@@ -876,12 +910,12 @@ test("PiSubprocessCheckerRunner accepts current recognized event envelopes after
         type: "message_end",
         message: { ...assistant, content: [{ type: "text", text: '{"decision":"continue"}' }] },
       };
-      const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: {} };
-      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }, { type: "image", data: "base64", mimeType: "image/png" }], isError: false, timestamp: 0 };
-      const thinkingAssistant = jsonAssistantMessage([{ type: "thinking", thinking: "inspect" }, toolCall]);
+      const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: {}, thoughtSignature: "thought" };
+      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }, { type: "image", data: "base64", mimeType: "image/png" }], addedToolNames: ["read"], isError: false, timestamp: 0 };
+      const thinkingAssistant = jsonAssistantMessage([{ type: "thinking", thinking: "inspect", thinkingSignature: "thinking", redacted: false }, toolCall]);
       const errorAssistant = jsonAssistantMessage([], "error");
       const userMessage = { role: "user", content: "inspect", timestamp: 0 };
-      const bashMessage = { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: 0 };
+      const bashMessage = { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, fullOutputPath: "/tmp/full", excludeFromContext: false, timestamp: 0 };
       const branchMessage = { role: "branchSummary", summary: "summary", fromId: "entry-0", timestamp: 0 };
       const compactionMessage = { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: 0 };
       const entryBase = { id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z" };
@@ -912,24 +946,26 @@ test("PiSubprocessCheckerRunner accepts current recognized event envelopes after
         { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {}, partialResult: null },
         { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {}, isError: false },
         { type: "turn_end", message: assistant, toolResults: [toolResult] },
-        { type: "agent_settled" },
         { type: "queue_update", steering: [], followUp: [] },
         { type: "compaction_start", reason: "manual" },
         { type: "entry_appended", entry: { ...entryBase, type: "message", message: userMessage } },
         { type: "entry_appended", entry: { ...entryBase, type: "thinking_level_change", thinkingLevel: "high" } },
         { type: "entry_appended", entry: { ...entryBase, type: "model_change", provider: "openai", modelId: "gpt-test" } },
-        { type: "entry_appended", entry: { ...entryBase, type: "compaction", summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10 } },
-        { type: "entry_appended", entry: { ...entryBase, type: "branch_summary", fromId: "entry-0", summary: "summary" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "compaction", summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, fromHook: true } },
+        { type: "entry_appended", entry: { ...entryBase, type: "branch_summary", fromId: "entry-0", summary: "summary", fromHook: true } },
         { type: "entry_appended", entry: { ...entryBase, type: "custom", customType: "test" } },
         { type: "entry_appended", entry: { ...entryBase, type: "custom_message", customType: "test", content: "ok", display: false } },
         { type: "entry_appended", entry: { ...entryBase, type: "label", targetId: "entry-0", label: "label" } },
         { type: "entry_appended", entry: { ...entryBase, type: "session_info", name: "name" } },
         { type: "session_info_changed" },
         { type: "thinking_level_changed", level: "high" },
+        { type: "compaction_end", reason: "manual", aborted: false, willRetry: false },
+        { type: "compaction_end", reason: "manual", result: { summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10 }, aborted: false, willRetry: false, errorMessage: "safe compaction failure" },
         { type: "compaction_end", reason: "manual", result: { summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, estimatedTokensAfter: 5 }, aborted: false, willRetry: false },
         { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
         { type: "auto_retry_end", success: true, attempt: 1 },
         { type: "agent_end", messages: [assistant], willRetry: false },
+        { type: "agent_settled" },
       ];
       return {
         stdout: [verdict, ...events].map((event) => JSON.stringify(event)).join("\n"),
@@ -951,6 +987,8 @@ test("PiSubprocessCheckerRunner rejects a valid event stream without assistant m
           JSON.stringify({ type: "session", version: 3, id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp" }),
           JSON.stringify({ type: "agent_start" }),
           JSON.stringify({ type: "turn_start" }),
+          JSON.stringify({ type: "agent_end", messages: [], willRetry: false }),
+          JSON.stringify({ type: "agent_settled" }),
         ].join("\n"),
         stderr: "",
         code: 0,

@@ -324,6 +324,8 @@ function scanJsonMode(stdout: string): {
   let finalAssistantMessage: Record<string, unknown> | undefined;
   let nonJsonLineCount = 0;
   let malformedEventCount = 0;
+  let lifecycleObserved = false;
+  let lifecycleSettled = false;
 
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
@@ -335,6 +337,10 @@ function scanJsonMode(stdout: string): {
     if (!isValidJsonModeEventEnvelope(event)) {
       malformedEventCount += 1;
       continue;
+    }
+    if (isLifecycleEvent(event.type)) {
+      lifecycleObserved = true;
+      lifecycleSettled = event.type === "agent_settled";
     }
     if (event.type !== "message_end") continue;
     const message = event.message;
@@ -358,7 +364,18 @@ function scanJsonMode(stdout: string): {
     }
   }
 
+  if (lifecycleObserved && !lifecycleSettled) malformedEventCount += 1;
   return { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount };
+}
+
+function isLifecycleEvent(type: unknown): boolean {
+  return type === "agent_start"
+    || type === "agent_end"
+    || type === "agent_settled"
+    || type === "compaction_start"
+    || type === "compaction_end"
+    || type === "auto_retry_start"
+    || type === "auto_retry_end";
 }
 
 function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
@@ -443,6 +460,7 @@ function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown
         && (value.errorMessage === undefined || typeof value.errorMessage === "string")
         && (value.responseModel === undefined || typeof value.responseModel === "string")
         && (value.responseId === undefined || typeof value.responseId === "string")
+        && (value.diagnostics === undefined || (Array.isArray(value.diagnostics) && value.diagnostics.every(isAssistantDiagnostic)))
         && typeof value.timestamp === "number";
     case "user":
       return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
@@ -464,6 +482,8 @@ function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown
         && (value.exitCode === undefined || typeof value.exitCode === "number")
         && typeof value.cancelled === "boolean"
         && typeof value.truncated === "boolean"
+        && (value.fullOutputPath === undefined || typeof value.fullOutputPath === "string")
+        && (value.excludeFromContext === undefined || typeof value.excludeFromContext === "boolean")
         && typeof value.timestamp === "number";
     case "branchSummary":
       return hasStringProperties(value, "summary", "fromId") && typeof value.timestamp === "number";
@@ -510,13 +530,32 @@ function isSessionEntryEnvelope(value: unknown): boolean {
   }
 }
 
+function isAssistantDiagnostic(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.type !== "string" || typeof value.timestamp !== "number") return false;
+  if (value.details !== undefined && !isRecord(value.details)) return false;
+  if (value.error === undefined) return true;
+  return isRecord(value.error)
+    && typeof value.error.message === "string"
+    && (value.error.name === undefined || typeof value.error.name === "string")
+    && (value.error.stack === undefined || typeof value.error.stack === "string")
+    && (value.error.code === undefined || typeof value.error.code === "string" || typeof value.error.code === "number");
+}
+
 function isAssistantContent(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (value.type === "text") return typeof value.text === "string";
-  if (value.type === "thinking") return typeof value.thinking === "string";
+  if (value.type === "text") {
+    return typeof value.text === "string"
+      && (value.textSignature === undefined || typeof value.textSignature === "string");
+  }
+  if (value.type === "thinking") {
+    return typeof value.thinking === "string"
+      && (value.thinkingSignature === undefined || typeof value.thinkingSignature === "string")
+      && (value.redacted === undefined || typeof value.redacted === "boolean");
+  }
   return value.type === "toolCall"
     && hasStringProperties(value, "id", "name")
-    && isRecord(value.arguments);
+    && isRecord(value.arguments)
+    && (value.thoughtSignature === undefined || typeof value.thoughtSignature === "string");
 }
 
 function isUserContent(value: unknown): boolean {
