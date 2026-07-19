@@ -21,31 +21,68 @@ export interface CheckerRunner {
 
 type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
 
+class CheckerFailure extends Error {
+  public override readonly name = "CheckerFailure";
+}
+
+type VerdictValidationCode = "not-json" | "missing-decision" | "conflicting-fields" | "insufficient-proof";
+
+class VerdictValidationError extends Error {
+  public override readonly name = "VerdictValidationError";
+  public constructor(public readonly code: VerdictValidationCode, message: string) {
+    super(message);
+  }
+}
+
 export class PiSubprocessCheckerRunner implements CheckerRunner {
   public constructor(private readonly pi: Pick<ExtensionAPI, "exec">) {}
 
   public async run(input: CheckerRunInput): Promise<CheckerVerdict> {
     const prompt = buildCheckerPrompt(input.goal, input.context);
-    const args = checkerArgs(input, prompt);
+    const effectiveModel = resolveModelPattern(input.config.checker.model, input.model);
+    const args = checkerArgs(input, prompt, effectiveModel);
     const startedAt = Date.now();
-    const result = await this.pi.exec("pi", args, {
-      cwd: input.cwd,
-      timeout: input.config.checker.timeoutMs,
-      signal: input.signal,
-    });
+    let result: ExecResult;
+    try {
+      result = await this.pi.exec("pi", args, {
+        cwd: input.cwd,
+        timeout: input.config.checker.timeoutMs,
+        signal: input.signal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new CheckerFailure([
+        "Goal checker subprocess could not start or complete.",
+        checkerConfigSummary(input.config, effectiveModel),
+        `Execution classification: ${classifyExecutionFailure(message)}`,
+      ].join("\n"));
+    }
     const elapsedMs = Math.max(0, Date.now() - startedAt);
 
-    if (result.code !== 0) {
-      throw new Error(formatCheckerSubprocessFailure(result, input.config, elapsedMs));
+    if (result.killed || result.code !== 0) {
+      throw new CheckerFailure(formatCheckerSubprocessFailure(result, input.config, elapsedMs, effectiveModel));
     }
 
-    const finalText = verdictTextFromJsonMode(result.stdout) ?? result.stdout.trim();
-    return parseCheckerVerdict(finalText);
+    const finalText = verdictTextFromJsonMode(result.stdout, input.config, effectiveModel);
+    try {
+      return parseCheckerVerdict(finalText);
+    } catch (error) {
+      throw new CheckerFailure([
+        "Goal checker returned an invalid verdict.",
+        checkerConfigSummary(input.config, effectiveModel),
+        `Verdict classification: ${classifyVerdictFailure(error)}`,
+      ].join("\n"));
+    }
   }
 }
 
-function formatCheckerSubprocessFailure(result: ExecResult, config: GoalControllerConfig, elapsedMs: number): string {
-  const configSummary = `Checker config: model=${config.checker.model}, thinking=${config.checker.thinking}, timeoutMs=${config.checker.timeoutMs}.`;
+function formatCheckerSubprocessFailure(
+  result: ExecResult,
+  config: GoalControllerConfig,
+  elapsedMs: number,
+  effectiveModel: string | undefined,
+): string {
+  const configSummary = checkerConfigSummary(config, effectiveModel);
   const noVerdict = "No checker verdict was returned.";
   const output = outputDiagnostics(result);
 
@@ -67,21 +104,53 @@ function formatCheckerSubprocessFailure(result: ExecResult, config: GoalControll
 
 function outputDiagnostics(result: ExecResult): string | undefined {
   const stderr = result.stderr.trim();
-  const stdout = result.stdout.trim();
-  const parts = [formatOutputTail("stderr", stderr), formatOutputTail("stdout tail", stdout)].filter((part): part is string => part !== undefined);
+  const assistant = scanJsonMode(result.stdout).finalAssistantMessage;
+  const stopReason = checkerStopReason(stringProperty(assistant, "stopReason"));
+  const errorMessage = stringProperty(assistant, "errorMessage");
+  const parts = [
+    stderr ? `Stderr classification: ${classifyExecutionFailure(stderr)}` : undefined,
+    stopReason ? `Assistant stop reason: ${stopReason}.` : undefined,
+    errorMessage ? `Provider classification: ${classifyProviderFailure(errorMessage)}` : undefined,
+  ].filter((part): part is string => part !== undefined);
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-function formatOutputTail(label: string, value: string): string | undefined {
-  if (!value) return undefined;
-  // Redact before tailing so a token near the cut boundary cannot survive as a
-  // partial secret. A bootstrap extension that fails to load can echo provider
-  // config (apiKey/headers/bearer tokens) to stderr, and this diagnostic is
-  // persisted in goal state and shown in the UI, so it must not carry secrets.
-  const redacted = redactSecrets(value);
-  const maxChars = 2_000;
-  const tail = redacted.length > maxChars ? `…${redacted.slice(-maxChars)}` : redacted;
-  return `${label}:\n${tail}`;
+function classifyProviderFailure(message: string): string {
+  if (/reverse engineering or duplicating model outputs/iu.test(message)) {
+    return "The provider refused the checker request as suspected reverse engineering or duplicating model outputs.";
+  }
+  if (/no models match|model[^\r\n]*(?:not found|does not exist|invalid|unavailable|not supported)|model_not_found|unknown model|no such model|(?:404[^\r\n]*model|model[^\r\n]*404)/iu.test(message)) return "The requested checker model could not be resolved.";
+  if (/rate.?limit|quota|\b429\b/iu.test(message)) return "The provider reported a rate-limit or quota failure.";
+  if (/unauthorized|forbidden|authentication|authorization|invalid[_ -]?api[_ -]?key|incorrect api key|credentials?|\b401\b|\b403\b/iu.test(message)) {
+    return "The provider reported an authentication or authorization failure.";
+  }
+  if (/timed?\s*out|timeout/iu.test(message)) return "The provider request timed out.";
+  return "The provider returned an assistant error. Inspect local Pi logs for details.";
+}
+
+function classifyExecutionFailure(message: string): string {
+  if (/reverse engineering or duplicating model outputs/iu.test(message)) {
+    return "The provider refused the checker request as suspected reverse engineering or duplicating model outputs.";
+  }
+  if (/rate.?limit|quota|\b429\b/iu.test(message)) return "The provider reported a rate-limit or quota failure.";
+  if (/no models match|model[^\r\n]*(?:not found|does not exist|invalid|unavailable|not supported)|model_not_found|unknown model|no such model|(?:404[^\r\n]*model|model[^\r\n]*404)/iu.test(message)) return "The requested checker model could not be resolved.";
+  if (/no API key|API key not found|missing credentials?/iu.test(message)) {
+    return "Checker process authentication or authorization failed.";
+  }
+  if (/enoent|spawn|(?:command|executable)[^\r\n]*not found/iu.test(message)) return "The checker process could not be launched.";
+  if (/timed?\s*out|timeout/iu.test(message)) return "The checker process timed out.";
+  if (/unauthorized|forbidden|authentication|authorization|invalid[_ -]?api[_ -]?key|incorrect api key|credentials?|\b401\b|\b403\b/iu.test(message)) {
+    return "Checker process authentication or authorization failed.";
+  }
+  return "Checker process execution failed. Inspect local Pi logs for details.";
+}
+
+function classifyVerdictFailure(error: unknown): string {
+  if (!(error instanceof VerdictValidationError)) return "The checker verdict failed schema validation.";
+  if (error.code === "not-json") return "The checker response was not a JSON verdict object.";
+  if (error.code === "missing-decision") return "The checker verdict omitted a recognized decision.";
+  if (error.code === "conflicting-fields") return "The checker verdict contained conflicting decision fields.";
+  return "The completion verdict did not contain sufficient consistent proof.";
 }
 
 const REDACTED = "[REDACTED]";
@@ -117,7 +186,7 @@ function formatDuration(ms: number): string {
   return `${ms}ms`;
 }
 
-function checkerArgs(input: CheckerRunInput, prompt: string): string[] {
+function checkerArgs(input: CheckerRunInput, prompt: string, model: string | undefined): string[] {
   const args = [
     "--mode",
     "json",
@@ -132,7 +201,6 @@ function checkerArgs(input: CheckerRunInput, prompt: string): string[] {
     args.push("-e", extensionPath);
   }
 
-  const model = resolveModelPattern(input.config.checker.model, input.model);
   if (model) args.push("--model", model);
 
   const thinking = input.config.checker.thinking === "inherit" ? input.thinkingLevel : input.config.checker.thinking;
@@ -155,52 +223,199 @@ function stringProperty(value: unknown, key: string): string | undefined {
   return typeof property === "string" && property.trim().length > 0 ? property.trim() : undefined;
 }
 
-function verdictTextFromJsonMode(stdout: string): string | undefined {
-  const textBlocks = assistantTextBlocksFromJsonMode(stdout);
-  if (textBlocks.length === 0) return undefined;
-  // Prefer the last text block that actually carries a JSON object. A checker
-  // that inspected evidence sometimes appends a prose summary after (or emits
-  // it in a later turn than) the verdict; the final block alone would then miss
-  // the JSON. Fall back to the last block so a truly prose-only run still yields
-  // the informative parse error.
-  for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
-    const candidate = textBlocks[index];
-    if (candidate !== undefined && containsJsonObject(candidate)) return candidate;
+function verdictTextFromJsonMode(
+  stdout: string,
+  config: GoalControllerConfig,
+  effectiveModel: string | undefined,
+): string {
+  const { textBlocks, finalAssistantMessage, nonJsonLineCount } = scanJsonMode(stdout);
+  const stopReason = checkerStopReason(stringProperty(finalAssistantMessage, "stopReason"));
+  const errorMessage = stringProperty(finalAssistantMessage, "errorMessage");
+  // Earlier failed attempts can remain in the stream when Pi retries. The final
+  // assistant message is authoritative once retries settle.
+  if (stopReason === "error" || stopReason === "aborted" || errorMessage) {
+    const parts = [
+      "Goal checker model failed before returning a verdict.",
+      checkerConfigSummary(config, effectiveModel),
+      stopReason ? `Assistant stop reason: ${stopReason}.` : undefined,
+      errorMessage ? `Provider classification: ${classifyProviderFailure(errorMessage)}` : undefined,
+      config.checker.model === "inherit"
+        ? "The checker inherited the active session model. Configure checker.model explicitly in goal-controller.config.json if that model cannot perform checker work."
+        : undefined,
+    ];
+    throw new CheckerFailure(parts.filter((part): part is string => part !== undefined).join("\n"));
   }
-  return textBlocks.at(-1);
+
+  if (nonJsonLineCount > 0) {
+    throw new CheckerFailure([
+      `Goal checker returned a malformed Pi JSON event stream (${nonJsonLineCount} non-JSON line${nonJsonLineCount === 1 ? "" : "s"}).`,
+      checkerConfigSummary(config, effectiveModel),
+    ].join("\n"));
+  }
+
+  if (finalAssistantMessage && stopReason !== "stop") {
+    throw new CheckerFailure([
+      "Goal checker model did not finish with a complete verdict response.",
+      checkerConfigSummary(config, effectiveModel),
+      `Assistant stop reason: ${stopReason ?? "missing"}.`,
+    ].join("\n"));
+  }
+
+  if (finalAssistantMessage && !assistantMessageHasText(finalAssistantMessage)) {
+    throw new CheckerFailure([
+      "Goal checker model returned no verdict text.",
+      checkerConfigSummary(config, effectiveModel),
+      stopReason ? `Assistant stop reason: ${stopReason}.` : undefined,
+    ].filter((part): part is string => part !== undefined).join("\n"));
+  }
+
+  // Reconstruct ordered terminal text, then prefer the last balanced JSON object
+  // that is a valid verdict. This tolerates provider block-splitting and trailing
+  // prose with unrelated braces without consulting earlier assistant turns.
+  const finalText = textBlocks.join("");
+  const candidates = jsonObjectCandidates(finalText);
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index];
+    if (candidate !== undefined && containsCheckerVerdict(candidate)) return candidate;
+  }
+  if (finalText) return finalText;
+
+  throw new CheckerFailure([
+    "Goal checker Pi JSON event stream ended without an assistant message_end verdict.",
+    checkerConfigSummary(config, effectiveModel),
+  ].join("\n"));
 }
 
-function assistantTextBlocksFromJsonMode(stdout: string): string[] {
-  const texts: string[] = [];
+function scanJsonMode(stdout: string): {
+  textBlocks: string[];
+  finalAssistantMessage: Record<string, unknown> | undefined;
+  nonJsonLineCount: number;
+} {
+  const textBlocks: string[] = [];
+  let finalAssistantMessage: Record<string, unknown> | undefined;
+  let nonJsonLineCount = 0;
+
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const event = safeJsonParse(line);
-    if (!isRecord(event) || event.type !== "message_end") continue;
+    if (!isRecord(event) || typeof event.type !== "string") {
+      nonJsonLineCount += 1;
+      continue;
+    }
+    if (event.type !== "message_end") continue;
     const message = event.message;
-    if (!isRecord(message) || message.role !== "assistant") continue;
+    if (!isRecord(message) || typeof message.role !== "string") {
+      nonJsonLineCount += 1;
+      continue;
+    }
+    if (message.role !== "assistant") continue;
+    if (!Array.isArray(message.content)) {
+      nonJsonLineCount += 1;
+      continue;
+    }
+    finalAssistantMessage = message;
+    textBlocks.length = 0;
     const content = message.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
-        texts.push(block.text);
+      if (isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+        textBlocks.push(block.text);
       }
     }
   }
-  return texts;
+
+  return { textBlocks, finalAssistantMessage, nonJsonLineCount };
 }
 
-function containsJsonObject(text: string): boolean {
-  return isRecord(safeJsonParse(extractJsonObject(text)));
+function assistantMessageHasText(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  return Array.isArray(content) && content.some(
+    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
+  );
+}
+
+function checkerStopReason(value: string | undefined): "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
+  if (value === "stop" || value === "length" || value === "toolUse" || value === "error" || value === "aborted") return value;
+  return undefined;
+}
+
+function checkerConfigSummary(config: GoalControllerConfig, modelPattern: string | undefined): string {
+  const selection = config.checker.model === "inherit"
+    ? `effectiveModel=${modelPattern ?? "unresolved"}`
+    : `requestedModel=${modelPattern ?? config.checker.model}`;
+  return redactSecrets(`Checker config: model=${config.checker.model}, thinking=${config.checker.thinking}, timeoutMs=${config.checker.timeoutMs}, ${selection}.`);
+}
+
+export function safeCheckerFailureMessage(
+  error: unknown,
+  config: GoalControllerConfig,
+  model: ExtensionContext["model"],
+): string {
+  if (error instanceof CheckerFailure) {
+    return error.message.length > 4_000 ? `${error.message.slice(0, 4_000)}…` : error.message;
+  }
+  const modelPattern = resolveModelPattern(config.checker.model, model);
+  return [
+    "Goal checker failed unexpectedly. Inspect local Pi logs for details.",
+    checkerConfigSummary(config, modelPattern),
+  ].join("\n");
+}
+
+function jsonObjectCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{") continue;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') {
+        quoted = true;
+        continue;
+      }
+      if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(text.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
+function containsCheckerVerdict(text: string): boolean {
+  try {
+    parseCheckerVerdict(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function parseCheckerVerdict(text: string): CheckerVerdict {
   const parsed = safeJsonParse(extractJsonObject(text));
-  if (!isRecord(parsed)) throw new Error(`checker did not return a JSON object: ${text.slice(0, 300)}`);
+  if (!isRecord(parsed)) throw new VerdictValidationError("not-json", `checker did not return a JSON object: ${text.slice(0, 300)}`);
 
-  const explicitDecision = checkerDecision(parsed.decision);
-  const complete = parsed.complete === true || explicitDecision === "complete";
-  const blocked = explicitDecision === "blocked" || (explicitDecision === undefined && parsed.blocked === true);
-  const decision = explicitDecision ?? (complete ? "complete" : blocked ? "blocked" : "continue");
+  const decision = checkerDecision(parsed.decision);
+  if (!decision) throw new VerdictValidationError("missing-decision", "checker verdict must include a recognized decision");
+  const complete = decision === "complete";
+  const blocked = decision === "blocked";
+  if (parsed.complete !== undefined && parsed.complete !== complete) {
+    throw new VerdictValidationError("conflicting-fields", `checker verdict decision=${decision} conflicts with complete=${String(parsed.complete)}`);
+  }
+  if (parsed.blocked !== undefined && parsed.blocked !== blocked) {
+    throw new VerdictValidationError("conflicting-fields", `checker verdict decision=${decision} conflicts with blocked=${String(parsed.blocked)}`);
+  }
   const reason = typeof parsed.reason === "string" && parsed.reason.trim().length > 0 ? parsed.reason.trim() : complete ? "Checker marked the goal complete." : "Checker did not find the goal complete.";
   const evidence = stringArray(parsed.evidence);
   const requirementVerdicts = requirements(parsed.requirements);
@@ -233,13 +448,16 @@ function extractJsonObject(text: string): string {
 }
 
 function requirements(value: unknown): CheckerVerdict["requirements"] {
-  if (!Array.isArray(value)) return undefined;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new VerdictValidationError("insufficient-proof", "checker verdict requirements must be an array");
   const result: NonNullable<CheckerVerdict["requirements"]> = [];
   for (const item of value) {
-    if (!isRecord(item)) continue;
-    const requirement = typeof item.requirement === "string" ? item.requirement : undefined;
+    if (!isRecord(item)) throw new VerdictValidationError("insufficient-proof", "checker verdict contains a malformed requirement entry");
+    const requirement = typeof item.requirement === "string" && item.requirement.trim() ? item.requirement : undefined;
     const status = item.status;
-    if (!requirement || !isRequirementStatus(status)) continue;
+    if (!requirement || !isRequirementStatus(status)) {
+      throw new VerdictValidationError("insufficient-proof", "checker verdict contains a malformed requirement entry");
+    }
     result.push({
       requirement,
       status,
@@ -275,14 +493,14 @@ function assertCompleteVerdictHasEvidence(
   requirementVerdicts: CheckerVerdict["requirements"],
 ): void {
   if (!evidence || evidence.length === 0) {
-    throw new Error("complete checker verdict must include at least one evidence item");
+    throw new VerdictValidationError("insufficient-proof", "complete checker verdict must include at least one evidence item");
   }
   if (!requirementVerdicts || requirementVerdicts.length === 0) {
-    throw new Error("complete checker verdict must include requirement-by-requirement assessment");
+    throw new VerdictValidationError("insufficient-proof", "complete checker verdict must include requirement-by-requirement assessment");
   }
   const unproven = requirementVerdicts.filter((item) => item.status !== "satisfied" && item.status !== "not_applicable");
   if (unproven.length > 0) {
-    throw new Error(`complete checker verdict has unproven requirements: ${unproven.map((item) => item.requirement).join(", ")}`);
+    throw new VerdictValidationError("insufficient-proof", `complete checker verdict has unproven requirements: ${unproven.map((item) => item.requirement).join(", ")}`);
   }
 }
 

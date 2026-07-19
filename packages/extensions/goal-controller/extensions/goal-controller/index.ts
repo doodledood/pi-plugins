@@ -19,7 +19,7 @@ import {
   startGoal,
   updateUsage,
 } from "./controller.ts";
-import { PiSubprocessCheckerRunner, type CheckerRunner } from "./checker.ts";
+import { PiSubprocessCheckerRunner, safeCheckerFailureMessage, type CheckerRunner } from "./checker.ts";
 import {
   CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
   CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
@@ -560,6 +560,8 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     activeGoal = markChecking(activeGoal);
     persistGoal(activeGoal);
     const run = startCheckerRun(ctx, goalId);
+    const checkerConfig = loadedConfig.config;
+    const checkerModel = ctx.model;
     const forwardAbort = (): void => run.controller.abort();
     if (ctx.signal?.aborted) forwardAbort();
     else ctx.signal?.addEventListener("abort", forwardAbort, { once: true });
@@ -576,16 +578,16 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       const verdict = await checkerRunner.run({
         goal: activeGoal,
         context,
-        config: loadedConfig.config,
+        config: checkerConfig,
         cwd: ctx.cwd,
-        model: ctx.model,
+        model: checkerModel,
         thinkingLevel: pi.getThinkingLevel(),
         checkerModelBootstrapPaths: trustedCheckerModelBootstrapPaths(),
         signal: run.controller.signal,
       });
 
       if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
-      activeGoal = applyCheckerVerdict(activeGoal, verdict, loadedConfig.config, turnHadToolUse);
+      activeGoal = applyCheckerVerdict(activeGoal, verdict, checkerConfig, turnHadToolUse);
       persistGoal(activeGoal);
       setStatus(ctx);
 
@@ -618,7 +620,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
       }
     } catch (error) {
       if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = safeCheckerFailureMessage(error, checkerConfig, checkerModel);
       activeGoal = pauseGoal(activeGoal, `checker failed: ${message}`);
       clearPendingContinuation();
       persistGoal(activeGoal);

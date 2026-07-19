@@ -48,7 +48,7 @@ function assertAuditOnlyCheckerArgs(args: string[]): void {
 }
 
 test("parseCheckerVerdict parses complete verdict JSON with evidence and requirements", () => {
-  const verdict = parseCheckerVerdict('{"complete":true,"reason":"tests pass","evidence":["npm test exited 0"],"requirements":[{"requirement":"tests pass","status":"satisfied","evidence":"npm test exited 0"}]}');
+  const verdict = parseCheckerVerdict('{"decision":"complete","complete":true,"reason":"tests pass","evidence":["npm test exited 0"],"requirements":[{"requirement":"tests pass","status":"satisfied","evidence":"npm test exited 0"}]}');
   assert.equal(verdict.decision, "complete");
   assert.equal(verdict.complete, true);
   assert.equal(verdict.reason, "tests pass");
@@ -57,7 +57,7 @@ test("parseCheckerVerdict parses complete verdict JSON with evidence and require
 });
 
 test("parseCheckerVerdict parses fenced JSON and requirements", () => {
-  const verdict = parseCheckerVerdict(`\n\`\`\`json\n{"complete":false,"blocked":true,"reason":"missing creds","nextTurnGuidance":"ask user","unmetRequirements":["run e2e"],"requirements":[{"requirement":"run e2e","status":"unsatisfied","evidence":"no credentials"}]}\n\`\`\``);
+  const verdict = parseCheckerVerdict(`\n\`\`\`json\n{"decision":"blocked","complete":false,"blocked":true,"reason":"missing creds","nextTurnGuidance":"ask user","unmetRequirements":["run e2e"],"requirements":[{"requirement":"run e2e","status":"unsatisfied","evidence":"no credentials"}]}\n\`\`\``);
   assert.equal(verdict.decision, "blocked");
   assert.equal(verdict.complete, false);
   assert.equal(verdict.blocked, true);
@@ -101,10 +101,23 @@ test("parseCheckerVerdict throws on non-json output", () => {
   assert.throws(() => parseCheckerVerdict("looks done to me"), /checker did not return/iu);
 });
 
-test("parseCheckerVerdict rejects complete verdict without evidence and requirement assessment", () => {
-  assert.throws(() => parseCheckerVerdict('{"complete":true}'), /evidence|requirement/iu);
+test("parseCheckerVerdict requires an explicit recognized and internally consistent decision", () => {
+  assert.throws(() => parseCheckerVerdict('{}'), /recognized decision/iu);
+  assert.throws(() => parseCheckerVerdict('{"decision":"INCOMPLETE"}'), /recognized decision/iu);
+  assert.throws(() => parseCheckerVerdict('{"decision":"continue","complete":true}'), /conflicts with complete/iu);
+  assert.throws(() => parseCheckerVerdict('{"decision":"continue","blocked":true}'), /conflicts with blocked/iu);
+  assert.throws(() => parseCheckerVerdict('{"decision":"complete","complete":true,"blocked":true}'), /conflicts with blocked/iu);
+  assert.throws(() => parseCheckerVerdict('{"decision":"blocked","complete":true,"blocked":true}'), /conflicts with complete/iu);
   assert.throws(
-    () => parseCheckerVerdict('{"complete":true,"evidence":["test"],"requirements":[{"requirement":"lint","status":"unclear"}]}'),
+    () => parseCheckerVerdict('{"decision":"complete","complete":true,"evidence":["A"],"requirements":[{"requirement":"A","status":"satisfied"},{"requirement":"B","status":"invalid"}]}'),
+    /malformed requirement/iu,
+  );
+});
+
+test("parseCheckerVerdict rejects complete verdict without evidence and requirement assessment", () => {
+  assert.throws(() => parseCheckerVerdict('{"decision":"complete","complete":true}'), /evidence|requirement/iu);
+  assert.throws(
+    () => parseCheckerVerdict('{"decision":"complete","complete":true,"evidence":["test"],"requirements":[{"requirement":"lint","status":"unclear"}]}'),
     /unproven requirements/iu,
   );
 });
@@ -133,6 +146,7 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
                 }),
               },
             ],
+            stopReason: "stop",
           },
         }) + "\n",
         stderr: "",
@@ -208,6 +222,7 @@ test("PiSubprocessCheckerRunner maps configured and inherited max thinking to su
                 reason: "more work remains",
               }),
             }],
+            stopReason: "stop",
           },
         }) + "\n",
         stderr: "",
@@ -244,13 +259,15 @@ test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summ
     async exec() {
       const verdictMessage = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: jsonVerdict }] },
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: `I inspected {an odd fragment. Here's the verdict: ${jsonVerdict}\nVerification summary: metadata was {}.` },
+          ],
+          stopReason: "stop",
+        },
       });
-      const trailingProse = JSON.stringify({
-        type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: everything looks done to me." }] },
-      });
-      return { stdout: `${verdictMessage}\n${trailingProse}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: `${verdictMessage}\n`, stderr: "", code: 0, killed: false };
     },
   });
 
@@ -267,18 +284,448 @@ test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summ
   assert.equal(verdict.reason, "all requirements proven");
 });
 
-test("PiSubprocessCheckerRunner surfaces the informative parse error when the checker emits only prose", async () => {
+test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal text blocks", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const splitVerdict = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: '{"decision":"continue",' },
+            { type: "text", text: '"complete":false,"reason":"split verdict"}' },
+          ],
+          stopReason: "stop",
+        },
+      });
+      const customMessage = JSON.stringify({
+        type: "message_end",
+        message: { role: "custom", customType: "note", content: "safe string content" },
+      });
+      return { stdout: `${customMessage}\n${splitVerdict}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(verdict.decision, "continue");
+  assert.equal(verdict.reason, "split verdict");
+});
+
+test("PiSubprocessCheckerRunner does not let an earlier tool-turn verdict override terminal prose", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const staleVerdict = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
+          stopReason: "toolUse",
+        },
+      });
+      const terminalProse = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Verification failed after inspection." }],
+          stopReason: "stop",
+        },
+      });
+      return { stdout: `${staleVerdict}\n${terminalProse}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned an invalid verdict/iu);
+      assert.match(error.message, /checker response was not a JSON verdict object/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner classifies and redacts invalid verdict text", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
       const proseOnly = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: looks complete to me." }] },
+        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: apiKey=sk-invalidverdictsecret123" }], stopReason: "stop" },
       });
       return { stdout: `${proseOnly}\n`, stderr: "", code: 0, killed: false };
     },
   });
 
-  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /checker did not return a JSON object/iu);
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG, {
+      model: {
+        id: "gpt-test",
+        name: "GPT Test",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned an invalid verdict/iu);
+      assert.match(error.message, /checker response was not a JSON verdict object/iu);
+      assert.match(error.message, /effectiveModel=openai\/gpt-test/iu);
+      assert.doesNotMatch(error.message, /sk-invalidverdictsecret123/u);
+      assert.doesNotMatch(error.message, /Verification summary/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner surfaces a zero-exit assistant provider error instead of parsing raw JSONL", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const session = JSON.stringify({ type: "session", version: 3, id: "session-1" });
+      const assistantError = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "This request was blocked as it seems to violate restrictions on reverse engineering or duplicating model outputs. apiKey=sk-supersecret123456",
+        },
+      });
+      return { stdout: `${session}\n${assistantError}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG, {
+      model: {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /checker model failed before returning a verdict/iu);
+      assert.match(error.message, /effectiveModel=anthropic\/claude-fable-5/iu);
+      assert.match(error.message, /provider refused the checker request/iu);
+      assert.match(error.message, /reverse engineering or duplicating model outputs/iu);
+      assert.match(error.message, /configure checker\.model/iu);
+      assert.doesNotMatch(error.message, /sk-supersecret123456/u);
+      assert.doesNotMatch(error.message, /checker did not return a JSON object/iu);
+      assert.doesNotMatch(error.message, /\{"type":"session"/u);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner rejects verdict-looking partial text when the terminal assistant errored", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const assistantError = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              decision: "complete",
+              complete: true,
+              evidence: ["partial output must not win"],
+              requirements: [{ requirement: "fake", status: "satisfied" }],
+            }),
+          }],
+          stopReason: "error",
+          errorMessage: "provider stream failed",
+        },
+      });
+      return { stdout: `${assistantError}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /checker model failed before returning a verdict/iu);
+      assert.doesNotMatch(error.message, /partial output must not win/u);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner rejects verdict-looking text when the terminal assistant was aborted", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const aborted = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              decision: "complete",
+              complete: true,
+              evidence: ["aborted output must not win"],
+              requirements: [{ requirement: "fake", status: "satisfied" }],
+            }),
+          }],
+          stopReason: "aborted",
+        },
+      });
+      return { stdout: `${aborted}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /checker model failed before returning a verdict/iu);
+      assert.match(error.message, /Assistant stop reason: aborted/iu);
+      return true;
+    },
+  );
+});
+
+for (const stopReason of ["length", "toolUse"] as const) {
+  test(`PiSubprocessCheckerRunner rejects verdict-looking text when terminal stop reason is ${stopReason}`, async () => {
+    const runner = new PiSubprocessCheckerRunner({
+      async exec() {
+        const incomplete = JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                decision: "complete",
+                complete: true,
+                evidence: ["incomplete output must not win"],
+                requirements: [{ requirement: "fake", status: "satisfied" }],
+              }),
+            }],
+            stopReason,
+          },
+        });
+        return { stdout: `${incomplete}\n`, stderr: "", code: 0, killed: false };
+      },
+    });
+
+    await assert.rejects(
+      () => runChecker(runner, DEFAULT_CONFIG),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /did not finish with a complete verdict response/iu);
+        assert.match(error.message, new RegExp(`Assistant stop reason: ${stopReason}`, "iu"));
+        return true;
+      },
+    );
+  });
+}
+
+test("PiSubprocessCheckerRunner does not echo an unknown terminal stop reason", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const unknownStop = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "unexpected apiKey=sk-must-not-persist",
+        },
+      });
+      return { stdout: `${unknownStop}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Assistant stop reason: missing/iu);
+      assert.doesNotMatch(error.message, /sk-must-not-persist/u);
+      assert.doesNotMatch(error.message, /unexpected apiKey/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner treats errorMessage as failure even with stopReason stop", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const assistantError = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              decision: "complete",
+              complete: true,
+              evidence: ["errored output must not win"],
+              requirements: [{ requirement: "fake", status: "satisfied" }],
+            }),
+          }],
+          stopReason: "stop",
+          errorMessage: "provider reported a terminal error",
+        },
+      });
+      return { stdout: `${assistantError}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /checker model failed before returning a verdict/iu);
+      assert.match(error.message, /provider returned an assistant error/iu);
+      assert.doesNotMatch(error.message, /provider reported a terminal error/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner accepts a terminal verdict after an earlier retried assistant error", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const retriedError = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "transient provider failure" },
+      });
+      const terminalVerdict = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              decision: "complete",
+              complete: true,
+              reason: "retry succeeded",
+              evidence: ["fresh terminal evidence"],
+              requirements: [{ requirement: "fake", status: "satisfied", evidence: "fresh terminal evidence" }],
+            }),
+          }],
+          stopReason: "stop",
+        },
+      });
+      return { stdout: `${retriedError}\n${terminalVerdict}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(verdict.decision, "complete");
+  assert.equal(verdict.reason, "retry succeeded");
+});
+
+test("PiSubprocessCheckerRunner distinguishes an empty assistant response from invalid verdict text", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const staleVerdict = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
+          stopReason: "toolUse",
+        },
+      });
+      const emptyAssistant = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [], stopReason: "stop" },
+      });
+      return { stdout: `${staleVerdict}\n${emptyAssistant}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned no verdict text/iu);
+      assert.match(error.message, /effectiveModel=unresolved/iu);
+      assert.doesNotMatch(error.message, /checker did not return a JSON object/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner rejects malformed Pi JSON output as a protocol failure", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return {
+        stdout: `${JSON.stringify({ type: "session", version: 3, id: "session-1" })}\nnot-json passphrase=\"correct horse battery staple\"\n`,
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /malformed Pi JSON event stream/iu);
+      assert.match(error.message, /1 non-JSON line/iu);
+      assert.doesNotMatch(error.message, /correct horse battery staple/u);
+      assert.doesNotMatch(error.message, /not-json/iu);
+      assert.doesNotMatch(error.message, /checker did not return a JSON object/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a verdict", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const verdict = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
+      });
+      return { stdout: `${verdict}\n{}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+});
+
+test("PiSubprocessCheckerRunner rejects a valid event stream without assistant message_end", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return {
+        stdout: [
+          JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+          JSON.stringify({ type: "agent_start" }),
+          JSON.stringify({ type: "turn_start" }),
+        ].join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /ended without an assistant message_end/iu);
+      assert.doesNotMatch(error.message, /checker did not return a JSON object/iu);
+      return true;
+    },
+  );
 });
 
 test("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled", async () => {
@@ -322,6 +769,31 @@ test("removed checker capability config cannot expand audit-only subprocess tool
   assertAuditOnlyCheckerArgs(await captureCheckerArgs(loaded.config));
 });
 
+test("PiSubprocessCheckerRunner wraps exec rejections with requested-model and redacted diagnostics", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      throw new Error('spawn failed; passphrase="correct horse battery staple"');
+    },
+  });
+  const config: GoalControllerConfig = {
+    ...DEFAULT_CONFIG,
+    checker: { ...DEFAULT_CONFIG.checker, model: "sonnet" },
+  };
+
+  await assert.rejects(
+    () => runChecker(runner, config),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /could not start or complete/iu);
+      assert.match(error.message, /requestedModel=sonnet/iu);
+      assert.match(error.message, /checker process could not be launched/iu);
+      assert.doesNotMatch(error.message, /spawn failed/iu);
+      assert.doesNotMatch(error.message, /correct horse battery staple/u);
+      return true;
+    },
+  );
+});
+
 test("PiSubprocessCheckerRunner reports killed subprocesses as timeout or termination failures", async () => {
   const config: GoalControllerConfig = { ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, timeoutMs: 1 } };
   const runner = new PiSubprocessCheckerRunner({
@@ -340,17 +812,54 @@ test("PiSubprocessCheckerRunner reports killed subprocesses as timeout or termin
       assert.match(error.message, /Exit code: 143/iu);
       assert.match(error.message, /No checker verdict was returned/iu);
       assert.match(error.message, /Checker config: model=inherit, thinking=inherit/iu);
-      assert.match(error.message, /stdout tail:\npartial checker output/iu);
+      assert.doesNotMatch(error.message, /partial checker output/iu);
+      assert.doesNotMatch(error.message, /stdout tail/iu);
       assert.doesNotMatch(error.message, /^checker subprocess exited with code 143$/iu);
       return true;
     },
   );
 });
 
-test("PiSubprocessCheckerRunner preserves exit-code and output diagnostics for non-killed failures", async () => {
+test("PiSubprocessCheckerRunner treats killed=true as failure even when Pi normalizes the exit code to zero", async () => {
+  const config: GoalControllerConfig = { ...DEFAULT_CONFIG, checker: { ...DEFAULT_CONFIG.checker, timeoutMs: 1 } };
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
-      return { stdout: "stdout clue", stderr: "stderr clue", code: 7, killed: false };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return {
+        stdout: JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
+          },
+        }),
+        stderr: "",
+        code: 0,
+        killed: true,
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, config),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /timed out|terminated/iu);
+      assert.match(error.message, /Exit code: 0/iu);
+      assert.match(error.message, /No checker verdict was returned/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner preserves structured diagnostics for non-killed failures without raw JSONL", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const stdout = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider quota exhausted" },
+      });
+      return { stdout, stderr: "stderr clue", code: 7, killed: false };
     },
   });
 
@@ -359,9 +868,13 @@ test("PiSubprocessCheckerRunner preserves exit-code and output diagnostics for n
     (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /exited with code 7/iu);
-      assert.match(error.message, /stderr:\nstderr clue/iu);
-      assert.match(error.message, /stdout tail:\nstdout clue/iu);
+      assert.match(error.message, /Stderr classification: Checker process execution failed/iu);
+      assert.match(error.message, /Assistant stop reason: error/iu);
+      assert.match(error.message, /Provider classification: The provider reported a rate-limit or quota failure/iu);
+      assert.doesNotMatch(error.message, /stderr clue/iu);
+      assert.doesNotMatch(error.message, /provider quota exhausted/iu);
       assert.match(error.message, /No checker verdict was returned/iu);
+      assert.doesNotMatch(error.message, /\{"type":"message_end"/u);
       assert.doesNotMatch(error.message, /timed out/iu);
       return true;
     },
@@ -384,13 +897,12 @@ test("PiSubprocessCheckerRunner redacts secrets from checker subprocess diagnost
     () => runChecker(runner, DEFAULT_CONFIG),
     (error: unknown) => {
       assert.ok(error instanceof Error);
-      // Operational diagnostics survive so the failure is diagnosable...
       assert.match(error.message, /exited with code 1/iu);
-      assert.match(error.message, /checker-bootstrap\.ts/iu);
-      // ...but no secret material leaks into persisted/notified checker state.
+      assert.match(error.message, /Stderr classification: Checker process authentication or authorization failed/iu);
+      assert.doesNotMatch(error.message, /checker-bootstrap\.ts/iu);
       assert.doesNotMatch(error.message, /sk-[A-Za-z0-9_-]{8,}/u);
       assert.doesNotMatch(error.message, /Bearer\s+sk-/iu);
-      assert.match(error.message, /\[REDACTED\]/u);
+      assert.doesNotMatch(error.message, /azuresecret|anothersecret|topsecret/iu);
       return true;
     },
   );
@@ -440,6 +952,7 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
                 }),
               },
             ],
+            stopReason: "stop",
           },
         }) + "\n",
         stderr: "",
@@ -453,12 +966,12 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
   return capturedArgs;
 }
 
-async function runChecker(
+async function runCheckerVerdict(
   runner: PiSubprocessCheckerRunner,
   config: GoalControllerConfig,
   overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel">> = {},
-): Promise<void> {
-  await runner.run({
+) {
+  return runner.run({
     goal: createGoal("fake goal", config, 0),
     context: checkerContext(undefined),
     config,
@@ -467,4 +980,12 @@ async function runChecker(
     thinkingLevel: "off",
     ...overrides,
   });
+}
+
+async function runChecker(
+  runner: PiSubprocessCheckerRunner,
+  config: GoalControllerConfig,
+  overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel">> = {},
+): Promise<void> {
+  await runCheckerVerdict(runner, config, overrides);
 }

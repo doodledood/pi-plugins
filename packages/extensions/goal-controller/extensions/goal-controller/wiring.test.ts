@@ -13,7 +13,7 @@ import {
   CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
   CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE,
 } from "./checker-model-bootstrap.ts";
-import type { CheckerRunner, CheckerRunInput } from "./checker.ts";
+import { PiSubprocessCheckerRunner, type CheckerRunner, type CheckerRunInput } from "./checker.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { createGoal, markChecking } from "./controller.ts";
 import type { GoalControllerHost, CapturedHandlers } from "./host.ts";
@@ -704,6 +704,77 @@ test("checker-complete verdict completes without worker completion tool", async 
   await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
   assert.equal(latestGoal(host)?.status, "complete");
   assert.equal(latestGoal(host)?.lastCheckerVerdict?.complete, true);
+});
+
+test("unexpected checker failures are replaced before goal persistence and UI notification", async () => {
+  const host = new FakeHost();
+  const checker = new DeferredChecker();
+  activate(host, checker);
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const ctx = makeCtx([], {
+    onNotify: (message, level) => notifications.push({ message, level }),
+  });
+  await host.commandHandler?.("goal with secret-bearing checker failure", ctx);
+
+  const run = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  await new Promise((resolve) => setImmediate(resolve));
+  const omittedTail = "TAIL_MUST_NOT_PERSIST";
+  checker.reject(new Error(`Goal checker model failed before returning a verdict. passphrase="correct horse battery staple" ${"x".repeat(5_000)}${omittedTail}`));
+  await run;
+
+  const goal = latestGoal(host);
+  const persistedReason = goal?.lastTransitionReason ?? "";
+  assert.equal(goal?.status, "paused");
+  assert.match(persistedReason, /checker failed unexpectedly/iu);
+  assert.match(persistedReason, /inspect local Pi logs/iu);
+  assert.match(persistedReason, /effectiveModel=openai\/gpt-5\.5/iu);
+  assert.ok(persistedReason.length < 200);
+  assert.doesNotMatch(persistedReason, /correct horse battery staple/u);
+  assert.doesNotMatch(persistedReason, new RegExp(omittedTail, "u"));
+  const failureNotification = notifications.find(({ level }) => level === "error")?.message ?? "";
+  assert.match(failureNotification, /checker failed unexpectedly/iu);
+  assert.match(failureNotification, /inspect local Pi logs/iu);
+  assert.match(failureNotification, /effectiveModel=openai\/gpt-5\.5/iu);
+  assert.ok(failureNotification.length < 250);
+  assert.doesNotMatch(failureNotification, /correct horse battery staple/u);
+  assert.doesNotMatch(failureNotification, new RegExp(omittedTail, "u"));
+});
+
+test("recognized checker failures preserve fixed safe diagnostics through persistence and UI", async () => {
+  const host = new FakeHost();
+  const checker = new PiSubprocessCheckerRunner({
+    async exec() {
+      return {
+        stdout: JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "This request was blocked for reverse engineering or duplicating model outputs. apiKey=sk-must-not-persist",
+          },
+        }),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+  activate(host, checker);
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const ctx = makeCtx([], { onNotify: (message, level) => notifications.push({ message, level }) });
+  await host.commandHandler?.("goal with recognized checker failure", ctx);
+
+  await host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext);
+
+  const persistedReason = latestGoal(host)?.lastTransitionReason ?? "";
+  assert.match(persistedReason, /provider refused the checker request/iu);
+  assert.match(persistedReason, /effectiveModel=openai\/gpt-5\.5/iu);
+  assert.doesNotMatch(persistedReason, /sk-must-not-persist/u);
+  const failureNotification = notifications.find(({ level }) => level === "error")?.message ?? "";
+  assert.match(failureNotification, /provider refused the checker request/iu);
+  assert.match(failureNotification, /effectiveModel=openai\/gpt-5\.5/iu);
+  assert.doesNotMatch(failureNotification, /sk-must-not-persist/u);
 });
 
 test("abort and error turns pause without running checker", async () => {
