@@ -530,8 +530,10 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
     const goalId = activeGoal.id;
     activeGoal = updateUsage(activeGoal, currentTokenTotal(ctx), Date.now(), true);
     const finalAssistant = findFinalAssistantMessage(event.messages);
-    if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
-      activeGoal = pauseGoal(activeGoal, finalAssistant.stopReason === "aborted" ? "paused after interruption" : `paused after agent error${finalAssistant.errorMessage ? `: ${finalAssistant.errorMessage}` : ""}`);
+    if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error" || finalAssistant?.errorMessage) {
+      activeGoal = pauseGoal(activeGoal, finalAssistant.stopReason === "aborted"
+        ? "paused after interruption"
+        : "paused after agent error; inspect local Pi logs for details");
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);

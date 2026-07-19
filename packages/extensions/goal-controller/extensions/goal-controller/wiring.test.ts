@@ -750,8 +750,20 @@ test("recognized checker failures preserve fixed safe diagnostics through persis
           message: {
             role: "assistant",
             content: [],
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
             stopReason: "error",
             errorMessage: "This request was blocked for reverse engineering or duplicating model outputs. apiKey=sk-must-not-persist",
+            timestamp: 0,
           },
         }),
         stderr: "",
@@ -777,11 +789,12 @@ test("recognized checker failures preserve fixed safe diagnostics through persis
   assert.doesNotMatch(failureNotification, /sk-must-not-persist/u);
 });
 
-test("abort and error turns pause without running checker", async () => {
+test("abort and error turns pause without running checker or persisting raw provider errors", async () => {
   const host = new FakeHost();
   const checker = new FakeChecker([]);
   activate(host, checker);
-  const ctx = makeCtx();
+  const notifications: string[] = [];
+  const ctx = makeCtx([], { onNotify: (message) => notifications.push(message) });
   await host.commandHandler?.("goal that gets interrupted", ctx);
   await host.handlers.agent_end?.(agentEnd("", false, "aborted"), ctx as ExtensionContext);
   assert.equal(checker.inputs.length, 0);
@@ -789,10 +802,24 @@ test("abort and error turns pause without running checker", async () => {
   assert.match(latestGoal(host)?.lastTransitionReason ?? "", /interruption/iu);
 
   await host.commandHandlers.get("goal_resume")?.("", ctx);
-  await host.handlers.agent_end?.(agentEnd("", false, "error", "boom"), ctx as ExtensionContext);
+  const rawProviderError = "boom apiKey=sk-worker-secret123 correct horse battery staple";
+  await host.handlers.agent_end?.(agentEnd("", false, "error", rawProviderError), ctx as ExtensionContext);
   assert.equal(checker.inputs.length, 0);
   assert.equal(latestGoal(host)?.status, "paused");
-  assert.match(latestGoal(host)?.lastTransitionReason ?? "", /boom/iu);
+  const persistedReason = latestGoal(host)?.lastTransitionReason ?? "";
+  assert.match(persistedReason, /agent error/iu);
+  assert.match(persistedReason, /inspect local Pi logs/iu);
+  assert.doesNotMatch(persistedReason, /boom|sk-worker-secret123|correct horse battery staple/u);
+  assert.doesNotMatch(notifications.at(-1) ?? "", /boom|sk-worker-secret123|correct horse battery staple/u);
+
+  await host.commandHandlers.get("goal_resume")?.("", ctx);
+  const inconsistentProviderError = "stop-with-error token=sk-inconsistent-secret123";
+  await host.handlers.agent_end?.(agentEnd("", false, "stop", inconsistentProviderError), ctx as ExtensionContext);
+  const inconsistentReason = latestGoal(host)?.lastTransitionReason ?? "";
+  assert.equal(latestGoal(host)?.status, "paused");
+  assert.match(inconsistentReason, /agent error/iu);
+  assert.doesNotMatch(inconsistentReason, /stop-with-error|sk-inconsistent-secret123/u);
+  assert.doesNotMatch(notifications.at(-1) ?? "", /stop-with-error|sk-inconsistent-secret123/u);
 });
 
 test("pending messages after checker suppress continuation", async () => {

@@ -8,6 +8,25 @@ import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { createGoal } from "./controller.ts";
 import type { CheckerSessionContext, GoalControllerConfig } from "./types.ts";
 
+const JSON_ASSISTANT_FIELDS = {
+  api: "openai-responses",
+  provider: "openai",
+  model: "gpt-test",
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  timestamp: 0,
+};
+
+function jsonAssistantMessage(content: unknown[] = [], stopReason = "stop"): Record<string, unknown> {
+  return { role: "assistant", ...JSON_ASSISTANT_FIELDS, content, stopReason };
+}
+
 function checkerContext(sessionFile: string | undefined): CheckerSessionContext {
   return {
     sessionFormat: "pi-jsonl-tree",
@@ -133,7 +152,7 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
         stdout: JSON.stringify({
           type: "message_end",
           message: {
-            role: "assistant",
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [
               {
                 type: "text",
@@ -213,7 +232,7 @@ test("PiSubprocessCheckerRunner maps configured and inherited max thinking to su
         stdout: JSON.stringify({
           type: "message_end",
           message: {
-            role: "assistant",
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [{
               type: "text",
               text: JSON.stringify({
@@ -260,7 +279,7 @@ test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summ
       const verdictMessage = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [
             { type: "text", text: `I inspected {an odd fragment. Here's the verdict: ${jsonVerdict}\nVerification summary: metadata was {}.` },
           ],
@@ -297,7 +316,7 @@ test("PiSubprocessCheckerRunner rejects a verdict nested inside a non-verdict JS
       });
       const message = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: wrappedVerdict }], stopReason: "stop" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: wrappedVerdict }], stopReason: "stop" },
       });
       return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
     },
@@ -325,7 +344,7 @@ test("PiSubprocessCheckerRunner rejects a verdict nested inside a JSON array", a
       }]);
       const message = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: `before ${nestedVerdict} after` }], stopReason: "stop" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: `before ${nestedVerdict} after` }], stopReason: "stop" },
       });
       return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
     },
@@ -348,7 +367,7 @@ test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal tex
       const splitVerdict = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [
             { type: "text", text: '{"decision":"continue",' },
             { type: "text", text: '"complete":false,"reason":"split verdict"}' },
@@ -358,7 +377,7 @@ test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal tex
       });
       const customMessage = JSON.stringify({
         type: "message_end",
-        message: { role: "custom", customType: "note", content: "safe string content" },
+        message: { role: "custom", customType: "note", content: "safe string content", display: false, timestamp: 0 },
       });
       return { stdout: `${customMessage}\n${splitVerdict}\n`, stderr: "", code: 0, killed: false };
     },
@@ -375,7 +394,7 @@ test("PiSubprocessCheckerRunner does not let an earlier tool-turn verdict overri
       const staleVerdict = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
           stopReason: "toolUse",
         },
@@ -383,7 +402,7 @@ test("PiSubprocessCheckerRunner does not let an earlier tool-turn verdict overri
       const terminalProse = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{ type: "text", text: "Verification failed after inspection." }],
           stopReason: "stop",
         },
@@ -408,7 +427,7 @@ test("PiSubprocessCheckerRunner classifies and redacts invalid verdict text", as
     async exec() {
       const proseOnly = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "Verification summary: apiKey=sk-invalidverdictsecret123" }], stopReason: "stop" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: "Verification summary: apiKey=sk-invalidverdictsecret123" }], stopReason: "stop" },
       });
       return { stdout: `${proseOnly}\n`, stderr: "", code: 0, killed: false };
     },
@@ -448,7 +467,7 @@ test("PiSubprocessCheckerRunner surfaces a zero-exit assistant provider error in
       const assistantError = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [],
           stopReason: "error",
           errorMessage: "This request was blocked as it seems to violate restrictions on reverse engineering or duplicating model outputs. apiKey=sk-supersecret123456",
@@ -494,7 +513,7 @@ test("PiSubprocessCheckerRunner rejects verdict-looking partial text when the te
       const assistantError = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{
             type: "text",
             text: JSON.stringify({
@@ -529,7 +548,7 @@ test("PiSubprocessCheckerRunner rejects verdict-looking text when the terminal a
       const aborted = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{
             type: "text",
             text: JSON.stringify({
@@ -564,7 +583,7 @@ for (const stopReason of ["length", "toolUse"] as const) {
         const incomplete = JSON.stringify({
           type: "message_end",
           message: {
-            role: "assistant",
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [{
               type: "text",
               text: JSON.stringify({
@@ -593,13 +612,13 @@ for (const stopReason of ["length", "toolUse"] as const) {
   });
 }
 
-test("PiSubprocessCheckerRunner does not echo an unknown terminal stop reason", async () => {
+test("PiSubprocessCheckerRunner rejects and does not echo an unknown terminal stop reason", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
       const unknownStop = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [],
           stopReason: "unexpected apiKey=sk-must-not-persist",
         },
@@ -612,7 +631,7 @@ test("PiSubprocessCheckerRunner does not echo an unknown terminal stop reason", 
     () => runChecker(runner, DEFAULT_CONFIG),
     (error: unknown) => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, /Assistant stop reason: missing/iu);
+      assert.match(error.message, /malformed Pi JSON event stream/iu);
       assert.doesNotMatch(error.message, /sk-must-not-persist/u);
       assert.doesNotMatch(error.message, /unexpected apiKey/iu);
       return true;
@@ -626,7 +645,7 @@ test("PiSubprocessCheckerRunner treats errorMessage as failure even with stopRea
       const assistantError = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{
             type: "text",
             text: JSON.stringify({
@@ -661,12 +680,12 @@ test("PiSubprocessCheckerRunner accepts a terminal verdict after an earlier retr
     async exec() {
       const retriedError = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "transient provider failure" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "error", errorMessage: "transient provider failure" },
       });
       const terminalVerdict = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{
             type: "text",
             text: JSON.stringify({
@@ -695,14 +714,14 @@ test("PiSubprocessCheckerRunner distinguishes an empty assistant response from i
       const staleVerdict = JSON.stringify({
         type: "message_end",
         message: {
-          role: "assistant",
+          role: "assistant", ...JSON_ASSISTANT_FIELDS,
           content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
           stopReason: "toolUse",
         },
       });
       const emptyAssistant = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [], stopReason: "stop" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" },
       });
       return { stdout: `${staleVerdict}\n${emptyAssistant}\n`, stderr: "", code: 0, killed: false };
     },
@@ -751,7 +770,7 @@ test("PiSubprocessCheckerRunner rejects malformed protocol before interpreting a
     async exec() {
       const assistantError = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider failed" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "error", errorMessage: "provider failed" },
       });
       return { stdout: `not-json\n${assistantError}\n`, stderr: "", code: 0, killed: false };
     },
@@ -773,7 +792,7 @@ test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a ver
     async exec() {
       const verdict = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
       });
       return { stdout: `${verdict}\n{}\n`, stderr: "", code: 0, killed: false };
     },
@@ -787,9 +806,34 @@ for (const malformedEvent of [
   { name: "session with invalid parentSession", event: { type: "session", id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp", parentSession: 42 } },
   { name: "thinking_level_changed with an unknown level", event: { type: "thinking_level_changed", level: "extreme" } },
   { name: "compaction_end with an invalid errorMessage", event: { type: "compaction_end", reason: "manual", aborted: false, willRetry: false, errorMessage: 42 } },
+  { name: "compaction_start with an invalid reason", event: { type: "compaction_start", reason: "automatic" } },
+  { name: "entry_appended without an entry", event: { type: "entry_appended" } },
+  { name: "entry_appended with a malformed message entry", event: { type: "entry_appended", entry: { type: "message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", message: {} } } },
+  { name: "entry_appended with malformed custom message display", event: { type: "entry_appended", entry: { type: "custom_message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", customType: "test", content: "ok", display: "yes" } } },
+  { name: "entry_appended with malformed label", event: { type: "entry_appended", entry: { type: "label", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", targetId: "target", label: 42 } } },
+  { name: "session_info_changed with an invalid name", event: { type: "session_info_changed", name: 42 } },
+  { name: "auto_retry_start with an invalid attempt", event: { type: "auto_retry_start", attempt: "1", maxAttempts: 3, delayMs: 100, errorMessage: "retry" } },
+  { name: "auto_retry_end with an invalid success flag", event: { type: "auto_retry_end", success: "yes", attempt: 1 } },
   { name: "message_start without a message", event: { type: "message_start" } },
-  { name: "message_update without an assistant event", event: { type: "message_update", message: {} } },
-  { name: "turn_end without tool results", event: { type: "turn_end", message: {} } },
+  { name: "message_start with a malformed message", event: { type: "message_start", message: {} } },
+  { name: "message_update without an assistant event", event: { type: "message_update", message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" } } },
+  { name: "message_update with a malformed assistant event", event: { type: "message_update", message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" }, assistantMessageEvent: {} } },
+  { name: "turn_end without tool results", event: { type: "turn_end", message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" } } },
+  { name: "turn_end with a malformed message", event: { type: "turn_end", message: {}, toolResults: [] } },
+  { name: "turn_end with a malformed tool result", event: { type: "turn_end", message: jsonAssistantMessage(), toolResults: [{ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: "invalid" }] } },
+  { name: "message_start with malformed assistant content", event: { type: "message_start", message: { ...jsonAssistantMessage(), content: [{}] } } },
+  { name: "message_start with malformed assistant usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } } } },
+  { name: "message_start with malformed bash timestamp", event: { type: "message_start", message: { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: "invalid" } } },
+  { name: "message_start with malformed compaction timestamp", event: { type: "message_start", message: { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: "invalid" } } },
+  { name: "message_start with a malformed tool result", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], isError: false } } },
+  { name: "message_update with an invalid text delta", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: 42, partial: jsonAssistantMessage() } } },
+  { name: "message_update with a malformed text partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
+  { name: "message_update with an invalid tool call", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { id: "call-1", name: "read", arguments: {} }, partial: jsonAssistantMessage() } } },
+  { name: "message_update with a malformed tool call partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { type: "toolCall", id: "call-1", name: "read", arguments: {} }, partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
+  { name: "message_update with an invalid done reason", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "done", reason: "error", message: jsonAssistantMessage() } } },
+  { name: "message_update with malformed done output", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "done", reason: "stop", message: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
+  { name: "message_update with malformed error output", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "error", reason: "error", error: { ...jsonAssistantMessage([], "error"), timestamp: "invalid" } } } },
+  { name: "message_update with malformed thinking end partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "done", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "tool_execution_start without args", event: { type: "tool_execution_start", toolCallId: "call-1", toolName: "read" } },
   { name: "tool_execution_update without a partial result", event: { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {} } },
   { name: "tool_execution_end without isError", event: { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {} } },
@@ -799,7 +843,7 @@ for (const malformedEvent of [
       async exec() {
         const verdict = JSON.stringify({
           type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
+          message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
         });
         return { stdout: `${verdict}\n${JSON.stringify(malformedEvent.event)}\n`, stderr: "", code: 0, killed: false };
       },
@@ -821,24 +865,59 @@ for (const malformedEvent of [
 test("PiSubprocessCheckerRunner accepts current recognized event envelopes after a verdict", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
-      const assistant = { role: "assistant", content: [], stopReason: "stop" };
+      const assistant = jsonAssistantMessage();
       const verdict = {
         type: "message_end",
         message: { ...assistant, content: [{ type: "text", text: '{"decision":"continue"}' }] },
       };
+      const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: {} };
+      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 0 };
+      const thinkingAssistant = jsonAssistantMessage([{ type: "thinking", thinking: "inspect" }, toolCall]);
+      const errorAssistant = jsonAssistantMessage([], "error");
+      const userMessage = { role: "user", content: "inspect", timestamp: 0 };
+      const bashMessage = { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: 0 };
+      const branchMessage = { role: "branchSummary", summary: "summary", fromId: "entry-0", timestamp: 0 };
+      const compactionMessage = { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: 0 };
+      const entryBase = { id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z" };
       const events = [
         { type: "agent_start" },
         { type: "turn_start" },
         { type: "message_start", message: assistant },
-        { type: "message_update", message: assistant, assistantMessageEvent: { type: "text_delta", delta: "x" } },
+        { type: "message_start", message: userMessage },
+        { type: "message_start", message: toolResult },
+        { type: "message_start", message: bashMessage },
+        { type: "message_start", message: branchMessage },
+        { type: "message_start", message: compactionMessage },
+        { type: "message_start", message: { role: "custom", customType: "note", content: "ok", display: false, timestamp: 0 } },
+        { type: "message_start", message: thinkingAssistant },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "start", partial: assistant } },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: assistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinkingAssistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: thinkingAssistant } },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: assistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "x", partial: thinkingAssistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "toolcall_delta", contentIndex: 1, delta: "x", partial: thinkingAssistant } },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "done", partial: assistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "done", partial: thinkingAssistant } },
+        { type: "message_update", message: thinkingAssistant, assistantMessageEvent: { type: "toolcall_end", contentIndex: 1, toolCall, partial: thinkingAssistant } },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "done", reason: "stop", message: assistant } },
+        { type: "message_update", message: errorAssistant, assistantMessageEvent: { type: "error", reason: "error", error: errorAssistant } },
         { type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: {} },
         { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {}, partialResult: null },
         { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {}, isError: false },
-        { type: "turn_end", message: assistant, toolResults: [] },
+        { type: "turn_end", message: assistant, toolResults: [toolResult] },
         { type: "agent_settled" },
         { type: "queue_update", steering: [], followUp: [] },
         { type: "compaction_start", reason: "manual" },
-        { type: "entry_appended", entry: {} },
+        { type: "entry_appended", entry: { ...entryBase, type: "message", message: userMessage } },
+        { type: "entry_appended", entry: { ...entryBase, type: "thinking_level_change", thinkingLevel: "high" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "model_change", provider: "openai", modelId: "gpt-test" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "compaction", summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10 } },
+        { type: "entry_appended", entry: { ...entryBase, type: "branch_summary", fromId: "entry-0", summary: "summary" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "custom", customType: "test" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "custom_message", customType: "test", content: "ok", display: false } },
+        { type: "entry_appended", entry: { ...entryBase, type: "label", targetId: "entry-0", label: "label" } },
+        { type: "entry_appended", entry: { ...entryBase, type: "session_info", name: "name" } },
         { type: "session_info_changed" },
         { type: "thinking_level_changed", level: "high" },
         { type: "compaction_end", reason: "manual", aborted: false, willRetry: false },
@@ -986,7 +1065,7 @@ test("PiSubprocessCheckerRunner treats killed=true as failure even when Pi norma
         stdout: JSON.stringify({
           type: "message_end",
           message: {
-            role: "assistant",
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
           },
         }),
@@ -1014,7 +1093,7 @@ test("PiSubprocessCheckerRunner preserves structured diagnostics for non-killed 
     async exec() {
       const stdout = JSON.stringify({
         type: "message_end",
-        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider quota exhausted" },
+        message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "error", errorMessage: "provider quota exhausted" },
       });
       return { stdout, stderr: "stderr clue", code: 7, killed: false };
     },
@@ -1068,6 +1147,26 @@ test("PiSubprocessCheckerRunner redacts secrets from checker subprocess diagnost
 test("redactSecrets scrubs common secret carriers while preserving surrounding text", () => {
   assert.equal(redactSecrets("apiKey=sk-abcdef123456"), "apiKey=[REDACTED]");
   assert.equal(redactSecrets('"api_key": "sk-abcdef123456"'), '"api_key": "[REDACTED]"');
+  assert.equal(redactSecrets('apiKey="abc def,ghi"'), 'apiKey="[REDACTED]"');
+  assert.equal(redactSecrets("passphrase='correct horse battery staple'"), "passphrase='[REDACTED]'");
+  assert.equal(redactSecrets('apiKey="unterminated secret'), 'apiKey="[REDACTED]');
+  assert.equal(redactSecrets("token='unterminated secret"), "token='[REDACTED]");
+  assert.equal(redactSecrets(String.raw`apiKey="unterminated\" secret`), 'apiKey="[REDACTED]');
+  assert.equal(redactSecrets(String.raw`token='unterminated\' secret`), "token='[REDACTED]");
+  assert.equal(redactSecrets('apiKey="unterminated secret' + "\\"), 'apiKey="[REDACTED]');
+  assert.equal(redactSecrets("token='unterminated secret" + "\\"), "token='[REDACTED]");
+  assert.equal(redactSecrets("token: abc,def"), "token: [REDACTED]");
+  assert.equal(redactSecrets("passphrase=correct horse battery staple"), "passphrase=[REDACTED]");
+  assert.equal(redactSecrets("token: alpha beta gamma"), "token: [REDACTED]");
+  assert.equal(
+    redactSecrets("request failed token=alpha beta gamma; retrying in 5s"),
+    "request failed token=[REDACTED]; retrying in 5s",
+  );
+  assert.equal(redactSecrets("token=alpha beta gamma status=503"), "token=[REDACTED] status=503");
+  assert.equal(redactSecrets("token=abc, retrying in 5s"), "token=[REDACTED], retrying in 5s");
+  assert.equal(redactSecrets("token=abc. retrying"), "token=[REDACTED]. retrying");
+  assert.equal(redactSecrets("mytoken=public"), "mytoken=public");
+  assert.equal(redactSecrets("not_token=public"), "not_token=public");
   assert.equal(redactSecrets("Authorization: Bearer sk-abcdef123456"), "Authorization: Bearer [REDACTED]");
   assert.equal(redactSecrets("loaded /tmp/checker-bootstrap.ts fine"), "loaded /tmp/checker-bootstrap.ts fine");
 });
@@ -1096,7 +1195,7 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
         stdout: JSON.stringify({
           type: "message_end",
           message: {
-            role: "assistant",
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [
               {
                 type: "text",

@@ -154,7 +154,7 @@ function classifyVerdictFailure(error: unknown): string {
 }
 
 const REDACTED = "[REDACTED]";
-const SECRET_KEY_PATTERN = "api[_-]?key|apikey|secret|token|password|passwd|passphrase|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret";
+const SECRET_KEY_PATTERN = "(?:x[_-]?)?api[_-]?key|apikey|secret|token|password|passwd|passphrase|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret";
 
 // Redaction is intentionally quote-agnostic: a failing bootstrap extension often
 // renders provider config with Node's `util.inspect`, whose default is
@@ -171,11 +171,28 @@ export function redactSecrets(value: string): string {
     )
     // Standalone bearer tokens outside an Authorization header.
     .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]{6,}/gi, `$1 ${REDACTED}`)
-    // `key: value` / `key=value` / `"key":"value"` / `'key':'value'` for known
-    // secret carriers, with either quote style (or none).
+    // Quoted values may contain spaces and delimiters, so consume the whole
+    // matching quoted value before handling unquoted carriers.
     .replace(
-      new RegExp(`(['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)(['"]?)([^\\s"',}]+)(['"]?)`, "gi"),
-      (_match, prefix: string, openQuote: string, _secret: string, closeQuote: string) => `${prefix}${openQuote}${REDACTED}${closeQuote}`,
+      new RegExp(`((?<![A-Za-z0-9_-])['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\\\r\\n])*"`, "gi"),
+      (_match, prefix: string) => `${prefix}"${REDACTED}"`,
+    )
+    .replace(
+      new RegExp(`((?<![A-Za-z0-9_-])['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\\\r\\n])*'`, "gi"),
+      (_match, prefix: string) => `${prefix}'${REDACTED}'`,
+    )
+    // Truncated diagnostics can end before a quoted value closes.
+    .replace(
+      new RegExp(`((?<![A-Za-z0-9_-])['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\\\r\\n])*\\\\?$`, "gim"),
+      (_match, prefix: string) => `${prefix}"${REDACTED}`,
+    )
+    .replace(
+      new RegExp(`((?<![A-Za-z0-9_-])['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\\\r\\n])*\\\\?$`, "gim"),
+      (_match, prefix: string) => `${prefix}'${REDACTED}`,
+    )
+    .replace(
+      new RegExp(`((?<![A-Za-z0-9_-])['"]?(?:${SECRET_KEY_PATTERN})['"]?\\s*[:=]\\s*)([^\\s\\r\\n'"}][^\\r\\n'"}]*?)(?=\\s+[A-Za-z][\\w-]*\\s*=|,\\s*['"]?[A-Za-z][\\w-]*['"]?\\s*[:=]|[,;.]\\s+|\\s*}|$)`, "gi"),
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
     )
     // OpenAI-style secret keys anywhere else in the text.
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED);
@@ -357,14 +374,19 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
       // events; raw turn_start records have no turnIndex or timestamp fields.
       return true;
     case "agent_end":
-      return Array.isArray(event.messages) && typeof event.willRetry === "boolean";
+      return Array.isArray(event.messages)
+        && event.messages.every(isAgentMessageEnvelope)
+        && typeof event.willRetry === "boolean";
     case "turn_end":
-      return isRecord(event.message) && Array.isArray(event.toolResults);
+      return isAgentMessageEnvelope(event.message)
+        && Array.isArray(event.toolResults)
+        && event.toolResults.every((result) => isAgentMessageEnvelope(result) && result.role === "toolResult");
     case "message_start":
+      return isAgentMessageEnvelope(event.message);
     case "message_end":
-      return isRecord(event.message);
+      return isTerminalMessageEnvelope(event.message);
     case "message_update":
-      return isRecord(event.message) && isRecord(event.assistantMessageEvent);
+      return isAgentMessageEnvelope(event.message) && isAssistantMessageEventEnvelope(event.assistantMessageEvent);
     case "tool_execution_start":
       return hasStringProperties(event, "toolCallId", "toolName") && Object.hasOwn(event, "args");
     case "tool_execution_update":
@@ -380,7 +402,7 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
     case "compaction_start":
       return isCompactionReason(event.reason);
     case "entry_appended":
-      return isRecord(event.entry);
+      return isSessionEntryEnvelope(event.entry);
     case "session_info_changed":
       return event.name === undefined || typeof event.name === "string";
     case "thinking_level_changed":
@@ -402,6 +424,151 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
       // Unknown event types remain forward-compatible; every event type known to
       // the current Pi JSON contract must carry its required envelope fields.
       return true;
+  }
+}
+
+function isTerminalMessageEnvelope(value: unknown): value is Record<string, unknown> {
+  return isAgentMessageEnvelope(value);
+}
+
+function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || typeof value.role !== "string") return false;
+  switch (value.role) {
+    case "assistant":
+      return hasStringProperties(value, "api", "provider", "model")
+        && Array.isArray(value.content)
+        && value.content.every(isAssistantContent)
+        && isUsage(value.usage)
+        && checkerStopReason(stringProperty(value, "stopReason")) !== undefined
+        && typeof value.timestamp === "number";
+    case "user":
+      return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
+        && typeof value.timestamp === "number";
+    case "toolResult":
+      return hasStringProperties(value, "toolCallId", "toolName")
+        && Array.isArray(value.content)
+        && value.content.every(isUserContent)
+        && typeof value.isError === "boolean"
+        && typeof value.timestamp === "number";
+    case "custom":
+      return typeof value.customType === "string"
+        && (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
+        && typeof value.display === "boolean"
+        && typeof value.timestamp === "number";
+    case "bashExecution":
+      return hasStringProperties(value, "command", "output")
+        && (value.exitCode === undefined || typeof value.exitCode === "number")
+        && typeof value.cancelled === "boolean"
+        && typeof value.truncated === "boolean"
+        && typeof value.timestamp === "number";
+    case "branchSummary":
+      return hasStringProperties(value, "summary", "fromId") && typeof value.timestamp === "number";
+    case "compactionSummary":
+      return typeof value.summary === "string"
+        && typeof value.tokensBefore === "number"
+        && typeof value.timestamp === "number";
+    default:
+      return false;
+  }
+}
+
+function isSessionEntryEnvelope(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasStringProperties(value, "type", "id", "timestamp")
+    || (value.parentId !== null && typeof value.parentId !== "string")) return false;
+  switch (value.type) {
+    case "message":
+      return isAgentMessageEnvelope(value.message);
+    case "thinking_level_change":
+      return typeof value.thinkingLevel === "string";
+    case "model_change":
+      return hasStringProperties(value, "provider", "modelId");
+    case "compaction":
+      return hasStringProperties(value, "summary", "firstKeptEntryId")
+        && typeof value.tokensBefore === "number";
+    case "branch_summary":
+      return hasStringProperties(value, "fromId", "summary");
+    case "custom":
+      return typeof value.customType === "string";
+    case "custom_message":
+      return typeof value.customType === "string"
+        && (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
+        && typeof value.display === "boolean";
+    case "label":
+      return typeof value.targetId === "string"
+        && (value.label === undefined || typeof value.label === "string");
+    case "session_info":
+      return value.name === undefined || typeof value.name === "string";
+    default:
+      return false;
+  }
+}
+
+function isAssistantContent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  if (value.type === "thinking") return typeof value.thinking === "string";
+  return value.type === "toolCall"
+    && hasStringProperties(value, "id", "name")
+    && isRecord(value.arguments);
+}
+
+function isUserContent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  return value.type === "image"
+    && hasStringProperties(value, "data", "mimeType");
+}
+
+function isUsage(value: unknown): boolean {
+  return isRecord(value)
+    && hasNumberProperties(value, "input", "output", "cacheRead", "cacheWrite", "totalTokens")
+    && isRecord(value.cost)
+    && hasNumberProperties(value.cost, "input", "output", "cacheRead", "cacheWrite", "total");
+}
+
+function isAssistantMessageEventEnvelope(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  switch (value.type) {
+    case "start":
+      return isAgentMessageEnvelope(value.partial) && value.partial.role === "assistant";
+    case "text_start":
+    case "thinking_start":
+    case "toolcall_start":
+      return typeof value.contentIndex === "number"
+        && isAgentMessageEnvelope(value.partial)
+        && value.partial.role === "assistant";
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta":
+      return typeof value.contentIndex === "number"
+        && typeof value.delta === "string"
+        && isAgentMessageEnvelope(value.partial)
+        && value.partial.role === "assistant";
+    case "text_end":
+    case "thinking_end":
+      return typeof value.contentIndex === "number"
+        && typeof value.content === "string"
+        && isAgentMessageEnvelope(value.partial)
+        && value.partial.role === "assistant";
+    case "toolcall_end":
+      return typeof value.contentIndex === "number"
+        && isRecord(value.toolCall)
+        && value.toolCall.type === "toolCall"
+        && hasStringProperties(value.toolCall, "id", "name")
+        && isRecord(value.toolCall.arguments)
+        && isAgentMessageEnvelope(value.partial)
+        && value.partial.role === "assistant";
+    case "done":
+      return (value.reason === "stop" || value.reason === "length" || value.reason === "toolUse")
+        && isAgentMessageEnvelope(value.message)
+        && value.message.role === "assistant";
+    case "error":
+      return (value.reason === "error" || value.reason === "aborted")
+        && isAgentMessageEnvelope(value.error)
+        && value.error.role === "assistant";
+    default:
+      return false;
   }
 }
 
