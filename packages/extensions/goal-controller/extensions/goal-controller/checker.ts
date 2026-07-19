@@ -231,21 +231,9 @@ function verdictTextFromJsonMode(
   const { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount } = scanJsonMode(stdout);
   const stopReason = checkerStopReason(stringProperty(finalAssistantMessage, "stopReason"));
   const errorMessage = stringProperty(finalAssistantMessage, "errorMessage");
-  // Earlier failed attempts can remain in the stream when Pi retries. The final
-  // assistant message is authoritative once retries settle.
-  if (stopReason === "error" || stopReason === "aborted" || errorMessage) {
-    const parts = [
-      "Goal checker model failed before returning a verdict.",
-      checkerConfigSummary(config, effectiveModel),
-      stopReason ? `Assistant stop reason: ${stopReason}.` : undefined,
-      errorMessage ? `Provider classification: ${classifyProviderFailure(errorMessage)}` : undefined,
-      config.checker.model === "inherit"
-        ? "The checker inherited the active session model. Configure checker.model explicitly in goal-controller.config.json if that model cannot perform checker work."
-        : undefined,
-    ];
-    throw new CheckerFailure(parts.filter((part): part is string => part !== undefined).join("\n"));
-  }
 
+  // The terminal outcome is trustworthy only after every emitted JSONL record
+  // passes the protocol boundary.
   if (nonJsonLineCount > 0 || malformedEventCount > 0) {
     const counts = [
       nonJsonLineCount > 0
@@ -259,6 +247,21 @@ function verdictTextFromJsonMode(
       `Goal checker returned a malformed Pi JSON event stream (${counts}).`,
       checkerConfigSummary(config, effectiveModel),
     ].join("\n"));
+  }
+
+  // Earlier failed attempts can remain in the stream when Pi retries. The final
+  // assistant message is authoritative once retries settle.
+  if (stopReason === "error" || stopReason === "aborted" || errorMessage) {
+    const parts = [
+      "Goal checker model failed before returning a verdict.",
+      checkerConfigSummary(config, effectiveModel),
+      stopReason ? `Assistant stop reason: ${stopReason}.` : undefined,
+      errorMessage ? `Provider classification: ${classifyProviderFailure(errorMessage)}` : undefined,
+      config.checker.model === "inherit"
+        ? "The checker inherited the active session model. Configure checker.model explicitly in goal-controller.config.json if that model cannot perform checker work."
+        : undefined,
+    ];
+    throw new CheckerFailure(parts.filter((part): part is string => part !== undefined).join("\n"));
   }
 
   if (finalAssistantMessage && stopReason !== "stop") {
@@ -350,6 +353,8 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
     case "agent_start":
     case "agent_settled":
     case "turn_start":
+      // JSON mode serializes AgentSession listener events, not extension-hook
+      // events; raw turn_start records have no turnIndex or timestamp fields.
       return true;
     case "agent_end":
       return Array.isArray(event.messages) && typeof event.willRetry === "boolean";
@@ -461,13 +466,14 @@ export function safeCheckerFailureMessage(
 }
 
 function jsonObjectCandidates(text: string): string[] {
-  const candidates: string[] = [];
+  const containers: Array<{ start: number; end: number; text: string }> = [];
   for (let start = 0; start < text.length; start += 1) {
-    if (text[start] !== "{") continue;
-    let depth = 0;
+    const opening = text[start];
+    if (opening !== "{" && opening !== "[") continue;
+    const closings = [opening === "{" ? "}" : "]"];
     let quoted = false;
     let escaped = false;
-    for (let index = start; index < text.length; index += 1) {
+    for (let index = start + 1; index < text.length; index += 1) {
       const char = text[index];
       if (quoted) {
         if (escaped) escaped = false;
@@ -479,17 +485,26 @@ function jsonObjectCandidates(text: string): string[] {
         quoted = true;
         continue;
       }
-      if (char === "{") depth += 1;
-      else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          candidates.push(text.slice(start, index + 1));
+      if (char === "{") closings.push("}");
+      else if (char === "[") closings.push("]");
+      else if (char === "}" || char === "]") {
+        if (closings.pop() !== char) break;
+        if (closings.length === 0) {
+          containers.push({ start, end: index, text: text.slice(start, index + 1) });
           break;
         }
       }
     }
   }
-  return candidates;
+
+  return containers
+    .filter((candidate) => candidate.text.startsWith("{"))
+    .filter((candidate) => !containers.some((parent) => (
+      parent.start < candidate.start
+      && parent.end > candidate.end
+      && safeJsonParse(parent.text) !== undefined
+    )))
+    .map((candidate) => candidate.text);
 }
 
 function containsCheckerVerdict(text: string): boolean {
@@ -538,12 +553,7 @@ export function parseCheckerVerdict(text: string): CheckerVerdict {
 function extractJsonObject(text: string): string {
   const trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed)?.[1];
-  const candidate = fenced?.trim() ?? trimmed;
-  if (candidate.startsWith("{") && candidate.endsWith("}")) return candidate;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start >= 0 && end > start) return candidate.slice(start, end + 1);
-  return candidate;
+  return fenced?.trim() ?? trimmed;
 }
 
 function requirements(value: unknown): CheckerVerdict["requirements"] {

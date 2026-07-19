@@ -284,6 +284,64 @@ test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summ
   assert.equal(verdict.reason, "all requirements proven");
 });
 
+test("PiSubprocessCheckerRunner rejects a verdict nested inside a non-verdict JSON object", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const wrappedVerdict = JSON.stringify({
+        wrapper: {
+          decision: "complete",
+          complete: true,
+          evidence: ["nested evidence must not win"],
+          requirements: [{ requirement: "nested", status: "satisfied" }],
+        },
+      });
+      const message = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: wrappedVerdict }], stopReason: "stop" },
+      });
+      return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned an invalid verdict/iu);
+      assert.match(error.message, /omitted a recognized decision/iu);
+      return true;
+    },
+  );
+});
+
+test("PiSubprocessCheckerRunner rejects a verdict nested inside a JSON array", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const nestedVerdict = JSON.stringify([{
+        decision: "complete",
+        complete: true,
+        evidence: ["nested evidence must not win"],
+        requirements: [{ requirement: "nested", status: "satisfied" }],
+      }]);
+      const message = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: `before ${nestedVerdict} after` }], stopReason: "stop" },
+      });
+      return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned an invalid verdict/iu);
+      assert.match(error.message, /not a JSON verdict object/iu);
+      return true;
+    },
+  );
+});
+
 test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal text blocks", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
@@ -688,6 +746,28 @@ test("PiSubprocessCheckerRunner rejects malformed Pi JSON output as a protocol f
   );
 });
 
+test("PiSubprocessCheckerRunner rejects malformed protocol before interpreting a terminal provider error", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const assistantError = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider failed" },
+      });
+      return { stdout: `not-json\n${assistantError}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  await assert.rejects(
+    () => runChecker(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /malformed Pi JSON event stream/iu);
+      assert.doesNotMatch(error.message, /checker model failed before returning a verdict/iu);
+      return true;
+    },
+  );
+});
+
 test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a verdict", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
@@ -707,6 +787,12 @@ for (const malformedEvent of [
   { name: "session with invalid parentSession", event: { type: "session", id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp", parentSession: 42 } },
   { name: "thinking_level_changed with an unknown level", event: { type: "thinking_level_changed", level: "extreme" } },
   { name: "compaction_end with an invalid errorMessage", event: { type: "compaction_end", reason: "manual", aborted: false, willRetry: false, errorMessage: 42 } },
+  { name: "message_start without a message", event: { type: "message_start" } },
+  { name: "message_update without an assistant event", event: { type: "message_update", message: {} } },
+  { name: "turn_end without tool results", event: { type: "turn_end", message: {} } },
+  { name: "tool_execution_start without args", event: { type: "tool_execution_start", toolCallId: "call-1", toolName: "read" } },
+  { name: "tool_execution_update without a partial result", event: { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {} } },
+  { name: "tool_execution_end without isError", event: { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {} } },
 ]) {
   test(`PiSubprocessCheckerRunner rejects ${malformedEvent.name} after a verdict`, async () => {
     const runner = new PiSubprocessCheckerRunner({
@@ -732,16 +818,40 @@ for (const malformedEvent of [
   });
 }
 
-test("PiSubprocessCheckerRunner accepts current agent_end and queue_update envelopes after a verdict", async () => {
+test("PiSubprocessCheckerRunner accepts current recognized event envelopes after a verdict", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
-      const verdict = JSON.stringify({
+      const assistant = { role: "assistant", content: [], stopReason: "stop" };
+      const verdict = {
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
-      });
-      const queueUpdate = JSON.stringify({ type: "queue_update", steering: [], followUp: [] });
-      const agentEnd = JSON.stringify({ type: "agent_end", messages: [], willRetry: false });
-      return { stdout: `${verdict}\n${queueUpdate}\n${agentEnd}\n`, stderr: "", code: 0, killed: false };
+        message: { ...assistant, content: [{ type: "text", text: '{"decision":"continue"}' }] },
+      };
+      const events = [
+        { type: "agent_start" },
+        { type: "turn_start" },
+        { type: "message_start", message: assistant },
+        { type: "message_update", message: assistant, assistantMessageEvent: { type: "text_delta", delta: "x" } },
+        { type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: {} },
+        { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {}, partialResult: null },
+        { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {}, isError: false },
+        { type: "turn_end", message: assistant, toolResults: [] },
+        { type: "agent_settled" },
+        { type: "queue_update", steering: [], followUp: [] },
+        { type: "compaction_start", reason: "manual" },
+        { type: "entry_appended", entry: {} },
+        { type: "session_info_changed" },
+        { type: "thinking_level_changed", level: "high" },
+        { type: "compaction_end", reason: "manual", aborted: false, willRetry: false },
+        { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
+        { type: "auto_retry_end", success: true, attempt: 1 },
+        { type: "agent_end", messages: [], willRetry: false },
+      ];
+      return {
+        stdout: [verdict, ...events].map((event) => JSON.stringify(event)).join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
     },
   });
 
