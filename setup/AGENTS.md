@@ -16,6 +16,13 @@
 - Applies to exploration, search, research, and all information-gathering tasks.
 - Err toward more coverage; shallow/lazy passes miss critical context.
 
+# Communication
+
+## Plain Language
+
+- Write responses and authored text in plain, concise English: use familiar, concrete words, active voice, and direct phrasing; cut words that add no meaning; avoid stale figures of speech and needless jargon.
+- Treat these as defaults, not absolutes. Preserve needed detail, precision, naturalness, and readability rather than forcing awkward prose.
+
 # Planning
 
 ## Prompt Work
