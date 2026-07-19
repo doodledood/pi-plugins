@@ -20,8 +20,14 @@
 
 ## Plain Language
 
-- Write responses and authored text in plain, concise English: use familiar, concrete words, active voice, and direct phrasing; cut words that add no meaning; avoid stale figures of speech and needless jargon.
-- Treat these as defaults, not absolutes. Preserve needed detail, precision, naturalness, and readability rather than forcing awkward prose.
+Apply these rules to responses and authored text:
+
+- Avoid stock metaphors, similes, and other worn-out figures of speech.
+- Prefer a short, familiar word when it conveys the same meaning.
+- Cut any word that can be removed without losing meaning, precision, or useful emphasis.
+- Prefer active voice to passive voice.
+- Use an everyday English equivalent instead of a foreign phrase, scientific term, or jargon when one exists.
+- Break any of these rules rather than produce awkward, unclear, imprecise, or unnatural language.
 
 # Planning
 
