@@ -32,6 +32,14 @@ function jsonAssistantMessage(content: unknown[] = [], stopReason = "stop"): Rec
   return { role: "assistant", ...JSON_ASSISTANT_FIELDS, content, stopReason };
 }
 
+function settledJsonl(stdout: string): string {
+  return [
+    stdout.trimEnd(),
+    JSON.stringify({ type: "agent_end", messages: [], willRetry: false }),
+    JSON.stringify({ type: "agent_settled" }),
+  ].join("\n");
+}
+
 function checkerContext(sessionFile: string | undefined): CheckerSessionContext {
   return {
     sessionFormat: "pi-jsonl-tree",
@@ -154,7 +162,7 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
       capturedCommand = command;
       capturedArgs = args;
       return {
-        stdout: JSON.stringify({
+        stdout: settledJsonl(JSON.stringify({
           type: "message_end",
           message: {
             role: "assistant", ...JSON_ASSISTANT_FIELDS,
@@ -172,7 +180,7 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
             ],
             stopReason: "stop",
           },
-        }) + "\n",
+        }) + "\n"),
         stderr: "",
         code: 0,
         killed: false,
@@ -234,7 +242,7 @@ test("PiSubprocessCheckerRunner maps configured and inherited max thinking to su
     async exec(_command, args) {
       captured.push(args);
       return {
-        stdout: JSON.stringify({
+        stdout: settledJsonl(JSON.stringify({
           type: "message_end",
           message: {
             role: "assistant", ...JSON_ASSISTANT_FIELDS,
@@ -248,7 +256,7 @@ test("PiSubprocessCheckerRunner maps configured and inherited max thinking to su
             }],
             stopReason: "stop",
           },
-        }) + "\n",
+        }) + "\n"),
         stderr: "",
         code: 0,
         killed: false,
@@ -291,7 +299,7 @@ test("PiSubprocessCheckerRunner extracts the JSON verdict even when a prose summ
           stopReason: "stop",
         },
       });
-      return { stdout: `${verdictMessage}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${verdictMessage}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -323,7 +331,7 @@ test("PiSubprocessCheckerRunner rejects a verdict nested inside a non-verdict JS
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: wrappedVerdict }], stopReason: "stop" },
       });
-      return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${message}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -351,7 +359,7 @@ test("PiSubprocessCheckerRunner rejects a verdict nested inside a JSON array", a
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: `before ${nestedVerdict} after` }], stopReason: "stop" },
       });
-      return { stdout: `${message}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${message}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -364,6 +372,20 @@ test("PiSubprocessCheckerRunner rejects a verdict nested inside a JSON array", a
       return true;
     },
   );
+});
+
+test("PiSubprocessCheckerRunner rejects a verdict nested in a balanced malformed wrapper", async () => {
+  const verdict = '{"decision":"continue"}';
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const message = JSON.stringify({
+        type: "message_end",
+        message: { ...jsonAssistantMessage([{ type: "text", text: `{"wrapper":${verdict}, trailing}` }]) },
+      });
+      return { stdout: settledJsonl(message), stderr: "", code: 0, killed: false };
+    },
+  });
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /invalid verdict/iu);
 });
 
 test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal text blocks", async () => {
@@ -384,7 +406,7 @@ test("PiSubprocessCheckerRunner reconstructs a verdict split across terminal tex
         type: "message_end",
         message: { role: "custom", customType: "note", content: "safe string content", display: false, timestamp: 0 },
       });
-      return { stdout: `${customMessage}\n${splitVerdict}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${customMessage}\n${splitVerdict}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -412,7 +434,7 @@ test("PiSubprocessCheckerRunner does not let an earlier tool-turn verdict overri
           stopReason: "stop",
         },
       });
-      return { stdout: `${staleVerdict}\n${terminalProse}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${staleVerdict}\n${terminalProse}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -434,7 +456,7 @@ test("PiSubprocessCheckerRunner classifies and redacts invalid verdict text", as
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: "Verification summary: apiKey=sk-invalidverdictsecret123" }], stopReason: "stop" },
       });
-      return { stdout: `${proseOnly}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${proseOnly}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -478,7 +500,7 @@ test("PiSubprocessCheckerRunner surfaces a zero-exit assistant provider error in
           errorMessage: "This request was blocked as it seems to violate restrictions on reverse engineering or duplicating model outputs. apiKey=sk-supersecret123456",
         },
       });
-      return { stdout: `${session}\n${assistantError}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${session}\n${assistantError}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -532,7 +554,7 @@ test("PiSubprocessCheckerRunner rejects verdict-looking partial text when the te
           errorMessage: "provider stream failed",
         },
       });
-      return { stdout: `${assistantError}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${assistantError}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -566,7 +588,7 @@ test("PiSubprocessCheckerRunner rejects verdict-looking text when the terminal a
           stopReason: "aborted",
         },
       });
-      return { stdout: `${aborted}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${aborted}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -601,7 +623,7 @@ for (const stopReason of ["length", "toolUse"] as const) {
             stopReason,
           },
         });
-        return { stdout: `${incomplete}\n`, stderr: "", code: 0, killed: false };
+        return { stdout: settledJsonl(`${incomplete}\n`), stderr: "", code: 0, killed: false };
       },
     });
 
@@ -628,7 +650,7 @@ test("PiSubprocessCheckerRunner rejects and does not echo an unknown terminal st
           stopReason: "unexpected apiKey=sk-must-not-persist",
         },
       });
-      return { stdout: `${unknownStop}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${unknownStop}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -664,7 +686,7 @@ test("PiSubprocessCheckerRunner treats errorMessage as failure even with stopRea
           errorMessage: "provider reported a terminal error",
         },
       });
-      return { stdout: `${assistantError}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${assistantError}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -704,7 +726,7 @@ test("PiSubprocessCheckerRunner accepts a terminal verdict after an earlier retr
           stopReason: "stop",
         },
       });
-      return { stdout: `${retriedError}\n${terminalVerdict}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${retriedError}\n${terminalVerdict}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -728,7 +750,7 @@ test("PiSubprocessCheckerRunner distinguishes an empty assistant response from i
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" },
       });
-      return { stdout: `${staleVerdict}\n${emptyAssistant}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${staleVerdict}\n${emptyAssistant}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -777,7 +799,7 @@ test("PiSubprocessCheckerRunner rejects malformed protocol before interpreting a
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "error", errorMessage: "provider failed" },
       });
-      return { stdout: `not-json\n${assistantError}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`not-json\n${assistantError}\n`), stderr: "", code: 0, killed: false };
     },
   });
 
@@ -812,6 +834,34 @@ test("PiSubprocessCheckerRunner rejects a retry-pending lifecycle without agent_
   await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
 });
 
+for (const lifecycleTail of [
+  [
+    { type: "agent_start" },
+    { type: "agent_end", messages: [], willRetry: false },
+  ],
+  [
+    { type: "agent_start" },
+    { type: "agent_settled" },
+    { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
+  ],
+]) {
+  test("PiSubprocessCheckerRunner rejects a lifecycle that does not end settled", async () => {
+    const runner = new PiSubprocessCheckerRunner({
+      async exec() {
+        const assistant = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]);
+        return {
+          stdout: [{ type: "message_end", message: assistant }, ...lifecycleTail]
+            .map((event) => JSON.stringify(event)).join("\n"),
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      },
+    });
+    await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+  });
+}
+
 test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a verdict", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
@@ -819,7 +869,7 @@ test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a ver
         type: "message_end",
         message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
       });
-      return { stdout: `${verdict}\n{}\n`, stderr: "", code: 0, killed: false };
+      return { stdout: settledJsonl(`${verdict}\n{}\n`), stderr: "", code: 0, killed: false };
     },
   });
   await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
@@ -833,6 +883,7 @@ for (const malformedEvent of [
   { name: "thinking_level_changed with an unknown level", event: { type: "thinking_level_changed", level: "extreme" } },
   { name: "compaction_end with an invalid errorMessage", event: { type: "compaction_end", reason: "manual", aborted: false, willRetry: false, errorMessage: 42 } },
   { name: "compaction_end with a malformed result", event: { type: "compaction_end", reason: "manual", result: {}, aborted: false, willRetry: false } },
+  { name: "compaction_end with invalid estimated tokens", event: { type: "compaction_end", reason: "manual", result: { summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, estimatedTokensAfter: "5" }, aborted: false, willRetry: false } },
   { name: "compaction_start with an invalid reason", event: { type: "compaction_start", reason: "automatic" } },
   { name: "entry_appended without an entry", event: { type: "entry_appended" } },
   { name: "entry_appended with a malformed message entry", event: { type: "entry_appended", entry: { type: "message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", message: {} } } },
@@ -843,6 +894,7 @@ for (const malformedEvent of [
   { name: "session_info_changed with an invalid name", event: { type: "session_info_changed", name: 42 } },
   { name: "auto_retry_start with an invalid attempt", event: { type: "auto_retry_start", attempt: "1", maxAttempts: 3, delayMs: 100, errorMessage: "retry" } },
   { name: "auto_retry_end with an invalid success flag", event: { type: "auto_retry_end", success: "yes", attempt: 1 } },
+  { name: "auto_retry_end with an invalid final error", event: { type: "auto_retry_end", success: false, attempt: 1, finalError: 42 } },
   { name: "message_start without a message", event: { type: "message_start" } },
   { name: "message_start with a malformed message", event: { type: "message_start", message: {} } },
   { name: "message_update without an assistant event", event: { type: "message_update", message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [], stopReason: "stop" } } },
@@ -853,22 +905,26 @@ for (const malformedEvent of [
   { name: "message_start with malformed assistant content", event: { type: "message_start", message: { ...jsonAssistantMessage(), content: [{}] } } },
   { name: "message_start with invalid text signature", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "text", text: "x", textSignature: 42 }]) } } },
   { name: "message_start with invalid thinking metadata", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "thinking", thinking: "x", redacted: "yes" }]) } } },
+  { name: "message_start with invalid thinking signature", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "thinking", thinking: "x", thinkingSignature: 42 }]) } } },
   { name: "message_start with invalid tool thought signature", event: { type: "message_start", message: { ...jsonAssistantMessage([{ type: "toolCall", id: "call-1", name: "read", arguments: {}, thoughtSignature: 42 }]) } } },
   { name: "message_start with malformed assistant usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } } } },
   { name: "message_start with invalid assistant errorMessage", event: { type: "message_start", message: { ...jsonAssistantMessage(), errorMessage: 42 } } },
   { name: "message_start with invalid assistant responseModel", event: { type: "message_start", message: { ...jsonAssistantMessage(), responseModel: 42 } } },
   { name: "message_start with invalid assistant responseId", event: { type: "message_start", message: { ...jsonAssistantMessage(), responseId: 42 } } },
   { name: "message_start with invalid assistant diagnostics", event: { type: "message_start", message: { ...jsonAssistantMessage(), diagnostics: 42 } } },
+  { name: "message_start with malformed assistant diagnostic item", event: { type: "message_start", message: { ...jsonAssistantMessage(), diagnostics: [{ type: 42, timestamp: 0 }] } } },
   { name: "message_start with invalid assistant reasoning usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, reasoning: "bad" } } } },
   { name: "message_start with invalid assistant cacheWrite1h usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cacheWrite1h: "bad" } } } },
   { name: "message_start with invalid added tool names", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], addedToolNames: [42], isError: false, timestamp: 0 } } },
   { name: "message_start with malformed bash timestamp", event: { type: "message_start", message: { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: "invalid" } } },
+  { name: "message_start with malformed bash optional fields", event: { type: "message_start", message: { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, fullOutputPath: 42, excludeFromContext: "yes", timestamp: 0 } } },
   { name: "message_start with malformed compaction timestamp", event: { type: "message_start", message: { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: "invalid" } } },
   { name: "message_start with a malformed tool result", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], isError: false } } },
   { name: "message_start with malformed image content", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "image", data: "base64", mimeType: 42 }], isError: false, timestamp: 0 } } },
   { name: "message_update with an invalid text delta", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: 42, partial: jsonAssistantMessage() } } },
   { name: "message_update with a malformed text partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "message_update with an invalid tool call", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { id: "call-1", name: "read", arguments: {} }, partial: jsonAssistantMessage() } } },
+  { name: "message_update with an invalid tool call signature", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { type: "toolCall", id: "call-1", name: "read", arguments: {}, thoughtSignature: 42 }, partial: jsonAssistantMessage() } } },
   { name: "message_update with a malformed tool call partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { type: "toolCall", id: "call-1", name: "read", arguments: {} }, partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "message_update with an invalid done reason", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "done", reason: "error", message: jsonAssistantMessage() } } },
   { name: "message_update with malformed done output", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "done", reason: "stop", message: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
@@ -885,7 +941,7 @@ for (const malformedEvent of [
           type: "message_end",
           message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
         });
-        return { stdout: `${verdict}\n${JSON.stringify(malformedEvent.event)}\n`, stderr: "", code: 0, killed: false };
+        return { stdout: settledJsonl(`${verdict}\n${JSON.stringify(malformedEvent.event)}\n`), stderr: "", code: 0, killed: false };
       },
     });
 
@@ -1106,13 +1162,13 @@ test("PiSubprocessCheckerRunner treats killed=true as failure even when Pi norma
     async exec() {
       await new Promise((resolve) => setTimeout(resolve, 5));
       return {
-        stdout: JSON.stringify({
+        stdout: settledJsonl(JSON.stringify({
           type: "message_end",
           message: {
             role: "assistant", ...JSON_ASSISTANT_FIELDS,
             content: [{ type: "text", text: '{"decision":"complete","complete":true}' }],
           },
-        }),
+        })),
         stderr: "",
         code: 0,
         killed: true,
@@ -1236,7 +1292,7 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
     async exec(_command, args) {
       capturedArgs = args;
       return {
-        stdout: JSON.stringify({
+        stdout: settledJsonl(JSON.stringify({
           type: "message_end",
           message: {
             role: "assistant", ...JSON_ASSISTANT_FIELDS,
@@ -1254,7 +1310,7 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
             ],
             stopReason: "stop",
           },
-        }) + "\n",
+        }) + "\n"),
         stderr: "",
         code: 0,
         killed: false,

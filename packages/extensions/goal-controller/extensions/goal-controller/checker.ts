@@ -343,6 +343,7 @@ function scanJsonMode(stdout: string): {
       lifecycleSettled = event.type === "agent_settled";
     }
     if (event.type !== "message_end") continue;
+    if (lifecycleObserved && lifecycleSettled) lifecycleSettled = false;
     const message = event.message;
     if (!isRecord(message) || typeof message.role !== "string") {
       nonJsonLineCount += 1;
@@ -364,7 +365,7 @@ function scanJsonMode(stdout: string): {
     }
   }
 
-  if (lifecycleObserved && !lifecycleSettled) malformedEventCount += 1;
+  if (!lifecycleObserved || !lifecycleSettled) malformedEventCount += 1;
   return { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount };
 }
 
@@ -607,10 +608,9 @@ function isAssistantMessageEventEnvelope(value: unknown): boolean {
         && value.partial.role === "assistant";
     case "toolcall_end":
       return typeof value.contentIndex === "number"
+        && isAssistantContent(value.toolCall)
         && isRecord(value.toolCall)
         && value.toolCall.type === "toolCall"
-        && hasStringProperties(value.toolCall, "id", "name")
-        && isRecord(value.toolCall.arguments)
         && isAgentMessageEnvelope(value.partial)
         && value.partial.role === "assistant";
     case "done":
@@ -723,7 +723,6 @@ function jsonObjectCandidates(text: string): string[] {
     .filter((candidate) => !containers.some((parent) => (
       parent.start < candidate.start
       && parent.end > candidate.end
-      && safeJsonParse(parent.text) !== undefined
     )))
     .map((candidate) => candidate.text);
 }

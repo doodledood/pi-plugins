@@ -745,27 +745,31 @@ test("recognized checker failures preserve fixed safe diagnostics through persis
   const checker = new PiSubprocessCheckerRunner({
     async exec() {
       return {
-        stdout: JSON.stringify({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [],
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.5",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        stdout: [
+          {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [],
+              api: "openai-responses",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "error",
+              errorMessage: "This request was blocked for reverse engineering or duplicating model outputs. apiKey=sk-must-not-persist",
+              timestamp: 0,
             },
-            stopReason: "error",
-            errorMessage: "This request was blocked for reverse engineering or duplicating model outputs. apiKey=sk-must-not-persist",
-            timestamp: 0,
           },
-        }),
+          { type: "agent_end", messages: [], willRetry: false },
+          { type: "agent_settled" },
+        ].map((event) => JSON.stringify(event)).join("\n"),
         stderr: "",
         code: 0,
         killed: false,
