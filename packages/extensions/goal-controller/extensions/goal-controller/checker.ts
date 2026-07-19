@@ -411,7 +411,7 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
       return isCompactionReason(event.reason)
         && typeof event.aborted === "boolean"
         && typeof event.willRetry === "boolean"
-        && (event.result === undefined || isRecord(event.result))
+        && (event.result === undefined || isCompactionResult(event.result))
         && (event.errorMessage === undefined || typeof event.errorMessage === "string");
     case "auto_retry_start":
       return hasNumberProperties(event, "attempt", "maxAttempts", "delayMs")
@@ -440,6 +440,9 @@ function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown
         && value.content.every(isAssistantContent)
         && isUsage(value.usage)
         && checkerStopReason(stringProperty(value, "stopReason")) !== undefined
+        && (value.errorMessage === undefined || typeof value.errorMessage === "string")
+        && (value.responseModel === undefined || typeof value.responseModel === "string")
+        && (value.responseId === undefined || typeof value.responseId === "string")
         && typeof value.timestamp === "number";
     case "user":
       return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
@@ -448,6 +451,7 @@ function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown
       return hasStringProperties(value, "toolCallId", "toolName")
         && Array.isArray(value.content)
         && value.content.every(isUserContent)
+        && (value.addedToolNames === undefined || isStringArray(value.addedToolNames))
         && typeof value.isError === "boolean"
         && typeof value.timestamp === "number";
     case "custom":
@@ -485,9 +489,11 @@ function isSessionEntryEnvelope(value: unknown): boolean {
       return hasStringProperties(value, "provider", "modelId");
     case "compaction":
       return hasStringProperties(value, "summary", "firstKeptEntryId")
-        && typeof value.tokensBefore === "number";
+        && typeof value.tokensBefore === "number"
+        && (value.fromHook === undefined || typeof value.fromHook === "boolean");
     case "branch_summary":
-      return hasStringProperties(value, "fromId", "summary");
+      return hasStringProperties(value, "fromId", "summary")
+        && (value.fromHook === undefined || typeof value.fromHook === "boolean");
     case "custom":
       return typeof value.customType === "string";
     case "custom_message":
@@ -523,8 +529,17 @@ function isUserContent(value: unknown): boolean {
 function isUsage(value: unknown): boolean {
   return isRecord(value)
     && hasNumberProperties(value, "input", "output", "cacheRead", "cacheWrite", "totalTokens")
+    && (value.cacheWrite1h === undefined || typeof value.cacheWrite1h === "number")
+    && (value.reasoning === undefined || typeof value.reasoning === "number")
     && isRecord(value.cost)
     && hasNumberProperties(value.cost, "input", "output", "cacheRead", "cacheWrite", "total");
+}
+
+function isCompactionResult(value: unknown): boolean {
+  return isRecord(value)
+    && hasStringProperties(value, "summary", "firstKeptEntryId")
+    && typeof value.tokensBefore === "number"
+    && (value.estimatedTokensAfter === undefined || typeof value.estimatedTokensAfter === "number");
 }
 
 function isAssistantMessageEventEnvelope(value: unknown): boolean {

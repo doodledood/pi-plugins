@@ -802,15 +802,18 @@ test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a ver
 
 for (const malformedEvent of [
   { name: "agent_end without messages", event: { type: "agent_end", willRetry: false } },
+  { name: "agent_end with a malformed nested message", event: { type: "agent_end", messages: [{ ...jsonAssistantMessage(), timestamp: "invalid" }], willRetry: false } },
   { name: "queue_update without queues", event: { type: "queue_update" } },
   { name: "session with invalid parentSession", event: { type: "session", id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp", parentSession: 42 } },
   { name: "thinking_level_changed with an unknown level", event: { type: "thinking_level_changed", level: "extreme" } },
   { name: "compaction_end with an invalid errorMessage", event: { type: "compaction_end", reason: "manual", aborted: false, willRetry: false, errorMessage: 42 } },
+  { name: "compaction_end with a malformed result", event: { type: "compaction_end", reason: "manual", result: {}, aborted: false, willRetry: false } },
   { name: "compaction_start with an invalid reason", event: { type: "compaction_start", reason: "automatic" } },
   { name: "entry_appended without an entry", event: { type: "entry_appended" } },
   { name: "entry_appended with a malformed message entry", event: { type: "entry_appended", entry: { type: "message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", message: {} } } },
   { name: "entry_appended with malformed custom message display", event: { type: "entry_appended", entry: { type: "custom_message", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", customType: "test", content: "ok", display: "yes" } } },
   { name: "entry_appended with malformed label", event: { type: "entry_appended", entry: { type: "label", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", targetId: "target", label: 42 } } },
+  { name: "entry_appended with malformed hook marker", event: { type: "entry_appended", entry: { type: "compaction", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z", summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, fromHook: "yes" } } },
   { name: "session_info_changed with an invalid name", event: { type: "session_info_changed", name: 42 } },
   { name: "auto_retry_start with an invalid attempt", event: { type: "auto_retry_start", attempt: "1", maxAttempts: 3, delayMs: 100, errorMessage: "retry" } },
   { name: "auto_retry_end with an invalid success flag", event: { type: "auto_retry_end", success: "yes", attempt: 1 } },
@@ -823,9 +826,12 @@ for (const malformedEvent of [
   { name: "turn_end with a malformed tool result", event: { type: "turn_end", message: jsonAssistantMessage(), toolResults: [{ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: "invalid" }] } },
   { name: "message_start with malformed assistant content", event: { type: "message_start", message: { ...jsonAssistantMessage(), content: [{}] } } },
   { name: "message_start with malformed assistant usage", event: { type: "message_start", message: { ...jsonAssistantMessage(), usage: { ...JSON_ASSISTANT_FIELDS.usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } } } },
+  { name: "message_start with invalid optional assistant fields", event: { type: "message_start", message: { ...jsonAssistantMessage(), errorMessage: 42, usage: { ...JSON_ASSISTANT_FIELDS.usage, reasoning: "bad" } } } },
+  { name: "message_start with invalid added tool names", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], addedToolNames: [42], isError: false, timestamp: 0 } } },
   { name: "message_start with malformed bash timestamp", event: { type: "message_start", message: { role: "bashExecution", command: "pwd", output: "/tmp", exitCode: 0, cancelled: false, truncated: false, timestamp: "invalid" } } },
   { name: "message_start with malformed compaction timestamp", event: { type: "message_start", message: { role: "compactionSummary", summary: "summary", tokensBefore: 10, timestamp: "invalid" } } },
   { name: "message_start with a malformed tool result", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [], isError: false } } },
+  { name: "message_start with malformed image content", event: { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "image", data: "base64", mimeType: 42 }], isError: false, timestamp: 0 } } },
   { name: "message_update with an invalid text delta", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: 42, partial: jsonAssistantMessage() } } },
   { name: "message_update with a malformed text partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "message_update with an invalid tool call", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { id: "call-1", name: "read", arguments: {} }, partial: jsonAssistantMessage() } } },
@@ -871,7 +877,7 @@ test("PiSubprocessCheckerRunner accepts current recognized event envelopes after
         message: { ...assistant, content: [{ type: "text", text: '{"decision":"continue"}' }] },
       };
       const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: {} };
-      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 0 };
+      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }, { type: "image", data: "base64", mimeType: "image/png" }], isError: false, timestamp: 0 };
       const thinkingAssistant = jsonAssistantMessage([{ type: "thinking", thinking: "inspect" }, toolCall]);
       const errorAssistant = jsonAssistantMessage([], "error");
       const userMessage = { role: "user", content: "inspect", timestamp: 0 };
@@ -920,10 +926,10 @@ test("PiSubprocessCheckerRunner accepts current recognized event envelopes after
         { type: "entry_appended", entry: { ...entryBase, type: "session_info", name: "name" } },
         { type: "session_info_changed" },
         { type: "thinking_level_changed", level: "high" },
-        { type: "compaction_end", reason: "manual", aborted: false, willRetry: false },
+        { type: "compaction_end", reason: "manual", result: { summary: "summary", firstKeptEntryId: "entry-0", tokensBefore: 10, estimatedTokensAfter: 5 }, aborted: false, willRetry: false },
         { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
         { type: "auto_retry_end", success: true, attempt: 1 },
-        { type: "agent_end", messages: [], willRetry: false },
+        { type: "agent_end", messages: [assistant], willRetry: false },
       ];
       return {
         stdout: [verdict, ...events].map((event) => JSON.stringify(event)).join("\n"),
