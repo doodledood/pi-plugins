@@ -386,7 +386,7 @@ test("PiSubprocessCheckerRunner classifies and redacts invalid verdict text", as
 test("PiSubprocessCheckerRunner surfaces a zero-exit assistant provider error instead of parsing raw JSONL", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
-      const session = JSON.stringify({ type: "session", version: 3, id: "session-1" });
+      const session = JSON.stringify({ type: "session", version: 3, id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp" });
       const assistantError = JSON.stringify({
         type: "message_end",
         message: {
@@ -666,7 +666,7 @@ test("PiSubprocessCheckerRunner rejects malformed Pi JSON output as a protocol f
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
       return {
-        stdout: `${JSON.stringify({ type: "session", version: 3, id: "session-1" })}\nnot-json passphrase=\"correct horse battery staple\"\n`,
+        stdout: `${JSON.stringify({ type: "session", version: 3, id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp" })}\nnot-json passphrase=\"correct horse battery staple\"\n`,
         stderr: "",
         code: 0,
         killed: false,
@@ -701,12 +701,59 @@ test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a ver
   await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
 });
 
+for (const malformedEvent of [
+  { name: "agent_end without messages", event: { type: "agent_end", willRetry: false } },
+  { name: "queue_update without queues", event: { type: "queue_update" } },
+  { name: "session with invalid parentSession", event: { type: "session", id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp", parentSession: 42 } },
+  { name: "thinking_level_changed with an unknown level", event: { type: "thinking_level_changed", level: "extreme" } },
+  { name: "compaction_end with an invalid errorMessage", event: { type: "compaction_end", reason: "manual", aborted: false, willRetry: false, errorMessage: 42 } },
+]) {
+  test(`PiSubprocessCheckerRunner rejects ${malformedEvent.name} after a verdict`, async () => {
+    const runner = new PiSubprocessCheckerRunner({
+      async exec() {
+        const verdict = JSON.stringify({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
+        });
+        return { stdout: `${verdict}\n${JSON.stringify(malformedEvent.event)}\n`, stderr: "", code: 0, killed: false };
+      },
+    });
+
+    await assert.rejects(
+      () => runChecker(runner, DEFAULT_CONFIG),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /malformed Pi JSON event stream/iu);
+        assert.match(error.message, /malformed recognized event envelope/iu);
+        assert.doesNotMatch(error.message, /returned an invalid verdict/iu);
+        return true;
+      },
+    );
+  });
+}
+
+test("PiSubprocessCheckerRunner accepts current agent_end and queue_update envelopes after a verdict", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const verdict = JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
+      });
+      const queueUpdate = JSON.stringify({ type: "queue_update", steering: [], followUp: [] });
+      const agentEnd = JSON.stringify({ type: "agent_end", messages: [], willRetry: false });
+      return { stdout: `${verdict}\n${queueUpdate}\n${agentEnd}\n`, stderr: "", code: 0, killed: false };
+    },
+  });
+
+  assert.equal((await runCheckerVerdict(runner, DEFAULT_CONFIG)).decision, "continue");
+});
+
 test("PiSubprocessCheckerRunner rejects a valid event stream without assistant message_end", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
       return {
         stdout: [
-          JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+          JSON.stringify({ type: "session", version: 3, id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp" }),
           JSON.stringify({ type: "agent_start" }),
           JSON.stringify({ type: "turn_start" }),
         ].join("\n"),

@@ -228,7 +228,7 @@ function verdictTextFromJsonMode(
   config: GoalControllerConfig,
   effectiveModel: string | undefined,
 ): string {
-  const { textBlocks, finalAssistantMessage, nonJsonLineCount } = scanJsonMode(stdout);
+  const { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount } = scanJsonMode(stdout);
   const stopReason = checkerStopReason(stringProperty(finalAssistantMessage, "stopReason"));
   const errorMessage = stringProperty(finalAssistantMessage, "errorMessage");
   // Earlier failed attempts can remain in the stream when Pi retries. The final
@@ -246,9 +246,17 @@ function verdictTextFromJsonMode(
     throw new CheckerFailure(parts.filter((part): part is string => part !== undefined).join("\n"));
   }
 
-  if (nonJsonLineCount > 0) {
+  if (nonJsonLineCount > 0 || malformedEventCount > 0) {
+    const counts = [
+      nonJsonLineCount > 0
+        ? `${nonJsonLineCount} non-JSON line${nonJsonLineCount === 1 ? "" : "s"}`
+        : undefined,
+      malformedEventCount > 0
+        ? `${malformedEventCount} malformed recognized event envelope${malformedEventCount === 1 ? "" : "s"}`
+        : undefined,
+    ].filter((count): count is string => count !== undefined).join(", ");
     throw new CheckerFailure([
-      `Goal checker returned a malformed Pi JSON event stream (${nonJsonLineCount} non-JSON line${nonJsonLineCount === 1 ? "" : "s"}).`,
+      `Goal checker returned a malformed Pi JSON event stream (${counts}).`,
       checkerConfigSummary(config, effectiveModel),
     ].join("\n"));
   }
@@ -290,16 +298,22 @@ function scanJsonMode(stdout: string): {
   textBlocks: string[];
   finalAssistantMessage: Record<string, unknown> | undefined;
   nonJsonLineCount: number;
+  malformedEventCount: number;
 } {
   const textBlocks: string[] = [];
   let finalAssistantMessage: Record<string, unknown> | undefined;
   let nonJsonLineCount = 0;
+  let malformedEventCount = 0;
 
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const event = safeJsonParse(line);
     if (!isRecord(event) || typeof event.type !== "string") {
       nonJsonLineCount += 1;
+      continue;
+    }
+    if (!isValidJsonModeEventEnvelope(event)) {
+      malformedEventCount += 1;
       continue;
     }
     if (event.type !== "message_end") continue;
@@ -324,7 +338,92 @@ function scanJsonMode(stdout: string): {
     }
   }
 
-  return { textBlocks, finalAssistantMessage, nonJsonLineCount };
+  return { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount };
+}
+
+function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
+  switch (event.type) {
+    case "session":
+      return hasStringProperties(event, "id", "timestamp", "cwd")
+        && (event.version === undefined || typeof event.version === "number")
+        && (event.parentSession === undefined || typeof event.parentSession === "string");
+    case "agent_start":
+    case "agent_settled":
+    case "turn_start":
+      return true;
+    case "agent_end":
+      return Array.isArray(event.messages) && typeof event.willRetry === "boolean";
+    case "turn_end":
+      return isRecord(event.message) && Array.isArray(event.toolResults);
+    case "message_start":
+    case "message_end":
+      return isRecord(event.message);
+    case "message_update":
+      return isRecord(event.message) && isRecord(event.assistantMessageEvent);
+    case "tool_execution_start":
+      return hasStringProperties(event, "toolCallId", "toolName") && Object.hasOwn(event, "args");
+    case "tool_execution_update":
+      return hasStringProperties(event, "toolCallId", "toolName")
+        && Object.hasOwn(event, "args")
+        && Object.hasOwn(event, "partialResult");
+    case "tool_execution_end":
+      return hasStringProperties(event, "toolCallId", "toolName")
+        && Object.hasOwn(event, "result")
+        && typeof event.isError === "boolean";
+    case "queue_update":
+      return isStringArray(event.steering) && isStringArray(event.followUp);
+    case "compaction_start":
+      return isCompactionReason(event.reason);
+    case "entry_appended":
+      return isRecord(event.entry);
+    case "session_info_changed":
+      return event.name === undefined || typeof event.name === "string";
+    case "thinking_level_changed":
+      return isThinkingLevel(event.level);
+    case "compaction_end":
+      return isCompactionReason(event.reason)
+        && typeof event.aborted === "boolean"
+        && typeof event.willRetry === "boolean"
+        && (event.result === undefined || isRecord(event.result))
+        && (event.errorMessage === undefined || typeof event.errorMessage === "string");
+    case "auto_retry_start":
+      return hasNumberProperties(event, "attempt", "maxAttempts", "delayMs")
+        && typeof event.errorMessage === "string";
+    case "auto_retry_end":
+      return typeof event.success === "boolean"
+        && typeof event.attempt === "number"
+        && (event.finalError === undefined || typeof event.finalError === "string");
+    default:
+      // Unknown event types remain forward-compatible; every event type known to
+      // the current Pi JSON contract must carry its required envelope fields.
+      return true;
+  }
+}
+
+function hasStringProperties(value: Record<string, unknown>, ...keys: string[]): boolean {
+  return keys.every((key) => typeof value[key] === "string");
+}
+
+function hasNumberProperties(value: Record<string, unknown>, ...keys: string[]): boolean {
+  return keys.every((key) => typeof value[key] === "number");
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isCompactionReason(value: unknown): boolean {
+  return value === "manual" || value === "threshold" || value === "overflow";
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "off"
+    || value === "minimal"
+    || value === "low"
+    || value === "medium"
+    || value === "high"
+    || value === "xhigh"
+    || value === "max";
 }
 
 function assistantMessageHasText(message: Record<string, unknown>): boolean {
