@@ -338,12 +338,15 @@ function scanJsonMode(stdout: string): {
       malformedEventCount += 1;
       continue;
     }
+    if (lifecycleSettled) {
+      malformedEventCount += 1;
+      continue;
+    }
     if (isLifecycleEvent(event.type)) {
       lifecycleObserved = true;
       lifecycleSettled = event.type === "agent_settled";
     }
     if (event.type !== "message_end") continue;
-    if (lifecycleObserved && lifecycleSettled) lifecycleSettled = false;
     const message = event.message;
     if (!isRecord(message) || typeof message.role !== "string") {
       nonJsonLineCount += 1;

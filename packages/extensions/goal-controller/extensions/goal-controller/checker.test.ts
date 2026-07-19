@@ -834,6 +834,35 @@ test("PiSubprocessCheckerRunner rejects a retry-pending lifecycle without agent_
   await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
 });
 
+test("PiSubprocessCheckerRunner rejects a verdict stream without lifecycle settlement", async () => {
+  const assistant = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]);
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return { stdout: JSON.stringify({ type: "message_end", message: assistant }), stderr: "", code: 0, killed: false };
+    },
+  });
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+});
+
+test("PiSubprocessCheckerRunner rejects assistant output after agent_settled", async () => {
+  const assistant = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]);
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      return {
+        stdout: [
+          { type: "agent_start" },
+          { type: "agent_settled" },
+          { type: "message_end", message: assistant },
+        ].map((event) => JSON.stringify(event)).join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+});
+
 for (const lifecycleTail of [
   [
     { type: "agent_start" },
@@ -843,6 +872,11 @@ for (const lifecycleTail of [
     { type: "agent_start" },
     { type: "agent_settled" },
     { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 100, errorMessage: "retry" },
+  ],
+  [
+    { type: "agent_start" },
+    { type: "agent_settled" },
+    { type: "queue_update", steering: [], followUp: [] },
   ],
 ]) {
   test("PiSubprocessCheckerRunner rejects a lifecycle that does not end settled", async () => {
