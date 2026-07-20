@@ -114,7 +114,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
    - Run `pi --list-models`; for the full profile confirm `anthropic/claude-fable-5`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Fable at medium, Sol at xhigh, and Luna at max; Sol reports 372K context, Luna reports approximately 1.1M, and `model-aliases.json` gives both OpenAI models a 1,050,000-token target window.
-   - Confirm each selected config, instruction, and agent file exists at its target path. For the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
+   - Confirm each selected config, instruction, and agent file exists at its target path. For the goal-controller profile, confirm `checker.model: openai/gpt-5.6-sol` and `checker.thinking: xhigh`; for the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
    - When editing this repository itself, also run `npm run verify:structure` and the secret-safety scans from the `sync-pi-setup` skill.
@@ -143,6 +143,8 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 ```
 
 The setup makes `anthropic/claude-fable-5` the default at medium thinking. The model cycle contains only Fable at medium, `openai/gpt-5.6-sol` at xhigh, and `openai/gpt-5.6-luna` at max. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol as a dual-window alias—Pi sees a 372,000-token operating window for display and compaction while provider requests use its 1,050,000-token target window—and exposes Luna's full 1,050,000-token window.
+
+[`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-5.6-sol` at `xhigh`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
@@ -266,7 +268,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `btw` — `/btw` side conversations with ephemeral child history and a shared project workspace.
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
-- `goal-controller` — checker-only long-running goal controller.
+- `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-sol` at `xhigh` while the extension default remains `inherit`.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle.
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.

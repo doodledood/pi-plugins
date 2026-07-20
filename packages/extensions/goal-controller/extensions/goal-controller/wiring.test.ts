@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { registerCheckerModelBootstrap as registerRealModelAliasesBootstrap } from "../../../model-aliases/extensions/model-aliases/index.ts";
 import realModelAliasesCheckerBootstrap from "../../../model-aliases/extensions/model-aliases/checker-bootstrap.ts";
 import { createEventBus, type AgentEndEvent, type BeforeAgentStartEvent, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent, type SessionTreeEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { activate, activeStatusRefreshDelayMs, formatStatus } from "./index.ts";
+import { activate as activateGoalController, activeStatusRefreshDelayMs, formatStatus } from "./index.ts";
 import {
   CHECKER_MODEL_BOOTSTRAP_KIND,
   CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION,
@@ -104,6 +104,13 @@ class FakeHost implements GoalControllerHost {
   public async exec(): Promise<never> {
     throw new Error("fake host should not exec");
   }
+}
+
+function activate(host: GoalControllerHost, checker: CheckerRunner): void {
+  activateGoalController(host, checker, () => ({
+    config: DEFAULT_CONFIG,
+    path: "/tmp/goal-controller-test.config.json",
+  }));
 }
 
 interface CtxOptions {

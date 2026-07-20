@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 
+test("package defaults inherit checker model and thinking", () => {
+  assert.equal(DEFAULT_CONFIG.checker.model, "inherit");
+  assert.equal(DEFAULT_CONFIG.checker.thinking, "inherit");
+});
+
 test("loadConfig uses defaults when config file is absent", () => {
   const path = join(mkdtempSync(join(tmpdir(), "goal-controller-config-")), "missing.json");
   const loaded = loadConfig(path);

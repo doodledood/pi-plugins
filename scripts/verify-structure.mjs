@@ -111,6 +111,22 @@ const setupModels = readJson(join(root, "setup", "models.example.json"));
 if (setupModels && Object.keys(setupModels.providers ?? {}).length !== 0) {
   errors.push("setup/models.example.json: full profile must not use model-provider overrides");
 }
+const setupGoalController = readJson(join(root, "setup", "configs", "goal-controller.config.json"));
+if (setupGoalController) {
+  const checker = setupGoalController.checker;
+  if (checker?.model !== "openai/gpt-5.6-sol") {
+    errors.push("setup/configs/goal-controller.config.json: checker model must be openai/gpt-5.6-sol");
+  }
+  if (checker?.thinking !== "xhigh") {
+    errors.push("setup/configs/goal-controller.config.json: checker thinking must be xhigh");
+  }
+  if (JSON.stringify(Object.keys(setupGoalController).sort()) !== JSON.stringify(["checker"])) {
+    errors.push("setup/configs/goal-controller.config.json: setup override must contain only checker settings");
+  }
+  if (checker && JSON.stringify(Object.keys(checker).sort()) !== JSON.stringify(["model", "thinking"])) {
+    errors.push("setup/configs/goal-controller.config.json: checker override must contain only model and thinking");
+  }
+}
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModelAliases) {
   const aliases = new Map((setupModelAliases.aliases ?? []).map((alias) => [alias.id, alias]));

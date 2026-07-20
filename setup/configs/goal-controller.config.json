@@ -1,0 +1,6 @@
+{
+  "checker": {
+    "model": "openai/gpt-5.6-sol",
+    "thinking": "xhigh"
+  }
+}

@@ -28,7 +28,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 ## Configuration
 
-See `config/` for a safe example config. Aviram's setup intentionally ships no goal-controller override right now; the package defaults are the current setup defaults unless you create `~/.pi/agent/goal-controller.config.json` locally.
+See `config/` for a safe example config. The package defaults both checker model and thinking to `inherit`. Aviram's portable setup adds a separate, setup-specific [`goal-controller.config.json`](../../../setup/configs/goal-controller.config.json) that pins its checker to `openai/gpt-5.6-sol` at `xhigh`; installing this package alone does not apply that override.
 
 ## Original extension notes
 

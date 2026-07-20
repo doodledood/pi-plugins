@@ -76,8 +76,12 @@ export default function goalController(pi: ExtensionAPI): void {
   activate(pi, new PiSubprocessCheckerRunner(pi));
 }
 
-export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): void {
-  let loadedConfig: LoadedConfig = loadConfig();
+export function activate(
+  pi: GoalControllerHost,
+  checkerRunner: CheckerRunner,
+  configLoader: () => LoadedConfig = loadConfig,
+): void {
+  let loadedConfig: LoadedConfig = configLoader();
   let activeGoal: ActiveGoal | undefined;
   let checkerRun: LiveCheckerRun | undefined;
   let activeStatusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -268,7 +272,7 @@ export function activate(pi: GoalControllerHost, checkerRunner: CheckerRunner): 
   };
 
   const reloadConfig = (ctx?: ExtensionContext): void => {
-    loadedConfig = loadConfig();
+    loadedConfig = configLoader();
     if (loadedConfig.warning && ctx) ctx.ui.notify(loadedConfig.warning, "warning");
   };
 
