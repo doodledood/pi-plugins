@@ -6,7 +6,7 @@ For agent-guided replication onto another computer—including target inspection
 
 ## Files
 
-- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to regular `openai/gpt-5.6-sol` (372K visible / 1.05M target dual-window alias) at high thinking, rotates native `openai/gpt-5.5` and `openai/gpt-5.5-1m` (1.05M alias) at xhigh plus `openai/gpt-5.6-sol-1m` (full 1.05M visible / 1.05M target window) alongside the Anthropic models, enables `deep-focus-pi`, and configures image generation to use `gpt-image-2`.
+- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to `anthropic/claude-fable-5` at medium thinking, and limits the model cycle to Fable at medium, `openai/gpt-5.6-sol` at xhigh, and `openai/gpt-5.6-luna` at max. Sol uses a 372K visible / 1.05M target dual-window alias, Luna exposes and targets 1.05M, the setup enables `deep-focus-pi`, and image generation uses `gpt-image-2`.
 - `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use. It lists each local extension package—including BTW—and the theme separately, replacing rather than duplicating the root Git bundle.
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename, for example `configs/model-aliases.json` → `~/.pi/agent/model-aliases.json`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
@@ -28,7 +28,7 @@ For agent-guided replication onto another computer—including target inspection
 7. Merge `AGENTS.md` / `APPEND_SYSTEM.md` only when the user wants Aviram's agent behavior.
 8. Copy `mcp.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.
 9. If local MCP server names are changed, update matching `mcp-tool-loadout` prior keys in `configs/mcp-tool-loadout.json` before copying that config.
-10. If a previous machine used `models.json` or `model-aliases.json` for an older 1M-context model, remove the obsolete override or alias before merging the current dual-window regular-Sol and `openai/gpt-5.6-sol-1m` aliases.
+10. If a previous machine used `models.json` or `model-aliases.json` for an older model profile, remove obsolete overrides and aliases before merging the current Sol and Luna aliases.
 
 ## Secret handling
 

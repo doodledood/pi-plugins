@@ -3,34 +3,12 @@
   "aliases": [
     {
       "provider": "openai",
-      "id": "gpt-5.5-1m",
-      "name": "GPT-5.5 1M",
-      "targetProvider": "openai",
-      "targetModel": "gpt-5.5",
-      "apiKey": "$OPENAI_API_KEY",
-      "contextWindow": 1050000,
-      "targetContextWindow": 1050000,
-      "maxTokens": 128000
-    },
-    {
-      "provider": "openai",
       "id": "gpt-5.6-sol",
       "name": "GPT-5.6 Sol",
       "targetProvider": "openai",
       "targetModel": "gpt-5.6-sol",
       "apiKey": "$OPENAI_API_KEY",
       "contextWindow": 372000,
-      "targetContextWindow": 1050000,
-      "maxTokens": 128000
-    },
-    {
-      "provider": "openai",
-      "id": "gpt-5.6-sol-1m",
-      "name": "GPT-5.6 Sol 1M",
-      "targetProvider": "openai",
-      "targetModel": "gpt-5.6-sol",
-      "apiKey": "$OPENAI_API_KEY",
-      "contextWindow": 1050000,
       "targetContextWindow": 1050000,
       "maxTokens": 128000
     },

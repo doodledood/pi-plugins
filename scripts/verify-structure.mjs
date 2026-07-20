@@ -12,13 +12,9 @@ const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
 const expectedSetupSkills = ["deletion-pass"];
 const expectedEnabledModels = [
-  "openai/gpt-5.5:xhigh",
-  "openai/gpt-5.5-1m:xhigh",
-  "openai/gpt-5.6-sol:high",
-  "openai/gpt-5.6-sol-1m:high",
-  "anthropic/claude-fable-5:xhigh",
-  "anthropic/claude-opus-4-8:xhigh",
-  "anthropic/claude-sonnet-5:xhigh",
+  "anthropic/claude-fable-5:medium",
+  "openai/gpt-5.6-sol:xhigh",
+  "openai/gpt-5.6-luna:max",
 ];
 
 function readJson(path) {
@@ -103,9 +99,9 @@ if (installedSettings && localSettings) {
     }),
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
-    if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
-    if (settings.defaultModel !== "gpt-5.6-sol") errors.push(`setup ${label} settings: defaultModel must be gpt-5.6-sol`);
-    if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
+    if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
+    if (settings.defaultModel !== "claude-fable-5") errors.push(`setup ${label} settings: defaultModel must be claude-fable-5`);
+    if (settings.defaultThinkingLevel !== "medium") errors.push(`setup ${label} settings: defaultThinkingLevel must be medium`);
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
     }
@@ -119,12 +115,15 @@ const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases
 if (setupModelAliases) {
   const aliases = new Map((setupModelAliases.aliases ?? []).map((alias) => [alias.id, alias]));
   const regularSol = aliases.get("gpt-5.6-sol");
-  const deepSol = aliases.get("gpt-5.6-sol-1m");
+  const luna = aliases.get("gpt-5.6-luna");
+  if (aliases.size !== 2) {
+    errors.push("setup/configs/model-aliases.json: full profile must define only Sol and Luna aliases");
+  }
   if (regularSol?.contextWindow !== 372000 || regularSol?.targetContextWindow !== 1050000) {
     errors.push("setup/configs/model-aliases.json: regular Sol must expose 372K and target 1.05M");
   }
-  if (deepSol?.contextWindow !== 1050000 || deepSol?.targetContextWindow !== 1050000) {
-    errors.push("setup/configs/model-aliases.json: Sol 1M must expose and target 1.05M");
+  if (luna?.contextWindow !== 1050000 || luna?.targetContextWindow !== 1050000) {
+    errors.push("setup/configs/model-aliases.json: Luna must expose and target 1.05M");
   }
 }
 for (const name of expectedExtensions) {
