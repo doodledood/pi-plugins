@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { isThinkingLevel, type LoadedPanelConfig, type PanelConfig, type PanelistSpec } from "./types.ts";
 
@@ -19,8 +20,9 @@ export const DEFAULT_PANELISTS: PanelistSpec[] = [
 export const DEFAULT_INSPECT_KEYBINDING: KeyId = "ctrl+p";
 
 export function configPath(agentDir?: string): string {
-  const dir = agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent");
-  return join(dir, "panel.json");
+  // getAgentDir() is pi's authoritative agent-dir resolver (env override,
+  // homedir fallback, rebrand-aware config dir name) — never hand-roll it.
+  return join(agentDir ?? getAgentDir(), "panel.json");
 }
 
 export function defaultConfig(): PanelConfig {

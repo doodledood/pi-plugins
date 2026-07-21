@@ -278,7 +278,7 @@ export class PanelMonitorComponent {
       this.onCancel();
       return;
     }
-    if (matchesKey(data, this.inspectKey) || data === "i") {
+    if (matchesKey(data, this.inspectKey) || matchesKey(data, "i")) {
       this.view = this.view === "inspect" ? "status" : "inspect";
       return;
     }

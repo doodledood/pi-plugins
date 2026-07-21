@@ -140,8 +140,13 @@ export async function runPanelCommand(
           () => tui.requestRender(),
         );
       }, { overlay: true });
-      results = await runPromise;
-      closeMonitor?.(undefined);
+      try {
+        results = await runPromise;
+      } finally {
+        // The monitor must never outlive the run — a stuck overlay would own
+        // the chat's input until restart.
+        closeMonitor?.(undefined);
+      }
       await monitorClosed;
     } else {
       results = await runPromise;
