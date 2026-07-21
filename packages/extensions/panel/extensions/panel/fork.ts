@@ -58,6 +58,10 @@ function renderMessage(message: Record<string, unknown>): string | undefined {
     case "toolResult":
       return `[tool result]\n${contentText(message.content)}`;
     case "bashExecution":
+      // `!!`-prefixed commands are flagged excludeFromContext: pi never sends
+      // their output to any model, and neither may the transcript — this is
+      // exactly where users park sensitive or huge output.
+      if (message.excludeFromContext === true) return undefined;
       return `[user ran: ${String(message.command ?? "")}]\n${String(message.output ?? "")}`;
     case "compactionSummary":
       return `[summary of earlier conversation]\n${String(message.summary ?? "")}`;

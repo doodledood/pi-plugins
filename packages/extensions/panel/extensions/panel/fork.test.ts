@@ -66,6 +66,21 @@ test("compaction, branch summaries, and custom messages render as labeled sectio
   assert.ok(!transcript.includes("model_change"));
 });
 
+test("excludeFromContext bash executions never enter the transcript; included ones do", () => {
+  const transcript = transcriptFromEntries([
+    entry({
+      type: "message",
+      message: { role: "bashExecution", command: "echo SECRET", output: "SECRET-VALUE", exitCode: 0, cancelled: false, truncated: false, excludeFromContext: true, timestamp: 1 },
+    }),
+    entry({
+      type: "message",
+      message: { role: "bashExecution", command: "ls", output: "file-a", exitCode: 0, cancelled: false, truncated: false, timestamp: 2 },
+    }),
+  ]);
+  assert.ok(!transcript.includes("SECRET"), "!!-excluded output must not reach any panelist provider");
+  assert.match(transcript, /\[user ran: ls\]\nfile-a/);
+});
+
 test("empty history forks to no messages; null message content tolerated", () => {
   assert.deepEqual(forkMessagesFromEntries([]), []);
   const messages = forkMessagesFromEntries([
