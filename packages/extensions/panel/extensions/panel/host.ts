@@ -8,8 +8,18 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { PanelistSession, SpawnPanelist, SpawnPanelistOptions } from "./types.ts";
 
-/** Tools a panelist gets: full agentic coding set. Guardrails are prompt-level. */
-const PANELIST_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+/**
+ * Tools a panelist must NOT have, because they are pathological in a headless
+ * side-session: `ask_user_question` blocks on a user who isn't there, and
+ * `openai_tts_speak` produces audible output the user never asked a panelist
+ * for. Everything else — built-ins, extension tools (goal, subagents,
+ * advisor, MCP) — stays available: a panelist is deliberately as close to a
+ * regular session as possible, and guardrails are prompt-level.
+ */
+const PANELIST_EXCLUDED_TOOLS = ["ask_user_question", "openai_tts_speak"];
+
+/** Built-in tools to enable (the full coding set, matching a regular session). */
+const PANELIST_BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /**
  * Production panelist spawner: an isolated in-process pi SDK session, seeded
@@ -33,20 +43,18 @@ export const spawnPanelistSession: SpawnPanelist = async (
   // effort.
   const thinkingLevel = resolved.thinkingLevel ?? options.spec.thinking;
 
-  // The panelist instructions are APPENDED to pi's standard system prompt
-  // rather than replacing it, and context files stay on: panelist requests
-  // must look like normal pi traffic. Stripped requests (tiny replaced system
-  // prompt, bare question) to frontier models trip provider screening —
-  // verified live: the same fable question is ToS-blocked with a replaced
-  // prompt and answered with the standard shape. Skills/extensions stay off
-  // so the main session's instruction surfaces don't leak.
+  // A panelist session is deliberately as close to a regular pi session as
+  // possible: full extension/skill/prompt-template discovery and pi's
+  // standard system prompt with the panelist instructions APPENDED (never
+  // replacing it). This is both a capability decision — panelists can run
+  // skills like figure-out, set goals, spawn subagents — and a provider
+  // requirement: stripped requests (tiny replaced system prompt, bare
+  // question) to frontier models trip anti-distillation screening, verified
+  // live on fable. Only themes are skipped (headless — nothing to render).
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: getAgentDir(),
     appendSystemPrompt: [options.systemPrompt],
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
     noThemes: true,
   });
   await loader.reload();
@@ -68,9 +76,22 @@ export const spawnPanelistSession: SpawnPanelist = async (
     thinkingLevel,
     modelRuntime,
     resourceLoader: loader,
-    tools: PANELIST_TOOLS,
+    // No `tools` allowlist: an allowlist would silently drop every extension
+    // tool (they must be named explicitly). Built-ins are broadened to the
+    // full coding set after creation instead.
+    excludeTools: PANELIST_EXCLUDED_TOOLS,
     sessionManager,
   });
+  // Enable the non-default built-ins (grep/find/ls) alongside whatever tools
+  // extensions registered, mirroring a regular session's toolbox.
+  const state = session.agent.state as { tools: Array<{ name: string }> };
+  const present = new Set(state.tools.map((tool) => tool.name));
+  const missingBuiltins = PANELIST_BUILTIN_TOOLS.filter((name) => !present.has(name));
+  if (missingBuiltins.length > 0) {
+    const { createCodingTools } = await import("@earendil-works/pi-coding-agent");
+    const coding = createCodingTools(options.cwd) as Array<{ name: string }>;
+    state.tools = [...state.tools, ...coding.filter((tool) => missingBuiltins.includes(tool.name))] as never;
+  }
   session.agent.state.messages = [...options.forkMessages];
 
   return {

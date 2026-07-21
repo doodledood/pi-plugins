@@ -7,7 +7,7 @@
 When you run `/panel <question>`:
 
 1. A lineup picker opens (models + effort from your config; see below): segmented `‹ effort ›` control per row, provider column, and a header showing the selected count plus a rough cost estimate for the fork. Enter launches.
-2. The active branch's context (compaction applied) is forked and each **panelist** runs your question in its own isolated in-process pi session — full agentic tools, in parallel, independent of each other.
+2. The active branch's context (compaction applied) is forked and each **panelist** runs your question in its own isolated in-process pi session — as close to a regular pi session as possible: your extensions, skills, and prompt templates load (so a panelist can run `figure-out`, set a `goal`, spawn subagents, or use MCP tools), with the full built-in coding toolset. Only interactive-by-nature tools are excluded (`ask_user_question`, `openai_tts_speak`), and themes are skipped (headless). Panelists run in parallel, independent of each other.
 3. A slim **ambient bar** replaces the editor for the duration of the run — your chat transcript stays visible above it — with an animated spinner and one live line per panelist (state glyph, model, elapsed, tokens, cost, current activity). The inspect key (default `ctrl+p`; `i` also works) opens a **drill-in split view**: one bordered column per panelist streaming its transcript, `tab` zooms one panelist to full width, digit keys switch focus, and `esc` returns to the bar (with more than 3 panelists the split degrades to a single zoomed pane with a chip strip). `esc` on the bar cancels the whole panel and restores your question to the editor unsent.
 4. When all panelists finish, each final answer is injected into your session **verbatim and attributed**, rendered as a styled collapsed row (state-colored glyph, stats, and a quoted first-line preview of the answer) you can expand to the full text. Your main model then answers with those opinions in hand.
 
@@ -15,7 +15,7 @@ When you run `/panel <question>`:
 
 ## Isolation model and its flip condition
 
-Panelists run fully agentic in your working directory under **prompt-level guardrails**: treat the tree as read-only, write scratch output only to their own temp dirs, treat shared external systems (staging, DBs) as read-only — unless your panel question explicitly grants writes. This suits the intended use (perspectives, investigations, claim verification), and residual clash risk is accepted.
+Panelists run fully agentic in your working directory — with your full extension/skill/tool surface — under **prompt-level guardrails**: treat the tree as read-only, write scratch output only to their own temp dirs, treat shared external systems (staging, DBs) as read-only — unless your panel question explicitly grants writes. Loaded extension tools (including MCP) obey the same prompt-level discipline; if that ever proves insufficient, tightening the exclusion list is a one-line change. This suits the intended use (perspectives, investigations, claim verification), and residual clash risk is accepted.
 
 **Flip condition:** if you start asking panelists to *implement or prototype* things, prompt guardrails stop being enough — that's the point to reinstate structural isolation (extension-created git worktree per panelist). It's an additive upgrade, not a redesign.
 
@@ -61,7 +61,7 @@ If an Anthropic panelist still reports a ToS block, check whether the model answ
 
 - **Panelist sessions:** each panelist run persists as a normal pi session file (in pi's standard sessions location for the project), seeded with the forked history so it is self-contained — browsable and resumable later. Paths are shown in the collapsed "panel run" metadata row after each run.
 - **Panelist scratch:** panelists are instructed to write scratch output only under temp dirs they create (`mktemp -d`); nothing is written to your working tree.
-- The extension reads `~/.pi/agent/panel.json` and writes no other state.
+- The extension itself reads `~/.pi/agent/panel.json` and writes no other state. Panelist sessions load your regular extensions, so those extensions read/write whatever local state they normally do (their own configs, caches) inside the panelist session too.
 
 ## Install
 

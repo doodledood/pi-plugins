@@ -85,7 +85,7 @@ A user-triggered consultation mode (the `panel` extension in this repo): `/panel
 _Avoid_: Ensemble, companions, council (earlier candidate names); consult.
 
 **Panelist**:
-One member model of a Panel, running agentically over its own fork of the conversation with a chosen effort level, read-only toward the working tree (scratch writes go to temp dirs) unless the user's message explicitly grants writes.
+One member model of a Panel, running agentically over a transcript fork of the conversation with a chosen effort level in a session shaped like a regular pi session (extensions, skills, and full tools loaded; interactive-only tools excluded), read-only toward the working tree (scratch writes go to temp dirs) unless the user's message explicitly grants writes.
 _Avoid_: Companion, advisor (advisor_consult is a different, dispatcher-briefed mechanism).
 
 **Tool-row glyph**:
