@@ -75,7 +75,7 @@ const main = async () => {
   if (answers.length !== specs.length) failures.push(`expected ${specs.length} answer messages, got ${answers.length}`);
   for (const answer of answers) {
     console.log(`\n--- injected ---\n${answer.content.slice(0, 400)}\n`);
-    if (!/Independent opinion from panelist/.test(answer.content)) failures.push("answer missing attribution framing");
+    if (!/<panelist_answer model="/.test(answer.content)) failures.push("answer missing tagged attribution block");
     if (!/mochi/i.test(answer.content)) failures.push("a panelist answer does not mention the seeded fork content (Mochi)");
   }
   const meta = entries.find((e) => e.customType === "panel-meta")?.data as

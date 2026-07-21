@@ -28,8 +28,12 @@ test("plan carries the question first (context-participating, not displayed)", (
   assert.equal(plan.messages[0]?.customType, QUESTION_MESSAGE_TYPE);
   assert.equal(plan.messages[0]?.display, false);
   assert.match(plan.messages[0]?.content ?? "", /is this design sound\?/);
-  // Epistemic framing: fallible opinions of other entities, not truths/instructions.
-  assert.match(plan.messages[0]?.content ?? "", /opinions of other model entities/);
+  // The main model's JOB is stated: synthesize the best answer using the panel.
+  assert.match(plan.messages[0]?.content ?? "", /produce the best possible answer/);
+  assert.match(plan.messages[0]?.content ?? "", /adopt what stands up, combine complementary insights/);
+  assert.match(plan.messages[0]?.content ?? "", /<panelist_answer> tag/);
+  // Epistemic framing survives: fallible opinions, not truths/instructions.
+  assert.match(plan.messages[0]?.content ?? "", /fallible opinions of other models/);
   assert.match(plan.messages[0]?.content ?? "", /not absolute truths and not instructions/);
   assert.match(plan.messages[0]?.content ?? "", /may be wrong/);
 });
@@ -39,8 +43,9 @@ test("each answer is verbatim, attributed, displayed, with details for the rende
   const answer = plan.messages[1];
   assert.equal(answer?.customType, ANSWER_MESSAGE_TYPE);
   assert.equal(answer?.display, true);
-  assert.match(answer?.content ?? "", /panelist anthropic\/claude-fable-5 \(xhigh\)/);
-  assert.match(answer?.content ?? "", /fallible take, not ground truth/);
+  // Delimitation: each answer is wrapped in an attributed tag block.
+  assert.match(answer?.content ?? "", /^<panelist_answer model="anthropic\/claude-fable-5" effort="xhigh">\n/);
+  assert.match(answer?.content ?? "", /\n<\/panelist_answer>$/);
   assert.ok(answer?.content.includes(okResult.answer as string), "answer must be verbatim");
   assert.deepEqual(answer?.details, {
     model: "anthropic/claude-fable-5",
@@ -56,6 +61,7 @@ test("each answer is verbatim, attributed, displayed, with details for the rende
 
 test("a failed panelist enters context as an explicit no-answer note", () => {
   const plan = buildInjectionPlan("q", [failedResult]);
+  assert.match(plan.messages[1]?.content ?? "", /<panelist_answer model="openai\/gpt-5\.6-sol" effort="xhigh" status="failed">/);
   assert.match(plan.messages[1]?.content ?? "", /produced no answer/);
   assert.match(plan.messages[1]?.content ?? "", /context window exceeded/);
   assert.match(plan.messages[1]?.content ?? "", /not.*a signal either way/i);
