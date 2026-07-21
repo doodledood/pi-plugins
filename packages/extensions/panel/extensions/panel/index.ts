@@ -70,7 +70,7 @@ export async function runPanelCommand(
   // Terminal-only UI (picker, monitor) is gated on TUI mode specifically:
   // in RPC mode hasUI is true but ctx.ui.custom() resolves undefined, so
   // non-TUI modes run the preselected lineup directly instead.
-  const isTui = ctx.hasUI && (ctx as { mode?: string }).mode === "tui";
+  const isTui = ctx.hasUI && ctx.mode === "tui";
 
   // Lineup picker: config-sourced lineup, fallback lineup preselected when
   // config is missing/empty; effort adjustable per row; enter runs.

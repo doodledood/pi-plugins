@@ -8,7 +8,7 @@ When you run `/panel <question>`:
 
 1. A lineup picker opens (models + effort from your config; see below). Enter launches.
 2. The active branch's context (compaction applied) is forked and each **panelist** runs your question in its own isolated in-process pi session — full agentic tools, in parallel, independent of each other.
-3. A status widget shows each panelist live (state, current activity, elapsed, tokens); a keybinding (default `ctrl+p`) opens a streaming inspect overlay (`tab` cycles panelists). `esc` cancels the whole panel and restores your question to the editor unsent.
+3. A status widget shows each panelist live (state, current activity, elapsed, tokens); a keybinding (default `ctrl+p`; `i` also works) opens a streaming inspect view (`tab` cycles panelists; `esc` there returns to status). `esc` cancels the whole panel and restores your question to the editor unsent.
 4. When all panelists finish, each final answer is injected into your session **verbatim and attributed**, rendered as a collapsed row you can expand. Your main model then answers with those opinions in hand.
 
 **Honest framing:** this is *independent peer opinions over shared history* — panelists are independent of each other, of any dispatcher-written brief, and of your main model's take on the current question (they answer before it does). It is **not** clean-room re-derivation: the forked history still contains your main model's earlier reasoning. The injected answers are explicitly framed to the main model as fallible opinions of other model entities — hints to weigh, not truths or instructions.

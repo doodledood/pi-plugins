@@ -72,6 +72,33 @@ test("invalid values are ignored with a warning, valid parts kept", () => {
   assert.deepEqual(config.preselected, [0]); // out-of-range preselect resets to all
 });
 
+test("inspectKeybinding: cmd/meta normalize to super; invalid chords and f13+ fall back with a warning", () => {
+  const cmd = loadConfig(tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }], inspectKeybinding: "cmd+p" })));
+  assert.equal(cmd.config.inspectKeybinding, "super+p");
+  assert.equal(cmd.warning, undefined);
+
+  const superKey = loadConfig(tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }], inspectKeybinding: "super+o" })));
+  assert.equal(superKey.config.inspectKeybinding, "super+o");
+
+  const fkey = loadConfig(tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }], inspectKeybinding: "f5" })));
+  assert.equal(fkey.config.inspectKeybinding, "f5");
+
+  // pi-tui's matchesKey rejects modified f-keys, f13+, and malformed chords.
+  for (const bad of ["ctrl-p", "f13", "ctrl+f1", "CTRL+", 42]) {
+    const { config, warning } = loadConfig(tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }], inspectKeybinding: bad })));
+    assert.equal(config.inspectKeybinding, "ctrl+p", `expected fallback for ${JSON.stringify(bad)}`);
+    assert.match(warning ?? "", /inspectKeybinding/);
+  }
+});
+
+test("non-integer preselected indexes are rejected with a warning, resetting to all", () => {
+  const { config, warning } = loadConfig(
+    tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }, { model: "c/d" }], preselected: [0.5] })),
+  );
+  assert.match(warning ?? "", /preselected/);
+  assert.deepEqual(config.preselected, [0, 1]);
+});
+
 test("timeout is clamped to sane bounds", () => {
   const low = loadConfig(tempConfig(JSON.stringify({ panelists: [{ model: "a/b" }], timeoutMs: 1 })));
   assert.equal(low.config.timeoutMs, 30_000);

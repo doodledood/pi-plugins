@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { isThinkingLevel, type LoadedPanelConfig, type PanelConfig, type PanelistSpec } from "./types.ts";
 
 const DEFAULT_TIMEOUT_MS = 900_000; // 15 minutes per panelist
@@ -15,7 +16,7 @@ export const DEFAULT_PANELISTS: PanelistSpec[] = [
   { model: "openai/gpt-5.6-sol", thinking: "xhigh" },
 ];
 
-export const DEFAULT_INSPECT_KEYBINDING = "ctrl+p";
+export const DEFAULT_INSPECT_KEYBINDING: KeyId = "ctrl+p";
 
 export function configPath(agentDir?: string): string {
   const dir = agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent");
@@ -96,22 +97,26 @@ function parsePanelists(raw: unknown, warnings: string[]): PanelistSpec[] {
 
 function parsePreselected(raw: unknown, lineupSize: number, warnings: string[]): number[] {
   if (raw === undefined) return Array.from({ length: lineupSize }, (_, i) => i);
-  if (!Array.isArray(raw) || raw.some((i) => typeof i !== "number" || i < 0 || i >= lineupSize)) {
+  if (!Array.isArray(raw) || raw.some((i) => typeof i !== "number" || !Number.isInteger(i) || i < 0 || i >= lineupSize)) {
     warnings.push("preselected must be an array of lineup indexes");
     return Array.from({ length: lineupSize }, (_, i) => i);
   }
   return [...new Set(raw as number[])];
 }
 
-// Conservative key-chord shape: optional modifiers + a single base key (letter,
-// digit, or f-key). Anything else would silently register a dead key, so it
-// falls back to the default with a warning instead.
-const KEYBINDING_PATTERN = /^((ctrl|alt|shift|meta|cmd)\+)*(f\d{1,2}|[a-z0-9])$/;
+// Key-chord shape restricted to what pi-tui's matchesKey actually honors:
+// optional ctrl/alt/shift/super modifiers + a letter/digit base key, or an
+// UNMODIFIED f1-f12 (pi-tui rejects modified f-keys). cmd/meta normalize to
+// super (pi-tui's name for that modifier); anything else would silently
+// produce a dead or mismatched key, so it falls back to the default with a
+// warning instead.
+const KEYBINDING_PATTERN = /^(((ctrl|alt|shift|super)\+)*[a-z0-9]|f([1-9]|1[0-2]))$/;
 
-function parseInspectKeybinding(raw: unknown, warnings: string[]): string {
+function parseInspectKeybinding(raw: unknown, warnings: string[]): KeyId {
   if (raw === undefined) return DEFAULT_INSPECT_KEYBINDING;
-  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  if (KEYBINDING_PATTERN.test(value)) return value;
+  const value =
+    typeof raw === "string" ? raw.trim().toLowerCase().replace(/\b(cmd|meta)\+/g, "super+") : "";
+  if (KEYBINDING_PATTERN.test(value)) return value as KeyId; // pattern is a subset of the KeyId grammar
   warnings.push(`inspectKeybinding ${JSON.stringify(raw)} is not a recognizable key chord`);
   return DEFAULT_INSPECT_KEYBINDING;
 }

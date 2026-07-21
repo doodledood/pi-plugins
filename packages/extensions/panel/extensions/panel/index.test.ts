@@ -220,6 +220,112 @@ test("tool activity in a panelist session never reaches the injected context mes
   assert.ok(sent[1]?.message.content.includes("final answer from anthropic/claude-fable-5"));
 });
 
+interface CustomCall {
+  component: { handleInput?: (data: string) => void; dispose?: () => void } | undefined;
+}
+
+/**
+ * TUI-mode ctx: ui.custom mimics pi's real behavior — the factory runs
+ * synchronously with a done() that resolves the returned promise and triggers
+ * component.dispose(). `script` decides what each call resolves to:
+ * "invoke-and-wait" leaves resolution to the component's own done usage
+ * (the monitor path), a function resolves immediately with its value.
+ */
+function fakeTuiCtx(options: {
+  entries?: unknown[];
+  script: Array<((component: unknown, done: (v: unknown) => void) => void) | "invoke-and-wait">;
+}) {
+  const notifications: string[] = [];
+  const editorTexts: string[] = [];
+  const customCalls: CustomCall[] = [];
+  let scriptIndex = 0;
+  const ctx = {
+    hasUI: true,
+    mode: "tui",
+    signal: undefined,
+    cwd: "/tmp/panel-test",
+    ui: {
+      notify: (text: string) => notifications.push(text),
+      setEditorText: (text: string) => editorTexts.push(text),
+      setWidget: () => {},
+      custom: (factory: (tui: unknown, theme: unknown, kb: unknown, done: (v: unknown) => void) => unknown) => {
+        const step = options.script[scriptIndex++];
+        return new Promise((resolve) => {
+          const call: CustomCall = { component: undefined };
+          customCalls.push(call);
+          const done = (value: unknown) => {
+            (call.component as { dispose?: () => void } | undefined)?.dispose?.();
+            resolve(value);
+          };
+          const component = factory({ requestRender: () => {} }, themeStubForTui, {}, done);
+          call.component = component as CustomCall["component"];
+          if (typeof step === "function") step(component, done);
+          // "invoke-and-wait": resolution happens via the captured done (monitor).
+        });
+      },
+    },
+    sessionManager: { buildContextEntries: () => options.entries ?? [] },
+  } as unknown as ExtensionCommandContext;
+  return { ctx, notifications, editorTexts, customCalls };
+}
+
+const themeStubForTui = { bold: (t: string) => t, fg: (_r: string, t: string) => t };
+
+test("TUI: declining the picker restores the question unsent and runs nothing", async () => {
+  const { pi, sent } = fakePi();
+  const { ctx, editorTexts } = fakeTuiCtx({
+    script: [(_component, done) => done(null)], // picker cancelled
+  });
+  const { spawn, spawned } = scriptedSpawn({});
+  await runPanelCommand(pi, ctx, "my question", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  assert.deepEqual(editorTexts, ["/panel my question"]);
+  assert.equal(spawned.length, 0);
+  assert.equal(sent.length, 0);
+});
+
+test("TUI: monitor opens for the run, closes cleanly on completion, and the command resolves", async () => {
+  const { pi, sent } = fakePi();
+  const { ctx, customCalls } = fakeTuiCtx({
+    script: [
+      (component, done) => {
+        // Drive the real picker component: enter accepts the preselected defaults.
+        (component as { handleInput: (d: string) => void }).handleInput("\r");
+        void done; // resolution happens through the component's own done
+      },
+      "invoke-and-wait", // monitor: closed programmatically when the run ends
+    ],
+  });
+  const { spawn } = scriptedSpawn({
+    "anthropic/claude-fable-5": "A",
+    "openai/gpt-5.6-sol": "B",
+  });
+  await runPanelCommand(pi, ctx, "q?", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  // Command resolved (no hang), both custom surfaces were used, answers injected.
+  assert.equal(customCalls.length, 2, "picker and monitor must both open");
+  assert.equal(sent.length, 3);
+});
+
+test("TUI: Esc on the monitor cancels the panel and restores the question", async () => {
+  const { pi, sent } = fakePi();
+  const { ctx, editorTexts } = fakeTuiCtx({
+    script: [
+      (component) => (component as { handleInput: (d: string) => void }).handleInput("\r"), // picker: run defaults
+      (component) => {
+        // monitor: press Esc shortly after it opens (status view → cancel)
+        setTimeout(() => (component as { handleInput: (d: string) => void }).handleInput("\x1b"), 20);
+      },
+    ],
+  });
+  const { spawn, aborts } = scriptedSpawn({
+    "anthropic/claude-fable-5": { hang: true },
+    "openai/gpt-5.6-sol": { hang: true },
+  });
+  await runPanelCommand(pi, ctx, "slow question", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  assert.equal(aborts.length, 2, "Esc must abort both panelists");
+  assert.deepEqual(editorTexts, ["/panel slow question"]);
+  assert.equal(sent.length, 0);
+});
+
 test("empty question notifies usage and runs nothing", async () => {
   const { pi, sent } = fakePi();
   const { ctx, notifications } = fakeCtx({});

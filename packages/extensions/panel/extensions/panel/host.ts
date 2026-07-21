@@ -27,6 +27,11 @@ export const spawnPanelistSession: SpawnPanelist = async (
   if (resolved.error || !resolved.model) {
     throw new Error(resolved.error ?? `model not found: ${options.spec.model}`);
   }
+  if (resolved.warning) console.warn(`panel: ${resolved.warning}`);
+  // A "provider/model:level" ref carries its own thinking level; honor it over
+  // the spec's separate field so suffixed refs don't silently run at the wrong
+  // effort.
+  const thinkingLevel = resolved.thinkingLevel ?? options.spec.thinking;
 
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
@@ -68,7 +73,7 @@ export const spawnPanelistSession: SpawnPanelist = async (
   const { session } = await createAgentSession({
     cwd: options.cwd,
     model: resolved.model,
-    thinkingLevel: options.spec.thinking,
+    thinkingLevel,
     modelRuntime,
     resourceLoader: loader,
     tools: PANELIST_TOOLS,

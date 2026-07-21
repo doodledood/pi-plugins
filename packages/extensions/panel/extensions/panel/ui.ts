@@ -256,7 +256,7 @@ export class PanelMonitorComponent {
     private readonly theme: ThemeLike,
     private readonly model: OverlayModel,
     private readonly getStates: () => readonly PanelistState[],
-    private readonly inspectKey: string,
+    private readonly inspectKey: KeyId,
     private readonly onCancel: () => void,
     requestRender?: () => void,
   ) {
@@ -278,7 +278,7 @@ export class PanelMonitorComponent {
       this.onCancel();
       return;
     }
-    if (matchesKey(data, this.inspectKey as KeyId) || data === "i") {
+    if (matchesKey(data, this.inspectKey) || data === "i") {
       this.view = this.view === "inspect" ? "status" : "inspect";
       return;
     }

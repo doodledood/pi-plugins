@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { KeyId } from "@earendil-works/pi-tui";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
@@ -19,8 +20,8 @@ export interface PanelConfig {
   panelists: PanelistSpec[];
   /** Which lineup entries start selected. Indexes into `panelists`. */
   preselected: number[];
-  /** Keybinding that opens the live inspect overlay while a panel runs. */
-  inspectKeybinding: string;
+  /** Keybinding that opens the live inspect view while a panel runs. */
+  inspectKeybinding: KeyId;
   /** Per-panelist wall-clock budget. */
   timeoutMs: number;
 }
