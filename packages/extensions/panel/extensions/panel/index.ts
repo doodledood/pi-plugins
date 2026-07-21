@@ -17,9 +17,9 @@ import { buildInjectionPlan, ANSWER_MESSAGE_TYPE, META_ENTRY_TYPE } from "./resu
 import { runPanel } from "./runner.ts";
 import type { PanelistResult, PanelistSpec, PanelistState, SpawnPanelist } from "./types.ts";
 import {
+  estimatePanelCostUsd,
   formatAnswerLines,
   formatMetaLines,
-  OverlayModel,
   PanelMonitorComponent,
   PanelPickerComponent,
   PickerState,
@@ -72,13 +72,25 @@ export async function runPanelCommand(
   // non-TUI modes run the preselected lineup directly instead.
   const isTui = ctx.hasUI && ctx.mode === "tui";
 
+  const forkMessagesEarly = forkMessagesFromEntries(ctx.sessionManager.buildContextEntries());
+  // Rough, display-only cost estimate for the picker header: fork size in
+  // ~tokens (chars/4) × each selected model's input price from pi's registry.
+  const forkTokens = Math.ceil(JSON.stringify(forkMessagesEarly).length / 4);
+  const priceLookup = (modelRef: string): number | undefined => {
+    const slash = modelRef.indexOf("/");
+    if (slash <= 0) return undefined;
+    const model = ctx.modelRegistry.find(modelRef.slice(0, slash), modelRef.slice(slash + 1));
+    return model?.cost?.input;
+  };
+
   // Lineup picker: config-sourced lineup, fallback lineup preselected when
   // config is missing/empty; effort adjustable per row; enter runs.
   let specs: PanelistSpec[] | null;
   if (isTui) {
     const picker = new PickerState(loaded.config.panelists, loaded.config.preselected);
     specs = await ctx.ui.custom<PanelistSpec[] | null>(
-      (_tui, theme, _keybindings, done) => new PanelPickerComponent(theme, picker, done),
+      (_tui, theme, _keybindings, done) =>
+        new PanelPickerComponent(theme, picker, (selection) => estimatePanelCostUsd(selection, forkTokens, priceLookup), done),
       { overlay: true },
     );
     if (!specs || specs.length === 0) {
@@ -93,7 +105,7 @@ export async function runPanelCommand(
     }
   }
 
-  const forkMessages = forkMessagesFromEntries(ctx.sessionManager.buildContextEntries());
+  const forkMessages = forkMessagesEarly;
 
   // Cancellation is owned here: pi provides no abort signal to idle command
   // handlers, so Esc is delivered through the focused monitor component below.
@@ -124,22 +136,21 @@ export async function runPanelCommand(
   let results: PanelistResult[];
   try {
     if (isTui) {
-      // The monitor blocks the chat for the duration of the run: it renders
-      // live per-panelist status, streams transcripts on demand, and turns
-      // Esc into the panel-wide cancel.
+      // The monitor runs as a NON-overlay custom component: it replaces the
+      // editor slot while the chat transcript stays visible above it (the
+      // ambient bar), owns input for Esc-cancel, and switches in place to the
+      // drill-in split view on the inspect key.
       let closeMonitor: ((value: undefined) => void) | undefined;
       const monitorClosed = ctx.ui.custom<undefined>((tui, theme, _keybindings, done) => {
         closeMonitor = done;
-        const model = new OverlayModel(latestStates.length > 0 ? latestStates : []);
         return new PanelMonitorComponent(
           theme,
-          model,
           () => latestStates,
           loaded.config.inspectKeybinding,
           () => controller.abort(),
           () => tui.requestRender(),
         );
-      }, { overlay: true });
+      });
       try {
         results = await runPromise;
       } finally {
