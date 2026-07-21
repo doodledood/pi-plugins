@@ -30,27 +30,29 @@ function fakePi() {
   return { pi, sent, entries };
 }
 
-function fakeCtx(options: { signal?: AbortSignal; entries?: unknown[] }) {
+function fakeCtx(options: { signal?: AbortSignal; entries?: unknown[]; hasUI?: boolean; mode?: string }) {
   const notifications: string[] = [];
   const editorTexts: string[] = [];
-  const widgets: Array<string[] | undefined> = [];
+  let customCalls = 0;
   const ctx = {
-    hasUI: false,
+    hasUI: options.hasUI ?? false,
+    mode: options.mode ?? "print",
     signal: options.signal,
     cwd: "/tmp/panel-test",
     ui: {
       notify: (text: string) => notifications.push(text),
       setEditorText: (text: string) => editorTexts.push(text),
-      setWidget: (_key: string, content: string[] | undefined) => widgets.push(content),
+      setWidget: () => {},
       custom: async () => {
-        throw new Error("ui.custom must not be called when hasUI is false");
+        customCalls++;
+        return undefined; // matches RPC-mode behavior: custom() resolves undefined
       },
     },
     sessionManager: {
       buildContextEntries: () => options.entries ?? [],
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, notifications, editorTexts, widgets };
+  return { ctx, notifications, editorTexts, customCalls: () => customCalls };
 }
 
 function scriptedSpawn(answers: Record<string, string | { hang: true }>): {
@@ -103,8 +105,8 @@ function scriptedSpawn(answers: Record<string, string | { hang: true }>): {
 test("full flow: fork built from session entries, defaults run, answers injected in order", async () => {
   const { pi, sent, entries } = fakePi();
   const historyEntries = [
-    { type: "message", message: { role: "user", content: [{ type: "text", text: "earlier turn" }], timestamp: 1 } },
-    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "earlier answer" }], stopReason: "stop", timestamp: 2 } },
+    { type: "message", id: "e1", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "earlier turn" }], timestamp: 1 } },
+    { type: "message", id: "e2", parentId: "e1", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "earlier answer" }], stopReason: "stop", timestamp: 2 } },
   ];
   const { ctx, editorTexts } = fakeCtx({ entries: historyEntries });
   const { spawn, spawned } = scriptedSpawn({
@@ -158,6 +160,64 @@ test("cancel: abort mid-run aborts every panelist and restores the question unse
   assert.deepEqual(editorTexts, ["/panel risky question"]);
   assert.match(notifications.join("\n"), /cancelled/i);
   assert.equal(sent.length, 0, "nothing enters context on cancel");
+});
+
+test("non-TUI mode with hasUI (RPC) skips the picker and runs the preselected lineup", async () => {
+  const { pi, sent } = fakePi();
+  const { ctx, customCalls } = fakeCtx({ hasUI: true, mode: "rpc" });
+  const { spawn, spawned } = scriptedSpawn({
+    "anthropic/claude-fable-5": "A",
+    "openai/gpt-5.6-sol": "B",
+  });
+  await runPanelCommand(pi, ctx, "q?", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  assert.equal(customCalls(), 0, "terminal-only ui.custom must not be used outside TUI mode");
+  assert.equal(spawned.length, 2);
+  assert.equal(sent.length, 3);
+});
+
+test("tool activity in a panelist session never reaches the injected context messages", async () => {
+  const { pi, sent } = fakePi();
+  const { ctx } = fakeCtx({});
+  // A session whose transcript includes tool calls and tool results around the
+  // final answer — only the final answer text may enter context.
+  const spawn: SpawnPanelist = async (options) => {
+    const messages: unknown[] = [];
+    return {
+      async prompt(text: string) {
+        messages.push({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
+        messages.push({
+          role: "assistant",
+          content: [
+            { type: "text", text: "let me check" },
+            { type: "toolCall", id: "t1", name: "bash", arguments: { command: "cat /etc/secret-config" } },
+          ],
+          stopReason: "toolUse",
+          timestamp: 2,
+        });
+        messages.push({ role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "SECRET-TOOL-OUTPUT" }], timestamp: 3 });
+        messages.push({
+          role: "assistant",
+          content: [{ type: "text", text: `final answer from ${options.spec.model}` }],
+          stopReason: "stop",
+          timestamp: 4,
+        });
+      },
+      async abort() {},
+      subscribe: () => () => {},
+      get messages() {
+        return messages as never;
+      },
+      sessionFile: undefined,
+      dispose() {},
+    };
+  };
+  await runPanelCommand(pi, ctx, "q?", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  assert.equal(sent.length, 3);
+  for (const s of sent) {
+    assert.ok(!s.message.content.includes("SECRET-TOOL-OUTPUT"), "tool output must not enter context");
+    assert.ok(!s.message.content.includes("cat /etc/secret-config"), "tool call arguments must not enter context");
+  }
+  assert.ok(sent[1]?.message.content.includes("final answer from anthropic/claude-fable-5"));
 });
 
 test("empty question notifies usage and runs nothing", async () => {

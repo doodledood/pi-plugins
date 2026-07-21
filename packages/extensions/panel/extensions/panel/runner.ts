@@ -95,6 +95,16 @@ async function runPanelist(
     return finish({ ok: false, error: state.error });
   }
 
+  // The user may have cancelled while spawn was in flight; a listener attached
+  // now would never fire for an already-aborted signal, so re-check explicitly.
+  if (options.signal?.aborted) {
+    await session.abort();
+    await disposeWithGrace(session);
+    state.status = "cancelled";
+    state.activity = "cancelled";
+    return finish({ ok: false, cancelled: true, error: "cancelled during startup" });
+  }
+
   state.status = "running";
   state.activity = "thinking";
   state.sessionFile = session.sessionFile;
@@ -104,7 +114,7 @@ async function runPanelist(
   let currentLine = "";
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_update") {
-      const sub = (event as { assistantMessageEvent?: { type: string; delta?: string } }).assistantMessageEvent;
+      const sub = event.assistantMessageEvent;
       if (sub?.type === "text_delta" && sub.delta) {
         currentLine += sub.delta;
         const lines = currentLine.split("\n");
@@ -118,13 +128,12 @@ async function runPanelist(
         notify();
       }
     } else if (event.type === "tool_execution_start") {
-      const toolName = (event as { toolName?: string }).toolName ?? "tool";
+      const toolName = event.toolName ?? "tool";
       state.activity = `running ${toolName}`;
       appendTranscript(state, [`> ${toolName}`]);
       notify();
     } else if (event.type === "message_end") {
-      const message = (event as { message?: { role?: string; stopReason?: string; errorMessage?: string; usage?: unknown } })
-        .message;
+      const message = event.message;
       if (message?.role === "assistant") {
         accumulateUsage(state, message.usage);
         if (message.stopReason === "error" && typeof message.errorMessage === "string") {
@@ -138,8 +147,12 @@ async function runPanelist(
   const abortRun = () => {
     void session.abort();
   };
+  let timedOut = false;
   options.signal?.addEventListener("abort", abortRun, { once: true });
-  const timeout = setTimeout(abortRun, options.timeoutMs);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    abortRun();
+  }, options.timeoutMs);
 
   // Only messages produced by this run may become the answer: the seeded fork
   // already contains assistant text, and a failed panelist must never surface
@@ -167,6 +180,12 @@ async function runPanelist(
     state.activity = "cancelled";
     return finish({ ok: false, cancelled: true, error: "cancelled" });
   }
+  if (timedOut) {
+    state.status = "error";
+    state.error = `timed out after ${Math.round(options.timeoutMs / 1000)}s`;
+    state.activity = "timed out";
+    return finish({ ok: false, error: state.error });
+  }
   if (answer) {
     state.status = "done";
     state.activity = "answered";
@@ -180,14 +199,16 @@ async function runPanelist(
 }
 
 /**
- * The panelist's final answer: text of the last non-errored assistant message
- * that carries any, so a trailing tool-only turn does not blank the result and
- * a partial errored message is never returned as complete.
+ * The panelist's final answer: text of the last cleanly-completed assistant
+ * message (`stopReason: "stop"`) that carries any, so a trailing tool-only
+ * turn does not blank the result and a partial message — errored, aborted
+ * mid-stream, or cut off at the output-length limit — is never returned as a
+ * complete answer.
  */
 export function finalAnswer(messages: readonly AgentMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as { role?: string; stopReason?: string; content?: unknown };
-    if (message.role !== "assistant" || message.stopReason === "error") continue;
+    if (message.role !== "assistant" || message.stopReason !== "stop") continue;
     const text = assistantText(message.content);
     if (text) return text;
   }

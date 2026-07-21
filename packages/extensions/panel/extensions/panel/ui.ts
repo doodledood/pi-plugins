@@ -1,4 +1,4 @@
-import { matchesKey } from "@earendil-works/pi-tui";
+import { matchesKey, type KeyId } from "@earendil-works/pi-tui";
 import { THINKING_LEVELS, type PanelistSpec, type PanelistState, type ThinkingLevel } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -73,9 +73,9 @@ export function formatCost(cost: number | undefined): string | undefined {
 }
 
 /**
- * The compact always-visible status widget shown above the editor while a
- * panel runs: a header with run state + cancel/inspect hints, one line per
- * panelist (glyph, model+effort, current activity, tokens).
+ * The compact status lines shown while a panel runs: a header with run state +
+ * cancel/inspect hints, one line per panelist (glyph, model+effort, current
+ * activity, per-panelist elapsed, tokens, best-effort cost).
  */
 export function formatWidgetLines(
   states: readonly PanelistState[],
@@ -92,9 +92,62 @@ export function formatWidgetLines(
   for (const state of states) {
     const glyph = STATUS_GLYPHS[state.status];
     const label = `${state.spec.model} ${state.spec.thinking}`;
+    const elapsed = formatDuration((state.endedAt ?? now) - state.startedAt);
     const cost = formatCost(state.cost);
-    const stats = [formatTokens(state.tokens), ...(cost ? [cost] : [])].join(" · ");
+    const stats = [elapsed, formatTokens(state.tokens), ...(cost ? [cost] : [])].join(" · ");
     lines.push(`  ${glyph} ${label}  ${state.activity}  ${stats}`);
+  }
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Result rendering (pure; index.ts wraps these into TUI components)
+// ---------------------------------------------------------------------------
+
+export interface AnswerDetailsLike {
+  model?: string;
+  thinking?: string;
+  ok?: boolean;
+  cancelled?: boolean;
+  elapsedMs?: number;
+  tokens?: number;
+  cost?: number;
+}
+
+/** Collapsed/expanded transcript lines for one panelist-answer message. */
+export function formatAnswerLines(
+  details: AnswerDetailsLike,
+  content: string,
+  expanded: boolean,
+  theme: ThemeLike,
+): string[] {
+  const glyph = details.ok ? "◆" : details.cancelled ? "◌" : "✗";
+  const stateText = details.ok ? "answered" : details.cancelled ? "cancelled" : "failed";
+  const cost = formatCost(details.cost);
+  const stats = [formatDuration(details.elapsedMs ?? 0), formatTokens(details.tokens ?? 0), ...(cost ? [cost] : [])].join(
+    " · ",
+  );
+  const header = theme.fg(
+    details.ok ? "accent" : "warning",
+    `${glyph} panelist ${details.model ?? "?"} ${details.thinking ?? ""} · ${stats} · ${stateText}`,
+  );
+  if (!expanded) return [theme.fg("dim", "▸ ") + header];
+  return [theme.fg("dim", "▾ ") + header, ...content.split("\n")];
+}
+
+export interface MetaDataLike {
+  panelists?: Array<{ model?: string; sessionFile?: string }>;
+}
+
+/** Collapsed/expanded transcript lines for the context-excluded metadata row. */
+export function formatMetaLines(data: MetaDataLike, expanded: boolean, theme: ThemeLike): string[] {
+  const count = data.panelists?.length ?? 0;
+  if (!expanded) {
+    return [theme.fg("dim", `▸ panel run · ${count} panelist${count === 1 ? "" : "s"} · sessions saved`)];
+  }
+  const lines = [theme.fg("dim", "▾ panel run")];
+  for (const p of data.panelists ?? []) {
+    lines.push(theme.fg("dim", `  ${p.model}: ${p.sessionFile ?? "(no session file)"}`));
   }
   return lines;
 }
@@ -134,7 +187,7 @@ export class OverlayModel {
 // TUI components (thin shells over the state above)
 // ---------------------------------------------------------------------------
 
-interface ThemeLike {
+export interface ThemeLike {
   bold(text: string): string;
   fg(role: string, text: string): string;
 }
@@ -181,28 +234,64 @@ export class PanelPickerComponent {
   }
 }
 
-export class PanelInspectOverlay {
+/**
+ * The focused component shown for the whole panel run. It owns keyboard input
+ * while panelists work — which is what makes Esc-cancel real: pi gives
+ * extension command handlers no abort signal while the agent is idle, so
+ * cancellation must come from a UI surface that actually receives input
+ * during the run.
+ *
+ * Views: "status" (compact per-panelist lines) and "inspect" (one panelist's
+ * streaming transcript; tab cycles). Esc in status view cancels the panel;
+ * Esc in inspect view returns to status.
+ */
+export class PanelMonitorComponent {
   readonly width = 90;
   focused = false;
+  view: "status" | "inspect" = "status";
   private readonly viewport = 30;
+  private readonly ticker: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly theme: ThemeLike,
     private readonly model: OverlayModel,
-    private readonly done: (result: undefined) => void,
-  ) {}
+    private readonly getStates: () => readonly PanelistState[],
+    private readonly inspectKey: string,
+    private readonly onCancel: () => void,
+    requestRender?: () => void,
+  ) {
+    this.ticker = requestRender ? setInterval(requestRender, 1_000) : undefined;
+  }
 
   invalidate(): void {}
 
+  dispose(): void {
+    if (this.ticker) clearInterval(this.ticker);
+  }
+
   handleInput(data: string): void {
-    if (matchesKey(data, "escape") || data === "q") return this.done(undefined);
-    if (matchesKey(data, "tab")) this.model.next();
+    if (matchesKey(data, "escape")) {
+      if (this.view === "inspect") {
+        this.view = "status";
+        return;
+      }
+      this.onCancel();
+      return;
+    }
+    if (matchesKey(data, this.inspectKey as KeyId) || data === "i") {
+      this.view = this.view === "inspect" ? "status" : "inspect";
+      return;
+    }
+    if (this.view === "inspect" && matchesKey(data, "tab")) this.model.next();
   }
 
   render(_width: number): string[] {
     const th = this.theme;
-    const lines = [th.bold(this.model.titleLine()), th.fg("dim", "tab next panelist · esc close")];
-    for (const line of this.model.tail(this.viewport)) lines.push(line);
-    return lines;
+    if (this.view === "inspect") {
+      const lines = [th.bold(this.model.titleLine()), th.fg("dim", "tab next panelist · esc back")];
+      for (const line of this.model.tail(this.viewport)) lines.push(line);
+      return lines;
+    }
+    return formatWidgetLines(this.getStates(), Date.now(), this.inspectKey);
   }
 }

@@ -38,7 +38,7 @@ export interface InjectionPlan {
 
 /**
  * Build everything injected into the main session after a panel completes.
- * Contract (AC-3.1): the question and each panelist's final answer enter LLM
+ * Contract: the question and each panelist's final answer enter LLM
  * context verbatim and attributed, framed as peer opinions; tool transcripts
  * never do. Cost/timing/session-path metadata rides context-excluded.
  */

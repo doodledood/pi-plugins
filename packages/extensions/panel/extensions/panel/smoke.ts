@@ -1,5 +1,5 @@
-// Live smoke (AC-5.1): a real /panel run against real providers with CHEAP
-// models at low effort — never the xhigh default lineup (PG-5).
+// Live smoke: a real /panel run against real providers with CHEAP models at
+// low effort — never the xhigh default lineup (cost discipline).
 //
 //   PANEL_SMOKE_MODELS="anthropic/claude-haiku-4-5:off,openai/gpt-4.1-mini:off" npm run smoke
 //

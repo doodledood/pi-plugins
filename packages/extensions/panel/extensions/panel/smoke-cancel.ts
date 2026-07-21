@@ -1,4 +1,4 @@
-// Live cancel smoke (AC-5.2): start a real panel with cheap models, cancel
+// Live cancel smoke: start a real panel with cheap models, cancel
 // mid-flight, and verify both panelist sessions abort promptly and the
 // original question is restored as unsent editor text.
 import { mkdtempSync, writeFileSync } from "node:fs";

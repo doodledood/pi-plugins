@@ -81,7 +81,7 @@ The investigation-log entry (heading contains `PRE-READ CHECKPOINT`) a watched f
 _Avoid_: Gate tool (deleted design), sign-off.
 
 **Panel**:
-A planned user-triggered consultation mode: `/panel <question>` forks the current conversation to several independently-running models in parallel, blocks the main chat, then returns their answers to the main model as attributed hints before it responds.
+A user-triggered consultation mode (the `panel` extension in this repo): `/panel <question>` forks the current conversation to several independently-running models in parallel, blocks the main chat behind a focused monitor component, then returns their answers to the main model as attributed fallible opinions before it responds.
 _Avoid_: Ensemble, companions, council (earlier candidate names); consult.
 
 **Panelist**:

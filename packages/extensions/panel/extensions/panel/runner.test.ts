@@ -151,11 +151,79 @@ test("abort propagates to every panelist promptly and reports cancelled states",
   assert.deepEqual(updates.at(-1), ["cancelled", "cancelled"]);
 });
 
-test("per-panelist timeout aborts that panelist", async () => {
+test("per-panelist timeout aborts that panelist and reports a distinct timeout error", async () => {
   const spawn = spawnFor(new Map([["stub/model-a", { hangUntilAbort: true }]]));
   const results = await runPanel({ ...baseOptions, specs: [specA], spawn, timeoutMs: 30 });
   assert.equal(results[0]?.ok, false);
-  assert.match(results[0]?.error ?? "", /without an answer/);
+  assert.match(results[0]?.error ?? "", /timed out after/);
+});
+
+test("an answer aborted mid-stream (stopReason aborted/length) is never accepted as complete", async () => {
+  // Timeout fires mid-answer; the stub leaves a partial assistant message with
+  // stopReason "aborted" — the panelist must report the timeout, not ok:true.
+  const spawn: SpawnPanelist = async () => {
+    let aborted = false;
+    const messages: unknown[] = [];
+    return {
+      async prompt(text: string) {
+        messages.push({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+        await new Promise<void>((resolve) => {
+          const check = setInterval(() => {
+            if (aborted) {
+              clearInterval(check);
+              messages.push({
+                role: "assistant",
+                content: [{ type: "text", text: "partial trunca" }],
+                stopReason: "aborted",
+                timestamp: Date.now(),
+              });
+              resolve();
+            }
+          }, 5);
+        });
+      },
+      async abort() {
+        aborted = true;
+      },
+      subscribe: () => () => {},
+      get messages() {
+        return messages as never;
+      },
+      sessionFile: undefined,
+      dispose() {},
+    };
+  };
+  const results = await runPanel({ ...baseOptions, specs: [specA], spawn, timeoutMs: 30 });
+  assert.equal(results[0]?.ok, false);
+  assert.equal(results[0]?.answer, undefined);
+  assert.match(results[0]?.error ?? "", /timed out/);
+});
+
+test("cancelling during the spawn window still aborts the panelist session", async () => {
+  let abortCalled = false;
+  let promptRan = false;
+  const spawn: SpawnPanelist = async () => {
+    await new Promise((r) => setTimeout(r, 60)); // spawn in flight while abort lands
+    return {
+      async prompt() {
+        promptRan = true;
+      },
+      async abort() {
+        abortCalled = true;
+      },
+      subscribe: () => () => {},
+      messages: [] as never,
+      sessionFile: undefined,
+      dispose() {},
+    };
+  };
+  const controller = new AbortController();
+  const run = runPanel({ ...baseOptions, specs: [specA], spawn, signal: controller.signal });
+  setTimeout(() => controller.abort(), 10); // aborts before spawn resolves
+  const results = await run;
+  assert.equal(promptRan, false, "prompt must not run after a startup-window cancel");
+  assert.equal(abortCalled, true, "session.abort() must still be called");
+  assert.deepEqual([results[0]?.ok, results[0]?.cancelled], [false, true]);
 });
 
 test("streamed events drive state: activity, transcript tail, tokens", async () => {
@@ -203,4 +271,21 @@ test("finalAnswer takes the last non-errored assistant text; errored partials ne
   assert.equal(finalAnswer(messages as never), "good answer");
   assert.equal(finalAnswer([messages[2]] as never), undefined);
   assert.equal(finalAnswer([]), undefined);
+});
+
+test("finalAnswer extracts only text blocks; tool-call blocks and non-stop reasons never leak", () => {
+  const mixed = [
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "the real answer" },
+        { type: "toolCall", id: "t1", name: "bash", arguments: { command: "rm -rf /" } },
+      ],
+      stopReason: "stop",
+    },
+  ];
+  assert.equal(finalAnswer(mixed as never), "the real answer");
+  // aborted / length-cutoff partials are not answers
+  assert.equal(finalAnswer([{ role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "aborted" }] as never), undefined);
+  assert.equal(finalAnswer([{ role: "assistant", content: [{ type: "text", text: "cut off" }], stopReason: "length" }] as never), undefined);
 });

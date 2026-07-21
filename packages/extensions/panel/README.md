@@ -23,6 +23,8 @@ Panelists run fully agentic in your working directory under **prompt-level guard
 
 Cost ≈ forked context size × number of panelists × effort, per consult, before any tool work the panelists do. The manual trigger is the cost control: reach for `/panel` at junctures (a decision, a review, a stuck point), not per message.
 
+**What prompt caching does and doesn't buy here.** Each panelist pays full input price to ingest the fork once — that is unavoidable: provider caches are per-model (and per key), so no panelist can reuse your main session's cache, and even a same-model panelist can't, because the panelist system prompt and tool set differ from the main session's, which changes the cached prefix from byte zero. What you do get automatically: within each panelist session, pi's normal provider caching (Anthropic cache_control, OpenAI automatic prefix cache) makes the panelist's own subsequent agentic turns read the fork at cache prices — usually the bulk of a multi-turn run. Net: cost scales with fork size and panelist count/effort; caching softens the tool-loop turns, not the first ingestion.
+
 ## Config
 
 `~/.pi/agent/panel.json` (respects `PI_CODING_AGENT_DIR`; see `config/panel.example.json`):

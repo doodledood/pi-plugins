@@ -63,10 +63,7 @@ export function loadConfig(path = configPath()): LoadedPanelConfig {
   }
 
   const preselected = parsePreselected(parsed.preselected, panelists.length, warnings);
-  const inspectKeybinding =
-    typeof parsed.inspectKeybinding === "string" && parsed.inspectKeybinding.trim()
-      ? parsed.inspectKeybinding.trim()
-      : DEFAULT_INSPECT_KEYBINDING;
+  const inspectKeybinding = parseInspectKeybinding(parsed.inspectKeybinding, warnings);
   const timeoutMs = parseTimeout(parsed.timeoutMs, warnings);
 
   return {
@@ -104,6 +101,19 @@ function parsePreselected(raw: unknown, lineupSize: number, warnings: string[]):
     return Array.from({ length: lineupSize }, (_, i) => i);
   }
   return [...new Set(raw as number[])];
+}
+
+// Conservative key-chord shape: optional modifiers + a single base key (letter,
+// digit, or f-key). Anything else would silently register a dead key, so it
+// falls back to the default with a warning instead.
+const KEYBINDING_PATTERN = /^((ctrl|alt|shift|meta|cmd)\+)*(f\d{1,2}|[a-z0-9])$/;
+
+function parseInspectKeybinding(raw: unknown, warnings: string[]): string {
+  if (raw === undefined) return DEFAULT_INSPECT_KEYBINDING;
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (KEYBINDING_PATTERN.test(value)) return value;
+  warnings.push(`inspectKeybinding ${JSON.stringify(raw)} is not a recognizable key chord`);
+  return DEFAULT_INSPECT_KEYBINDING;
 }
 
 function parseTimeout(raw: unknown, warnings: string[]): number {

@@ -77,12 +77,16 @@ export interface PanelistSession {
   dispose(): void;
 }
 
-/** Minimal event union the runner consumes (subset of AgentSessionEvent shapes). */
+/**
+ * Minimal event union the runner consumes — a narrowable discriminated union
+ * (subset of AgentSessionEvent shapes). Real sessions emit further event types;
+ * the production adapter in host.ts casts them into this union at the boundary
+ * and the runner simply ignores types it doesn't handle.
+ */
 export type PanelistSessionEvent =
   | { type: "message_update"; assistantMessageEvent?: { type: string; delta?: string } }
   | { type: "tool_execution_start"; toolName?: string }
-  | { type: "message_end"; message?: { role?: string; stopReason?: string; errorMessage?: string; usage?: unknown } }
-  | { type: string; [key: string]: unknown };
+  | { type: "message_end"; message?: { role?: string; stopReason?: string; errorMessage?: string; usage?: unknown } };
 
 export interface SpawnPanelistOptions {
   spec: PanelistSpec;

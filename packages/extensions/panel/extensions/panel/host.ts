@@ -15,8 +15,9 @@ const PANELIST_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
  * Production panelist spawner: an isolated in-process pi SDK session, seeded
  * with the forked history, running the panelist system prompt with no host
  * extensions, skills, prompt templates, or context files (a fork must not
- * re-apply the host session's instruction surfaces). Verified pattern from the
- * D1 spike: minimal DefaultResourceLoader + agent.state.messages seeding.
+ * re-apply the host session's instruction surfaces). The pattern — minimal
+ * DefaultResourceLoader + agent.state.messages seeding — was verified against
+ * a live provider before this module was built.
  */
 export const spawnPanelistSession: SpawnPanelist = async (
   options: SpawnPanelistOptions,
@@ -44,8 +45,23 @@ export const spawnPanelistSession: SpawnPanelist = async (
     : SessionManager.create(options.cwd);
 
   // Persist the seeded fork into the panelist's own session file so the
-  // transcript is self-contained: browsable and resumable later (ASM-5).
+  // transcript is self-contained: browsable and resumable later.
+  // SessionManager.appendMessage rejects compactionSummary/branchSummary roles
+  // (those are reserved for top-level compaction/branch entries), so summary
+  // messages are persisted as custom messages carrying the same text; the
+  // in-memory agent state below still keeps the original roles.
   for (const message of options.forkMessages) {
+    const role = (message as { role?: string }).role;
+    if (role === "compactionSummary" || role === "branchSummary") {
+      sessionManager.appendMessage({
+        role: "custom",
+        customType: "panel-fork-summary",
+        content: (message as { summary?: string }).summary ?? "",
+        display: false,
+        timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
+      });
+      continue;
+    }
     sessionManager.appendMessage(message as Parameters<SessionManager["appendMessage"]>[0]);
   }
 
