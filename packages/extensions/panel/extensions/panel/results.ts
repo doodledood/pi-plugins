@@ -13,6 +13,8 @@ export interface AnswerMessageDetails {
   elapsedMs: number;
   tokens: number;
   cost: number | undefined;
+  /** First line of the raw answer, for the collapsed-row preview (renderer-owned clipping). */
+  preview: string | undefined;
 }
 
 export interface InjectedMessage {
@@ -65,6 +67,7 @@ export function buildInjectionPlan(question: string, results: readonly PanelistR
         elapsedMs: result.elapsedMs,
         tokens: result.tokens,
         cost: result.cost,
+        preview: result.ok ? (result.answer ?? "").split("\n").find((line) => line.trim()) : undefined,
       },
     });
   }

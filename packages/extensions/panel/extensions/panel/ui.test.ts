@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_PANELISTS, defaultConfig } from "./config.ts";
 import type { PanelistState, PanelistSpec } from "./types.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   answerPreview,
+  clipText,
   estimatePanelCostUsd,
+  stripThinkingSuffix,
   formatAmbientLines,
   formatAnswerLines,
   formatDuration,
@@ -181,6 +184,49 @@ const splitStates = [
   state({ id: 1, spec: { model: "b/sol", thinking: "high" }, transcript: ["sol line one"], tokens: 38_000, cost: 0.71 }),
 ];
 
+test("clipText clips by display columns: CJK and tabs cannot overflow a pane", () => {
+  const cjk = "対話の文脈を確認しています。これは長い行です。";
+  const clipped = clipText(cjk, 20);
+  assert.ok(visibleWidth(clipped) <= 20, `expected ≤20 cols, got ${visibleWidth(clipped)}`);
+  const tabs = "\t\t\tfunc main() { fmt.Println(\"hello\") }";
+  assert.ok(visibleWidth(clipText(tabs, 24)) <= 24);
+  assert.equal(clipText("short", 20), "short");
+});
+
+test("stripThinkingSuffix: drops valid :level suffixes only", () => {
+  assert.equal(stripThinkingSuffix("anthropic/claude-fable-5:high"), "anthropic/claude-fable-5");
+  assert.equal(stripThinkingSuffix("openai/gpt-5.6-sol"), "openai/gpt-5.6-sol");
+  assert.equal(stripThinkingSuffix("openrouter/model:exacto"), "openrouter/model:exacto"); // not a level
+});
+
+test("every rendered line respects the component width: bar, split, zoomed, many panelists", () => {
+  const cjkState = state({
+    id: 0,
+    spec: { model: "anthropic/claude-sonnet-4-5-20250929", thinking: "xhigh" },
+    transcript: ["対話の文脈を確認しています。これはとても長いトランスクリプト行です。".repeat(3)],
+    tokens: 123_000,
+    cost: 1.23,
+    activity: "running snowflake_mcp_run_snowflake_query with a very long tool name",
+  });
+  const many = [cjkState, ...[1, 2, 3].map((i) => state({ id: i, spec: { model: `provider/model-name-${i}-20250929`, thinking: "low" }, transcript: [`t${i}`] }))];
+  const monitor = new PanelMonitorComponent(themeStub, () => many, "ctrl+p", () => {});
+  for (const width of [64, 80, 110]) {
+    for (const line of monitor.render(width)) {
+      assert.ok(visibleWidth(line) <= width, `bar/inspect line exceeds ${width}: ${visibleWidth(line)}`);
+    }
+    monitor.handleInput("i"); // switch view and re-check
+  }
+  monitor.dispose();
+});
+
+test("split view: content rows align exactly with the frame borders (remainder redistributed)", () => {
+  for (const width of [80, 100, 110]) {
+    const lines = renderInspectView(splitStates, { focus: 0, zoomed: false }, width, 135_000, themeStub);
+    const widths = new Set(lines.map((l) => visibleWidth(l)));
+    assert.equal(widths.size, 1, `expected uniform row width at ${width}, got ${[...widths].join(",")}`);
+  }
+});
+
 test("split view: bordered, one column per panelist with header stats and transcript", () => {
   const lines = renderInspectView(splitStates, { focus: 0, zoomed: false }, 100, 135_000, themeStub);
   assert.match(lines[0] ?? "", /┌─ ▣ Panel · 2 running /);
@@ -255,7 +301,16 @@ test("monitor: esc cancels in bar view; inspect key/i toggles; tab zooms; digits
 // ---------------------------------------------------------------------------
 
 test("answer rendering: collapsed styled row with quoted first-line preview; expanded verbatim body", () => {
-  const ok = { model: "a/a", thinking: "xhigh", ok: true, cancelled: false, elapsedMs: 182_000, tokens: 41_000, cost: 0.84 };
+  const ok = {
+    model: "a/a",
+    thinking: "xhigh",
+    ok: true,
+    cancelled: false,
+    elapsedMs: 182_000,
+    tokens: 41_000,
+    cost: 0.84,
+    preview: "The TTL assumption has a real hole in it.",
+  };
   const content = "Independent opinion from panelist a/a (xhigh) — one model's fallible take, not ground truth:\n\nThe TTL assumption has a real hole in it.\nSecond line of detail.";
   const collapsed = formatAnswerLines(ok, content, false, themeStub);
   assert.equal(collapsed.length, 1);
@@ -274,9 +329,8 @@ test("answer rendering: collapsed styled row with quoted first-line preview; exp
   assert.match(failed[0] ?? "", /✗ panelist \?\s+0s · 0 tok · failed/);
 });
 
-test("answerPreview: skips the attribution wrapper and clips long lines", () => {
-  const long = `Independent opinion from panelist m (off) — one model's fallible take, not ground truth:\n\n${"x".repeat(200)}`;
-  const preview = answerPreview(long);
+test("answerPreview: quotes the first non-empty line and clips long lines by display width", () => {
+  const preview = answerPreview("x".repeat(200));
   assert.ok(preview.startsWith('"xxx'));
   assert.ok(preview.length <= 60);
   assert.ok(preview.endsWith('…"') || preview.endsWith('"'));

@@ -18,6 +18,7 @@ import { runPanel } from "./runner.ts";
 import type { PanelistResult, PanelistSpec, PanelistState, SpawnPanelist } from "./types.ts";
 import {
   estimatePanelCostUsd,
+  stripThinkingSuffix,
   formatAnswerLines,
   formatMetaLines,
   PanelMonitorComponent,
@@ -72,14 +73,17 @@ export async function runPanelCommand(
   // non-TUI modes run the preselected lineup directly instead.
   const isTui = ctx.hasUI && ctx.mode === "tui";
 
-  const forkMessagesEarly = forkMessagesFromEntries(ctx.sessionManager.buildContextEntries());
+  const forkMessages = forkMessagesFromEntries(ctx.sessionManager.buildContextEntries());
   // Rough, display-only cost estimate for the picker header: fork size in
   // ~tokens (chars/4) × each selected model's input price from pi's registry.
-  const forkTokens = Math.ceil(JSON.stringify(forkMessagesEarly).length / 4);
+  const forkTokens = Math.ceil(JSON.stringify(forkMessages).length / 4);
   const priceLookup = (modelRef: string): number | undefined => {
-    const slash = modelRef.indexOf("/");
+    // The config contract allows "provider/id:level" refs; the registry needs
+    // the bare provider/id.
+    const bare = stripThinkingSuffix(modelRef);
+    const slash = bare.indexOf("/");
     if (slash <= 0) return undefined;
-    const model = ctx.modelRegistry.find(modelRef.slice(0, slash), modelRef.slice(slash + 1));
+    const model = ctx.modelRegistry.find(bare.slice(0, slash), bare.slice(slash + 1));
     return model?.cost?.input;
   };
 
@@ -104,8 +108,6 @@ export async function runPanelCommand(
       return;
     }
   }
-
-  const forkMessages = forkMessagesEarly;
 
   // Cancellation is owned here: pi provides no abort signal to idle command
   // handlers, so Esc is delivered through the focused monitor component below.
@@ -154,8 +156,8 @@ export async function runPanelCommand(
       try {
         results = await runPromise;
       } finally {
-        // The monitor must never outlive the run — a stuck overlay would own
-        // the chat's input until restart.
+        // The monitor must never outlive the run — a stuck focused component
+        // would own the chat's input until restart.
         closeMonitor?.(undefined);
       }
       await monitorClosed;

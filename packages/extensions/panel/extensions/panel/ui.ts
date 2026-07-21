@@ -1,5 +1,5 @@
-import { matchesKey, visibleWidth, type KeyId } from "@earendil-works/pi-tui";
-import { THINKING_LEVELS, type PanelistSpec, type PanelistState, type ThinkingLevel } from "./types.ts";
+import { matchesKey, sliceByColumn, truncateToWidth, visibleWidth, type KeyId } from "@earendil-works/pi-tui";
+import { isThinkingLevel, THINKING_LEVELS, type PanelistSpec, type PanelistState, type ThinkingLevel } from "./types.ts";
 
 export interface ThemeLike {
   bold(text: string): string;
@@ -49,10 +49,15 @@ export function formatCost(cost: number | undefined): string | undefined {
   return `$${cost.toFixed(2)}`;
 }
 
-/** Truncate to a display width, ANSI-aware inputs not supported (plain text only). */
+/**
+ * Truncate to a DISPLAY width (ANSI- and wide-glyph-aware): panelist
+ * transcripts are arbitrary model output — CJK text and tabs occupy more
+ * columns than code units, and code-unit clipping would blow out the panes.
+ */
 export function clipText(text: string, width: number): string {
-  if (width <= 1) return text.slice(0, Math.max(0, width));
-  return text.length > width ? `${text.slice(0, width - 1)}…` : text;
+  if (width <= 0) return "";
+  if (visibleWidth(text) <= width) return text;
+  return `${sliceByColumn(text, 0, Math.max(0, width - 1), true)}…`;
 }
 
 function padTo(text: string, width: number): string {
@@ -67,6 +72,17 @@ function padTo(text: string, width: number): string {
 export interface PriceLookup {
   /** Dollars per million input tokens for a "provider/id" model ref; undefined when unknown. */
   (modelRef: string): number | undefined;
+}
+
+/**
+ * Drop a trailing ":<thinkingLevel>" from a model ref (the config contract
+ * allows "provider/id:level" refs) so registry lookups see the bare id.
+ */
+export function stripThinkingSuffix(modelRef: string): string {
+  const colon = modelRef.lastIndexOf(":");
+  if (colon <= 0) return modelRef;
+  const suffix = modelRef.slice(colon + 1);
+  return isThinkingLevel(suffix) ? modelRef.slice(0, colon) : modelRef;
 }
 
 /**
@@ -218,6 +234,7 @@ export function formatAmbientLines(
   now: number,
   inspectKeyText: string,
   theme: ThemeLike,
+  width = 120,
 ): string[] {
   const running = states.filter((s) => s.status === "running" || s.status === "pending").length;
   const startedAt = Math.min(...states.map((s) => s.startedAt));
@@ -235,13 +252,9 @@ export function formatAmbientLines(
     const stats = [elapsed, formatTokens(state.tokens), ...(cost ? [cost] : [])].join(" · ");
     lines.push(`  ${glyph} ${label} ${padTo(stats, 24)} ${theme.fg("dim", clipText(state.activity, 32))}`);
   }
-  return lines;
-}
-
-/** Back-compat alias used by earlier tests/docs; ambient bar is the v2 form. */
-export function formatWidgetLines(states: readonly PanelistState[], now: number, inspectKeyText: string): string[] {
-  const plain: ThemeLike = { bold: (t) => t, fg: (_r, t) => t };
-  return formatAmbientLines(states, now, inspectKeyText, plain);
+  // Non-overlay components get no platform truncation net: every emitted line
+  // must fit the viewport or the terminal hard-wraps and corrupts the frame.
+  return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +300,7 @@ export function renderInspectView(
   now: number,
   theme: ThemeLike,
 ): string[] {
-  const inner = Math.max(40, totalWidth - 2);
+  const inner = Math.max(20, totalWidth - 2);
   const zoomForced = states.length > SPLIT_MAX_PANELISTS;
   const zoomed = zoomForced || inspect.zoomed;
   const height = 18;
@@ -308,20 +321,27 @@ export function renderInspectView(
         return i === focus ? theme.bold(theme.fg("accent", `[${chip}]`)) : theme.fg("dim", ` ${chip} `);
       })
       .join(" ");
-    rows.push(`│${padTo(` ${chipStrip}`, inner)}│`);
+    rows.push(`│${padTo(truncateToWidth(` ${chipStrip}`, inner, "…"), inner)}│`);
     const pane = states[focus];
     if (pane) for (const line of paneLines(pane, now, inner - 2, height, theme)) rows.push(`│ ${line} │`);
   } else {
-    const colWidth = Math.floor((inner - (states.length - 1) - 2 * states.length) / states.length);
-    const panes = states.map((s) => paneLines(s, now, colWidth, height, theme));
+    const usable = inner - (states.length - 1) - 2 * states.length;
+    const colWidth = Math.floor(usable / states.length);
+    // The integer-division remainder goes to the last column so content rows
+    // line up exactly with the top/bottom borders.
+    const remainder = usable - colWidth * states.length;
+    const panes = states.map((s, i) =>
+      paneLines(s, now, colWidth + (i === states.length - 1 ? remainder : 0), height, theme),
+    );
     const paneHeight = Math.max(...panes.map((p) => p.length));
     for (let r = 0; r < paneHeight; r++) {
-      const cells = panes.map((p) => ` ${padTo(p[r] ?? "", colWidth)} `);
+      const cells = panes.map((p, i) => ` ${padTo(p[r] ?? "", colWidth + (i === states.length - 1 ? remainder : 0))} `);
       rows.push(`│${cells.join(theme.fg("dim", "│"))}│`);
     }
   }
   rows.push(bottom);
-  return rows;
+  // Belt over the per-cell clipping: no emitted row may exceed the frame.
+  return rows.map((row) => (visibleWidth(row) > inner + 2 ? truncateToWidth(row, inner + 2, "…") : row));
 }
 
 // ---------------------------------------------------------------------------
@@ -336,13 +356,13 @@ export interface AnswerDetailsLike {
   elapsedMs?: number;
   tokens?: number;
   cost?: number;
+  /** First line of the raw answer, provided at build time by results.ts. */
+  preview?: string;
 }
 
-/** First non-empty line of the answer body, quoted and clipped, for the collapsed row. */
-export function answerPreview(content: string, maxLength = 56): string {
-  const attributionEnd = content.indexOf(":\n\n");
-  const body = attributionEnd >= 0 ? content.slice(attributionEnd + 3) : content;
-  const firstLine = body.split("\n").find((line) => line.trim()) ?? "";
+/** First non-empty line of a raw answer, quoted and clipped, for the collapsed row. */
+export function answerPreview(rawAnswer: string, maxLength = 56): string {
+  const firstLine = rawAnswer.split("\n").find((line) => line.trim()) ?? "";
   return firstLine ? `"${clipText(firstLine.trim(), maxLength)}"` : "";
 }
 
@@ -354,7 +374,7 @@ export function formatAnswerLines(
   theme: ThemeLike,
 ): string[] {
   const glyph = details.ok ? "◆" : details.cancelled ? "◌" : "✗";
-  const role = details.ok ? "accent" : details.cancelled ? "dim" : "warning";
+  const role = details.ok ? "accent" : details.cancelled ? "dim" : "error";
   const stateText = details.ok ? "answered" : details.cancelled ? "cancelled" : "failed";
   const cost = formatCost(details.cost);
   const stats = [formatDuration(details.elapsedMs ?? 0), formatTokens(details.tokens ?? 0), ...(cost ? [cost] : [])].join(
@@ -363,7 +383,7 @@ export function formatAnswerLines(
   const label = padTo(clipText(`${details.model ?? "?"} ${details.thinking ?? ""}`.trim(), 28), 28);
   const header = `${theme.fg(role, glyph)} ${theme.bold(`panelist ${label}`)} ${theme.fg("dim", `${stats} · ${stateText}`)}`;
   if (!expanded) {
-    const preview = details.ok ? answerPreview(content) : "";
+    const preview = details.ok && details.preview ? answerPreview(details.preview) : "";
     return [`${theme.fg("dim", "▸ ")}${header}${preview ? `  ${theme.fg("dim", preview)}` : ""}`];
   }
   return [`${theme.fg("dim", "▾ ")}${header}`, ...content.split("\n")];
@@ -450,9 +470,12 @@ export class PanelMonitorComponent {
   render(width: number): string[] {
     const states = this.getStates();
     const now = Date.now();
-    if (this.view === "inspect") {
-      return renderInspectView(states, this.inspect, Math.min(width, 110), now, this.theme);
-    }
-    return formatAmbientLines(states, now, this.inspectKey, this.theme);
+    const lines =
+      this.view === "inspect"
+        ? renderInspectView(states, this.inspect, Math.min(width, 110), now, this.theme)
+        : formatAmbientLines(states, now, this.inspectKey, this.theme, width);
+    // Final clamp: pi gives non-overlay components no truncation net, and an
+    // overflowing line desynchronizes the differential renderer.
+    return lines.map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line));
   }
 }

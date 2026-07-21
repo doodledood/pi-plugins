@@ -34,14 +34,14 @@ export interface LoadedPanelConfig {
 
 export type PanelistStatus = "pending" | "running" | "done" | "error" | "cancelled";
 
-/** Live view of one panelist run, consumed by the widget/overlay and result layer. */
+/** Live view of one panelist run, consumed by the ambient bar/inspect view and result layer. */
 export interface PanelistState {
   id: number;
   spec: PanelistSpec;
   status: PanelistStatus;
   /** Short human description of what the panelist is doing right now. */
   activity: string;
-  /** Rolling tail of streamed output for the inspect overlay. */
+  /** Rolling tail of streamed output for the drill-in inspect view. */
   transcript: string[];
   tokens: number;
   /** Best-effort dollar cost; undefined when the provider reports no cost. */

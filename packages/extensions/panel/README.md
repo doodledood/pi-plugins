@@ -44,7 +44,7 @@ Cost ≈ forked context size × number of panelists × effort, per consult, befo
 
 - `panelists` — lineup shown in the picker (`model` is any pi model reference; `thinking` is `off|minimal|low|medium|high|xhigh|max`).
 - `preselected` — lineup indexes selected by default (default: all).
-- `inspectKeybinding` — opens the live inspect overlay during a run (default `ctrl+p`).
+- `inspectKeybinding` — opens the drill-in inspect view during a run (default `ctrl+p`).
 - `timeoutMs` — per-panelist wall-clock budget (clamped 30s–1h; default 15m).
 
 **No config or empty lineup?** The picker shows the built-in default lineup preselected: `anthropic/claude-fable-5` at `xhigh` and `openai/gpt-5.6-sol` at `xhigh`.

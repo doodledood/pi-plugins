@@ -50,6 +50,7 @@ test("each answer is verbatim, attributed, displayed, with details for the rende
     elapsedMs: 182_000,
     tokens: 41_000,
     cost: 0.84,
+    preview: "My independent answer.",
   });
 });
 
