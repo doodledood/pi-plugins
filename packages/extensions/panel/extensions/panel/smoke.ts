@@ -55,7 +55,7 @@ const ctx = {
           content: [{ type: "text", text: "Noted: the candidate name is Mochi." }],
           stopReason: "stop",
           timestamp: Date.now() - 10_000,
-          model: "seed",
+          model: "gpt-5.6-luna", // cross-vendor shape: history authored by another model
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
         },
       },

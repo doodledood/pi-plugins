@@ -116,11 +116,15 @@ test("full flow: fork built from session entries, defaults run, answers injected
 
   await runPanelCommand(pi, ctx, "  is this sound?  ", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
 
-  // Both default panelists spawned with the forked history and the panelist system prompt.
+  // Both default panelists spawned with the transcript fork and the panelist system prompt.
   assert.equal(spawned.length, 2);
   for (const spawnOptions of spawned) {
-    assert.equal(spawnOptions.forkMessages.length, 2);
-    assert.equal((spawnOptions.forkMessages[0] as { role: string }).role, "user");
+    assert.equal(spawnOptions.forkMessages.length, 1, "fork is a single transcript message");
+    const fork = spawnOptions.forkMessages[0] as { role: string; content: Array<{ text: string }> };
+    assert.equal(fork.role, "user");
+    assert.match(fork.content[0]?.text ?? "", /Transcript of the conversation under review/);
+    assert.ok((fork.content[0]?.text ?? "").includes("earlier turn"));
+    assert.ok((fork.content[0]?.text ?? "").includes("earlier answer"));
     assert.match(spawnOptions.systemPrompt, /independent panelist/);
     assert.match(spawnOptions.systemPrompt, /read-only/);
   }

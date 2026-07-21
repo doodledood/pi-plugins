@@ -49,24 +49,10 @@ export const spawnPanelistSession: SpawnPanelist = async (
     ? SessionManager.create(options.cwd, options.sessionDir)
     : SessionManager.create(options.cwd);
 
-  // Persist the seeded fork into the panelist's own session file so the
-  // transcript is self-contained: browsable and resumable later.
-  // SessionManager.appendMessage rejects compactionSummary/branchSummary roles
-  // (those are reserved for top-level compaction/branch entries), so summary
-  // messages are persisted as custom messages carrying the same text; the
-  // in-memory agent state below still keeps the original roles.
+  // Persist the seeded fork (a single transcript user message) into the
+  // panelist's own session file so it is self-contained: browsable and
+  // resumable later.
   for (const message of options.forkMessages) {
-    const role = (message as { role?: string }).role;
-    if (role === "compactionSummary" || role === "branchSummary") {
-      sessionManager.appendMessage({
-        role: "custom",
-        customType: "panel-fork-summary",
-        content: (message as { summary?: string }).summary ?? "",
-        display: false,
-        timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
-      });
-      continue;
-    }
     sessionManager.appendMessage(message as Parameters<SessionManager["appendMessage"]>[0]);
   }
 
