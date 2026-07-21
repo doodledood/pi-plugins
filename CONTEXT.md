@@ -141,7 +141,7 @@ _Avoid_: Terminal goal when resumability matters.
 - A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.
 
 - A **Panelist** answers the user's question *before* the main model does, so on the current question it is unanchored by the main model's take; the main model is the last mover, synthesizing with all **Panel** answers in hand.
-- A **Panel** injects each **Panelist**'s final answer verbatim and attributed into the main session — never their tool transcripts, which stay viewable in the UI.
+- A **Panel** injects each **Panelist**'s final answer verbatim into the main session — anonymous and randomly ordered for the main model (brand/position de-biasing), attributed to the user via renderer rows and the metadata entry — never their tool transcripts, which stay viewable in the UI.
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
 - A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.

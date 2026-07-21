@@ -49,8 +49,10 @@ function renderMessage(message: Record<string, unknown>): string | undefined {
     case "user":
       return `USER:\n${contentText(message.content)}`;
     case "assistant": {
-      const model = typeof message.model === "string" && message.model ? ` (${message.model})` : "";
-      const parts = [`ASSISTANT${model}:`];
+      // Deliberately unlabeled: naming the producing model would hand the
+      // panelist a vendor cue (sibling loyalty / competitor skepticism) before
+      // it forms its own take — the same blinding applied to the main model.
+      const parts = ["ASSISTANT:"];
       const text = contentText(message.content, parts);
       if (text) parts.splice(1, 0, text);
       return parts.length > 1 ? parts.join("\n") : undefined;

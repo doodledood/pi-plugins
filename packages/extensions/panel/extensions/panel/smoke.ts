@@ -75,7 +75,8 @@ const main = async () => {
   if (answers.length !== specs.length) failures.push(`expected ${specs.length} answer messages, got ${answers.length}`);
   for (const answer of answers) {
     console.log(`\n--- injected ---\n${answer.content.slice(0, 400)}\n`);
-    if (!/<panelist_answer model="/.test(answer.content)) failures.push("answer missing tagged attribution block");
+    if (!/<panelist_answer panelist="[A-Z]"/.test(answer.content)) failures.push("answer missing anonymous labeled block");
+    if (/claude-haiku|gpt-4\.1-mini/.test(answer.content)) failures.push("model identity leaked into context content");
     if (!/mochi/i.test(answer.content)) failures.push("a panelist answer does not mention the seeded fork content (Mochi)");
   }
   const meta = entries.find((e) => e.customType === "panel-meta")?.data as

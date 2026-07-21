@@ -114,7 +114,7 @@ test("full flow: fork built from session entries, defaults run, answers injected
     "openai/gpt-5.6-sol": "sol says Y",
   });
 
-  await runPanelCommand(pi, ctx, "  is this sound?  ", { spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+  await runPanelCommand(pi, ctx, "  is this sound?  ", { spawn, configPath: missingConfig, rng: () => 0.999999 }, { setActiveRun: () => {} });
 
   // Both default panelists spawned with the transcript fork and the panelist system prompt.
   assert.equal(spawned.length, 2);
@@ -135,8 +135,13 @@ test("full flow: fork built from session entries, defaults run, answers injected
   assert.equal(sent[0]?.message.display, false);
   assert.match(sent[0]?.message.content ?? "", /is this sound\?/);
   assert.equal(sent[1]?.message.customType, ANSWER_MESSAGE_TYPE);
-  assert.ok(sent[1]?.message.content.includes("fable says X"));
+  assert.ok(sent[1]?.message.content.includes("fable says X")); // identity rng keeps lineup order
   assert.ok(sent[2]?.message.content.includes("sol says Y"));
+  // Anonymity: model identity never enters context-participating content.
+  for (const s2 of sent) {
+    assert.ok(!s2.message.content.includes("claude-fable-5"), "model name must not enter context");
+    assert.ok(!s2.message.content.includes("gpt-5.6-sol"), "model name must not enter context");
+  }
   // Only the final message triggers the main-model turn.
   assert.deepEqual(sent.map((s) => s.options.triggerTurn ?? false), [false, false, true]);
 
@@ -221,7 +226,10 @@ test("tool activity in a panelist session never reaches the injected context mes
     assert.ok(!s.message.content.includes("SECRET-TOOL-OUTPUT"), "tool output must not enter context");
     assert.ok(!s.message.content.includes("cat /etc/secret-config"), "tool call arguments must not enter context");
   }
-  assert.ok(sent[1]?.message.content.includes("final answer from anthropic/claude-fable-5"));
+  // Order-independent under the shuffle: the answer text lands in one of the
+  // answer messages (the panelist's own words may mention models; only OUR
+  // framing must stay anonymous).
+  assert.ok(sent.slice(1).some((s2) => s2.message.content.includes("final answer from anthropic/claude-fable-5")));
 });
 
 interface CustomCall {

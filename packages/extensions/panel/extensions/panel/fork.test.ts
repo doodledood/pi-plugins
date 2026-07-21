@@ -38,10 +38,13 @@ test("fork is ONE user-role transcript message — never replayed assistant turn
   assert.ok(messages.every((m) => (m as { role: string }).role !== "assistant"));
 });
 
-test("transcript preserves full history: user turns, model-labeled assistant turns, tool activity", () => {
+test("transcript preserves full history: user turns, unlabeled assistant turns, tool activity", () => {
   const transcript = transcriptFromEntries(history);
   assert.match(transcript, /USER:\nhi whats up/);
-  assert.match(transcript, /ASSISTANT \(gpt-5\.6-luna\):/);
+  // Assistant turns are deliberately UNLABELED: the producing model's name
+  // would hand panelists a vendor cue before they form their own take.
+  assert.match(transcript, /ASSISTANT:\n/);
+  assert.ok(!transcript.includes("gpt-5.6-luna"), "model identity must not reach panelists");
   assert.ok(transcript.includes("Hi! Ready to help."));
   assert.match(transcript, /\[called tool: bash \{"command":"ls"\}\]/);
   assert.match(transcript, /\[tool result\]\nfile-a file-b/);

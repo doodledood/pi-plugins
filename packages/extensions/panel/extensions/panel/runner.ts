@@ -112,6 +112,7 @@ async function runPanelist(
 
   let providerError: string | undefined;
   let currentLine = "";
+  let currentThought = "";
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_update") {
       const sub = event.assistantMessageEvent;
@@ -123,14 +124,23 @@ async function runPanelist(
         state.activity = "writing";
         notify();
       }
-      if (sub?.type === "thinking_delta") {
+      if (sub?.type === "thinking_delta" && sub.delta) {
+        // Thinking streams into the transcript with a distinct prefix — at
+        // high effort it is usually the most informative part of the run.
+        currentThought += sub.delta;
+        const lines = currentThought.split("\n");
+        currentThought = lines.pop() ?? "";
+        if (lines.length > 0) appendTranscript(state, lines.filter((l) => l.trim()).map((l) => `· ${l}`));
         state.activity = "thinking";
         notify();
       }
     } else if (event.type === "tool_execution_start") {
       const toolName = event.toolName ?? "tool";
       state.activity = `running ${toolName}`;
-      appendTranscript(state, [`> ${toolName}`]);
+      appendTranscript(state, [summarizeToolCall(toolName, event.args)]);
+      notify();
+    } else if (event.type === "tool_execution_end") {
+      appendTranscript(state, [summarizeToolResult(event.toolName ?? "tool", event.result, event.isError ?? false)]);
       notify();
     } else if (event.type === "message_end") {
       const message = event.message;
@@ -166,6 +176,7 @@ async function runPanelist(
   } finally {
     clearTimeout(timeout);
     options.signal?.removeEventListener("abort", abortRun);
+    if (currentThought.trim()) appendTranscript(state, [`· ${currentThought}`]);
     if (currentLine) appendTranscript(state, [currentLine]);
     unsubscribe();
   }
@@ -259,4 +270,43 @@ async function disposeWithGrace(session: PanelistSession): Promise<void> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** One-line tool-call summary with its most salient argument, for the live transcript. */
+export function summarizeToolCall(toolName: string, args: unknown): string {
+  const a = (args ?? {}) as Record<string, unknown>;
+  const salient =
+    typeof a.command === "string" ? a.command
+    : typeof a.path === "string" ? a.path
+    : typeof a.file_path === "string" ? a.file_path
+    : typeof a.pattern === "string" ? a.pattern
+    : typeof a.query === "string" ? a.query
+    : typeof a.url === "string" ? a.url
+    : safeArgs(args);
+  const suffix = salient ? `: ${clipLine(salient, 100)}` : "";
+  return `▸ ${toolName}${suffix}`;
+}
+
+/** One-line tool-result summary (first meaningful output line), for the live transcript. */
+export function summarizeToolResult(toolName: string, result: unknown, isError: boolean): string {
+  const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content;
+  const text = Array.isArray(content)
+    ? content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text as string).join("\n")
+    : "";
+  const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
+  const glyph = isError ? "✗" : "✓";
+  return `${glyph} ${toolName}${firstLine ? `: ${clipLine(firstLine.trim(), 100)}` : ""}`;
+}
+
+function clipLine(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function safeArgs(args: unknown): string {
+  try {
+    const text = JSON.stringify(args) ?? "";
+    return text === "{}" ? "" : text;
+  } catch {
+    return "";
+  }
 }

@@ -6,6 +6,8 @@ export const QUESTION_MESSAGE_TYPE = "panel-question";
 export const META_ENTRY_TYPE = "panel-meta";
 
 export interface AnswerMessageDetails {
+  /** Anonymous in-context label ("A", "B", …) mapping the main model's references back to a panelist for the user. */
+  label: string;
   model: string;
   thinking: string;
   ok: boolean;
@@ -44,6 +46,11 @@ export function humanizePanelistError(error: string): string {
   return error;
 }
 
+/** Anonymous label for the panelist at a presented position: A..Z, then P27, P28, … */
+export function panelistLabel(index: number): string {
+  return index < 26 ? String.fromCharCode(65 + index) : `P${index + 1}`;
+}
+
 export interface InjectionPlan {
   /** Context-participating custom messages, in send order. */
   messages: InjectedMessage[];
@@ -55,11 +62,24 @@ export interface InjectionPlan {
 
 /**
  * Build everything injected into the main session after a panel completes.
- * Contract: the question and each panelist's final answer enter LLM
- * context verbatim and attributed, framed as peer opinions; tool transcripts
- * never do. Cost/timing/session-path metadata rides context-excluded.
+ * Contract: the question and each panelist's final answer enter LLM context
+ * verbatim — but ANONYMOUS and RANDOMLY ORDERED (Fisher-Yates via the
+ * injectable rng): the main model judges substance, free of brand and
+ * position bias. Attribution for the user rides on message details
+ * (renderer-only; convertToLlm sends content only) and the context-excluded
+ * meta entry. Tool transcripts never enter context.
  */
-export function buildInjectionPlan(question: string, results: readonly PanelistResult[]): InjectionPlan {
+export function buildInjectionPlan(
+  question: string,
+  results: readonly PanelistResult[],
+  rng: () => number = Math.random,
+): InjectionPlan {
+  const shuffled = [...results];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j] as PanelistResult, shuffled[i] as PanelistResult];
+  }
+
   const messages: InjectedMessage[] = [
     {
       customType: QUESTION_MESSAGE_TYPE,
@@ -67,19 +87,16 @@ export function buildInjectionPlan(question: string, results: readonly PanelistR
       display: false,
     },
   ];
-  for (const result of results) {
+  shuffled.forEach((result, index) => {
+    const label = panelistLabel(index); // A, B, C, … in presented order
     messages.push({
       customType: ANSWER_MESSAGE_TYPE,
       content: result.ok
-        ? panelistAnswerMessage(result.spec.model, result.spec.thinking, result.answer ?? "")
-        : panelistFailureMessage(
-            result.spec.model,
-            result.spec.thinking,
-            humanizePanelistError(result.error ?? "unknown error"),
-            result.cancelled ?? false,
-          ),
+        ? panelistAnswerMessage(label, result.answer ?? "")
+        : panelistFailureMessage(label, humanizePanelistError(result.error ?? "unknown error"), result.cancelled ?? false),
       display: true,
       details: {
+        label,
         model: result.spec.model,
         thinking: result.spec.thinking,
         ok: result.ok,
@@ -90,7 +107,7 @@ export function buildInjectionPlan(question: string, results: readonly PanelistR
         preview: result.ok ? (result.answer ?? "").split("\n").find((line) => line.trim()) : undefined,
       },
     });
-  }
+  });
   return {
     messages,
     triggerIndex: messages.length - 1,
@@ -98,7 +115,8 @@ export function buildInjectionPlan(question: string, results: readonly PanelistR
       customType: META_ENTRY_TYPE,
       data: {
         question,
-        panelists: results.map((result) => ({
+        panelists: shuffled.map((result, index) => ({
+          label: panelistLabel(index),
           model: result.spec.model,
           thinking: result.spec.thinking,
           ok: result.ok,

@@ -244,13 +244,22 @@ export function formatAmbientLines(
     `esc cancel · ${inspectKeyText} inspect`,
   )}`;
   const lines = [header];
-  for (const state of states) {
+  // Large panels must not swallow the editor slot: cap the per-panelist lines
+  // and summarize the rest (the drill-in view shows everyone).
+  const MAX_BAR_ROWS = 8;
+  const shown = states.length > MAX_BAR_ROWS ? states.slice(0, MAX_BAR_ROWS - 1) : states;
+  for (const state of shown) {
     const glyph = theme.fg(STATUS_ROLES[state.status], STATUS_GLYPHS[state.status]);
     const label = padTo(clipText(`${modelIdOf(state.spec.model)} ${state.spec.thinking}`, 26), 26);
     const elapsed = formatDuration((state.endedAt ?? now) - state.startedAt);
     const cost = formatCost(state.cost);
     const stats = [elapsed, formatTokens(state.tokens), ...(cost ? [cost] : [])].join(" · ");
     lines.push(`  ${glyph} ${label} ${padTo(stats, 24)} ${theme.fg("dim", clipText(state.activity, 32))}`);
+  }
+  if (states.length > shown.length) {
+    const rest = states.slice(shown.length);
+    const running = rest.filter((s) => s.status === "running" || s.status === "pending").length;
+    lines.push(theme.fg("dim", `  … ${rest.length} more panelist${rest.length === 1 ? "" : "s"} (${running} running) — ${inspectKeyText} to inspect`));
   }
   // Non-overlay components get no platform truncation net: every emitted line
   // must fit the viewport or the terminal hard-wraps and corrupts the frame.
@@ -280,11 +289,20 @@ function panelistHeaderLines(state: PanelistState, now: number, width: number, t
   return [title, theme.fg("dim", clipText(stats, width)), theme.fg("dim", `▸ ${clipText(state.activity, width - 2)}`)];
 }
 
+/** Transcript line theming by prefix: thinking dim, tool calls accent, results dim/error. */
+function themeTranscriptLine(line: string, theme: ThemeLike): string {
+  if (line.startsWith("· ")) return theme.fg("dim", line);
+  if (line.startsWith("▸ ")) return theme.fg("accent", line);
+  if (line.startsWith("✓ ")) return theme.fg("dim", line);
+  if (line.startsWith("✗ ")) return theme.fg("error", line);
+  return line;
+}
+
 function paneLines(state: PanelistState, now: number, width: number, height: number, theme: ThemeLike): string[] {
   const header = panelistHeaderLines(state, now, width, theme);
   const divider = theme.fg("dim", "─".repeat(width));
   const bodyHeight = Math.max(1, height - header.length - 1);
-  const body = state.transcript.slice(-bodyHeight).map((line) => clipText(line, width));
+  const body = state.transcript.slice(-bodyHeight).map((line) => themeTranscriptLine(clipText(line, width), theme));
   while (body.length < bodyHeight) body.push("");
   return [...header, divider, ...body].map((line) => padTo(line, width));
 }
@@ -308,19 +326,30 @@ export function renderInspectView(
 
   const title = ` ▣ Panel · ${states.filter((s) => s.status === "running" || s.status === "pending").length} running `;
   const top = theme.fg("accent", `┌─${title}${"─".repeat(Math.max(0, inner - visibleWidth(title) - 1))}┐`);
+  const digitMax = Math.min(9, states.length);
+  const focusHint = states.length > 1 ? ` · ←/→${digitMax > 1 ? ` or 1-${digitMax}` : ""} focus` : "";
   const hintText = zoomed
-    ? ` esc back · tab ${zoomForced ? "—" : "split"} · 1-${states.length} focus `
-    : ` esc back · tab zoom · 1-${states.length} focus `;
+    ? ` esc back · tab ${zoomForced ? "—" : "split"}${focusHint} `
+    : ` esc back · tab zoom${focusHint} `;
   const bottom = theme.fg("accent", `└─${theme.fg("dim", hintText)}${"─".repeat(Math.max(0, inner - visibleWidth(hintText) - 1))}┘`);
 
   const rows: string[] = [top];
   if (zoomed) {
-    const chipStrip = states
-      .map((s, i) => {
-        const chip = `${STATUS_GLYPHS[s.status]} ${modelIdOf(s.spec.model)}`;
-        return i === focus ? theme.bold(theme.fg("accent", `[${chip}]`)) : theme.fg("dim", ` ${chip} `);
-      })
-      .join(" ");
+    // Build chips left-to-right but slide the window so the FOCUSED chip is
+    // always visible even with many panelists.
+    const chips = states.map((s, i) => {
+      const chip = `${STATUS_GLYPHS[s.status]} ${modelIdOf(s.spec.model)}`;
+      return {
+        plain: i === focus ? `[${chip}]` : ` ${chip} `,
+        themed: i === focus ? theme.bold(theme.fg("accent", `[${chip}]`)) : theme.fg("dim", ` ${chip} `),
+      };
+    });
+    let start = 0;
+    const fits = (from: number) =>
+      chips.slice(from, focus + 1).reduce((w, c) => w + visibleWidth(c.plain) + 1, 0) <= inner - 2;
+    while (start < focus && !fits(start)) start++;
+    const prefix = start > 0 ? theme.fg("dim", "… ") : "";
+    const chipStrip = prefix + chips.slice(start).map((c) => c.themed).join(" ");
     rows.push(`│${padTo(truncateToWidth(` ${chipStrip}`, inner, "…"), inner)}│`);
     const pane = states[focus];
     if (pane) for (const line of paneLines(pane, now, inner - 2, height, theme)) rows.push(`│ ${line} │`);
@@ -349,6 +378,8 @@ export function renderInspectView(
 // ---------------------------------------------------------------------------
 
 export interface AnswerDetailsLike {
+  /** Anonymous in-context label ("A", "B", …); maps the main model's references back to a panelist. */
+  label?: string;
   model?: string;
   thinking?: string;
   ok?: boolean;
@@ -380,7 +411,8 @@ export function formatAnswerLines(
   const stats = [formatDuration(details.elapsedMs ?? 0), formatTokens(details.tokens ?? 0), ...(cost ? [cost] : [])].join(
     " · ",
   );
-  const label = padTo(clipText(`${details.model ?? "?"} ${details.thinking ?? ""}`.trim(), 28), 28);
+  const who = `${details.label ? `${details.label} — ` : ""}${details.model ?? "?"} ${details.thinking ?? ""}`.trim();
+  const label = padTo(clipText(who, 32), 32);
   const header = `${theme.fg(role, glyph)} ${theme.bold(`panelist ${label}`)} ${theme.fg("dim", `${stats} · ${stateText}`)}`;
   if (!expanded) {
     const preview = details.ok && details.preview ? answerPreview(details.preview) : "";
@@ -390,7 +422,7 @@ export function formatAnswerLines(
 }
 
 export interface MetaDataLike {
-  panelists?: Array<{ model?: string; sessionFile?: string }>;
+  panelists?: Array<{ label?: string; model?: string; sessionFile?: string }>;
 }
 
 /** Collapsed/expanded transcript lines for the context-excluded metadata row. */
@@ -401,7 +433,7 @@ export function formatMetaLines(data: MetaDataLike, expanded: boolean, theme: Th
   }
   const lines = [theme.fg("dim", "▾ panel run")];
   for (const p of data.panelists ?? []) {
-    lines.push(theme.fg("dim", `  ${p.model}: ${p.sessionFile ?? "(no session file)"}`));
+    lines.push(theme.fg("dim", `  ${p.label ? `${p.label} — ` : ""}${p.model}: ${p.sessionFile ?? "(no session file)"}`));
   }
   return lines;
 }
@@ -460,8 +492,17 @@ export class PanelMonitorComponent {
         this.inspect.zoomed = !this.inspect.zoomed;
         return;
       }
+      const count = this.getStates().length;
+      if (matchesKey(data, "right") || matchesKey(data, "down")) {
+        this.inspect.focus = (this.inspect.focus + 1) % Math.max(1, count);
+        return;
+      }
+      if (matchesKey(data, "left") || matchesKey(data, "up")) {
+        this.inspect.focus = (this.inspect.focus - 1 + Math.max(1, count)) % Math.max(1, count);
+        return;
+      }
       const digit = Number.parseInt(data, 10);
-      if (Number.isInteger(digit) && digit >= 1 && digit <= this.getStates().length) {
+      if (Number.isInteger(digit) && digit >= 1 && digit <= count) {
         this.inspect.focus = digit - 1;
       }
     }

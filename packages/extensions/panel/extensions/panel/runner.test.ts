@@ -228,7 +228,11 @@ test("cancelling during the spawn window still aborts the panelist session", asy
 
 test("streamed events drive state: activity, transcript tail, tokens", async () => {
   const events: PanelistSessionEvent[] = [
-    { type: "tool_execution_start", toolName: "bash" },
+    { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "weighing the options\ncarefully\n" } },
+    { type: "tool_execution_start", toolName: "bash", args: { command: "npm test" } },
+    { type: "tool_execution_end", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "14 passing\nmore output" }] } },
+    { type: "tool_execution_start", toolName: "read", args: { path: "src/agent.ts" } },
+    { type: "tool_execution_end", toolName: "read", isError: true, result: { content: [{ type: "text", text: "ENOENT: no such file" }] } },
     { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "line one\nline two\n" } },
     { type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 100, output: 50, cost: { total: 0.01 } } } },
   ];
@@ -244,7 +248,14 @@ test("streamed events drive state: activity, transcript tail, tokens", async () 
   });
   const state = finalStates[0];
   assert.ok(state);
-  assert.ok(state.transcript.includes("> bash"));
+  // Thinking streams with the · prefix; tool calls carry their salient arg;
+  // results carry status glyph + first output line.
+  assert.ok(state.transcript.includes("· weighing the options"));
+  assert.ok(state.transcript.includes("· carefully"));
+  assert.ok(state.transcript.includes("▸ bash: npm test"));
+  assert.ok(state.transcript.includes("✓ bash: 14 passing"));
+  assert.ok(state.transcript.includes("▸ read: src/agent.ts"));
+  assert.ok(state.transcript.includes("✗ read: ENOENT: no such file"));
   assert.ok(state.transcript.includes("line one"));
   assert.equal(state.tokens, 150);
   assert.equal(state.cost, 0.01);

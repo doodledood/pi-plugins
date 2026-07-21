@@ -34,6 +34,8 @@ interface PanelDeps {
   sessionDir?: string;
   /** Config file override (tests/smokes); default is ~/.pi/agent/panel.json. */
   configPath?: string;
+  /** RNG override for the answer shuffle (tests); default Math.random. */
+  rng?: () => number;
 }
 
 /** Live run state exposed to hooks (smokes assert on it). */
@@ -177,7 +179,7 @@ export async function runPanelCommand(
     return;
   }
 
-  const plan = buildInjectionPlan(question, results);
+  const plan = buildInjectionPlan(question, results, deps.rng ?? Math.random);
   pi.appendEntry(plan.metaEntry.customType, plan.metaEntry.data);
   plan.messages.forEach((message, index) => {
     pi.sendMessage(

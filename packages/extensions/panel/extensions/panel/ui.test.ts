@@ -230,7 +230,7 @@ test("split view: content rows align exactly with the frame borders (remainder r
 test("split view: bordered, one column per panelist with header stats and transcript", () => {
   const lines = renderInspectView(splitStates, { focus: 0, zoomed: false }, 100, 135_000, themeStub);
   assert.match(lines[0] ?? "", /┌─ ▣ Panel · 2 running /);
-  assert.match(lines.at(-1) ?? "", /esc back · tab zoom · 1-2 focus/);
+  assert.match(lines.at(-1) ?? "", /esc back · tab zoom · ←\/→ or 1-2 focus/);
   const body = lines.join("\n");
   assert.ok(body.includes("fable · xhigh"));
   assert.ok(body.includes("sol · high"));
@@ -302,6 +302,7 @@ test("monitor: esc cancels in bar view; inspect key/i toggles; tab zooms; digits
 
 test("answer rendering: collapsed styled row with quoted first-line preview; expanded verbatim body", () => {
   const ok = {
+    label: "B",
     model: "a/a",
     thinking: "xhigh",
     ok: true,
@@ -314,7 +315,7 @@ test("answer rendering: collapsed styled row with quoted first-line preview; exp
   const content = "Independent opinion from panelist a/a (xhigh) — one model's fallible take, not ground truth:\n\nThe TTL assumption has a real hole in it.\nSecond line of detail.";
   const collapsed = formatAnswerLines(ok, content, false, themeStub);
   assert.equal(collapsed.length, 1);
-  assert.match(collapsed[0] ?? "", /▸ ◆ panelist a\/a xhigh\s+3m02s · 41k tok · \$0\.84 · answered/);
+  assert.match(collapsed[0] ?? "", /▸ ◆ panelist B — a\/a xhigh\s+3m02s · 41k tok · \$0\.84 · answered/);
   assert.match(collapsed[0] ?? "", /"The TTL assumption has a real hole in it\."/);
 
   const expanded = formatAnswerLines(ok, content, true, themeStub);
@@ -343,4 +344,45 @@ test("meta rendering: collapsed count line; expanded session paths with missing-
   const expanded = formatMetaLines(data, true, themeStub);
   assert.match(expanded[1] ?? "", /a\/a: \/s\/a\.jsonl/);
   assert.match(expanded[2] ?? "", /b\/b: \(no session file\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Many-panelist scaling
+// ---------------------------------------------------------------------------
+
+function manyStates(n: number) {
+  return Array.from({ length: n }, (_, i) =>
+    state({ id: i, spec: { model: `prov/model-${i + 1}`, thinking: "low" }, transcript: [`line-${i + 1}`] }),
+  );
+}
+
+test("ambient bar caps panelist rows and summarizes the rest", () => {
+  const lines = formatAmbientLines(manyStates(12), 10_000, "ctrl+p", themeStub, 120);
+  assert.equal(lines.length, 1 + 7 + 1, "header + 7 rows + summary");
+  assert.match(lines.at(-1) ?? "", /… 5 more panelists \(5 running\) — ctrl\+p to inspect/);
+  // Small panels are unaffected.
+  assert.equal(formatAmbientLines(manyStates(3), 10_000, "ctrl+p", themeStub, 120).length, 4);
+});
+
+test("chip strip keeps the focused chip visible with many panelists", () => {
+  const lines = renderInspectView(manyStates(10), { focus: 9, zoomed: true }, 100, 10_000, themeStub);
+  const body = lines.join("\n");
+  assert.ok(body.includes("[◐ model-10]"), "focused chip must be visible even at the end of a long strip");
+  assert.ok(body.includes("line-10"), "focused pane renders");
+  for (const line of lines) assert.ok(visibleWidth(line) <= 100);
+});
+
+test("inspect focus: arrows wrap across any panelist count; digits stay within 1-9; hint stays honest", () => {
+  const states12 = manyStates(12);
+  const monitor = new PanelMonitorComponent(themeStub, () => states12, "ctrl+p", () => {});
+  monitor.handleInput("i");
+  monitor.handleInput("\x1b[D"); // left from 0 wraps to last
+  assert.equal(monitor.inspect.focus, 11);
+  monitor.handleInput("\x1b[C"); // right wraps back to 0
+  assert.equal(monitor.inspect.focus, 0);
+  monitor.handleInput("9");
+  assert.equal(monitor.inspect.focus, 8);
+  const hint = monitor.render(100).at(-1) ?? "";
+  assert.match(hint, /←\/→ or 1-9 focus/);
+  monitor.dispose();
 });

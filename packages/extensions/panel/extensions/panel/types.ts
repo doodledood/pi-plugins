@@ -86,7 +86,8 @@ export interface PanelistSession {
  */
 export type PanelistSessionEvent =
   | { type: "message_update"; assistantMessageEvent?: { type: string; delta?: string } }
-  | { type: "tool_execution_start"; toolName?: string }
+  | { type: "tool_execution_start"; toolName?: string; args?: unknown }
+  | { type: "tool_execution_end"; toolName?: string; result?: unknown; isError?: boolean }
   | { type: "message_end"; message?: { role?: string; stopReason?: string; errorMessage?: string; usage?: unknown } };
 
 export interface SpawnPanelistOptions {
