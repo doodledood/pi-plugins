@@ -80,6 +80,14 @@ _Avoid_: Fact-checker, reviewer agent.
 The investigation-log entry (heading contains `PRE-READ CHECKPOINT`) a watched figure-out driver appends before naming its read; the watcher always answers it with an explicit verdict interject, and in autonomous runs the driver blocks on that verdict.
 _Avoid_: Gate tool (deleted design), sign-off.
 
+**Panel**:
+A planned user-triggered consultation mode: `/panel <question>` forks the current conversation to several independently-running models in parallel, blocks the main chat, then returns their answers to the main model as attributed hints before it responds.
+_Avoid_: Ensemble, companions, council (earlier candidate names); consult.
+
+**Panelist**:
+One member model of a Panel, running agentically over its own fork of the conversation with a chosen effort level, read-only toward the working tree (scratch writes go to temp dirs) unless the user's message explicitly grants writes.
+_Avoid_: Companion, advisor (advisor_consult is a different, dispatcher-briefed mechanism).
+
 **Tool-row glyph**:
 The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
 _Avoid_: Dot thingy.
@@ -132,6 +140,8 @@ _Avoid_: Terminal goal when resumability matters.
 
 - A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.
 
+- A **Panelist** answers the user's question *before* the main model does, so on the current question it is unanchored by the main model's take; the main model is the last mover, synthesizing with all **Panel** answers in hand.
+- A **Panel** injects each **Panelist**'s final answer verbatim and attributed into the main session — never their tool transcripts, which stay viewable in the UI.
 - The **Goal controller** publishes **Goal footer** state through Pi extension status APIs; the statusline renderer consumes that state but remains a separate surface.
 - A **Live goal** blocks new goal starts; a **Stopped goal** can be superseded by a new **Goal controller** goal.
 - A **Completed goal** is not a **Live goal**; resuming it returns the same goal record to active work while historical checker verdicts remain audit history.

@@ -1,0 +1,9 @@
+{
+  "panelists": [
+    { "model": "anthropic/claude-fable-5", "thinking": "xhigh" },
+    { "model": "openai/gpt-5.6-sol", "thinking": "xhigh" }
+  ],
+  "preselected": [0, 1],
+  "inspectKeybinding": "ctrl+p",
+  "timeoutMs": 900000
+}

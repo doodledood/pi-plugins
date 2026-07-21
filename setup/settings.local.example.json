@@ -23,6 +23,7 @@
     "npm:pi-web-access",
     "npm:@amaster.ai/pi-image-gen",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/advisor-consult",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/panel",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/btw",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/context-breakdown",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/goal-controller",

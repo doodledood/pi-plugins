@@ -1,0 +1,54 @@
+{
+  "name": "@doodledood/pi-panel",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi /panel: user-triggered parallel consultation of independent models over a fork of the live conversation, with attributed answers returned to the main model.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/panel/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/panel/*.test.ts",
+    "smoke": "tsx extensions/panel/smoke.ts",
+    "smoke:cancel": "tsx extensions/panel/smoke-cancel.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/panel"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/panel#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

@@ -276,6 +276,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; the portable setup defines Sol as a 372K/1.05M dual-window alias and Luna as a 1.05M/1.05M alias.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
+- `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
 - `simple-statusline` — compact Pi footer/statusline.
 - `skill-argument-hints` — argument hints for skill commands.
 - `tool-activity-renderer` — compact rendering wrappers for built-in tools.
