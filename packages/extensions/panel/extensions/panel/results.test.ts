@@ -61,6 +61,22 @@ test("a failed panelist enters context as an explicit no-answer note", () => {
   assert.match(plan.messages[1]?.content ?? "", /not.*a signal either way/i);
 });
 
+test("provider content-screening refusals are summarized with actionable guidance, not dumped raw", () => {
+  const blocked: PanelistResult = {
+    ...failedResult,
+    error:
+      "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals...",
+  };
+  const plan = buildInjectionPlan("q", [blocked]);
+  const content = plan.messages[1]?.content ?? "";
+  assert.match(content, /content screening blocked the request at the account\/model level/);
+  assert.match(content, /try a different model for this panelist or retry later/);
+  assert.ok(!content.includes("anthropic.com/legal"), "raw legalese stays out of context");
+  // Ordinary errors pass through untouched.
+  const ordinary = buildInjectionPlan("q", [failedResult]);
+  assert.match(ordinary.messages[1]?.content ?? "", /context window exceeded/);
+});
+
 test("the last message carries the turn trigger", () => {
   const plan = buildInjectionPlan("q", [okResult, failedResult]);
   assert.equal(plan.messages.length, 3);

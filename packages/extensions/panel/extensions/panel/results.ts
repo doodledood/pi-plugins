@@ -29,6 +29,21 @@ export interface InjectedEntry {
   data: Record<string, unknown>;
 }
 
+/**
+ * Provider-side content-screening refusals (e.g. Anthropic's "reverse
+ * engineering or duplicating model outputs" ToS block) are account/model-level
+ * screening decisions, not answers to the question — raw refusal text is a
+ * confusing wall of legalese, so it is summarized with actionable guidance.
+ * Observed live: a key can get a sticky per-model flag (fable) while other
+ * models on the same key (haiku, sonnet) keep working.
+ */
+export function humanizePanelistError(error: string): string {
+  if (/terms of service|reverse engineering or duplicating model outputs/i.test(error)) {
+    return "the provider's content screening blocked the request at the account/model level (this is about the API key × model combination, not your question — other models on the same key usually still work; try a different model for this panelist or retry later)";
+  }
+  return error;
+}
+
 export interface InjectionPlan {
   /** Context-participating custom messages, in send order. */
   messages: InjectedMessage[];
@@ -57,7 +72,12 @@ export function buildInjectionPlan(question: string, results: readonly PanelistR
       customType: ANSWER_MESSAGE_TYPE,
       content: result.ok
         ? panelistAnswerMessage(result.spec.model, result.spec.thinking, result.answer ?? "")
-        : panelistFailureMessage(result.spec.model, result.spec.thinking, result.error ?? "unknown error", result.cancelled ?? false),
+        : panelistFailureMessage(
+            result.spec.model,
+            result.spec.thinking,
+            humanizePanelistError(result.error ?? "unknown error"),
+            result.cancelled ?? false,
+          ),
       display: true,
       details: {
         model: result.spec.model,

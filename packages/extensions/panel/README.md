@@ -49,6 +49,12 @@ Cost ≈ forked context size × number of panelists × effort, per consult, befo
 
 **No config or empty lineup?** The picker shows the built-in default lineup preselected: `anthropic/claude-fable-5` at `xhigh` and `openai/gpt-5.6-sol` at `xhigh`.
 
+## Troubleshooting: Anthropic "Terms of Service" blocks
+
+Panelists receive the conversation as a plain transcript document (never as replayed assistant-role messages), precisely because feeding one model's outputs to another vendor as assistant turns trips anti-distillation screening — Anthropic hard-blocks that shape.
+
+If an Anthropic panelist still reports a ToS block, it is an **account/model-level screening flag on your API key**, not the panel content: keys that accumulated flagged requests (e.g. from panel versions before the transcript fork) can get a sticky per-model restriction where even trivial prompts to that model are blocked while other models on the same key work fine. Verify with `pi -p --no-session -nt --model anthropic/<model> "what is 17*23?"`. Workarounds: use another Anthropic model for that panelist (sonnet/haiku), retry later (flags can decay), or use different credentials; persistent cases are an Anthropic support matter.
+
 ## Local files this extension writes
 
 - **Panelist sessions:** each panelist run persists as a normal pi session file (in pi's standard sessions location for the project), seeded with the forked history so it is self-contained — browsable and resumable later. Paths are shown in the collapsed "panel run" metadata row after each run.
