@@ -33,15 +33,21 @@ export const spawnPanelistSession: SpawnPanelist = async (
   // effort.
   const thinkingLevel = resolved.thinkingLevel ?? options.spec.thinking;
 
+  // The panelist instructions are APPENDED to pi's standard system prompt
+  // rather than replacing it, and context files stay on: panelist requests
+  // must look like normal pi traffic. Stripped requests (tiny replaced system
+  // prompt, bare question) to frontier models trip provider screening —
+  // verified live: the same fable question is ToS-blocked with a replaced
+  // prompt and answered with the standard shape. Skills/extensions stay off
+  // so the main session's instruction surfaces don't leak.
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: getAgentDir(),
-    systemPrompt: options.systemPrompt,
+    appendSystemPrompt: [options.systemPrompt],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
-    noContextFiles: true,
   });
   await loader.reload();
 

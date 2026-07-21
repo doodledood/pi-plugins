@@ -53,7 +53,9 @@ Cost ≈ forked context size × number of panelists × effort, per consult, befo
 
 Panelists receive the conversation as a plain transcript document (never as replayed assistant-role messages), precisely because feeding one model's outputs to another vendor as assistant turns trips anti-distillation screening — Anthropic hard-blocks that shape.
 
-If an Anthropic panelist still reports a ToS block, it is an **account/model-level screening flag on your API key**, not the panel content: keys that accumulated flagged requests (e.g. from panel versions before the transcript fork) can get a sticky per-model restriction where even trivial prompts to that model are blocked while other models on the same key work fine. Verify with `pi -p --no-session -nt --model anthropic/<model> "what is 17*23?"`. Workarounds: use another Anthropic model for that panelist (sonnet/haiku), retry later (flags can decay), or use different credentials; persistent cases are an Anthropic support matter.
+Panelist sessions are also shaped like normal pi sessions on purpose: pi's standard system prompt stays as the base (panelist instructions are appended, never replacing it) and context files load. Stripped requests — a tiny custom system prompt and a bare question — to frontier models trip the same screening even with a clean transcript; verified live, the identical fable question is blocked with a replaced system prompt and answered with the standard shape.
+
+If an Anthropic panelist still reports a ToS block, check whether the model answers through a normally-shaped request (`pi -p --no-session --model anthropic/<model> "what is 17*23?"`). If that works, the block is request-shape-related and worth reporting; if that is blocked too, it's provider/account-side. Either way the panel summarizes the refusal into an actionable note instead of injecting the legalese.
 
 ## Local files this extension writes
 

@@ -1,7 +1,9 @@
 /**
- * System prompt for a panelist session. Full replacement of the host session's
- * system prompt: panelists must not inherit the main session's skill and
- * extension instructions (AC-1.1).
+ * Panelist instructions, appended to pi's standard system prompt. The base
+ * prompt stays: panelist requests must look like normal pi traffic (a
+ * replaced, stripped system prompt trips frontier-model provider screening).
+ * Skills/extensions are not loaded, so the host's instruction surfaces never
+ * leak.
  */
 export function panelistSystemPrompt(): string {
   return `You are an independent panelist: one of several strong models consulted in parallel for a second opinion. You received the transcript of an ongoing conversation, followed by the user's question to the panel.

@@ -91,6 +91,7 @@ export type PanelistSessionEvent =
 
 export interface SpawnPanelistOptions {
   spec: PanelistSpec;
+  /** Panelist instructions, appended to pi's standard system prompt (never replacing it). */
   systemPrompt: string;
   forkMessages: AgentMessage[];
   cwd: string;
