@@ -369,7 +369,7 @@ export class BtwOverlay implements Component, Focusable {
   private readonly childStatuses = new Map<string, string>();
   private _focused = false;
   private phase: OverlayPhase = "opening";
-  private phaseMessage = "Forking the last complete parent context…";
+  private phaseMessage = "Forking the parent's latest state…";
   private parentRunning = false;
   private childRunning = false;
   private childSession: AgentSession | undefined;
@@ -751,7 +751,7 @@ export class BtwOverlay implements Component, Focusable {
       ? Math.max(0, renderedEditorLines.length - editorBudget)
       : Math.max(0, Math.min(cursorLine, renderedEditorLines.length - editorBudget));
     const editorLines = renderedEditorLines.slice(editorStart, editorStart + editorBudget);
-    const fixedLines = 9 + editorLines.length;
+    const fixedLines = 8 + editorLines.length;
     const transcriptViewport = shortLayout ? 0 : Math.max(1, targetHeight - fixedLines);
     this.lastTranscriptViewport = transcriptViewport;
 
@@ -800,11 +800,6 @@ export class BtwOverlay implements Component, Focusable {
     const visibleTranscript = allTranscriptLines.slice(start, start + transcriptViewport);
     while (visibleTranscript.length < transcriptViewport) visibleTranscript.unshift("");
 
-    const scrollLabel = this.lastMaxScroll === 0
-      ? ""
-      : this.scrollFromBottom === 0
-        ? "TAIL"
-        : `${this.scrollFromBottom}↑`;
     const extensionStatus = [...this.childStatuses.values()].at(-1);
     const phaseLine = extensionStatus ? `${this.phaseMessage} · ${extensionStatus}` : this.phaseMessage;
 
@@ -817,9 +812,17 @@ export class BtwOverlay implements Component, Focusable {
       lines.push(framed(this.theme, ` ${focusLabel} ${this.theme.fg("dim", `· ${phaseLine}`)}`, panelWidth, borderColor));
       lines.push(dimBorder("├") + dimBorder("─".repeat(innerWidth)) + dimBorder("┤"));
       for (const line of visibleTranscript) lines.push(framed(this.theme, ` ${line}`, panelWidth, borderColor));
-      const transcriptRule = ` transcript ${scrollLabel}`;
-      lines.push(dimBorder("├") + this.theme.fg("dim", truncateToWidth(transcriptRule, innerWidth, "").padEnd(innerWidth, "─")) + dimBorder("┤"));
-      lines.push(framed(this.theme, ` ${this.theme.fg("muted", "MESSAGE")}`, panelWidth, borderColor));
+      if (this.scrollFromBottom > 0) {
+        const scrollHint = ` ↑ ${this.scrollFromBottom} older · PgDn latest `;
+        const hintWidth = Math.min(innerWidth - 2, visibleWidth(scrollHint));
+        lines.push(
+          dimBorder("├─") +
+          this.theme.fg("dim", truncateToWidth(scrollHint, hintWidth, "")) +
+          dimBorder("─".repeat(Math.max(0, innerWidth - hintWidth - 1)) + "┤"),
+        );
+      } else {
+        lines.push(dimBorder("├") + dimBorder("─".repeat(innerWidth)) + dimBorder("┤"));
+      }
     }
     for (const line of editorLines) lines.push(framed(this.theme, ` ${line}`, panelWidth, borderColor));
     if (shortLayout) {

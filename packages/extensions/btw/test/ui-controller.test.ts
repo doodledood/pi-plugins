@@ -186,7 +186,8 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
     assert.match(screen, /stays isolated/);
     assert.match(screen, /read/);
     assert.match(screen, /context compacted/);
-    assert.match(screen, /MESSAGE/);
+    assert.doesNotMatch(screen, /MESSAGE/, "no stray section label above the editor");
+    assert.doesNotMatch(screen, /transcript/, "no labeled transcript rule");
     assert.match(screen, /Wheel\/PgUp\/PgDn scroll/);
     assert.match(screen, /click in\/out focus/);
     assert.match(screen, /\/main unfocus/);
@@ -444,9 +445,9 @@ test("overlay keyboard scroll and escape distinguish active abort from idle /mai
   for (let index = 0; index < 30; index += 1) overlay.addNotice(`line ${index}`);
   overlay.render(60);
   overlay.scrollBy(3);
-  assert.match(overlay.render(60).join("\n"), /3↑/, "public wheel seam scrolls by the requested lines");
+  assert.match(overlay.render(60).join("\n"), /↑ 3 older · PgDn latest/, "public wheel seam scrolls by the requested lines");
   overlay.scrollBy(-3);
-  assert.match(overlay.render(60).join("\n"), /TAIL/, "negative deltas return toward the transcript tail");
+  assert.doesNotMatch(overlay.render(60).join("\n"), /older · PgDn latest/, "negative deltas return toward the transcript tail");
   overlay.handleInput("\x1b[5~");
   assert.match(overlay.render(60).join("\n"), /↑/);
   overlay.handleInput("\x1b");
@@ -759,18 +760,18 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
 
   const focusesBeforeWheel = harness.focusCount();
   assert.deepEqual(harness.emitTerminalInput("\x1b[<64;63;2M"), { consume: true });
-  assert.match(harness.render().join("\n"), /3↑/, "inside focused wheel-up scrolls the actual overlay by three lines");
+  assert.match(harness.render().join("\n"), /↑ 3 older · PgDn latest/, "inside focused wheel-up scrolls the actual overlay by three lines");
   assert.equal(harness.focusCount(), focusesBeforeWheel, "wheel input does not refocus BTW");
   assert.equal(harness.unfocusCount(), 0, "wheel input does not unfocus BTW");
   assert.deepEqual(harness.emitTerminalInput("\x1b[<65;63;2M"), { consume: true });
-  assert.match(harness.render().join("\n"), /TAIL/, "inside focused wheel-down returns toward the tail");
+  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "inside focused wheel-down returns toward the tail");
 
   assert.deepEqual(harness.emitTerminalInput("\x1b[<64;62;2M"), { consume: true });
-  assert.match(harness.render().join("\n"), /TAIL/, "outside wheel input is consumed without scrolling");
+  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "outside wheel input is consumed without scrolling");
   assert.deepEqual(harness.emitTerminalInput("\x1b[<0;62;2M"), { consume: true });
   assert.equal(harness.unfocusCount(), 1, "outside click returns focus to the main editor");
   assert.deepEqual(harness.emitTerminalInput("\x1b[<64;63;2M"), { consume: true });
-  assert.match(harness.render().join("\n"), /TAIL/, "unfocused wheel input is consumed without scrolling BTW");
+  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "unfocused wheel input is consumed without scrolling BTW");
   assert.equal(harness.unfocusCount(), 1, "wheel input never changes focus");
 
   const firstClose = controller.close();
