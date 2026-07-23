@@ -329,7 +329,7 @@ Theme-only example:
 }
 ```
 
-Do not rely on undocumented Git subdirectory install syntax. Examples track `@main` so installs follow the latest version. Pin release tags only when intentionally using a frozen snapshot.
+Do not rely on undocumented Git subdirectory install syntax. Examples track `@main` so installs follow the latest version. Pin a specific commit only when intentionally using a frozen snapshot.
 
 ## Security
 

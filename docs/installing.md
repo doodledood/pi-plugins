@@ -63,7 +63,7 @@ The BTW example uses the package-root `index.ts` entry declared by `@doodledood/
 
 Do not rely on undocumented Git subdirectory install syntax.
 
-The examples track the `@main` branch so `pi update --extensions` always reconciles to the latest version. Pin a release tag (`@vX.Y.Z`, auto-created on every version bump) only when you intentionally want a frozen snapshot.
+The examples track the `@main` branch so `pi update --extensions` always reconciles to the latest version. Pin a specific commit (or one of the old historical `@vX.Y.Z` tags) only when you intentionally want a frozen snapshot.
 
 ## Install one local package after cloning
 

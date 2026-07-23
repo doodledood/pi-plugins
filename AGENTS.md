@@ -22,9 +22,8 @@ If an extension starts reading or writing local files, env vars, credentials, br
 
 ## Version and install-ref policy
 
-Pi clients install this repo via a Git source tracking the `main` branch (`git:github.com/doodledood/pi-plugins@main`), so installs and `pi update --extensions` always follow the latest version — no doc reference needs to move on release. Release tags still exist as frozen snapshots for anyone who wants to pin.
+Pi clients install this repo via a Git source tracking the `main` branch (`git:github.com/doodledood/pi-plugins@main`), so installs and `pi update --extensions` always follow the latest version — no doc reference needs to move on release. Tags are not published for new versions; a few old `vX.Y.Z` tags remain as frozen historical snapshots.
 
 - All install snippets in docs (`README.md`, `docs/installing.md`, package READMEs, setup templates) reference `@main`. Do not reintroduce `@vX.Y.Z` pins into install examples.
 - Any change under `packages/**` must still bump the root `package.json` `version` (and the affected package's own `version`) in the same change. Bump minor for new features, patch for fixes, per semver — versions remain the release history and npm-publish metadata.
-- `.github/workflows/tag-release.yml` runs on every push to `main`: it walks the root `package.json` version history and pushes a matching `vX.Y.Z` tag (plus a GitHub release) for any version that doesn't have one yet. It backfills gaps automatically, so never hand-create a release tag — just bump the version and let it merge.
 - `.github/workflows/version-bump-check.yml` fails PRs that touch `packages/**` without bumping the root version, so this can't regress silently.
