@@ -4,7 +4,7 @@ A `/btw` side conversation for Pi. BTW opens one ephemeral child `AgentSession` 
 
 BTW requires Pi 0.80.6 or newer and its interactive TUI. It refuses to register under an older Pi host with an actionable compatibility error, because prompt cancellation depends on Pi's `preflightResult` behavior (introduced in 0.80.6). It does not open in RPC, JSON, or print mode.
 
-The child starts from the parent's latest complete, compaction-aware active branch and inherits its model, thinking level, working directory, and best-effort active tool set. Parent and child histories remain separate, but they intentionally share the same project workspace.
+The child forks in place: it starts from the parent's latest persisted, compaction-aware state at the moment you open it — including tool calls of a parent turn that is still running — trimmed only when the branch ends in a tool call whose result has not landed yet. Content the parent is still streaming is not persisted anywhere and cannot be forked. The child is told it may have been forked mid-work and to address your messages rather than continue the parent's unfinished task. It inherits the parent's model, thinking level, working directory, and best-effort active tool set. Parent and child histories remain separate, but they intentionally share the same project workspace.
 
 ## Use
 
@@ -32,7 +32,7 @@ The overlay presents separate parent/child activity, streaming output, tool prog
 
 ## Parent updates
 
-The child does not continuously synchronize parent content after its fork. When the parent settles at a newer completed head, BTW adds a minimal hidden notice to the child that the child-only `check_parent_updates` tool is available. The child can explicitly pull completed parent updates when a later answer depends on them.
+The child does not continuously synchronize parent content after its fork. When the parent settles at a newer head, BTW adds a minimal hidden notice to the child that the child-only `check_parent_updates` tool is available. The child can explicitly pull the parent entries persisted since the fork when a later answer depends on them.
 
 The tool reports no-op, linear-update, post-compaction, or branch-divergence state; normalizes and bounds returned content; records the pull only in child history; and never mutates parent history.
 

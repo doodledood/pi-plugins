@@ -11,7 +11,7 @@ import {
   type ExtensionContext,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { selectCompletedBranch, snapshotParent, type ForkSnapshot } from "../src/fork.ts";
+import { selectForkBranch, snapshotParent, type ForkSnapshot } from "../src/fork.ts";
 import {
   CHECK_PARENT_UPDATES_TOOL,
   filterBtwExtensions,
@@ -116,7 +116,7 @@ function snapshot(entries: SessionEntry[]): ForkSnapshot {
   };
 }
 
-test("completed branch includes idle trailing custom context but excludes active-turn custom context", () => {
+test("fork branch keeps trailing custom context whether the parent is idle or active", () => {
   const completed: SessionEntry[] = [
     user("01", null, "complete"),
     assistant("02", "01", "done"),
@@ -131,8 +131,8 @@ test("completed branch includes idle trailing custom context but excludes active
     },
   ];
 
-  assert.deepEqual(selectCompletedBranch(completed, true).map((item) => item.id), ["01", "02", "03"]);
-  assert.deepEqual(selectCompletedBranch(completed, false).map((item) => item.id), ["01", "02"]);
+  assert.deepEqual(selectForkBranch(completed, true).map((item) => item.id), ["01", "02", "03"]);
+  assert.deepEqual(selectForkBranch(completed, false).map((item) => item.id), ["01", "02", "03"]);
 
   const context = (isIdle: boolean) => ({
     cwd: "/tmp/btw-workspace",
@@ -151,12 +151,12 @@ test("completed branch includes idle trailing custom context but excludes active
   );
   assert.deepEqual(
     snapshotParent(context(false), model, "high", ["read"]).entryIds,
-    ["01", "02"],
-    "snapshot excludes custom context that may belong to the active incomplete turn",
+    ["01", "02", "03"],
+    "snapshot forks in place: persisted context is kept even while the parent is active",
   );
 });
 
-test("idle completed branch retains a terminating assistant/tool-result batch", () => {
+test("fork branch retains a resolved assistant/tool-result batch idle or active", () => {
   const toolUse = assistant("03", "02", "", "toolUse") as Extract<SessionEntry, { type: "message" }>;
   if (toolUse.message.role !== "assistant") assert.fail("expected assistant fixture");
   toolUse.message.content = [{
@@ -177,40 +177,103 @@ test("idle completed branch retains a terminating assistant/tool-result batch", 
   const entries = [user("01", null, "finish"), assistant("02", "01", "working"), toolUse, toolResult];
 
   assert.deepEqual(
-    selectCompletedBranch(entries, true).map((item) => item.id),
+    selectForkBranch(entries, true).map((item) => item.id),
     ["01", "02", "03", "04"],
     "idle means Pi has no model continuation after the terminating tool result",
   );
   assert.deepEqual(
-    selectCompletedBranch(entries, false).map((item) => item.id),
-    ["01", "02"],
-    "the identical persisted batch remains partial while the parent is active",
+    selectForkBranch(entries, false).map((item) => item.id),
+    ["01", "02", "03", "04"],
+    "a resolved tool batch is a valid fork point even while the parent is active",
   );
 });
 
-test("completed branch excludes a trailing incomplete assistant/tool batch", () => {
+function toolUseAssistant(id: string, parentId: string, calls: Array<{ id: string; name?: string }>): SessionEntry {
+  const base = assistant(id, parentId, "", "toolUse") as Extract<SessionEntry, { type: "message" }>;
+  if (base.message.role !== "assistant") assert.fail("expected assistant fixture");
+  base.message.content = calls.map((call) => ({
+    type: "toolCall",
+    id: call.id,
+    name: call.name ?? "read",
+    arguments: { path: "x" },
+  }));
+  return base;
+}
+
+function toolResultEntry(id: string, parentId: string, toolCallId: string): SessionEntry {
+  return entry(id, parentId, {
+    role: "toolResult",
+    toolCallId,
+    toolName: "read",
+    content: [{ type: "text", text: `result ${toolCallId}` }],
+    isError: false,
+    timestamp: 3,
+  });
+}
+
+test("mid-turn fork keeps every persisted entry through the last complete tool-result batch", () => {
   const entries: SessionEntry[] = [
-    user("01", null, "complete"),
-    assistant("02", "01", "done"),
-    user("03", "02", "in progress"),
-    {
-      ...assistant("04", "03", "", "toolUse"),
-      message: {
-        ...(assistant("04", "03", "", "toolUse") as Extract<SessionEntry, { type: "message" }>).message,
-        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "x" } }],
-      },
-    } as SessionEntry,
-    entry("05", "04", {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: "partial batch" }],
-      isError: false,
-      timestamp: 3,
-    }),
+    user("01", null, "long running task"),
+    toolUseAssistant("02", "01", [{ id: "call-1" }]),
+    toolResultEntry("03", "02", "call-1"),
+    toolUseAssistant("04", "03", [{ id: "call-2" }]),
+    toolResultEntry("05", "04", "call-2"),
   ];
 
-  assert.deepEqual(selectCompletedBranch(entries).map((item) => item.id), ["01", "02"]);
+  assert.deepEqual(
+    selectForkBranch(entries, false).map((item) => item.id),
+    ["01", "02", "03", "04", "05"],
+    "an open turn's persisted tool rounds are all part of the fork",
+  );
+});
+
+test("fork branch trims only a dangling tool-use assistant and anything after it", () => {
+  const dangling: SessionEntry[] = [
+    user("01", null, "task"),
+    toolUseAssistant("02", "01", [{ id: "call-1" }]),
+    toolResultEntry("03", "02", "call-1"),
+    toolUseAssistant("04", "03", [{ id: "call-2" }, { id: "call-3" }]),
+    toolResultEntry("05", "04", "call-2"),
+  ];
+  assert.deepEqual(
+    selectForkBranch(dangling, false).map((item) => item.id),
+    ["01", "02", "03"],
+    "an assistant with unresolved tool calls is dropped along with its partial results",
+  );
+
+  const endsWithUser: SessionEntry[] = [
+    user("01", null, "first"),
+    assistant("02", "01", "done"),
+    user("03", "02", "queued follow-up"),
+  ];
+  assert.deepEqual(
+    selectForkBranch(endsWithUser, false).map((item) => item.id),
+    ["01", "02", "03"],
+    "a branch ending in a user message is kept whole",
+  );
+
+  const endsWithTerminalAssistant: SessionEntry[] = [
+    user("01", null, "first"),
+    assistant("02", "01", "done"),
+  ];
+  assert.deepEqual(
+    selectForkBranch(endsWithTerminalAssistant, false).map((item) => item.id),
+    ["01", "02"],
+    "a branch ending in a terminal assistant is kept whole",
+  );
+
+  const trailingNonMessage: SessionEntry[] = [
+    user("01", null, "first"),
+    toolUseAssistant("02", "01", [{ id: "call-1" }]),
+    toolResultEntry("03", "02", "call-1"),
+    customMessage("04", "03", "queued context"),
+    modelEntry("05", "04"),
+  ];
+  assert.deepEqual(
+    selectForkBranch(trailingNonMessage, false).map((item) => item.id),
+    ["01", "02", "03", "04", "05"],
+    "trailing non-message entries after a resolved batch are kept whole",
+  );
 });
 
 test("serialized fork restores Pi's compaction-aware context", async () => {
@@ -284,11 +347,38 @@ test("parent updates are explicit: idle custom context participates in no-op and
 
   parentIdle = false;
   branch = [...branch, customMessage("05", "04", "active pending context")];
-  assert.equal(tracker.pull(manager).status, "no_updates", "active trailing context is not exposed early");
+  const active = tracker.pull(manager);
+  assert.equal(active.status, "updates", "persisted trailing context is pullable even while the parent is active");
+  assert.match(active.text, /active pending context/);
   parentIdle = true;
-  const settled = tracker.pull(manager);
-  assert.equal(settled.status, "updates");
-  assert.match(settled.text, /active pending context/);
+  assert.equal(tracker.pull(manager).status, "no_updates");
+});
+
+test("mid-turn fork prefix reads as linear updates once the parent turn completes", () => {
+  const forkPrefix: SessionEntry[] = [
+    user("01", null, "long task"),
+    toolUseAssistant("02", "01", [{ id: "call-1" }]),
+    toolResultEntry("03", "02", "call-1"),
+  ];
+  let branch = [...forkPrefix];
+  let parentIdle = false;
+  const tracker = new ParentUpdateTracker(forkPrefix.map((item) => item.id), {}, () => parentIdle);
+  const manager = managerFor(() => branch);
+
+  assert.equal(tracker.pull(manager).status, "no_updates", "the fork prefix alone is not an update");
+
+  branch = [
+    ...branch,
+    toolUseAssistant("04", "03", [{ id: "call-2" }]),
+    toolResultEntry("05", "04", "call-2"),
+    assistant("06", "05", "turn finished"),
+  ];
+  parentIdle = true;
+  const completed = tracker.pull(manager);
+  assert.equal(completed.status, "updates", "turn completion after a mid-turn fork is linear, not divergence");
+  assert.equal(completed.details.updateCount, 3, "only entries after the fork prefix are delivered");
+  assert.match(completed.text, /turn finished/);
+  assert.equal(tracker.pull(manager).status, "no_updates");
 });
 
 test("parent update pull reports post-compaction context", () => {

@@ -17,7 +17,7 @@ import {
 
 const testModelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
 const inMemoryRegistry = () => new ModelRegistry(testModelRuntime);
-import { selectCompletedBranch, type ForkSnapshot } from "../src/fork.ts";
+import { selectForkBranch, type ForkSnapshot } from "../src/fork.ts";
 import {
   CHECK_PARENT_UPDATES_TOOL,
   createChildRuntime,
@@ -266,9 +266,10 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
 
     const childEntriesBefore = child.session.sessionManager.getEntries();
     parentIdle = false;
-    parent.appendMessage({ role: "user", content: "incomplete parent turn", timestamp: 3 });
-    assert.equal(await child.announceParentUpdate(), false, "an incomplete active turn cannot advance the completed head");
-    assert.deepEqual(child.session.sessionManager.getEntries(), childEntriesBefore);
+    const midTurnHead = parent.appendMessage({ role: "user", content: "incomplete parent turn", timestamp: 3 });
+    assert.equal(await child.announceParentUpdate(), true, "a persisted mid-turn user message advances the fork head");
+    assert.equal(await child.announceParentUpdate(), false, "the same mid-turn head is announced once");
+    assert.notDeepEqual(child.session.sessionManager.getEntries(), childEntriesBefore, "the announcement is recorded in the child session");
 
     const firstNewHead = parent.appendMessage({
       role: "assistant",
@@ -328,6 +329,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
         ? (entry.details as { parentHeadId?: unknown } | undefined)?.parentHeadId
         : undefined,
     })), [
+      { content: PARENT_UPDATE_AVAILABLE_MESSAGE, display: false, parentHeadId: midTurnHead },
       { content: PARENT_UPDATE_AVAILABLE_MESSAGE, display: false, parentHeadId: firstNewHead },
       { content: PARENT_UPDATE_AVAILABLE_MESSAGE, display: false, parentHeadId: secondNewHead },
     ]);
@@ -565,9 +567,9 @@ test("deterministic child turn streams without touching parent history", async (
       true,
     );
     assert.deepEqual(
-      selectCompletedBranch(terminatingBranch, child.session.isIdle).map((entry) => entry.id),
+      selectForkBranch(terminatingBranch, child.session.isIdle).map((entry) => entry.id),
       terminatingBranch.map((entry) => entry.id),
-      "a real idle terminating batch is entirely completed",
+      "a real idle terminating batch is entirely part of the fork",
     );
 
     const rapidFirst = child.prompt("rapid first");

@@ -334,6 +334,112 @@ function parentSnapshotContext(
   } as unknown as ExtensionCommandContext;
 }
 
+test("a mid-turn fork yields a usable child session and announces the turn's completion once", { timeout: 10_000 }, async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "btw-midturn-workspace-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "btw-midturn-agent-"));
+  let child: ChildRuntimeHandle | undefined;
+  let registry: ModelRegistry | undefined;
+
+  try {
+    const parentManager = SessionManager.inMemory(workspace);
+    let parentIdle = false;
+    parentManager.appendMessage({ role: "user", content: "long parent task", timestamp: 1 });
+    parentManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "x" } }],
+      api: API,
+      provider: PROVIDER,
+      model: MODEL_ID,
+      usage,
+      stopReason: "toolUse",
+      timestamp: 2,
+    });
+    const lastForkEntryId = parentManager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: "MID-TURN TOOL OUTPUT: beta-7" }],
+      isError: false,
+      timestamp: 3,
+    });
+
+    const snapshot = snapshotParent(
+      {
+        cwd: workspace,
+        sessionManager: parentManager,
+        isIdle: () => parentIdle,
+        isProjectTrusted: () => true,
+        getSystemPromptOptions: () => ({ cwd: workspace }),
+      } as unknown as ExtensionCommandContext,
+      model,
+      "off",
+      [],
+    );
+    assert.equal(snapshot.forkLeafId, lastForkEntryId, "the fork reaches the last persisted tool result of the open turn");
+    assert.equal(snapshot.entries.length, 3, "the open turn's persisted entries are all forked");
+
+    const settingsManager = SettingsManager.create(workspace, agentDir);
+    settingsManager.setProjectTrusted(true);
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify(PROVIDER, async () => ({ type: "api_key", key: "deterministic-test-key" }));
+    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    registry = new ModelRegistry(modelRuntime);
+
+    child = await createChildRuntime({
+      snapshot,
+      parentSessionManager: parentManager,
+      parentIsIdle: () => parentIdle,
+      parentUI: { theme: {} } as ExtensionUIContext,
+      parentModelRegistry: registry,
+      modelRuntime,
+      agentDir,
+      callbacks: {
+        onEvent() {},
+        onNotice() {},
+        onChildStatus() {},
+        onRequestClose() {},
+      },
+    });
+
+    // Session construction resets Pi's compatibility provider registry; install
+    // the deterministic echo stream only after the child session exists.
+    registry.registerProvider(PROVIDER, {
+      api: API,
+      streamSimple: (selectedModel, context) => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => pushText(stream, selectedModel, `MID-TURN CHILD REPLY: ${latestUserText(context)}`));
+        return stream;
+      },
+    });
+
+    const forkContext = child.session.sessionManager.buildSessionContext();
+    assert.deepEqual(
+      forkContext.messages.map((message) => message.role),
+      ["user", "assistant", "toolResult"],
+      "the mid-turn tool round is part of the child's context",
+    );
+
+    await child.prompt("what does beta-7 mean?");
+    assert.match(
+      child.session.getLastAssistantText() ?? "",
+      /MID-TURN CHILD REPLY: what does beta-7 mean\?/,
+      "a child forked mid-turn processes prompts without session or serialization errors",
+    );
+
+    assert.equal(await child.announceParentUpdate(), false, "the fork prefix alone is never announced");
+
+    parentManager.appendMessage(assistantMessage("parent turn finished", 4));
+    parentIdle = true;
+    assert.equal(await child.announceParentUpdate(), true, "the completion of the mid-flight turn is announced");
+    assert.equal(await child.announceParentUpdate(), false, "the completed head is announced only once");
+  } finally {
+    if (child) await child.close();
+    registry?.unregisterProvider(PROVIDER);
+    await rm(agentDir, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("parent and BTW child overlap, mutate files, pull updates, isolate history, and clean up", { timeout: 10_000 }, async () => {
   const workspace = await mkdtemp(join(tmpdir(), "btw-integration-workspace-"));
   const agentDir = await mkdtemp(join(tmpdir(), "btw-integration-agent-"));

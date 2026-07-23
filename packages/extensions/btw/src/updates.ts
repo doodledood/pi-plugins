@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 type ReadonlyParentSessionManager = ExtensionContext["sessionManager"];
-import { selectCompletedBranch } from "./fork.ts";
+import { selectForkBranch } from "./fork.ts";
 
 const DEFAULT_MAX_ENTRIES = 16;
 const DEFAULT_MAX_CHARS = 12_000;
@@ -222,10 +222,10 @@ export class ParentUpdateTracker {
   pull(parent: ReadonlyParentSessionManager): ParentUpdateResult {
     const rawBranch = parent.getBranch();
     const parentIdle = this.parentIsIdle();
-    let branch = selectCompletedBranch(rawBranch, parentIdle);
-    // An active selector may conservatively hide trailing custom context that
-    // was already observed during an earlier idle pull. Preserve that known
-    // prefix so a newly pending custom message cannot look like divergence.
+    let branch = selectForkBranch(rawBranch, parentIdle);
+    // An active selector can trim a dangling tail that an earlier idle pull
+    // already observed as settled. Preserve that known prefix so previously
+    // observed entries cannot look like divergence.
     if (
       !parentIdle &&
       branch.length < this.observedEntryIds.length &&

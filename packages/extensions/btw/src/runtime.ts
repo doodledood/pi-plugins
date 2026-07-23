@@ -20,7 +20,7 @@ import {
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { selectCompletedBranch, type ForkSnapshot } from "./fork.ts";
+import { selectForkBranch, type ForkSnapshot } from "./fork.ts";
 import {
   ChildPromptCoordinator,
   type ParentUpdateAnnouncement,
@@ -32,7 +32,7 @@ export const CHECK_PARENT_UPDATES_TOOL = "check_parent_updates";
 export const PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE = "btw-parent-update-available";
 export const PARENT_UPDATE_AVAILABLE_MESSAGE = "Newer completed parent context is available. Call check_parent_updates when the answer may depend on parent work completed after this BTW fork.";
 
-const CHILD_APPEND_PROMPT = `BTW is an independent side conversation forked from the parent. Its messages never update the parent conversation. You share the parent's working directory and requested active tool names; the parent may modify files concurrently, so verify shared state is current before a conflicting write.`;
+const CHILD_APPEND_PROMPT = `BTW is an independent side conversation forked from the parent, possibly mid-work: the history may end inside an unfinished task the parent is still running. Do not continue that task — treat the prior history as context only and address just what the user asks here. BTW messages never update the parent conversation. You share the parent's working directory and requested active tool names; the parent may modify files concurrently, so verify shared state is current before a conflicting write.`;
 
 export interface ChildRuntimeCallbacks {
   onEvent(event: AgentSessionEvent): void;
@@ -295,7 +295,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
         return coordinator!.prompt(text);
       },
       async announceParentUpdate() {
-        const completedEntries = selectCompletedBranch(
+        const completedEntries = selectForkBranch(
           input.parentSessionManager.getBranch(),
           input.parentIsIdle(),
         );
