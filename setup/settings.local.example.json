@@ -1,8 +1,9 @@
 {
   "defaultProvider": "anthropic",
-  "defaultModel": "claude-fable-5",
-  "defaultThinkingLevel": "medium",
+  "defaultModel": "claude-opus-5",
+  "defaultThinkingLevel": "high",
   "enabledModels": [
+    "anthropic/claude-opus-5:high",
     "anthropic/claude-fable-5:medium",
     "openai/gpt-5.6-sol:xhigh",
     "openai/gpt-5.6-luna:max"
