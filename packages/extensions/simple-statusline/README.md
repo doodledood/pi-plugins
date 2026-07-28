@@ -79,11 +79,12 @@ amount, each provider/model with token counts, why the total is approximate when
 is, how much scanning the last refresh actually did, and what it cannot see at all.
 Every figure uses the same accounting rules, so they can be compared.
 
-Two installed extensions spend money without reporting any usage —
-`pi-web-access` (search-answer synthesis and paid search APIs) and
-`pi-image-gen` — so their spend is unrecoverable from the session and sits
-outside this total. `/cost` names them rather than letting the number read as
-every dollar spent.
+Some paid work reports no usage at all, so nothing in the session records it and no
+total can include it — web-search or source-check answer synthesis, paid search
+APIs, and image generation are the usual cases. `/cost` says so plainly, rather
+than letting the number read as every dollar spent. It describes the class rather
+than naming packages, because which tools you have installed is not something the
+footer can know.
 
 ### Retention
 
