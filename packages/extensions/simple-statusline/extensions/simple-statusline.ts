@@ -231,9 +231,9 @@ function renderExtensionStatuses(width: number, theme: any, row: StatusEntry[]):
 
 /**
  * Split extension statuses between the prominent slot beside the model and the second
- * row. Placement is by width only — short statuses are easier to read inline — and every
- * status a plugin sets lands in exactly one of the two, so nothing announced is dropped.
- * Noisy ambient statuses (MCP loadouts) are useful in /mcp and too loud here.
+ * row. Placement is by width only — short statuses are easier to read inline — and no
+ * status is ever shown in both places. The footer stays quiet by holding at most two
+ * inline and three in the row, and by hiding MCP loadout statuses, which belong in /mcp.
  */
 function partitionStatuses(footerData: any): { inline: StatusEntry[]; row: StatusEntry[] } {
   const statuses: Map<string, string> | undefined = footerData.getExtensionStatuses?.();

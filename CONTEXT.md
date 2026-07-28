@@ -98,7 +98,7 @@ _Avoid_: Usage ledger, cost tracker (both imply a parallel record Pi does not re
 
 **Sidecar child session**:
 A persistent Pi session written under `<parent-session-file-without-.jsonl>/<kind>/` and linked to its parent, so a spawned run's spend and transcript stay discoverable without appearing in the user's normal session list; `tasks/` for subagents is the existing instance of the convention.
-_Avoid_: Sub-session, temp session (a BTW-style deleted-on-close session is precisely what this is not).
+_Avoid_: Sub-session, temp session — a sidecar child session is kept, and deleting one destroys the evidence behind a cost figure.
 
 **Cost record**:
 A durable, context-excluded session entry that carries the usage and cost of a billed call which produces no Pi session of its own, such as a TTL keepalive ping or a speech synthesis call.
