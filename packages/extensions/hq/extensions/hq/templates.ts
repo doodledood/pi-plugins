@@ -34,11 +34,11 @@ cannot be cited as the rule that answers a stop.
 
 ## Doors
 
-- Treat destructive actions, releases and deployments, publishing, production
-  changes, and externally visible acts performed as the user as one-way doors
-  unless the user has already authorized the exact action.
-- Treat reversible local edits, tests, and investigation inside a worker's
-  existing permission envelope as two-way doors.
+- Destructive actions, releases and deployments, publishing, production changes,
+  and externally visible acts performed as the user are one-way doors: escalate
+  them, unless the user has already authorized the exact action.
+- Reversible local edits, tests, and investigation inside a worker's existing
+  permission envelope are two-way doors: let the work carry on without asking.
 
 ## Escalation rules
 

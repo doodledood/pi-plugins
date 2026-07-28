@@ -524,6 +524,9 @@ test("the packet bar rejects placeholders as firmly as blanks", () => {
     "options[0].price",
     "options[1].label",
     "recommendationId",
+    // A recommendation naming no option also breaks its pairing with the shadow
+    // ruling, which is the same call in its graded role.
+    "shadowRuling",
   ]);
 });
 
@@ -562,6 +565,12 @@ test("two options sharing an id keep the packet off the desk", async () => {
           { id: "hold", label: "Ship it now", price: "ships without a green run" },
         ],
         recommendationId: "hold",
+        shadowRuling: {
+          optionId: "hold",
+          text: "wait for CI",
+          rationale: "an hour is cheaper than a revert",
+          doctrineCitations: [],
+        },
       }),
     );
     // A ruling is carried by option id, so a collision would send the user's
@@ -628,6 +637,35 @@ test("the queue is re-derived from disk, so a fresh reader sees the same pending
     const second = makeStore(root);
     assert.deepEqual((await second.listPresentable()).map((p) => p.id), [packet.id]);
     assert.equal(hqPaths(root).queue.startsWith(root), true);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a packet that recommends one option while predicting another is held", async () => {
+  const root = await makeRoot("hq-shadow-split");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const { packet, violations } = await store.createPacket(
+      packetDraftFixture({
+        recommendationId: "retry",
+        shadowRuling: {
+          optionId: "escalate",
+          text: "escalate instead",
+          rationale: "predicting the opposite of the advice on the card",
+          doctrineCitations: [],
+        },
+      }),
+    );
+    // The grade this pairing produces is what earns a domain its authority, so a
+    // packet that advises one option and predicts another would inflate or deflate
+    // the ladder with a disagreement the user never had.
+    assert.equal(packet.status, "held");
+    assert.deepEqual(
+      violations.map((violation) => violation.field),
+      ["shadowRuling"],
+    );
   } finally {
     await dropRoot(root);
   }

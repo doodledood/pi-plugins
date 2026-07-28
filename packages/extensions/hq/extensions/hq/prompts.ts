@@ -19,15 +19,22 @@ Anything you would have to open the session to learn belongs in the packet.
 
 A packet also carries its doctrine citations — the lines the decision rests on, or
 none if no rule covered it — and the ruling the machinery would have made itself
-(the shadow ruling), with the option it picks and why. The shadow ruling is graded
-against what the user decides and never applied; a packet without one is held,
-because there would be nothing for their decision to be graded against.`;
+(the shadow ruling), with the reasoning and the doctrine it leaned on.
+
+The shadow ruling picks the recommended option; those are one decision in two
+roles. The recommendation is the advice the user reads. The shadow ruling is the
+same call recorded as a prediction, graded against what they actually decide and
+never applied — that grade is what earns a domain its authority. Recommending one
+option while predicting another would make the grade meaningless, so a packet whose
+shadow ruling names a different option is held.`;
 
 /** Appended for the two runtimes that *author* packets; the seat only reads them. */
 export const PACKET_AUTHORING = `If you cannot fill a field from what you read, leave it empty rather than writing
-prose about not knowing. An empty field holds the packet and sends a drill to fill
-it, which is a normal outcome; a sentence explaining that you could not tell reads
-as a filled field and reaches the user as one.
+prose about not knowing: a sentence explaining that you could not tell reads as a
+filled field and reaches the user as one. But an empty field is a delay, not a
+neutral choice — a held packet does not reach the user at all until a drill fills
+the gap. Read for the answer first; leave the field empty only when it is genuinely
+not in anything you can read.
 
 Cite doctrine by copying the text inside the brackets exactly, for example
 "global.md § Doors #a1b2c3d4". A line rendered as "shapes a decision; cannot decide

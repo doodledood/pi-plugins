@@ -768,6 +768,18 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
         field: "shadowRuling",
         reason: "the shadow ruling has no ruling or no reasoning",
       });
+    } else if (
+      packet.shadowRuling.optionId &&
+      packet.shadowRuling.optionId !== packet.recommendationId
+    ) {
+      // The recommendation and the shadow ruling are one decision in two roles:
+      // the advice the user reads, and the same call recorded as a prediction to be
+      // graded. Advising one option while predicting another makes the grade — and
+      // so the authority ladder built on it — measure nothing.
+      violations.push({
+        field: "shadowRuling",
+        reason: "the shadow ruling predicts a different option than it recommends",
+      });
     }
   }
   return violations;
