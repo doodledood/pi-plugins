@@ -1,0 +1,408 @@
+import assert from "node:assert/strict";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import {
+  accumulateEntry,
+  combine,
+  COST_RECORD_TYPE,
+  createAccumulator,
+  deriveChildSessionDir,
+  deriveSidecarRoot,
+  PRICE_TIER_RECORD_TYPE,
+  readSessionHeader,
+  SessionTreeScanner,
+  summarize,
+} from "./session-cost.ts";
+import { analyzeSessionTree } from "./cost-report.ts";
+
+// ── fixtures ─────────────────────────────────────────────────────────────────
+
+let roots: string[] = [];
+
+function tempRoot(): string {
+  const dir = mkdtempSync(join(tmpdir(), "session-cost-"));
+  roots.push(dir);
+  return dir;
+}
+
+test.afterEach(() => {
+  for (const dir of roots) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  roots = [];
+});
+
+function usage(cost: number, tokens = { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 }) {
+  return {
+    ...tokens,
+    totalTokens: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite,
+    cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+  };
+}
+
+let entrySeq = 0;
+function assistant(cost: number, model = "gpt-test", provider = "openai") {
+  entrySeq += 1;
+  return { type: "message", id: `e${entrySeq}`, message: { role: "assistant", provider, model, usage: usage(cost), timestamp: entrySeq } };
+}
+function toolResult(cost: number) {
+  entrySeq += 1;
+  return { type: "message", id: `e${entrySeq}`, message: { role: "toolResult", toolName: "advisor_consult", usage: usage(cost) } };
+}
+function compaction(cost: number) {
+  entrySeq += 1;
+  return { type: "compaction", id: `e${entrySeq}`, usage: usage(cost) };
+}
+function branchSummary(cost: number) {
+  entrySeq += 1;
+  return { type: "branch_summary", id: `e${entrySeq}`, usage: usage(cost) };
+}
+// Cost records and tier records are context-excluded custom entries, the shape
+// pi.appendEntry() writes: { type: "custom", customType, data }.
+function costRecord(cost: number, recordId: string, key = "keepalive") {
+  entrySeq += 1;
+  return { type: "custom", id: `e${entrySeq}`, customType: COST_RECORD_TYPE, data: { recordId, key, usage: usage(cost) } };
+}
+function tierRecord(tier: "priority" | "standard") {
+  entrySeq += 1;
+  return { type: "custom", id: `e${entrySeq}`, customType: PRICE_TIER_RECORD_TYPE, data: { tier } };
+}
+
+/** Write a session file with a header plus entries. */
+function writeSession(path: string, opts: { id: string; parentSession?: string; entries?: unknown[] }): string {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const header = { type: "session", version: 3, id: opts.id, timestamp: new Date().toISOString(), cwd: "/tmp/project", ...(opts.parentSession ? { parentSession: opts.parentSession } : {}) };
+  const lines = [JSON.stringify(header), ...(opts.entries ?? []).map((e) => JSON.stringify(e))];
+  writeFileSync(path, `${lines.join("\n")}\n`);
+  return path;
+}
+
+// ── Pi's accounting rules (AC-1.2) ───────────────────────────────────────────
+
+test("all four of Pi's usage sources are counted, over every entry", () => {
+  const acc = createAccumulator();
+  for (const entry of [assistant(1), toolResult(2), compaction(0.5), branchSummary(0.25)]) accumulateEntry(acc, entry);
+  const summary = summarize(acc, { kind: "own" });
+  assert.equal(summary.cost, 3.75);
+  // Pi buckets tool/compaction/branch usage together and assistant usage per model.
+  assert.deepEqual(
+    summary.models.map((m) => m.key).sort(),
+    ["Tools/summaries", "openai/gpt-test"],
+  );
+});
+
+test("non-billed entries and unknown types contribute nothing", () => {
+  const acc = createAccumulator();
+  for (const entry of [{ type: "message", id: "u1", message: { role: "user", content: "hi" } }, { type: "message", id: "t1", message: { role: "toolResult", toolName: "read" } }, { type: "session_info", name: "x" }, undefined, null, 7]) {
+    accumulateEntry(acc, entry as any);
+  }
+  assert.equal(summarize(acc, { kind: "own" }).cost, 0);
+});
+
+test("responseModel wins over model for the bucket key, as Pi does", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, { type: "message", id: "a1", message: { role: "assistant", provider: "openai", model: "alias", responseModel: "real-model", usage: usage(1) } });
+  assert.equal(summarize(acc, { kind: "own" }).models[0]?.key, "openai/real-model");
+});
+
+// ── exactly-once counting (INV-G5) ───────────────────────────────────────────
+
+test("re-folding the same entries does not inflate the total", () => {
+  const acc = createAccumulator();
+  const entries = [assistant(1), toolResult(1)];
+  for (const entry of entries) accumulateEntry(acc, entry);
+  for (const entry of entries) accumulateEntry(acc, entry);
+  assert.equal(summarize(acc, { kind: "own" }).cost, 2);
+});
+
+test("a duplicated cost-record id counts once", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, costRecord(0.5, "ping-1"));
+  const duplicate = costRecord(0.5, "ping-1");
+  accumulateEntry(acc, duplicate);
+  assert.equal(summarize(acc, { kind: "own" }).cost, 0.5);
+});
+
+test("a child reachable by BOTH the sidecar convention and a parentSession header counts once", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // Same file, reachable via the sidecar dir; its header also points at the parent id.
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", parentSession: "p1", entries: [assistant(2)] });
+  const scanner = new SessionTreeScanner();
+  const found = scanner.discover(parent, "p1");
+  assert.equal(found.length, 1, "one child, not two");
+  const tree = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 2);
+});
+
+test("re-scanning a tree does not inflate the total", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(1.5)] });
+  const scanner = new SessionTreeScanner();
+  const first = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  const second = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(first.totalCost, 2.5);
+  assert.equal(second.totalCost, 2.5);
+});
+
+test("tool-result usage for a child session's work is not double counted", () => {
+  // A tool that spawns a child session and ALSO reports usage would be counted twice;
+  // the tool result carries the child's session id so the scan can drop one side.
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "advisor"), "child.jsonl"), { id: "c9", entries: [assistant(3)] });
+  const scanner = new SessionTreeScanner();
+  const tree = scanner.scanTree({
+    ownEntries: [
+      { type: "message", id: "tr1", message: { role: "toolResult", toolName: "advisor_consult", usage: usage(3), details: { childSessionId: "c9" } } },
+    ],
+    sessionFile: parent,
+    sessionId: "p1",
+  });
+  assert.equal(tree.totalCost, 3, "the child session's cost is counted once, not once per surface");
+});
+
+// ── discovery across both header forms and depth (AC-1.1) ────────────────────
+
+test("discovery follows the sidecar convention, parentSession as id, and parentSession as path", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "a.jsonl"), { id: "a", entries: [assistant(1)] });
+  writeSession(join(root, "by-id.jsonl"), { id: "b", parentSession: "p1", entries: [assistant(2)] });
+  writeSession(join(root, "by-path.jsonl"), { id: "c", parentSession: parent, entries: [assistant(4)] });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 7);
+  assert.equal(tree.descendants.length, 3);
+});
+
+test("grandchildren at depth are counted", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(1)] });
+  writeSession(join(deriveChildSessionDir(child, "tasks"), "grand.jsonl"), { id: "g1", entries: [assistant(2)] });
+  writeSession(join(deriveChildSessionDir(child, "advisor"), "great.jsonl"), { id: "g2", entries: [assistant(4)] });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 7);
+});
+
+test("a self-referential or cyclic parent link cannot loop forever", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", parentSession: "p1" });
+  const a = writeSession(join(root, "a.jsonl"), { id: "a", parentSession: "p1", entries: [assistant(1)] });
+  writeSession(join(root, "b.jsonl"), { id: "b", parentSession: "a", entries: [assistant(1)] });
+  // b's header points at a, and a duplicate header id must not re-admit the parent.
+  writeSession(join(deriveChildSessionDir(a, "tasks"), "dupe.jsonl"), { id: "p1", entries: [assistant(99)] });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 2, "the duplicate-id file and the self link are both rejected");
+});
+
+test("sidecar layout matches the convention pi-subagents already writes", () => {
+  const parent = "/s/--proj--/2026-07-28T08-04-15-096Z_019fa7c0.jsonl";
+  assert.equal(deriveSidecarRoot(parent), "/s/--proj--/2026-07-28T08-04-15-096Z_019fa7c0");
+  assert.equal(deriveChildSessionDir(parent, "tasks"), "/s/--proj--/2026-07-28T08-04-15-096Z_019fa7c0/tasks");
+});
+
+// ── caching and growth (AC-1.4) ─────────────────────────────────────────────
+
+test("an unchanged file is not re-read, and a grown file is read only from its previous end", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(1)] });
+  const scanner = new SessionTreeScanner();
+
+  const first = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(first.totalCost, 1);
+  assert.ok(scanner.stats.filesRead >= 1, "first scan reads the child");
+
+  const second = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(second.totalCost, 1);
+  assert.equal(scanner.stats.filesRead, 0, "unchanged files are not re-read");
+
+  appendFileSync(child, `${JSON.stringify(assistant(2))}\n`);
+  const third = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(third.totalCost, 3, "appended spend is picked up");
+  assert.equal(scanner.stats.filesRead, 1, "only the grown file is read");
+});
+
+test("a half-written trailing line is folded once the rest arrives", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(1)] });
+  const scanner = new SessionTreeScanner();
+  scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+
+  const full = `${JSON.stringify(assistant(5))}\n`;
+  appendFileSync(child, full.slice(0, 20));
+  const torn = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(torn.totalCost, 1, "a torn line contributes nothing yet");
+  appendFileSync(child, full.slice(20));
+  const complete = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(complete.totalCost, 6, "the completed line is folded exactly once");
+});
+
+test("render-sized trees scan within a bounded time and stay free on repeat", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const dir = deriveChildSessionDir(parent, "tasks");
+  for (let i = 0; i < 60; i += 1) {
+    const entries = Array.from({ length: 40 }, () => assistant(0.01));
+    writeSession(join(dir, `child-${i}.jsonl`), { id: `c${i}`, entries });
+  }
+  const scanner = new SessionTreeScanner();
+  const startCold = process.hrtime.bigint();
+  const cold = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  const coldMs = Number(process.hrtime.bigint() - startCold) / 1e6;
+  assert.equal(cold.descendants.length, 60);
+  assert.ok(Math.abs(cold.totalCost - 24) < 1e-6, `expected 24, got ${cold.totalCost}`);
+  assert.ok(coldMs < 2_000, `cold scan of 60 children took ${coldMs.toFixed(0)}ms`);
+
+  const startWarm = process.hrtime.bigint();
+  const warm = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  const warmMs = Number(process.hrtime.bigint() - startWarm) / 1e6;
+  assert.ok(Math.abs(warm.totalCost - 24) < 1e-6);
+  assert.equal(scanner.stats.filesRead, 0, "warm scan reads no file bytes");
+  assert.ok(warmMs < 250, `warm scan took ${warmMs.toFixed(0)}ms`);
+});
+
+// ── failure degradation (INV-G12) ───────────────────────────────────────────
+
+test("a missing sidecar directory yields the parent's own cost, not an error", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(2)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 2);
+  assert.equal(tree.descendants.length, 0);
+});
+
+test("an in-memory parent with no session file still reports its own cost", () => {
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1.25)] });
+  assert.equal(tree.totalCost, 1.25);
+});
+
+test("an unreadable child is skipped and the rest of the tree still totals", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const dir = deriveChildSessionDir(parent, "tasks");
+  writeSession(join(dir, "ok.jsonl"), { id: "ok", entries: [assistant(1)] });
+  const locked = writeSession(join(dir, "locked.jsonl"), { id: "locked", entries: [assistant(9)] });
+  chmodSync(locked, 0o000);
+  try {
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+    assert.equal(tree.totalCost, 1, "readable spend still totals");
+  } finally {
+    chmodSync(locked, 0o600);
+  }
+});
+
+test("a corrupt line is skipped without losing the rest of the file", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(1)] });
+  appendFileSync(child, "{not json\n");
+  appendFileSync(child, `${JSON.stringify(assistant(2))}\n`);
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3);
+});
+
+test("a header-less or unreadable file yields no header rather than throwing", () => {
+  const root = tempRoot();
+  const path = join(root, "bad.jsonl");
+  writeFileSync(path, "not a session\n");
+  assert.equal(readSessionHeader(path), undefined);
+  assert.equal(readSessionHeader(join(root, "missing.jsonl")), undefined);
+});
+
+// ── price fidelity (D2) ─────────────────────────────────────────────────────
+
+test("priority-tier turns are marked approximate when no multiplier is configured", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority"));
+  accumulateEntry(acc, assistant(1));
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.equal(tree.totalCost, 1);
+  assert.ok(tree.approximate, "an uncorrected priority premium makes the total approximate");
+  assert.equal(tree.uncorrectedPriorityCost, 1);
+  assert.match(tree.approximateReasons.join(" "), /priority-tier/);
+});
+
+test("a configured multiplier prices priority turns exactly, and the marker clears", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
+  accumulateEntry(acc, assistant(1), { priorityMultiplier: 2 });
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.equal(tree.totalCost, 2);
+  assert.equal(tree.approximate, false);
+});
+
+test("toggling the tier mid-session prices each turn by the tier in force", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
+  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 3 });
+  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
+  accumulateEntry(acc, tierRecord("standard"), { priorityMultiplier: 3 });
+  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
+  assert.equal(summarize(acc, { kind: "own" }).cost, 1 + 3 + 1);
+});
+
+test("real tokens priced at zero are surfaced as unpriced, not silently free", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, { type: "message", id: "z1", message: { role: "assistant", provider: "openai", model: "mystery-alias", usage: usage(0) } });
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.deepEqual(tree.unpricedModels, ["openai/mystery-alias"]);
+  assert.ok(tree.approximate);
+  assert.match(tree.approximateReasons.join(" "), /no price resolved for openai\/mystery-alias/);
+});
+
+test("a zero-token, zero-cost entry is not reported as unpriced", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, { type: "message", id: "z2", message: { role: "assistant", provider: "openai", model: "aborted", usage: usage(0, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) } });
+  assert.equal(combine(summarize(acc, { kind: "own" }), []).approximate, false);
+});
+
+test("changing the configured premium re-prices an already-scanned tree", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [tierRecord("priority"), assistant(1)] });
+  const scanner = new SessionTreeScanner();
+  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 1);
+  scanner.setPrice({ priorityMultiplier: 2 });
+  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 2);
+});
+
+// ── non-session cost records (D6) ───────────────────────────────────────────
+
+test("cost records from a non-session call are counted and bucketed by their key", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, costRecord(0.25, "ping-1", "keepalive"));
+  accumulateEntry(acc, costRecord(0.1, "tts-1", "speech"));
+  const summary = summarize(acc, { kind: "own" });
+  assert.equal(summary.cost, 0.35);
+  assert.deepEqual(summary.models.map((m) => m.key).sort(), ["keepalive", "speech"]);
+});
+
+test("a cost record with no usage contributes nothing", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, { type: "custom", id: "r1", customType: COST_RECORD_TYPE, data: { recordId: "x", key: "keepalive" } });
+  assert.equal(summarize(acc, { kind: "own" }).cost, 0);
+});
+
+// ── post-hoc analysis (D7) ──────────────────────────────────────────────────
+
+test("analyzeSessionTree totals a tree on disk without a live session", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(1), toolResult(0.5)] });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2)] });
+  writeSession(join(deriveChildSessionDir(parent, "advisor"), "advice.jsonl"), { id: "c2", entries: [assistant(0.75)] });
+  const tree = analyzeSessionTree(parent);
+  assert.equal(tree.totalCost, 4.25);
+  assert.equal(tree.own.cost, 1.5);
+  assert.deepEqual(tree.descendants.map((d) => d.kind).sort(), ["advisor", "tasks"]);
+});

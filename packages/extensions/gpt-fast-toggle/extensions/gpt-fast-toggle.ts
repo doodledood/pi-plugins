@@ -1,18 +1,50 @@
 // gpt-fast-toggle.ts — /gpt-fast toggles OpenAI GPT API priority service tier.
 // Fast = service_tier: "priority". Deep/not-fast = default service tier.
 // This intentionally does not change reasoning/thinking level.
+//
+// Priority is billed above the standard rate, and pi prices a turn from its static
+// per-model rates, so a session that ran in fast mode costs more than any cost
+// surface can tell from the usage alone. The tier in force is therefore recorded in
+// the session as a context-excluded custom entry whenever it changes (and once at
+// session start), so a later scan can tell which turns paid the premium.
+// The premium itself is a configured multiplier: `priorityMultiplier` in the state
+// file below. Without it, cost surfaces mark the total approximate rather than low.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
 const STATUS_KEY = "gpt-fast";
+/** Custom-entry type read by cost surfaces to price priority-tier turns. */
+export const PRICE_TIER_RECORD_TYPE = "pi-price-tier";
 
 type TargetMode = "fast" | "deep";
+type BillingTier = "standard" | "priority";
 
 export default function gptFastToggle(pi: any) {
-  pi.on("session_start", (_event: any, ctx: any) => updateStatus(ctx));
-  pi.on("model_select", (_event: any, ctx: any) => updateStatus(ctx));
+  // Tier actually recorded in this session, so repeats are not appended per event.
+  let recordedTier: BillingTier | undefined;
+
+  const recordTier = (ctx: any, tier: BillingTier) => {
+    if (tier === recordedTier) return;
+    recordedTier = tier;
+    try {
+      pi.appendEntry(PRICE_TIER_RECORD_TYPE, { tier });
+    } catch {
+      // Session may be ephemeral or shutting down; the toggle itself still works.
+    }
+  };
+
+  pi.on("session_start", (_event: any, ctx: any) => {
+    updateStatus(ctx);
+    recordedTier = undefined;
+    recordTier(ctx, effectiveTier(ctx.model));
+  });
+  pi.on("model_select", (_event: any, ctx: any) => {
+    updateStatus(ctx);
+    // Switching off an OpenAI GPT model ends priority billing even with fast mode on.
+    recordTier(ctx, effectiveTier(ctx.model));
+  });
 
   pi.on("before_provider_request", (event: any, ctx: any) => {
     if (readSavedMode() !== "fast") return undefined;
@@ -40,6 +72,7 @@ export default function gptFastToggle(pi: any) {
         return;
       }
       await applyGptMode(ctx, target);
+      recordTier(ctx, effectiveTier(ctx.model));
     },
   });
 }
@@ -101,4 +134,9 @@ function saveMode(mode: TargetMode): void {
 function supportsPriorityServiceTier(model: any): boolean {
   if (!model?.provider || !model?.id) return false;
   return model.provider === "openai" && /^gpt-/i.test(model.id);
+}
+
+/** The tier turns are actually billed at: priority only when fast mode applies to this model. */
+export function effectiveTier(model: any, mode: TargetMode | undefined = readSavedMode()): BillingTier {
+  return mode === "fast" && supportsPriorityServiceTier(model) ? "priority" : "standard";
 }

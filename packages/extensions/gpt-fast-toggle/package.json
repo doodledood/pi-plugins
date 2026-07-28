@@ -12,6 +12,18 @@
       "./extensions/gpt-fast-toggle.ts"
     ]
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.8"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,9 +41,7 @@
     "extensions",
     "config",
     "README.md",
-    "package.json"
-  ],
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8"
-  }
+    "package.json",
+    "tsconfig.json"
+  ]
 }

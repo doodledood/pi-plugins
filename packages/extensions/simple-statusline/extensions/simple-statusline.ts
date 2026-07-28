@@ -17,6 +17,8 @@ import {
   pct,
   type SessionCacheStats,
 } from "./simple-statusline/cache.ts";
+import { SessionTreeScanner, type TreeCost } from "./simple-statusline/session-cost.ts";
+import { renderCostReport } from "./simple-statusline/cost-report.ts";
 
 const STATUSLINE_KEY = "simple-statusline";
 const GPT_FAST_STATUS_KEY = "gpt-fast";
@@ -24,13 +26,22 @@ const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? 
 /** First useful boundary where compaction planning beats waiting for overflow pressure. */
 const COMPACT_HINT_THRESHOLD_PERCENT = 50;
 
+/**
+ * Cost is a whole-session-tree figure read off session files, so it is refreshed on
+ * session events rather than inside render(): the footer paints from the last
+ * computed value and never does I/O while painting.
+ */
+const COST_REFRESH_INTERVAL_MS = 1_500;
+
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-type TokenTotals = { input: number; output: number; cost: number };
 type RuntimeState = {
   thinkingLevel: ThinkingLevel;
   turnCount: number;
   active: boolean;
   requestRender?: () => void;
+  scanner: SessionTreeScanner;
+  cost?: TreeCost;
+  costComputedAt: number;
 };
 type ModelSignal = { plain: string; colored: string };
 type ContextSignal = { plain: string; percent: number | undefined };
@@ -40,8 +51,25 @@ export default function simpleStatusline(pi: any) {
     thinkingLevel: "off",
     turnCount: 0,
     active: false,
+    scanner: new SessionTreeScanner(readPriceOptions()),
+    costComputedAt: 0,
   };
   const refresh = () => runtime.requestRender?.();
+  const refreshCost = (ctx: any, force = false) => {
+    const now = Date.now();
+    if (!force && runtime.cost && now - runtime.costComputedAt < COST_REFRESH_INTERVAL_MS) return;
+    runtime.costComputedAt = now;
+    try {
+      runtime.scanner.setPrice(readPriceOptions());
+      runtime.cost = runtime.scanner.scanTree({
+        ownEntries: ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(),
+        sessionFile: ctx.sessionManager.getSessionFile?.(),
+        sessionId: ctx.sessionManager.getSessionId?.(),
+      });
+    } catch {
+      // Keep the previous total rather than blanking the footer on a scan failure.
+    }
+  };
 
   const installFooter = (ctx: any) => {
     ctx.ui.setStatus(STATUSLINE_KEY, undefined);
@@ -66,12 +94,17 @@ export default function simpleStatusline(pi: any) {
   pi.on("session_start", (_event: any, ctx: any) => {
     runtime.thinkingLevel = pi.getThinkingLevel?.() ?? "off";
     installFooter(ctx);
+    refreshCost(ctx, true);
   });
   pi.on("session_tree", (_event: any, ctx: any) => {
     installFooter(ctx);
+    refreshCost(ctx, true);
     refresh();
   });
-  pi.on("session_compact", () => refresh());
+  pi.on("session_compact", (_event: any, ctx: any) => {
+    refreshCost(ctx, true);
+    refresh();
+  });
   pi.on("session_shutdown", (_event: any, ctx: any) => {
     ctx.ui.setFooter(undefined);
     ctx.ui.setStatus(STATUSLINE_KEY, undefined);
@@ -87,17 +120,34 @@ export default function simpleStatusline(pi: any) {
     runtime.active = true;
     refresh();
   });
-  pi.on("turn_end", () => refresh());
-  pi.on("message_update", () => refresh());
-  pi.on("agent_end", () => {
-    runtime.active = false;
+  pi.on("turn_end", (_event: any, ctx: any) => {
+    refreshCost(ctx, true);
     refresh();
+  });
+  pi.on("message_update", (_event: any, ctx: any) => {
+    // Throttled: background children append while a turn streams, so spend still
+    // moves mid-turn without scanning on every delta.
+    refreshCost(ctx);
+    refresh();
+  });
+  pi.on("agent_end", (_event: any, ctx: any) => {
+    runtime.active = false;
+    refreshCost(ctx, true);
+    refresh();
+  });
+
+  pi.registerCommand("cost", {
+    description: "Session-tree cost breakdown: this session plus every run it spawned.",
+    handler: async (_args: string, ctx: any) => {
+      refreshCost(ctx, true);
+      const branchCost = computeSessionCacheStats(ctx.sessionManager.getBranch()).totalCost;
+      ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost: branchCost }), "info");
+    },
   });
 }
 
 function renderMainLine(width: number, ctx: any, theme: any, footerData: any, runtime: RuntimeState): string {
   const usage = ctx.getContextUsage?.();
-  const totals = getTokenTotals(ctx);
   const cacheStats = computeSessionCacheStats(ctx.sessionManager.getBranch());
 
   const project = basename(ctx.cwd) || ctx.cwd;
@@ -105,7 +155,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const model = shortenModel(ctx.model?.id ?? "no-model");
   const level = runtime.thinkingLevel;
   const contextSignal = formatContextUsage(usage, ctx.model?.contextWindow);
-  const costStr = totals.cost > 0 ? formatCost(totals.cost) : "";
+  const costStr = formatTreeCost(runtime.cost);
   const modelSignal = formatModelSignal(ctx.model, model, level, isGptPriorityEnabled(), theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
@@ -177,16 +227,14 @@ function formatExtensionStatus(key: string, value: string, theme: any): string {
   return color(theme, tone, compact(plain || trimmed, 42));
 }
 
-function getTokenTotals(ctx: any): TokenTotals {
-  const totals: TokenTotals = { input: 0, output: 0, cost: 0 };
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-    const usage = entry.message.usage;
-    totals.input += usage?.input ?? 0;
-    totals.output += usage?.output ?? 0;
-    totals.cost += usage?.cost?.total ?? 0;
-  }
-  return totals;
+/**
+ * Lifetime spend for the whole session tree. A leading "~" says the figure is a
+ * floor rather than an exact number — unpriced models or an uncorrected priority
+ * premium — with the reasons available in /cost.
+ */
+function formatTreeCost(cost: TreeCost | undefined): string {
+  if (!cost || cost.totalCost <= 0) return "";
+  return `${cost.approximate ? "~" : ""}${formatCost(cost.totalCost)}`;
 }
 
 // Session cache rate (converging cumulative %) with a break flag: when the latest
@@ -221,12 +269,21 @@ function formatModelSignal(rawModel: any, model: string, level: ThinkingLevel, p
 }
 
 function isGptPriorityEnabled(): boolean {
+  return readGptFastState()?.mode === "fast";
+}
+
+function readGptFastState(): { mode?: string; priorityMultiplier?: number } | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(GPT_FAST_STATE_PATH, "utf8"));
-    return parsed?.mode === "fast";
+    return JSON.parse(readFileSync(GPT_FAST_STATE_PATH, "utf8"));
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** Priority-tier premium, when the user has configured one. */
+function readPriceOptions(): { priorityMultiplier?: number } {
+  const multiplier = readGptFastState()?.priorityMultiplier;
+  return typeof multiplier === "number" && multiplier > 0 ? { priorityMultiplier: multiplier } : {};
 }
 
 function isGptModel(model: any): boolean {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import simpleStatusline from "../simple-statusline.ts";
 import type { SessionEntryLike } from "./cache.ts";
+import { deriveChildSessionDir, PRICE_TIER_RECORD_TYPE } from "./session-cost.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -11,6 +15,7 @@ interface Harness {
   footerFactory?: (tui: any, theme: any, footerData: any) => { render(width: number): string[]; dispose?(): void };
   ctx: any;
   themeCalls: Array<{ tone: string; text: string }>;
+  notices: string[];
 }
 
 // Records fg() calls while leaving text unchanged so layout math stays exact.
@@ -43,17 +48,25 @@ function assistantEntry(timestamp: number, input: number, read: number, write: n
   return { type: "message", message: { role: "assistant", timestamp, usage: { input, cacheRead: read, cacheWrite: write } } };
 }
 
-function createHarness(branch: SessionEntryLike[]): Harness {
-  const harness: Harness = { handlers: new Map(), commands: new Map(), ctx: undefined, themeCalls: [] };
+function createHarness(branch: SessionEntryLike[], session?: { file?: string; id?: string; entries?: unknown[] }): Harness {
+  const harness: Harness = { handlers: new Map(), commands: new Map(), ctx: undefined, themeCalls: [], notices: [] };
   const ctx = {
     cwd: "/tmp/project",
     model: { id: "test-model", provider: "test" },
     getContextUsage: () => undefined,
-    sessionManager: { getBranch: () => branch },
+    sessionManager: {
+      getBranch: () => branch,
+      getEntries: () => session?.entries ?? branch,
+      getSessionFile: () => session?.file,
+      getSessionId: () => session?.id,
+    },
     ui: {
       setStatus() {},
       setFooter(factory: any) {
         harness.footerFactory = factory;
+      },
+      notify(message: string) {
+        harness.notices.push(message);
       },
     },
   };
@@ -164,6 +177,141 @@ test("footer omits the cache token when the branch has no cache data", () => {
   const harness = createHarness([assistantEntry(1_000, 50_000, 0, 0)]);
   const line = renderFooter(harness);
   assert.doesNotMatch(line, /cache \d+%/);
+});
+
+// ── session-tree cost in the footer (D1) ─────────────────────────────────────
+
+let costRoots: string[] = [];
+
+function tempSessionTree(): { parent: string; dir: string } {
+  const root = mkdtempSync(join(tmpdir(), "statusline-cost-"));
+  costRoots.push(root);
+  const parent = join(root, "parent.jsonl");
+  writeFileSync(parent, `${JSON.stringify({ type: "session", version: 3, id: "parent-1", timestamp: new Date().toISOString(), cwd: "/tmp/project" })}\n`);
+  return { parent, dir: root };
+}
+
+function writeChildSession(parent: string, kind: string, name: string, costs: number[]): void {
+  const dir = deriveChildSessionDir(parent, kind);
+  mkdirSync(dir, { recursive: true });
+  const lines = [JSON.stringify({ type: "session", version: 3, id: `${kind}-${name}`, timestamp: new Date().toISOString(), cwd: "/tmp/project", parentSession: "parent-1" })];
+  costs.forEach((cost, index) => {
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: `${kind}-${name}-${index}`,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "child-model",
+          usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } },
+        },
+      }),
+    );
+  });
+  writeFileSync(join(dir, `${name}.jsonl`), `${lines.join("\n")}\n`);
+}
+
+function ownAssistant(cost: number, id: string): unknown {
+  return {
+    type: "message",
+    id,
+    message: {
+      role: "assistant",
+      provider: "openai",
+      model: "parent-model",
+      usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } },
+    },
+  };
+}
+
+test.afterEach(() => {
+  for (const dir of costRoots) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  costRoots = [];
+});
+
+test("footer cost is the whole session tree, not just this session's own turns", () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "audit-a", [0.39, 0.1]);
+  writeChildSession(parent, "advisor", "consult", [0.25]);
+  const own = [ownAssistant(1.0, "own-1"), ownAssistant(0.26, "own-2")];
+
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+  const line = renderFooter(harness);
+
+  // own 1.26 + tasks 0.49 + advisor 0.25 = 2.00, computed independently here.
+  assert.match(line, /\$2\.00/);
+  assert.doesNotMatch(line, /\$1\.26/, "the parent-only figure is not what the footer shows");
+});
+
+test("footer marks the total approximate when some spend cannot be priced exactly", () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "unpriced", [0]);
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+  assert.match(renderFooter(harness), /~\$0\.500/, "an unpriceable model shows the total as a floor");
+});
+
+test("footer prices priority-tier turns as approximate until a multiplier is configured", () => {
+  const { parent } = tempSessionTree();
+  const own = [
+    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
+    ownAssistant(0.4, "own-1"),
+  ];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+  assert.match(renderFooter(harness), /~\$0\.400/);
+});
+
+test("repeated renders do not rescan the tree", () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "a", [0.5]);
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  const recording = createRecordingTheme();
+  const component = harness.footerFactory!(fakeTui, recording.theme, fakeFooterData);
+  const start = process.hrtime.bigint();
+  for (let i = 0; i < 200; i += 1) component.render(400);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(elapsedMs < 200, `200 renders took ${elapsedMs.toFixed(0)}ms — render must not scan session files`);
+  assert.match(component.render(400).join("\n"), /\$1\.00/);
+});
+
+test("/cost reports the tree breakdown, the branch subtotal, and what it cannot see", async () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "audit", [0.75]);
+  const own = [ownAssistant(0.25, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  const command = harness.commands.get("cost");
+  assert.ok(command, "/cost registered");
+  await command!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  assert.match(report, /Session tree lifetime cost: \$1\.00/);
+  assert.match(report, /active branch/);
+  assert.match(report, /tasks\//);
+  assert.match(report, /openai\/child-model/);
+  assert.match(report, /Not included/);
+  assert.match(report, /pi-web-access|web search/);
+});
+
+test("a scan failure leaves the previous total rather than blanking the footer", () => {
+  const { parent } = tempSessionTree();
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+  assert.match(renderFooter(harness), /\$0\.500/);
+
+  harness.ctx.sessionManager.getEntries = () => {
+    throw new Error("session manager replaced mid-flight");
+  };
+  harness.handlers.get("turn_end")!({}, harness.ctx);
+  assert.match(renderFooter(harness), /\$0\.500/, "last known total survives a failed scan");
 });
 
 test("statusline remains footer-only and owns no model-context mutation surfaces", () => {

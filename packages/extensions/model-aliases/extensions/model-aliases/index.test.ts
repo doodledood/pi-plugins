@@ -14,6 +14,7 @@ import {
   buildProviderRegistrations,
   buildTargetModelLookup,
   createAliasStreamSimple,
+  findUnpricedAliases,
   getAliasForModel,
   registerCheckerModelBootstrap,
   rewriteModelAliasPayload,
@@ -468,3 +469,48 @@ function fakeAssistantStream(identity: { api?: string; provider: string; model: 
     },
   } as any;
 }
+
+test("findUnpricedAliases names aliases whose per-token price cannot be resolved", () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      // Inherits real pricing from a target pi already knows.
+      { provider: "openai", id: "priced-by-target", targetProvider: "openai", targetModel: "gpt-5.5" },
+      // Explicit price of its own.
+      {
+        provider: "openai",
+        id: "priced-explicitly",
+        targetProvider: "openai",
+        targetModel: "not-in-registry",
+        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      },
+      // Neither: real spend would be counted at $0.
+      { provider: "openai", id: "unpriced", targetProvider: "openai", targetModel: "also-not-in-registry" },
+    ],
+  };
+
+  assert.deepEqual(findUnpricedAliases(config, existingModels), ["openai/unpriced"]);
+});
+
+test("findUnpricedAliases reports nothing when aliasing is disabled", () => {
+  const config: ModelAliasesConfig = {
+    enabled: false,
+    aliases: [{ provider: "openai", id: "unpriced", targetProvider: "openai", targetModel: "missing" }],
+  };
+  assert.deepEqual(findUnpricedAliases(config, existingModels), []);
+});
+
+test("the live alias configuration shape inherits pricing rather than falling back to zero", () => {
+  // Guards the trap this change was made for: aliases like gpt-5.6-sol/luna carry no
+  // cost block, so they are only priced correctly while their target resolves.
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      { provider: "openai", id: "gpt-5.6-sol", targetProvider: "openai", targetModel: "gpt-5.5", apiKey: "$OPENAI_API_KEY" },
+    ],
+  };
+  assert.deepEqual(findUnpricedAliases(config, existingModels), []);
+  const registration = buildProviderRegistrations(config, existingModels)[0]!;
+  const alias = (registration.config.models as Array<Record<string, unknown>>).find((m) => m.id === "gpt-5.6-sol");
+  assert.deepEqual(alias?.cost, { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 });
+});

@@ -114,6 +114,18 @@ export async function activateModelAliases(pi: any): Promise<void> {
   const targetLookup = buildTargetModelLookup(config, existingModels);
   const aliasStreamSimple = createAliasStreamSimple(aliasLookup, targetLookup);
 
+  // An alias with neither its own price nor a resolvable target price would report
+  // real token spend at $0. Pi still needs a cost object, so the zero stays — but it
+  // is announced here rather than quietly distorting every cost surface.
+  const unpriced = findUnpricedAliases(config, existingModels);
+  if (unpriced.length > 0) {
+    console.warn(
+      `[model-aliases] No price resolved for ${unpriced.join(", ")} — usage on ${
+        unpriced.length === 1 ? "this alias" : "these aliases"
+      } will be counted at $0. Add a "cost" block to the alias, or point targetModel at a model pi already prices.`,
+    );
+  }
+
   for (const registration of buildProviderRegistrations(config, existingModels, aliasStreamSimple)) {
     try {
       pi.registerProvider(registration.provider, registration.config);
@@ -135,6 +147,22 @@ export async function activateModelAliases(pi: any): Promise<void> {
     if (!alias) return undefined;
     return rewriteModelAliasPayload(event.payload, alias.targetModel);
   });
+}
+
+/**
+ * Aliases whose per-token price cannot be resolved: no explicit `cost`, and no
+ * target model in pi's registry to inherit one from. Returned as `provider/id`.
+ */
+export function findUnpricedAliases(config: ModelAliasesConfig, existingModels: ExistingModel[] = []): string[] {
+  if (!config.enabled) return [];
+  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+  const unpriced: string[] = [];
+  for (const alias of config.aliases) {
+    if (alias.cost) continue;
+    const inherited = inheritedModelForAlias(alias, targetModelByKey);
+    if (!inherited?.cost) unpriced.push(modelKey(alias.provider, alias.id));
+  }
+  return unpriced;
 }
 
 export function buildProviderRegistrations(
