@@ -126,9 +126,22 @@ function readSavedMode(): TargetMode | undefined {
   }
 }
 
+/**
+ * Persist the mode without disturbing the rest of the file. This file also holds the
+ * user's `priorityMultiplier`, which cost surfaces read to price priority-tier turns;
+ * writing only `mode` would erase that configuration on the very toggle that makes it
+ * relevant. Unknown keys are preserved for the same reason.
+ */
 function saveMode(mode: TargetMode): void {
   mkdirSync(dirname(STATE_PATH), { recursive: true });
-  writeFileSync(STATE_PATH, `${JSON.stringify({ mode }, null, 2)}\n`);
+  let existing: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
+  } catch {
+    // Missing or unreadable: start from an empty object rather than failing the toggle.
+  }
+  writeFileSync(STATE_PATH, `${JSON.stringify({ ...existing, mode }, null, 2)}\n`);
 }
 
 function supportsPriorityServiceTier(model: any): boolean {

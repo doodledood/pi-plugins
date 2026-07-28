@@ -144,6 +144,16 @@ export function analyzeSessionTree(sessionFile: string, price: PriceOptions = {}
   );
 }
 
+/**
+ * Spend on one branch of a session, by the same rules as the lifetime total: all four
+ * native usage sources plus cost records, rather than assistant messages alone.
+ */
+export function branchCost(branch: Iterable<unknown>, price: PriceOptions = {}): number {
+  const acc = createAccumulator();
+  for (const entry of branch) accumulateEntry(acc, entry, price);
+  return acc.cost;
+}
+
 /** Every session file directly in a session directory (Pi's own non-recursive view). */
 export function listSessionFiles(dir: string): string[] {
   try {

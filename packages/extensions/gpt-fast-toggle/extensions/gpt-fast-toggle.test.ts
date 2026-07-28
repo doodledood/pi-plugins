@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -133,4 +133,25 @@ test("priority payload injection is unchanged and still model-gated", () => {
   assert.equal(hook({ payload: { model: "x" } }, { model: claude }), undefined, "no injection off OpenAI GPT");
   setMode("deep");
   assert.equal(hook({ payload: { model: "gpt-5.6-sol" } }, harness.ctx), undefined, "no injection in deep mode");
+});
+
+test("toggling preserves the configured priority premium and any other keys", async () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "deep", priorityMultiplier: 2, somethingElse: "keep me" })}\n`);
+
+  await harness.commands.get("gpt-fast")!.handler("on", harness.ctx);
+  const afterOn = JSON.parse(readFileSync(statePath, "utf8"));
+  assert.equal(afterOn.mode, "fast");
+  assert.equal(afterOn.priorityMultiplier, 2, "the premium the cost surfaces read must survive the toggle");
+  assert.equal(afterOn.somethingElse, "keep me");
+
+  await harness.commands.get("gpt-fast")!.handler("off", harness.ctx);
+  assert.equal(JSON.parse(readFileSync(statePath, "utf8")).priorityMultiplier, 2);
+});
+
+test("a corrupt state file does not block the toggle", async () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, "not json\n");
+  await harness.commands.get("gpt-fast")!.handler("on", harness.ctx);
+  assert.equal(JSON.parse(readFileSync(statePath, "utf8")).mode, "fast");
 });

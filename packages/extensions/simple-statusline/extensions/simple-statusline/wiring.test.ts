@@ -323,3 +323,18 @@ test("statusline remains footer-only and owns no model-context mutation surfaces
   assert.equal(harness.handlers.get("tool_result"), undefined, "no tool-result/session mutation");
   assert.ok(harness.footerFactory, "footer renderer installed");
 });
+
+test("/cost's branch subtotal counts tool and compaction usage, not assistant turns alone", async () => {
+  const { parent } = tempSessionTree();
+  const branch = [
+    ownAssistant(1, "own-1"),
+    { type: "message", id: "tr-1", timestamp: "2026-07-28T10:00:00.000Z", message: { role: "toolResult", toolName: "advisor_consult", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 6, cost: { input: 0.5, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 } } } },
+    { type: "compaction", id: "cmp-1", timestamp: "2026-07-28T10:05:00.000Z", usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 } } },
+  ];
+  const harness = createHarness(branch as SessionEntryLike[], { file: parent, id: "parent-1", entries: branch });
+
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  // 1 + 0.5 + 0.25: the assistant-only rule would have reported $1.00.
+  assert.match(report, /active branch \(this session only\): \$1\.75/);
+});

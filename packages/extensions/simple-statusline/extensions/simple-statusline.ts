@@ -18,7 +18,7 @@ import {
   type SessionCacheStats,
 } from "./simple-statusline/cache.ts";
 import { SessionTreeScanner, type TreeCost } from "./simple-statusline/session-cost.ts";
-import { renderCostReport } from "./simple-statusline/cost-report.ts";
+import { branchCost, renderCostReport } from "./simple-statusline/cost-report.ts";
 
 const STATUSLINE_KEY = "simple-statusline";
 const GPT_FAST_STATUS_KEY = "gpt-fast";
@@ -140,8 +140,10 @@ export default function simpleStatusline(pi: any) {
     description: "Session-tree cost breakdown: this session plus every run it spawned.",
     handler: async (_args: string, ctx: any) => {
       refreshCost(ctx, true);
-      const branchCost = computeSessionCacheStats(ctx.sessionManager.getBranch()).totalCost;
-      ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost: branchCost }), "info");
+      // The branch subtotal uses the same accounting rules as the lifetime figure, so
+      // the two numbers in one report can be reasoned about against each other.
+      const activeBranchCost = branchCost(ctx.sessionManager.getBranch(), readPriceOptions());
+      ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost }), "info");
     },
   });
 }
