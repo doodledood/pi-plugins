@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -50,6 +50,56 @@ test("whole-file writes are atomic and seeding never overwrites an edit", async 
     await writeFile(seed, "the user's edit\n", "utf8");
     assert.equal(await materializeIfAbsent(seed, "original\n"), false);
     assert.equal(await readFile(seed, "utf8"), "the user's edit\n");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a whole-file write replaces the file rather than editing it in place", async () => {
+  const root = await makeRoot("hq-io-atomic");
+  try {
+    const target = join(root, "value.json");
+    await atomicWriteJson(target, { a: 1 });
+    const before = await stat(target);
+    await atomicWriteJson(target, { a: 2 });
+    const after = await stat(target);
+    // A rename swaps in a new inode; an in-place rewrite would keep the old one,
+    // which is what a concurrent reader could observe half-written.
+    assert.notEqual(after.ino, before.ino);
+    assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { a: 2 });
+    const residue = (await readdir(root)).filter((name) => name.endsWith(".tmp"));
+    assert.deepEqual(residue, [], "no temp files are left behind");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("an append-only log rejects a record it cannot trust instead of typing it as valid", async () => {
+  const root = await makeRoot("hq-log-parse");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    await store.appendAudit({
+      at: "2026-07-28T12:00:00.000Z",
+      sourceSessionId: "sess-a",
+      domain: "ci-flake",
+      project: "/work/alpha",
+      ruleCitation: "global.md § Tastes L10",
+      action: "continue",
+      summary: "retried the suite",
+      sampledForReview: true,
+    });
+    // A hand-edited or differently-versioned line: valid JSON, wrong shape.
+    await appendFile(hqPaths(root).auditLog, `${JSON.stringify({ domain: "x" })}\n`, "utf8");
+    await appendFile(hqPaths(root).defectsLog, `${JSON.stringify({ packetId: 42 })}\n`, "utf8");
+
+    const audits = await store.readAuditLines();
+    assert.equal(audits.length, 1, "the malformed line is absence, not a half-typed record");
+    assert.equal(audits[0]?.domain, "ci-flake");
+    assert.deepEqual(await store.readDefects(), []);
+
+    // The seat's counters read the same logs and must not throw on them.
+    assert.deepEqual(await store.countToday("2026-07-28"), { rulings: 0, audits: 1 });
   } finally {
     await dropRoot(root);
   }

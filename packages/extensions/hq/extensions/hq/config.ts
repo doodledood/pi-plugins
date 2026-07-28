@@ -14,14 +14,11 @@ export interface HqConfig {
   titleModel: string | undefined;
   /** Refuses further delegation past this many live managed workers. */
   maxConcurrentWorkers: number;
-  /** Overrides the doctrine value only when doctrine does not set one. */
-  stalenessMinutes: number | undefined;
 }
 
 export const DEFAULT_CONFIG: HqConfig = {
   titleModel: undefined,
   maxConcurrentWorkers: 10,
-  stalenessMinutes: undefined,
 };
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -41,16 +38,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HqConfig {
   if (typeof raw !== "object" || raw === null) return { ...DEFAULT_CONFIG };
   const record = raw as Record<string, unknown>;
   const workers = record.maxConcurrentWorkers;
-  const staleness = record.stalenessMinutes;
   return {
     titleModel: typeof record.titleModel === "string" ? record.titleModel : undefined,
     maxConcurrentWorkers:
       typeof workers === "number" && Number.isFinite(workers) && workers > 0
         ? Math.floor(workers)
         : DEFAULT_CONFIG.maxConcurrentWorkers,
-    stalenessMinutes:
-      typeof staleness === "number" && Number.isFinite(staleness) && staleness > 0
-        ? staleness
-        : undefined,
   };
 }

@@ -28,13 +28,17 @@ import {
   sessionStatePath,
 } from "./paths.ts";
 import {
+  AUDIT_VERSION,
   type AuditRecord,
+  DEFECT_VERSION,
   type DefectRecord,
   type DomainStats,
   emptyDomainStats,
   type GraduationState,
   type Packet,
   packetBarViolations,
+  parseAuditRecord,
+  parseDefectRecord,
   parseGraduationState,
   parsePacket,
   parseRuling,
@@ -205,10 +209,11 @@ export class HqStore {
    * record exists before the work becomes eligible to continue, so a crash can
    * never leave an unrecorded ruling that already moved work forward.
    */
-  async recordRuling(ruling: Ruling): Promise<void> {
+  async recordRuling(ruling: Ruling, options: { archive?: boolean } = {}): Promise<void> {
     await this.queue(this.paths.rulingsLog, async () => {
       await appendJsonl(this.paths.rulingsLog, ruling);
     });
+    if (options.archive === false) return;
     if (ruling.form === "defer") return;
     await this.updatePacket(ruling.packetId, (packet) => ({ ...packet, status: "ruled" }));
     await this.archivePacket(ruling.packetId);
@@ -226,36 +231,49 @@ export class HqStore {
     }
   }
 
+  /**
+   * Rulings are appended twice when routing follows recording, so the same id can
+   * appear more than once. The last append wins: it is the one that knows where
+   * the ruling was carried.
+   */
   async listRulings(): Promise<Ruling[]> {
-    return readJsonl(this.paths.rulingsLog, parseRuling, this.onError);
+    const all = await readJsonl(this.paths.rulingsLog, parseRuling, this.onError);
+    const latest = new Map<string, Ruling>();
+    for (const ruling of all) latest.set(ruling.id, ruling);
+    return [...latest.values()];
   }
 
-  async appendAudit(record: AuditRecord): Promise<void> {
+  async appendAudit(record: Omit<AuditRecord, "version">): Promise<void> {
     await this.queue(this.paths.auditLog, async () => {
-      await appendJsonl(this.paths.auditLog, record);
+      await appendJsonl(this.paths.auditLog, { version: AUDIT_VERSION, ...record });
     });
   }
 
   async readAuditLines(): Promise<AuditRecord[]> {
-    return readJsonl(
-      this.paths.auditLog,
-      (value) => (typeof value === "object" && value !== null ? (value as AuditRecord) : undefined),
-      this.onError,
-    );
+    return readJsonl(this.paths.auditLog, parseAuditRecord, this.onError);
   }
 
-  async appendDefect(record: DefectRecord): Promise<void> {
+  /**
+   * Counts today's records without reading a lifetime of history: the logs are
+   * append-only and time-ordered, so a reverse scan can stop at the first line
+   * older than the day being counted.
+   */
+  async countToday(day: string): Promise<{ rulings: number; audits: number }> {
+    const [rulings, audits] = await Promise.all([
+      countTailMatching(this.paths.rulingsLog, day, (line) => !line.includes('"form":"defer"')),
+      countTailMatching(this.paths.auditLog, day, () => true),
+    ]);
+    return { rulings, audits };
+  }
+
+  async appendDefect(record: Omit<DefectRecord, "version">): Promise<void> {
     await this.queue(this.paths.defectsLog, async () => {
-      await appendJsonl(this.paths.defectsLog, record);
+      await appendJsonl(this.paths.defectsLog, { version: DEFECT_VERSION, ...record });
     });
   }
 
   async readDefects(): Promise<DefectRecord[]> {
-    return readJsonl(
-      this.paths.defectsLog,
-      (value) => (typeof value === "object" && value !== null ? (value as DefectRecord) : undefined),
-      this.onError,
-    );
+    return readJsonl(this.paths.defectsLog, parseDefectRecord, this.onError);
   }
 
   // ---- graduation state -------------------------------------------------
@@ -303,4 +321,34 @@ export class HqStore {
       return undefined;
     }
   }
+}
+
+/**
+ * Reads a log backwards and counts lines whose `at` falls on `day`, stopping at
+ * the first older line. Bounded by the day's own volume rather than the log's.
+ */
+async function countTailMatching(
+  path: string,
+  day: string,
+  accept: (line: string) => boolean,
+): Promise<number> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return 0;
+  }
+  const lines = text.split("\n");
+  let count = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    const at = /"at":"([^"]+)"/.exec(line)?.[1];
+    if (!at) continue;
+    const lineDay = at.slice(0, 10);
+    if (lineDay > day) continue;
+    if (lineDay < day) break;
+    if (accept(line)) count += 1;
+  }
+  return count;
 }

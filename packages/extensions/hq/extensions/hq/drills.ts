@@ -13,13 +13,19 @@
  * the user could not check without going to look anyway.
  */
 
-import { appendJsonl } from "./io.ts";
+import { appendJsonl, readJsonl } from "./io.ts";
 import { hqPaths } from "./paths.ts";
 import { DRILL_FORK_PROMPT, DRILL_PROMPT } from "./prompts.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
 import { readTranscriptTail, renderTranscript, type TranscriptMessage } from "./transcript.ts";
-import type { Packet, PacketAnnotation } from "./types.ts";
+import {
+  DRILL_LOG_VERSION,
+  type DrillLogEntry,
+  parseDrillLogEntry,
+  type Packet,
+  type PacketAnnotation,
+} from "./types.ts";
 
 export const DRILL_QUESTION_ENV = "HQ_DRILL_QUESTION";
 export const DRILL_TIER_ENV = "HQ_DRILL_TIER";
@@ -30,26 +36,18 @@ export interface DrillDeps {
   now?: () => Date;
 }
 
-export interface DrillLogEntry {
-  at: string;
-  packetId: string;
-  question: string;
-  tier: 1 | 2;
-  /** "read" never opens a copy; "fork" resumes one. */
-  action: "read" | "fork" | "answered" | "gave-up";
-  runId: string | null;
-}
-
-async function logDrill(deps: DrillDeps, entry: DrillLogEntry): Promise<void> {
-  await appendJsonl(hqPaths(deps.store.root).drillsLog, entry);
+async function logDrill(
+  deps: DrillDeps,
+  entry: Omit<DrillLogEntry, "version">,
+): Promise<void> {
+  await appendJsonl(hqPaths(deps.store.root).drillsLog, {
+    version: DRILL_LOG_VERSION,
+    ...entry,
+  });
 }
 
 export async function readDrillLog(store: HqStore): Promise<DrillLogEntry[]> {
-  const { readJsonl } = await import("./io.ts");
-  return readJsonl(
-    hqPaths(store.root).drillsLog,
-    (value) => (typeof value === "object" && value !== null ? (value as DrillLogEntry) : undefined),
-  );
+  return readJsonl(hqPaths(store.root).drillsLog, parseDrillLogEntry);
 }
 
 /**
@@ -206,7 +204,7 @@ export async function submitDrillResult(
     }
     const spawned = await deps.spawner({
       kind: "drill",
-      prompt: DRILL_FORK_PROMPT(submission.question),
+      prompt: DRILL_FORK_PROMPT(submission.question, packet.id),
       cwd: packet.project,
       forkSessionFile: packet.sourceSessionFile,
       originSessionId: packet.sourceSessionId,

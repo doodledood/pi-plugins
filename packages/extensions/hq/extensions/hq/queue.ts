@@ -133,12 +133,6 @@ export function planPresentation(
         flush();
       }
       if (current.length >= meta.batchMax) flush();
-      if (
-        meta.batchRequiresSameProject && current.length > 0 &&
-        current[0]?.project !== packet.project
-      ) {
-        flush();
-      }
       current.push(packet);
       currentReason = `${current.length} trivial packets in ${project}`;
     }

@@ -8,7 +8,7 @@
  * a rule. Recording precedes routing so no work can move on an unrecorded ruling.
  */
 
-import { applyRatifiedRule, coverageFor, loadDoctrine, type MetaDoctrine } from "./doctrine.ts";
+import { applyRatifiedRule, coverageFor, loadDoctrine } from "./doctrine.ts";
 import { graduationProposalCheck, markProposed, recordShadowOutcome } from "./graduation.ts";
 import { newId } from "./io.ts";
 import type { Spawner } from "./spawn.ts";
@@ -147,8 +147,27 @@ export async function applyRuling(
     doctrineApplied = outcome.applied;
   }
 
+  // Record before routing: a continuation that starts on an unrecorded ruling
+  // would re-ask the user the same question and lose the shadow grading. The
+  // spawned session's id is not known until after routing, so it lands in a
+  // second append of the same ruling id, which readers resolve last-wins.
+  const pending = buildRuling({
+    at,
+    packet,
+    request,
+    coverage,
+    shadowAgreed,
+    routing: {
+      action: packet.proposal ? "none" : packet.sourceSessionFile ? "resume" : "none",
+      sessionFile: packet.sourceSessionFile,
+      spawnedSessionId: null,
+      note: "recorded; routing pending",
+    },
+  });
+  await deps.store.recordRuling(pending, { archive: false });
+
   const routing = await routeRuling(deps, packet, request, at);
-  const ruling = buildRuling({ at, packet, request, coverage, shadowAgreed, routing });
+  const ruling: Ruling = { ...pending, routing };
   await deps.store.recordRuling(ruling);
 
   const proposals: Packet[] = [];
@@ -163,10 +182,10 @@ export async function applyRuling(
     const doctrine = await loadDoctrine(deps.store.root, packet.project);
     const check = graduationProposalCheck(stats, doctrine.meta, at);
     if (check.propose) {
-      proposals.push(await createGraduationProposal(deps, packet, check.reason, at));
+      proposals.push(await createGraduationProposal(deps, packet, check.reason));
       await markProposed(deps.store, packet.domain, at);
     }
-    const doctrineProposal = await createDoctrineProposal(deps, packet, ruling, doctrine.meta, at);
+    const doctrineProposal = await createDoctrineProposal(deps, packet, ruling);
     if (doctrineProposal) proposals.push(doctrineProposal);
   }
 
@@ -269,6 +288,7 @@ async function applyProposalRuling(
   proposal: PacketProposal,
   request: RulingRequest,
 ): Promise<{ applied: boolean } | { error: string }> {
+  void deps;
   // A graduation proposal is informational: only the user's command can flip a
   // domain, so ruling on the packet never changes authority (INV-G8).
   if (proposal.kind === "graduation") return { applied: false };
@@ -297,12 +317,18 @@ async function createDoctrineProposal(
   deps: RulingDeps,
   packet: Packet,
   ruling: Ruling,
-  _meta: MetaDoctrine,
-  at: string,
 ): Promise<Packet | undefined> {
   if (ruling.coverage === "covered-agreed") return undefined;
 
-  const amendment = ruling.coverage === "contradicts";
+  // An amendment must carry the rule it replaces as *text*, because that is what
+  // the ratifier matches on; a citation string would never be found in the file.
+  // When the cited rule cannot be resolved, this becomes a new rule instead of an
+  // amendment that could never be applied.
+  const doctrine = await loadDoctrine(deps.store.root, packet.project);
+  const citedRule = packet.doctrineCitations[0]
+    ? doctrine.rules.find((rule) => rule.citation === packet.doctrineCitations[0])
+    : undefined;
+  const amendment = ruling.coverage === "contradicts" && citedRule !== undefined;
   const ruleText = amendment
     ? `In ${packet.domain}: ${ruling.text || "the user's ruling"} — this overrides the earlier rule for this case.`
     : `In ${packet.domain}: ${ruling.text || "the user's ruling"}.`;
@@ -349,14 +375,14 @@ async function createDoctrineProposal(
     trivial: true,
     proposal: {
       kind: amendment ? "amendment" : "new-rule",
-      scope: packet.project ? "project" : "global",
-      section: "Precedents",
+      // An amendment must be written into the file the cited rule lives in.
+      scope: amendment ? (citedRule?.scope ?? "global") : packet.project ? "project" : "global",
+      section: citedRule?.section ?? "Precedents",
       ruleText,
-      replaces: amendment ? (packet.doctrineCitations[0] ?? null) : null,
+      replaces: amendment ? (citedRule?.text ?? null) : null,
       domain: packet.domain,
     },
   });
-  void at;
   return created;
 }
 
@@ -364,7 +390,6 @@ async function createGraduationProposal(
   deps: RulingDeps,
   packet: Packet,
   reason: string,
-  at: string,
 ): Promise<Packet> {
   const { packet: created } = await deps.store.createPacket({
     sourceSessionId: packet.sourceSessionId,
@@ -405,7 +430,6 @@ async function createGraduationProposal(
       domain: packet.domain,
     },
   });
-  void at;
   return created;
 }
 
@@ -418,6 +442,7 @@ export async function recordDive(
   input: { packetId: string; missing: string; ruling: string; at?: string },
 ): Promise<DefectRecord> {
   const record: DefectRecord = {
+    version: 1,
     at: input.at ?? new Date().toISOString(),
     packetId: input.packetId,
     missing: input.missing,

@@ -1,11 +1,9 @@
 /**
  * Durable file mechanics.
  *
- * Adapted from the read-only reference at
- * ~/.pi/agent/extensions-disabled/mission-control/src/state.ts — whole-file
- * writes go through a same-directory temp file plus rename, logs are appended,
- * and seeding uses exclusive-create plus link so a user's edits are never
- * overwritten. Nothing here knows about packets or sessions.
+ * Whole-file writes go through a same-directory temp file plus rename, logs are
+ * appended, and seeding uses exclusive-create plus link so a user's edits are
+ * never overwritten. Nothing here knows about packets or sessions.
  */
 
 import {

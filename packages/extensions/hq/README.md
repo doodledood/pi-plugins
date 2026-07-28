@@ -45,6 +45,8 @@ From a clone:
 pi install /path/to/pi-plugins/packages/extensions/hq
 ```
 
+Once published to npm: `pi install npm:@doodledood/pi-hq`.
+
 Then create the state root, seed doctrine, and add the doctrine reference line to
 your agent instructions (idempotent — run it as often as you like):
 
@@ -93,7 +95,12 @@ From the seat, ask for work to be delegated (`hq_delegate`), and rule on what co
 back. A ruling can be: accept the recommendation, pick an alternative, say it in
 your own words, or **defer with a question** — which sends a drill to find the
 answer and puts the packet back in the queue annotated, while you carry on with
-the next one.
+the next one. You can also ask HQ to drill a packet outright, and it will say so
+and move on rather than making you wait.
+
+There is a row on every ask for "I had to open the session to decide". Choosing it
+records what the packet should have carried, alongside the ruling you then gave —
+that log (`defects.jsonl`) is how the packet format improves.
 
 The card is a glance, not a console:
 
@@ -170,8 +177,9 @@ picks up exactly where it was. Whole-file writes are atomic; logs are append-onl
 
 Optional mechanical settings live in `~/.pi/agent/hq.json` (see
 [`config/hq.example.json`](config/hq.example.json)) — a fast model for titling the
-board, and a cap on concurrent workers. Everything about judgment lives in
-doctrine instead.
+board, and a cap on concurrent workers. Everything else, including the staleness
+threshold and the batching and graduation numbers, lives in doctrine's Meta
+section, so there is exactly one place to look.
 
 ## How it works
 
@@ -188,7 +196,8 @@ doctrine instead.
   that must hold — the reversibility ceiling, graduation, the respawn limit — are
   code, so they hold whatever the model says.
 - **Drills** answer questions about a session. Tier 1 reads the transcript; tier 2
-  resumes a *copy* and asks it directly. Answers come back with verbatim quotes,
+  resumes a *copy* and asks it directly — and the copy is told nothing about HQ,
+  so the packet it answers comes from the run, not from the model. Answers come back with verbatim quotes,
   because a distilled answer you cannot check is one you have to go and verify.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
@@ -200,8 +209,11 @@ npm run verify --workspace @doodledood/pi-hq   # typecheck + unit tests
 npm run test:e2e --workspace @doodledood/pi-hq # full lifecycle, real sessions
 ```
 
-The end-to-end runner takes stage names — `skeleton`, `drill`, `doctrine`,
-`grammar`, `graduation`, or `all` (the default). `skeleton` and `drill` spawn real
-headless sessions and spend tokens; the rest exercise the substrate with a
-recording spawner. Everything runs against a temporary state root, and on failure
+The end-to-end runner takes stage names — `skeleton`, `drill`, `tiering`,
+`doctrine`, `grammar`, `graduation`, or `all` (the default). `skeleton`, `drill`
+and `tiering` spawn real headless sessions and spend tokens; the rest exercise the
+substrate with a recording spawner. `tiering` is the behavioural check on the drill
+order: one question whose answer is in the transcript verbatim must come back
+answered at tier 1 with no copy opened, and one that depends on reasoning the
+session never wrote down must escalate to the fork. Everything runs against a temporary state root, and on failure
 it keeps that root and prints its path.

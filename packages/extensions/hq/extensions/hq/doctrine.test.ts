@@ -28,6 +28,37 @@ test("rules parse with a citable location, and Meta is not a rule", () => {
   assert.equal(rules.some((rule) => rule.section === "Meta"), false);
 });
 
+test("a wrapped rule is cited at the line its bullet is on", () => {
+  const rules = parseRules(
+    `## Doors\n\n- first rule\n- a rule that wraps\n  onto a second line\n- third rule\n`,
+    "global.md",
+    "global",
+  );
+  assert.deepEqual(rules.map((rule) => rule.citation), [
+    "global.md § Doors L3",
+    "global.md § Doors L4",
+    "global.md § Doors L6",
+  ]);
+});
+
+test("the seed's own placeholder bullets are never citable rules", async () => {
+  const root = await makeRoot("hq-doctrine-placeholders");
+  try {
+    await seedDoctrine(root);
+    await seedProjectDoctrine(root, "/work/alpha");
+    const doctrine = await loadDoctrine(root, "/work/alpha");
+    const citable = doctrine.rules.map((rule) => rule.text);
+    assert.equal(
+      citable.some((text) => /^Add (current directives|only precedents|project-specific)/i.test(text)),
+      false,
+      "an instruction to the user must not be able to authorize a decision",
+    );
+    assert.equal(citable.length > 0, true, "the real rules are still citable");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("Meta values come from the file, and nonsense falls back to the default", () => {
   const parsed = parseMeta(
     `## Meta\n\n- batch-max: 2\n- batch-trivial-only: false\n- audit-sample-rate: 0.5\n- graduation-min-days: not-a-number\n`,

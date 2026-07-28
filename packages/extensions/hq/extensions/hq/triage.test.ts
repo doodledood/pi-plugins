@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import test from "node:test";
 import { loadDoctrine, seedDoctrine } from "./doctrine.ts";
 import { graduateDomain } from "./graduation.ts";
@@ -15,8 +17,14 @@ import {
 } from "./testing.ts";
 import { ensureStopRecord, readStopRecord, type StopRecord } from "./stops.ts";
 import { HqStore } from "./store.ts";
-import { applyTriageOutcome, MAX_RESPAWNS, sweepStops, triageContext } from "./triage.ts";
-import type { Spawner, SpawnRequest } from "./spawn.ts";
+import {
+  applyTriageOutcome,
+  MAX_RESPAWNS,
+  sweepStops,
+  triageContext,
+  type TriageOutcome,
+} from "./triage.ts";
+import { createSpawner, MANAGED_ENV, type Spawner, type SpawnRequest } from "./spawn.ts";
 
 interface Harness {
   root: string;
@@ -346,6 +354,120 @@ test("the stops directory stays inside the state root", async () => {
     assert.equal(hqPaths(h.root).stops.startsWith(h.root), true);
     await writeFile(`${h.root}/marker`, "x", "utf8");
   } finally {
+    await dropRoot(h.root);
+  }
+});
+
+/** Every file under a directory, with its bytes hashed, for a byte-identical check. */
+async function snapshotTree(dir: string): Promise<Record<string, string>> {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const snapshot: Record<string, string> = {};
+  for (const entry of entries) {
+    const full = join(entry.parentPath ?? dir, entry.name);
+    if (!entry.isFile()) continue;
+    snapshot[relative(dir, full)] = createHash("sha256")
+      .update(await readFile(full))
+      .digest("hex");
+  }
+  return snapshot;
+}
+
+/**
+ * The claim HQ rests on: triage classifies and records, and the only thing it can
+ * reach outward is a pi session (INV-G9). No outcome — not even one whose
+ * instruction names a push — can perform an externally visible or irreversible
+ * action itself, and no outcome touches the project directory.
+ */
+test("no triage outcome can act on the world itself: every effect is a pi session or a write inside the state root", async () => {
+  const h = await harness("hq-triage-no-actuation");
+  const workspace = await makeRoot("hq-triage-workspace");
+  try {
+    await writeFile(join(workspace, "tracked.txt"), "untouched\n", "utf8");
+    const before = await snapshotTree(workspace);
+
+    const spawned: Array<{ bin: string; argv: readonly string[]; options: Record<string, unknown> }> = [];
+    const spawner = createSpawner({
+      root: h.root,
+      env: { PATH: "/usr/bin" },
+      spawnImpl: ((bin: string, argv: readonly string[], options: Record<string, unknown>) => {
+        spawned.push({ bin, argv, options });
+        return { pid: 4242, unref() {}, once() {} };
+      }) as never,
+    });
+
+    await graduateDomain(h.store, "release-chores", "2026-07-20T00:00:00.000Z");
+    const citation = (await loadDoctrine(h.root, workspace)).rules[0]?.citation ?? "";
+    const deps = { store: h.store, spawner, now: h.now };
+
+    // One stop per outcome kind, all rooted in the real project directory.
+    const outcomes: Array<{ id: string; outcome: TriageOutcome }> = [
+      { id: "stop-packet", outcome: { kind: "packet", packet: triageDraftFixture() } },
+      {
+        id: "stop-continue",
+        outcome: {
+          kind: "continue",
+          domain: "release-chores",
+          citation,
+          // Deliberately an externally visible act: HQ may carry it, never do it.
+          instruction: "run git push --force and publish the package",
+          summary: "push and publish",
+          blastRadius: "low",
+          reversibility: "reversible",
+        },
+      },
+      {
+        id: "stop-close",
+        outcome: { kind: "close", domain: "release-chores", summary: "nothing left to do", citation },
+      },
+      {
+        id: "stop-respawn",
+        outcome: {
+          kind: "respawn",
+          domain: "release-chores",
+          reason: "the build died",
+          instruction: "delete the stale release tag and deploy again",
+        },
+      },
+    ];
+
+    for (const { id, outcome } of outcomes) {
+      await ensureStopRecord(h.root, { ...h.stop, stopId: id, project: workspace });
+      const result = await applyTriageOutcome(deps, id, outcome);
+      assert.equal("error" in result, false, `${id} applied`);
+    }
+
+    assert.ok(spawned.length > 0, "outcomes did reach the spawner, so the assertions below mean something");
+    for (const call of spawned) {
+      assert.equal(call.bin, "pi", "the only program HQ starts is pi");
+      const argv = [...call.argv];
+      const printIndex = argv.indexOf("--print");
+      assert.ok(printIndex >= 0, "every child is a pi session in print mode");
+      assert.equal(printIndex, argv.length - 2, "the prompt is the final argument");
+      // Anything actuating appears only inside the prompt text, never as argv.
+      const flags = argv.slice(0, printIndex);
+      for (const flag of flags) {
+        assert.match(
+          flag,
+          /^(--session|--fork|--model|--name|--tools|-e|\/|[^-].*)$/,
+          `unexpected argument to pi: ${flag}`,
+        );
+        assert.doesNotMatch(flag, /(^|\s)(git|gh|npm|curl|ssh|rm)(\s|$)|[;&|`$]/, `shell-shaped argument: ${flag}`);
+      }
+      assert.equal((call.options.env as NodeJS.ProcessEnv)[MANAGED_ENV], "1", "the child is itself supervised");
+      assert.equal(call.options.cwd, workspace);
+    }
+
+    // The instruction that named a push was carried as a prompt for the worker to
+    // weigh inside its own permission envelope, and nothing else.
+    const carried = spawned.filter((call) => call.argv.at(-1)?.includes("git push --force"));
+    assert.equal(carried.length, 1, "the ruling was carried once, as text");
+
+    assert.deepEqual(await snapshotTree(workspace), before, "the project directory is byte-identical");
+    for (const record of await h.store.readAuditLines()) {
+      assert.ok(record.at.length > 0, "records are the only durable effect, and they live under the root");
+    }
+  } finally {
+    await dropRoot(workspace);
     await dropRoot(h.root);
   }
 });

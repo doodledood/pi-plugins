@@ -16,6 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadDoctrine } from "./doctrine.ts";
 import { drillContext, startDrill, submitDrillResult, type DrillDeps } from "./drills.ts";
 import { buildFleetCard } from "./fleet.ts";
+import { isPidAlive } from "./io.ts";
 import { planPresentation } from "./queue.ts";
 import { applyRuling, recordDive, type RulingRequest } from "./rulings.ts";
 import { envKind, isManagedEnv, type Spawner } from "./spawn.ts";
@@ -41,6 +42,10 @@ export interface ToolDeps {
   doneToday: () => Promise<number>;
   /** Caps live managed workers, so a runaway seat cannot fill the machine. */
   maxConcurrentWorkers: number;
+  /** Read instead of process.env, so a worker tool's audience is injectable. */
+  env: NodeJS.ProcessEnv;
+  /** Set between the dive signal and the ruling it precedes; internal. */
+  pendingDive?: { packetId: string; missing: string };
 }
 
 function text(body: string) {
@@ -97,7 +102,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       "Everything known about a stop: the stop record, the tail of the source session's transcript, the doctrine that applies, and which domains are graduated.",
     parameters: Type.Object({ stopId: Type.String() }),
     async execute(_id, params) {
-      if (envKind() !== "triage") return refuse("this tool belongs to stop triage");
+      if (envKind(deps.env) !== "triage") return refuse("this tool belongs to stop triage");
       const context = await triageContext(deps, params.stopId);
       if ("error" in context) return text(context.error);
       return text(
@@ -146,7 +151,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       ),
     }),
     async execute(_id, params) {
-      if (envKind() !== "triage") return refuse("this tool belongs to stop triage");
+      if (envKind(deps.env) !== "triage") return refuse("this tool belongs to stop triage");
       const outcome = toTriageOutcome(params);
       if ("error" in outcome) return text(outcome.error);
       const result = await applyTriageOutcome(deps, params.stopId, outcome.outcome);
@@ -166,6 +171,13 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
 
   // ---- drill worker -----------------------------------------------------
 
+  // The packet a drill is about is fixed when the drill is spawned, so the run's
+  // environment decides it rather than the model. A tier-2 drill is a resumed copy
+  // of the source session: it was never told a packet id and must not have to
+  // invent one to report what it found.
+  const drillPacketId = (supplied?: string): string =>
+    deps.env.HQ_PACKET_ID?.trim() || supplied?.trim() || "";
+
   pi.registerTool({
     name: "hq_drill_context",
     label: "HQ drill context",
@@ -173,10 +185,10 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       "The packet being drilled and the tail of the source session's transcript. Read this before answering.",
     parameters: Type.Object({ packetId: Type.String() }),
     async execute(_id, params) {
-      if (envKind() !== "drill") return refuse("this tool belongs to drill workers");
-      const question = process.env.HQ_DRILL_QUESTION ?? "";
-      const tier = process.env.HQ_DRILL_TIER === "2" ? 2 : 1;
-      const context = await drillContext(drillDeps, params.packetId, question, tier);
+      if (envKind(deps.env) !== "drill") return refuse("this tool belongs to drill workers");
+      const question = deps.env.HQ_DRILL_QUESTION ?? "";
+      const tier = deps.env.HQ_DRILL_TIER === "2" ? 2 : 1;
+      const context = await drillContext(drillDeps, drillPacketId(params.packetId), question, tier);
       if ("error" in context) return text(context.error);
       return text(
         [
@@ -199,7 +211,9 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     description:
       "Submit the drill's answer with verbatim quotes. Set insufficient when reading cannot answer it and the session itself must be asked.",
     parameters: Type.Object({
-      packetId: Type.String(),
+      packetId: Type.Optional(
+        Type.String({ description: "Omit it: the drill's packet is fixed by the run" }),
+      ),
       answer: Type.String(),
       quotes: Type.Array(
         Type.Object({
@@ -227,15 +241,15 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       ),
     }),
     async execute(_id, params) {
-      if (envKind() !== "drill") return refuse("this tool belongs to drill workers");
+      if (envKind(deps.env) !== "drill") return refuse("this tool belongs to drill workers");
       const outcome = await submitDrillResult(drillDeps, {
-        packetId: params.packetId,
-        question: process.env.HQ_DRILL_QUESTION ?? "",
-        tier: process.env.HQ_DRILL_TIER === "2" ? 2 : 1,
+        packetId: drillPacketId(params.packetId),
+        question: deps.env.HQ_DRILL_QUESTION ?? "",
+        tier: deps.env.HQ_DRILL_TIER === "2" ? 2 : 1,
         answer: params.answer,
         quotes: params.quotes,
         ...(params.insufficient ? { insufficient: true } : {}),
-        ...(params.patch ? { patch: params.patch as never } : {}),
+        ...(params.patch ? { patch: params.patch } : {}),
       });
       if ("error" in outcome) return text(outcome.error);
       if (outcome.kind === "escalated") {
@@ -251,7 +265,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     description: "Set the short board label for a session.",
     parameters: Type.Object({ sessionId: Type.String(), title: Type.String() }),
     async execute(_id, params) {
-      if (envKind() !== "titler") return refuse("this tool belongs to the titler");
+      if (envKind(deps.env) !== "titler") return refuse("this tool belongs to the titler");
       const state = await deps.store.readSessionState(params.sessionId);
       if (!state) return text(`no such session: ${params.sessionId}`);
       await deps.store.publishSessionState({ ...state, title: params.title.trim().slice(0, 48) });
@@ -268,7 +282,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       "The queue, ordered and batched for presentation. Read this at the start of every cycle: the queue lives on disk and changes while you work.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       const presentable = await deps.store.listPresentable();
       const all = await deps.store.listQueue();
@@ -304,7 +318,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       packetIds: Type.Array(Type.String(), { description: "Packet ids from the plan, in order" }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       if (!ctx.hasUI) return refuse("there is no interactive surface to ask on");
 
@@ -332,7 +346,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     description: "The board: every supervised session, its state, and how long since it spoke.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       const [fleet, packets, doctrine, doneToday] = await Promise.all([
         deps.store.listFleet(),
@@ -371,7 +385,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       maxMessages: Type.Optional(Type.Number()),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       const state = await deps.store.readSessionState(params.sessionId);
       if (!state) return text(`no such session: ${params.sessionId}`);
@@ -394,10 +408,14 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       name: Type.Optional(Type.String()),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
+      // A worker killed without publishing would otherwise hold its slot forever,
+      // so the cap probes liveness rather than trusting the last published state.
       const live = (await deps.store.listFleet()).filter(
-        (state) => state.role === "managed" && state.kind === "worker" && state.state === "running",
+        (state) =>
+          state.role === "managed" && state.kind === "worker" && state.state === "running" &&
+          isPidAlive(state.pid),
       );
       if (live.length >= deps.maxConcurrentWorkers) {
         return refuse(
@@ -416,6 +434,35 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
   });
 
   pi.registerTool({
+    name: "hq_drill",
+    label: "HQ drill a packet",
+    description:
+      "Send a drill to find something out about a packet's source session, without waiting for it. The packet leaves the queue and returns annotated with the answer and verbatim quotes. Use this when a packet is missing something you would otherwise have to open the session for.",
+    parameters: Type.Object({
+      packetId: Type.String(),
+      question: Type.String({ description: "Exactly what should be found out" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      const denied = seatGuard(deps);
+      if (denied) return refuse(denied);
+      if (!params.question.trim()) return refuse("a drill needs a question");
+      const result = await applyRuling(
+        {
+          store: deps.store,
+          spawner: deps.spawner,
+          now: deps.now,
+          startDrill: (target, question) => startDrill(drillDeps, target, question),
+        },
+        { packetId: params.packetId, form: "defer", question: params.question },
+      );
+      if ("error" in result) return text(result.error);
+      return text(
+        `Drilling ${params.packetId}; it leaves the queue and comes back annotated. Carry on with the next packet.`,
+      );
+    },
+  });
+
+  pi.registerTool({
     name: "hq_defect",
     label: "HQ log a packet defect",
     description:
@@ -426,7 +473,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       ruling: Type.Optional(Type.String()),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       await recordDive(deps.store, {
         packetId: params.packetId,
@@ -445,7 +492,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       "Decisions HQ answered from doctrine without the user, with the sampled ones marked for review.",
     parameters: Type.Object({ limit: Type.Optional(Type.Number()) }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const denied = seatGuard(ctx, deps);
+      const denied = seatGuard(deps);
       if (denied) return refuse(denied);
       const records = await deps.store.readAuditLines();
       const limit = params.limit ?? 20;
@@ -460,10 +507,9 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
   });
 }
 
-function seatGuard(ctx: ExtensionContext, deps: ToolDeps): string | undefined {
-  if (isManagedEnv()) return "a worker session cannot use the seat's tools";
+function seatGuard(deps: ToolDeps): string | undefined {
+  if (isManagedEnv(deps.env)) return "a worker session cannot use the seat's tools";
   if (!deps.isSeatActive()) return "the HQ seat is not active in this session; run /hq first";
-  void ctx;
   return undefined;
 }
 
@@ -471,63 +517,101 @@ const DEFER_LABEL = "Ask first — I want something checked";
 const CUSTOM_LABEL = "In my own words…";
 const DIVE_LABEL = "I had to open the session to decide";
 
+export interface AskRow {
+  label: string;
+  request: RulingRequest;
+}
+
 /**
- * One ask, presented through pi's own dialogs. The order is the contract: the
- * recommendation is first, then alternatives, then defer, then free text.
+ * The rows of one ask, in the pinned order: the recommendation first, then the
+ * alternatives, then defer, then free text, then the dive row.
+ *
+ * Each row carries the ruling it means, so the choice is resolved by exact row
+ * rather than by re-reading the display text. Option labels are model-authored,
+ * and one label being a prefix of another used to record the wrong decision.
  */
-async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Promise<string> {
+export function buildAskRows(packet: Packet): AskRow[] {
   const recommended = packet.options.find((option) => option.id === packet.recommendationId);
   const alternatives = packet.options.filter((option) => option.id !== packet.recommendationId);
-  const labels = [
-    ...(recommended ? [`${recommended.label} (recommended) — ${recommended.price}`] : []),
-    ...alternatives.map((option) => `${option.label} — ${option.price}`),
-    DEFER_LABEL,
-    CUSTOM_LABEL,
-    DIVE_LABEL,
+  return [
+    ...(recommended
+      ? [{
+        label: `${recommended.label} (recommended) — ${recommended.price}`,
+        request: { packetId: packet.id, form: "accept" } as RulingRequest,
+      }]
+      : []),
+    ...alternatives.map((option) => ({
+      label: `${option.label} — ${option.price}`,
+      request: {
+        packetId: packet.id,
+        form: "alternative",
+        optionId: option.id,
+      } as RulingRequest,
+    })),
+    { label: DEFER_LABEL, request: { packetId: packet.id, form: "defer" } },
+    { label: CUSTOM_LABEL, request: { packetId: packet.id, form: "custom" } },
+    { label: DIVE_LABEL, request: { packetId: packet.id, form: "accept" } },
   ];
+}
 
+/** Fills in the text a defer or a custom ruling still needs from the user. */
+async function completeRequest(
+  ctx: ExtensionContext,
+  request: RulingRequest,
+): Promise<RulingRequest | undefined> {
+  if (request.form === "defer") {
+    const question = await ctx.ui.input("What should be checked?", "the question to drill");
+    return question?.trim() ? { ...request, question } : undefined;
+  }
+  if (request.form === "custom") {
+    const words = await ctx.ui.input("Your ruling", "what should happen");
+    return words?.trim() ? { ...request, text: words } : undefined;
+  }
+  return request;
+}
+
+/**
+ * One ask, presented through pi's own dialogs, ending in a recorded ruling.
+ */
+async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Promise<string> {
+  const rows = buildAskRows(packet);
   const title = `${packet.title} — ${packet.question}`;
-  const chosen = await ctx.ui.select(title, labels);
+
+  const chosen = await ctx.ui.select(title, rows.map((row) => row.label));
   if (chosen === undefined) return `${packet.id}: left pending`;
 
-  let request: RulingRequest | undefined;
+  let dived = false;
+  let selected = rows.find((row) => row.label === chosen);
+
   if (chosen === DIVE_LABEL) {
+    dived = true;
     const missing = await ctx.ui.input(
       "What was missing from the packet?",
       "what you had to go and find out",
     );
-    await recordDive(deps.store, {
-      packetId: packet.id,
-      missing: missing ?? "(not stated)",
-      ruling: "",
-      at: deps.now().toISOString(),
-    });
-    const second = await ctx.ui.select(title, labels.filter((label) => label !== DIVE_LABEL));
-    if (second === undefined) return `${packet.id}: defect logged, left pending`;
-    request = requestFromLabel(packet, second, undefined);
-    if (request?.form === "defer") {
-      const question = await ctx.ui.input("What should be checked?", "the question to drill");
-      if (!question?.trim()) return `${packet.id}: defect logged, left pending`;
-      request = { ...request, question };
+    const remaining = rows.filter((row) => row.label !== DIVE_LABEL);
+    const second = await ctx.ui.select(title, remaining.map((row) => row.label));
+    if (second === undefined) {
+      // The dive itself is the signal worth keeping, even with no ruling behind it.
+      await recordDive(deps.store, {
+        packetId: packet.id,
+        missing: missing?.trim() || "(not stated)",
+        ruling: "(left pending)",
+        at: deps.now().toISOString(),
+      });
+      return `${packet.id}: defect logged, left pending`;
     }
-    if (request?.form === "custom") {
-      const words = await ctx.ui.input("Your ruling", "what should happen");
-      if (!words?.trim()) return `${packet.id}: defect logged, left pending`;
-      request = { ...request, text: words };
-    }
-  } else if (chosen === DEFER_LABEL) {
-    const question = await ctx.ui.input("What should be checked?", "the question to drill");
-    if (!question?.trim()) return `${packet.id}: left pending`;
-    request = { packetId: packet.id, form: "defer", question };
-  } else if (chosen === CUSTOM_LABEL) {
-    const words = await ctx.ui.input("Your ruling", "what should happen");
-    if (!words?.trim()) return `${packet.id}: left pending`;
-    request = { packetId: packet.id, form: "custom", text: words };
-  } else {
-    request = requestFromLabel(packet, chosen, undefined);
+    selected = remaining.find((row) => row.label === second);
+    deps.pendingDive = { packetId: packet.id, missing: missing?.trim() || "(not stated)" };
   }
 
-  if (!request) return `${packet.id}: could not read that choice; left pending`;
+  if (!selected) return `${packet.id}: could not read that choice; left pending`;
+
+  const request = await completeRequest(ctx, selected.request);
+  if (!request) {
+    if (dived) await flushDive(deps, "(left pending)");
+    return `${packet.id}: left pending${dived ? " (defect logged)" : ""}`;
+  }
 
   const result = await applyRuling(
     {
@@ -539,31 +623,31 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
     },
     request,
   );
-  if ("error" in result) return `${packet.id}: ${result.error}`;
+  if ("error" in result) {
+    if (dived) await flushDive(deps, "(ruling failed)");
+    return `${packet.id}: ${result.error}`;
+  }
+
+  // The defect is written after the ruling so it can name what the user decided
+  // once they had looked — that pairing is the whole value of the log.
+  if (dived) await flushDive(deps, result.ruling.text || result.ruling.form);
+
   const proposals = result.proposals.length > 0
     ? ` Queued ${result.proposals.length} proposal${result.proposals.length === 1 ? "" : "s"}.`
     : "";
   return `${packet.id}: ruled (${result.ruling.form}, ${result.ruling.coverage}). ${result.note}.${proposals}`;
 }
 
-function requestFromLabel(
-  packet: Packet,
-  label: string,
-  text?: string,
-): RulingRequest | undefined {
-  if (label === DEFER_LABEL) return { packetId: packet.id, form: "defer" };
-  if (label === CUSTOM_LABEL) {
-    return { packetId: packet.id, form: "custom", ...(text ? { text } : {}) };
-  }
-  const recommended = packet.options.find((option) => option.id === packet.recommendationId);
-  if (recommended && label.startsWith(recommended.label)) {
-    return { packetId: packet.id, form: "accept" };
-  }
-  const alternative = packet.options.find((option) => label.startsWith(option.label));
-  if (alternative) {
-    return { packetId: packet.id, form: "alternative", optionId: alternative.id };
-  }
-  return undefined;
+async function flushDive(deps: ToolDeps, ruling: string): Promise<void> {
+  const pending = deps.pendingDive;
+  if (!pending) return;
+  deps.pendingDive = undefined;
+  await recordDive(deps.store, {
+    packetId: pending.packetId,
+    missing: pending.missing,
+    ruling,
+    at: deps.now().toISOString(),
+  });
 }
 
 /** Validates the model's outcome submission into the typed union. */

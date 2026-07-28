@@ -38,8 +38,20 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
     const root = options.stateRoot ?? resolveStateRoot();
     const config = options.config ?? loadConfig();
     const now = options.now ?? (() => new Date());
-    const store = new HqStore({ root, now });
-    const spawner = options.spawner ?? createSpawner({ root });
+    // Substrate failures are reported rather than swallowed: a packet that cannot
+    // be parsed would otherwise vanish from the queue with no sign a decision was
+    // dropped. In a headless worker there is no UI, so it goes to stderr.
+    const problems: string[] = [];
+    const report = (message: string, error: unknown): void => {
+      const line = `HQ: ${message}: ${error instanceof Error ? error.message : String(error)}`;
+      problems.push(line);
+      if (problems.length > 20) problems.shift();
+      process.stderr.write(`${line}\n`);
+      lastProblemAt = now().toISOString();
+    };
+    let lastProblemAt: string | undefined;
+    const store = new HqStore({ root, now, onError: report });
+    const spawner = options.spawner ?? createSpawner({ root, onError: report });
 
     let reporter: SessionReporter | undefined;
     let seatActive = false;
@@ -52,11 +64,8 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
 
     const doneToday = async (): Promise<number> => {
       const today = now().toISOString().slice(0, 10);
-      const [rulings, audit] = await Promise.all([store.listRulings(), store.readAuditLines()]);
-      return (
-        rulings.filter((ruling) => ruling.at.startsWith(today) && ruling.form !== "defer").length +
-        audit.filter((record) => record.at.startsWith(today)).length
-      );
+      const counts = await store.countToday(today);
+      return counts.rulings + counts.audits;
     };
 
     const refreshCard = async (): Promise<void> => {
@@ -66,14 +75,14 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         loadDoctrine(root, undefined),
         doneToday(),
       ]);
+      // The doctrine file is the only source for the staleness threshold, so the
+      // card and the hq_fleet tool cannot disagree about it.
       cardModel = buildFleetCard({
         fleet,
         packets,
         doneToday: done,
         now: now(),
-        meta: config.stalenessMinutes
-          ? { ...doctrine.meta, stalenessMinutes: config.stalenessMinutes }
-          : doctrine.meta,
+        meta: doctrine.meta,
       });
     };
 
@@ -85,13 +94,14 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
       defaultCwd: () => process.cwd(),
       doneToday,
       maxConcurrentWorkers: config.maxConcurrentWorkers,
+      env: process.env,
     });
 
     pi.on("session_start", async (_event, ctx) => {
       reporter = new SessionReporter({
         store,
         spawner,
-        ctx: ctx as unknown as ExtensionContext,
+        ctx,
         now,
         ...(config.titleModel ? { titleModel: config.titleModel } : {}),
       });
@@ -163,9 +173,10 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         ctx.ui.notify(
           `HQ seat active. ${pending} packet${pending === 1 ? "" : "s"} to rule${
             swept.retried.length > 0 ? `; ${swept.retried.length} stop(s) re-triaged` : ""
-          }.`,
+          }${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
           "info",
         );
+        for (const problem of problems.slice(-3)) ctx.ui.notify(problem, "warning");
         pi.sendUserMessage(
           pending > 0
             ? "Take the seat: read the queue plan and put the first ask to me."
@@ -253,7 +264,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
           overlay: true,
           overlayOptions: FLEET_OVERLAY_OPTIONS,
           onHandle: (handle) => {
-            overlayHandle = handle as unknown as typeof overlayHandle;
+            overlayHandle = handle;
             // The card is a glance, never a seat: it releases input immediately so
             // the editor keeps every keystroke.
             handle.unfocus({ target: null });

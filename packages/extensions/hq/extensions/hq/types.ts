@@ -10,6 +10,9 @@
 export const SESSION_STATE_VERSION = 1 as const;
 export const PACKET_VERSION = 1 as const;
 export const RULING_VERSION = 1 as const;
+export const AUDIT_VERSION = 1 as const;
+export const DEFECT_VERSION = 1 as const;
+export const DRILL_LOG_VERSION = 1 as const;
 
 /** How a session came to exist, which decides whether HQ may act on it. */
 export type SessionRole =
@@ -96,7 +99,7 @@ export interface PacketProposal {
   section: string;
   /** The rule as proposed; for a graduation proposal, the rationale. */
   ruleText: string;
-  /** For an amendment: the exact existing rule text being replaced. */
+  /** For an amendment: the rule being replaced, folded to one line. */
   replaces: string | null;
   /** For a graduation proposal: the domain concerned. */
   domain: string | null;
@@ -177,8 +180,13 @@ export interface Ruling {
   routing: RulingRouting;
 }
 
+/** The four things a stop can turn into. Closed set, so a typo cannot silently
+ * disable a limit that counts outcomes (the respawn ceiling reads this). */
+export type StopOutcome = "packet" | "continue" | "close" | "respawn";
+
 /** A stop answered from doctrine without the user, kept inspectable. */
 export interface AuditRecord {
+  version: typeof AUDIT_VERSION;
   at: string;
   sourceSessionId: string;
   domain: string;
@@ -191,10 +199,24 @@ export interface AuditRecord {
 
 /** Recorded when the user had to open a session to decide — the core bet's telemetry. */
 export interface DefectRecord {
+  version: typeof DEFECT_VERSION;
   at: string;
   packetId: string;
   missing: string;
+  /** The ruling the user gave once they had looked. */
   ruling: string;
+}
+
+/** One line per drill step, so which tier answered is auditable. */
+export interface DrillLogEntry {
+  version: typeof DRILL_LOG_VERSION;
+  at: string;
+  packetId: string;
+  question: string;
+  tier: 1 | 2;
+  /** "read" never opens a copy; "fork" resumes one. */
+  action: "read" | "fork" | "answered" | "gave-up";
+  runId: string | null;
 }
 
 /** Per-domain shadow-agreement tally. Never grants authority by itself. */
@@ -238,24 +260,24 @@ export function emptyDomainStats(domain: string): DomainStats {
 // silently-healthy empty state.
 // ---------------------------------------------------------------------------
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function str(value: unknown): string | undefined {
+export function str(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function strOrNull(value: unknown): string | null | undefined {
+export function strOrNull(value: unknown): string | null | undefined {
   if (value === null) return null;
   return typeof value === "string" ? value : undefined;
 }
 
-function num(value: unknown): number | undefined {
+export function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function bool(value: unknown): boolean | undefined {
+export function bool(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
@@ -269,17 +291,23 @@ function strArray(value: unknown): string[] | undefined {
   return out;
 }
 
-function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+export function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   const text = str(value);
   return text !== undefined && (allowed as readonly string[]).includes(text)
     ? (text as T)
     : undefined;
 }
 
-const ROLES = ["attended", "managed"] as const;
-const KINDS = ["worker", "triage", "drill", "continuation"] as const;
+export const ROLES = ["attended", "managed"] as const;
+export const KINDS = ["worker", "triage", "drill", "continuation"] as const;
 const FLEET_STATES = ["running", "idle", "drilling", "done"] as const;
-const STOP_STATES = ["working", "stopped-with-question", "idle-done", "aborted"] as const;
+export const STOP_STATES = [
+  "working",
+  "stopped-with-question",
+  "idle-done",
+  "aborted",
+] as const;
+export const STOP_OUTCOMES = ["packet", "continue", "close", "respawn"] as const;
 const BLASTS = ["low", "medium", "high"] as const;
 const REVERSIBILITIES = ["reversible", "one-way"] as const;
 const PACKET_STATUSES = ["pending", "held", "drilling", "ruled", "withdrawn"] as const;
@@ -535,6 +563,75 @@ export function parseRuling(value: unknown): Ruling | undefined {
   };
 }
 
+/**
+ * The append-only logs get the same treatment as the rest of the substrate: a
+ * record a reader cannot trust is absence-with-a-report, not a field that reads
+ * as a string and is actually undefined three frames later.
+ */
+export function parseAuditRecord(value: unknown): AuditRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  if (num(value.version) !== AUDIT_VERSION) return undefined;
+  const at = str(value.at);
+  const sourceSessionId = str(value.sourceSessionId);
+  const domain = str(value.domain);
+  const project = str(value.project);
+  const ruleCitation = str(value.ruleCitation);
+  const action = str(value.action);
+  const summary = str(value.summary);
+  if (
+    at === undefined || sourceSessionId === undefined || domain === undefined ||
+    project === undefined || ruleCitation === undefined || action === undefined ||
+    summary === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    version: AUDIT_VERSION,
+    at,
+    sourceSessionId,
+    domain,
+    project,
+    ruleCitation,
+    action,
+    summary,
+    sampledForReview: bool(value.sampledForReview) ?? false,
+  };
+}
+
+export function parseDefectRecord(value: unknown): DefectRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  if (num(value.version) !== DEFECT_VERSION) return undefined;
+  const at = str(value.at);
+  const packetId = str(value.packetId);
+  const missing = str(value.missing);
+  if (at === undefined || packetId === undefined || missing === undefined) return undefined;
+  return {
+    version: DEFECT_VERSION,
+    at,
+    packetId,
+    missing,
+    ruling: str(value.ruling) ?? "",
+  };
+}
+
+export function parseDrillLogEntry(value: unknown): DrillLogEntry | undefined {
+  if (!isRecord(value)) return undefined;
+  if (num(value.version) !== DRILL_LOG_VERSION) return undefined;
+  const at = str(value.at);
+  const packetId = str(value.packetId);
+  const question = str(value.question);
+  const action = oneOf(value.action, ["read", "fork", "answered", "gave-up"] as const);
+  const tier = num(value.tier);
+  const runId = strOrNull(value.runId);
+  if (
+    at === undefined || packetId === undefined || question === undefined ||
+    action === undefined || (tier !== 1 && tier !== 2) || runId === undefined
+  ) {
+    return undefined;
+  }
+  return { version: DRILL_LOG_VERSION, at, packetId, question, tier, action, runId };
+}
+
 export function parseGraduationState(value: unknown): GraduationState | undefined {
   if (!isRecord(value)) return undefined;
   if (num(value.version) !== 1) return undefined;
@@ -618,6 +715,16 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
   }
   if (!substantive(packet.domain, 1)) {
     violations.push({ field: "domain", reason: "no decision domain" });
+  }
+  // A decision packet without a shadow ruling silently stalls the authority
+  // ladder: there is nothing for the user's ruling to be graded against. HQ's own
+  // doctrine and graduation packets are exempt — they are not the machinery
+  // predicting a decision, they are the machinery asking about itself.
+  if (!packet.proposal && !packet.shadowRuling) {
+    violations.push({
+      field: "shadowRuling",
+      reason: "no shadow ruling to grade the user's decision against",
+    });
   }
   return violations;
 }

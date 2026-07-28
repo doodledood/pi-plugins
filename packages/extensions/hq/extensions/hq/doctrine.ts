@@ -20,13 +20,16 @@ export interface DoctrineRule {
   /** Citable location, e.g. "global.md § Doors L14". */
   citation: string;
   section: string;
+  /** The rule as one line, with any wrapped continuation folded in. */
   text: string;
   scope: "global" | "project";
+  /** 1-based line the bullet starts on, and the last line it occupies. */
+  line: number;
+  endLine: number;
 }
 
 export interface MetaDoctrine {
   batchMax: number;
-  batchRequiresSameProject: boolean;
   batchTrivialOnly: boolean;
   graduationConsecutiveAgreements: number;
   graduationMinDays: number;
@@ -36,7 +39,6 @@ export interface MetaDoctrine {
 
 export const META_DEFAULTS: MetaDoctrine = {
   batchMax: 4,
-  batchRequiresSameProject: true,
   batchTrivialOnly: true,
   graduationConsecutiveAgreements: 10,
   graduationMinDays: 14,
@@ -99,8 +101,14 @@ export function parseRules(
     const bullet = /^\s*[-*]\s+(.*\S)\s*$/.exec(line);
     if (!bullet?.[1]) continue;
     if (section === "Meta") continue;
+    // The seeded "add your rules here" bullets are instructions to the user, not
+    // rules HQ may cite — a placeholder must never be able to authorize a decision.
+    if (PLACEHOLDER_RULE.test(bullet[1])) continue;
 
-    // Fold continuation lines so a wrapped rule reads as one rule.
+    // Fold continuation lines so a wrapped rule reads as one rule, but cite the
+    // line the bullet itself is on — that is where the user will look.
+    const bulletLine = index + 1;
+    let endLine = bulletLine;
     let body = bullet[1];
     let lookahead = index + 1;
     while (lookahead < lines.length) {
@@ -108,6 +116,7 @@ export function parseRules(
       if (/^\s+\S/.test(next) && !/^\s*[-*]\s/.test(next)) {
         body += ` ${next.trim()}`;
         lookahead += 1;
+        endLine = lookahead;
         index = lookahead - 1;
         continue;
       }
@@ -115,14 +124,19 @@ export function parseRules(
     }
 
     rules.push({
-      citation: `${fileLabel} § ${section} L${index + 1}`,
+      citation: `${fileLabel} § ${section} L${bulletLine}`,
       section,
       text: body,
       scope,
+      line: bulletLine,
+      endLine,
     });
   }
   return rules;
 }
+
+/** Instructional bullets shipped in the seed, which are never citable rules. */
+const PLACEHOLDER_RULE = /^Add (current directives|only precedents|approved project-specific|project-specific directives)/i;
 
 function parseMetaValue(raw: string): string {
   return raw.trim().replace(/\.$/, "");
@@ -154,10 +168,6 @@ export function parseMeta(text: string): MetaDoctrine {
   };
 
   meta.batchMax = numeric("batch-max", meta.batchMax, 1, 20);
-  meta.batchRequiresSameProject = boolean(
-    "batch-requires-same-project",
-    meta.batchRequiresSameProject,
-  );
   meta.batchTrivialOnly = boolean("batch-trivial-only", meta.batchTrivialOnly);
   meta.graduationConsecutiveAgreements = numeric(
     "graduation-consecutive-agreements",
@@ -213,7 +223,11 @@ export interface RatificationRequest {
   project?: string;
   section: string;
   ruleText: string;
-  /** For an amendment: the existing rule text being replaced. */
+  /**
+   * For an amendment: the rule being replaced, as `DoctrineRule.text` (folded to
+   * one line). The rule is located by parsing the file, so a rule wrapped across
+   * several lines is replaced whole.
+   */
   replaces?: string;
 }
 
@@ -244,10 +258,18 @@ export async function applyRatifiedRule(
   }
 
   if (request.replaces) {
-    if (!text.includes(request.replaces)) {
-      return { applied: false, reason: "the rule being amended is no longer present verbatim" };
+    // A rule can be wrapped across lines in the file, so the amendment is located
+    // by parsing the file and matching the folded rule — not by a raw substring,
+    // which would never match a wrapped rule.
+    const target = parseRules(text, "target", request.scope).find(
+      (rule) => rule.text === request.replaces,
+    );
+    if (!target) {
+      return { applied: false, reason: "the rule being amended is no longer in the file" };
     }
-    await atomicWriteText(path, text.replace(request.replaces, request.ruleText));
+    const lines = text.split("\n");
+    lines.splice(target.line - 1, target.endLine - target.line + 1, `- ${request.ruleText}`);
+    await atomicWriteText(path, lines.join("\n"));
     return { applied: true };
   }
 

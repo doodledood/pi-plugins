@@ -23,7 +23,15 @@ import {
   type ErrorReporter,
 } from "./io.ts";
 import { assertSafeId, hqPaths } from "./paths.ts";
-import type { SessionKind, StopState } from "./types.ts";
+import {
+  KINDS,
+  oneOf,
+  STOP_OUTCOMES,
+  STOP_STATES,
+  type SessionKind,
+  type StopOutcome,
+  type StopState,
+} from "./types.ts";
 
 export type StopStatus = "open" | "claimed" | "done";
 
@@ -41,7 +49,7 @@ export interface StopRecord {
   claimedByPid: number | null;
   claimedAt: string | null;
   /** Set when triage produced an outcome. */
-  outcome: string | null;
+  outcome: StopOutcome | null;
   packetId: string | null;
 }
 
@@ -66,14 +74,14 @@ export function parseStopRecord(value: unknown): StopRecord | undefined {
     sessionId,
     sessionFile: typeof raw.sessionFile === "string" ? raw.sessionFile : null,
     project,
-    kind: (raw.kind as SessionKind) ?? "worker",
-    stopState: (raw.stopState as StopState) ?? "idle-done",
+    kind: oneOf(raw.kind, KINDS) ?? "worker",
+    stopState: oneOf(raw.stopState, STOP_STATES) ?? "idle-done",
     preview: typeof raw.preview === "string" ? raw.preview : "",
     createdAt,
     status,
     claimedByPid: typeof raw.claimedByPid === "number" ? raw.claimedByPid : null,
     claimedAt: typeof raw.claimedAt === "string" ? raw.claimedAt : null,
-    outcome: typeof raw.outcome === "string" ? raw.outcome : null,
+    outcome: oneOf(raw.outcome, STOP_OUTCOMES) ?? null,
     packetId: typeof raw.packetId === "string" ? raw.packetId : null,
   };
 }
@@ -152,7 +160,7 @@ export async function releaseClaim(root: string, stopId: string): Promise<void> 
 export async function finishStop(
   root: string,
   stopId: string,
-  outcome: string,
+  outcome: StopOutcome,
   packetId: string | null,
 ): Promise<void> {
   const record = await readStopRecord(root, stopId);

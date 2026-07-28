@@ -194,3 +194,44 @@ test("the card shows no transcript text", () => {
   const rendered = renderFleetCard(card, 40).join("\n");
   assert.equal(rendered.includes("SECRET-PREVIEW-TEXT"), false);
 });
+
+test("a long label is not truncated to the shortest one, and the age is in the drawn line", () => {
+  const card = buildFleetCard({
+    fleet: [
+      sessionStateFixture({ sessionId: "a", title: "hq", state: "running", lastEventAt: minutesAgo(2) }),
+      sessionStateFixture({
+        sessionId: "b",
+        title: "pi-plugins-panel",
+        state: "running",
+        lastEventAt: minutesAgo(3),
+      }),
+    ],
+    packets: [],
+    doneToday: 0,
+    now: NOW,
+    meta: META_DEFAULTS,
+  });
+  const lines = renderFleetCard(card, 40);
+  const panelLine = lines.find((line) => line.includes("pi-plugins"));
+  assert.ok(panelLine, "the longer label is rendered");
+  assert.equal(panelLine?.includes("pi-plugins-panel"), true, "and it is not clipped to the short one");
+  for (const row of card.rows) {
+    const line = lines.find((candidate) => candidate.includes(row.label.slice(0, 6)));
+    assert.match(line ?? "", new RegExp(`${row.age}\\s*$`), "each row line ends with its age");
+  }
+});
+
+test("the summary carries the idle and done glyphs, not just the words", () => {
+  const card = buildFleetCard({
+    fleet: [
+      sessionStateFixture({ sessionId: "idle-1", state: "idle", stopState: "idle-done" }),
+      sessionStateFixture({ sessionId: "done-1", state: "done", stopState: "idle-done" }),
+    ],
+    packets: [],
+    doneToday: 2,
+    now: NOW,
+    meta: META_DEFAULTS,
+  });
+  assert.equal(card.summary.includes(GLYPHS.idle), true);
+  assert.equal(card.summary.includes(GLYPHS.done), true);
+});

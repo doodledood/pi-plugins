@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 
 export interface TranscriptMessage {
-  role: string;
+  role: "user" | "assistant";
   text: string;
   at: string | undefined;
   stopReason: string | undefined;
@@ -31,7 +31,22 @@ function textFromContent(content: unknown): string {
   return parts.join("\n");
 }
 
-/** Parses a session file into user/assistant messages, oldest first. */
+interface RawEntry {
+  id: string | undefined;
+  parentId: string | undefined;
+  timestamp: string | undefined;
+  message: TranscriptMessage | undefined;
+}
+
+/**
+ * Parses a session file into the messages on its live branch, oldest first.
+ *
+ * Session entries form a tree via id/parentId — pi branches in place when a
+ * message is edited, a session is forked, or the tree is rewound — so file order
+ * is not conversation order. Reading flat would let an abandoned branch be quoted
+ * back to the user as what the session said, which is exactly the confusion
+ * drills exist to prevent.
+ */
 export async function readTranscript(sessionFile: string): Promise<TranscriptMessage[]> {
   let text: string;
   try {
@@ -40,7 +55,10 @@ export async function readTranscript(sessionFile: string): Promise<TranscriptMes
     return [];
   }
 
-  const messages: TranscriptMessage[] = [];
+  const entries: RawEntry[] = [];
+  const byId = new Map<string, RawEntry>();
+  const hasChild = new Set<string>();
+
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -52,23 +70,58 @@ export async function readTranscript(sessionFile: string): Promise<TranscriptMes
       continue;
     }
     if (typeof parsed !== "object" || parsed === null) continue;
-    const entry = parsed as Record<string, unknown>;
-    if (entry.type === "session") continue;
-    const message = entry.message;
-    if (typeof message !== "object" || message === null) continue;
-    const record = message as Record<string, unknown>;
-    const role = typeof record.role === "string" ? record.role : undefined;
-    if (!role || (role !== "user" && role !== "assistant")) continue;
-    const body = textFromContent(record.content);
-    if (!body.trim()) continue;
-    messages.push({
-      role,
-      text: body,
-      at: typeof entry.timestamp === "string" ? entry.timestamp : undefined,
-      stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
-    });
+    const raw = parsed as Record<string, unknown>;
+    if (raw.type === "session") continue;
+
+    const id = typeof raw.id === "string" ? raw.id : undefined;
+    const parentId = typeof raw.parentId === "string" ? raw.parentId : undefined;
+    const entry: RawEntry = {
+      id,
+      parentId,
+      timestamp: typeof raw.timestamp === "string" ? raw.timestamp : undefined,
+      message: toTranscriptMessage(raw),
+    };
+    entries.push(entry);
+    if (id) byId.set(id, entry);
+    if (parentId) hasChild.add(parentId);
   }
-  return messages;
+
+  // The live leaf is the last entry nothing descends from; falling back to the
+  // last entry keeps a malformed or single-line file readable.
+  const leaf = [...entries].reverse().find((entry) => entry.id && !hasChild.has(entry.id))
+    ?? entries.at(-1);
+  if (!leaf) return [];
+
+  const branch: RawEntry[] = [];
+  let cursor: RawEntry | undefined = leaf;
+  const seen = new Set<string>();
+  while (cursor) {
+    branch.unshift(cursor);
+    const parentId: string | undefined = cursor.parentId;
+    if (!parentId || seen.has(parentId)) break;
+    seen.add(parentId);
+    cursor = byId.get(parentId);
+  }
+
+  return branch
+    .map((entry) => entry.message)
+    .filter((message): message is TranscriptMessage => message !== undefined);
+}
+
+function toTranscriptMessage(raw: Record<string, unknown>): TranscriptMessage | undefined {
+  const message = raw.message;
+  if (typeof message !== "object" || message === null) return undefined;
+  const record = message as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : undefined;
+  if (role !== "user" && role !== "assistant") return undefined;
+  const body = textFromContent(record.content);
+  if (!body.trim()) return undefined;
+  return {
+    role,
+    text: body,
+    at: typeof raw.timestamp === "string" ? raw.timestamp : undefined,
+    stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
+  };
 }
 
 export interface TailOptions {

@@ -101,3 +101,33 @@ test("the spawner passes the child's cwd, env, and argv through and returns a lo
     await dropRoot(root);
   }
 });
+
+test("a detached spawn that fails is reported rather than taking down the session", async () => {
+  const root = await makeRoot("hq-spawn-error");
+  try {
+    const reported: Array<{ message: string; error: unknown }> = [];
+    let errorHandler: ((error: unknown) => void) | undefined;
+    const spawner = createSpawner({
+      root,
+      env: {},
+      onError: (message, error) => reported.push({ message, error }),
+      spawnImpl: (() => ({
+        pid: undefined,
+        unref() {},
+        once(event: string, handler: (error: unknown) => void) {
+          if (event === "error") errorHandler = handler;
+        },
+      })) as never,
+    });
+
+    await spawner({ kind: "triage", prompt: "look at this stop", cwd: "/work" });
+    assert.equal(typeof errorHandler, "function", "the detached path listens for spawn failure");
+
+    // Node emits this asynchronously; without a listener it throws and kills the process.
+    errorHandler?.(new Error("spawn pi ENOENT"));
+    assert.equal(reported.length, 1);
+    assert.match(reported[0]?.message ?? "", /Unable to spawn triage worker/);
+  } finally {
+    await dropRoot(root);
+  }
+});

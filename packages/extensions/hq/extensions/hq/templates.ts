@@ -6,9 +6,9 @@
  * edits are authoritative.
  *
  * The Tastes / Doors / Escalation / Directives / Precedents sections carry over
- * the content of the user's own policy file from the previous generation of this
- * system (~/.pi/mission-control/policy.md), curated for HQ's model where
- * delegated sessions end at stops rather than being messaged in place.
+ * the user's policy content from the previous generation of this system, curated
+ * for HQ's model where delegated sessions end at stops rather than being
+ * messaged in place.
  */
 
 export const DOCTRINE_GLOBAL_SEED = `# HQ Doctrine — global
@@ -34,14 +34,17 @@ own ratification adds to it, and HQ never rewrites it.
 
 ## Escalation rules
 
-- Escalate when a doctrine gap combines with a material preference, risk, doubt,
-  irreversibility, conflict, or a required novel personal fact. Also escalate
-  when evidence materially conflicts, or at a one-way door or other hard-to-
-  reverse choice.
-- Doctrine silence alone is not escalation. When a reversible gap blocks progress
-  or needs judgment, escalate; otherwise ordinary reversible progress continues.
-- A finished task is a decision too: closing work the user has not seen is
-  escalated as a close packet rather than silently archived.
+- Send a packet when a doctrine gap combines with a material preference, risk,
+  doubt, irreversibility, conflict, or a required novel personal fact. Also send
+  one when evidence materially conflicts, or at a one-way door or any other
+  hard-to-reverse choice.
+- Doctrine silence alone is not a packet. A reversible, low-blast step that no
+  rule decides may continue on the worker's own judgment; a reversible step that
+  needs the user's preference is a packet.
+- Continuing without the user still needs a line to cite. Silence is permission
+  to proceed, never a rule to point at.
+- A finished task is a decision too: work the user has not seen arrives as a
+  close packet rather than being silently archived.
 
 ## Directives
 
@@ -59,7 +62,6 @@ These numbers govern HQ itself. They are read from this file on every cycle, so
 editing them is the whole configuration surface. Nothing else changes them.
 
 - batch-max: 4
-- batch-requires-same-project: true
 - batch-trivial-only: true
 - graduation-consecutive-agreements: 10
 - graduation-min-days: 14
@@ -84,7 +86,6 @@ where both speak. HQ never rewrites this file.
 
 export const HQ_EXAMPLE_CONFIG = `{
   "titleModel": "anthropic/claude-fable-5",
-  "maxConcurrentWorkers": 10,
-  "stalenessMinutes": 30
+  "maxConcurrentWorkers": 10
 }
 `;

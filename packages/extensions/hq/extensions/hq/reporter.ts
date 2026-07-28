@@ -10,7 +10,7 @@
  */
 
 import { truncatePreview } from "./io.ts";
-import { assistantFromMessages, type SessionContextLike } from "./host.ts";
+import { assistantFromMessages, firstUserText, type SessionContextLike } from "./host.ts";
 import { TITLE_PROMPT } from "./prompts.ts";
 import {
   envKind,
@@ -194,7 +194,6 @@ export class SessionReporter {
     if (this.title || this.titleRequested || this.internal) return;
     if (this.env[TITLER_ENV] === "1") return;
     const branch = this.ctx.sessionManager.getBranch?.() ?? [];
-    const { firstUserText } = await import("./host.ts");
     const seed = firstUserText(branch);
     if (!seed) return;
     this.titleRequested = true;

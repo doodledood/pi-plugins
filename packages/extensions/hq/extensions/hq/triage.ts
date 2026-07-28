@@ -8,11 +8,22 @@
  */
 
 import { loadDoctrine, renderDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
+import { scanJsonDir } from "./io.ts";
+import { hqPaths } from "./paths.ts";
+import { TRIAGE_KICKOFF } from "./prompts.ts";
 import { ceilingDecision, shouldSampleForAudit } from "./graduation.ts";
 import { startCompletionDrill, type DrillDeps } from "./drills.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
-import { finishStop, readStopRecord, type StopRecord } from "./stops.ts";
+import {
+  claimStop,
+  findStopsNeedingTriage,
+  finishStop,
+  parseStopRecord,
+  readStopRecord,
+  reopenStop,
+  type StopRecord,
+} from "./stops.ts";
 import { readTranscriptTail, renderTranscript } from "./transcript.ts";
 import type { BlastRadius, Packet, Reversibility, ShadowRuling } from "./types.ts";
 
@@ -134,12 +145,14 @@ export async function applyTriageOutcome(
 
   switch (outcome.kind) {
     case "packet":
-      return applyPacketOutcome(deps, stop, outcome.packet, at, null);
+      return applyPacketOutcome(deps, stop, outcome.packet, null);
 
     case "continue": {
       const doctrine = await loadDoctrine(deps.store.root, stop.project);
-      const cited = doctrine.rules.find((rule) => rule.citation === outcome.citation)
-        ?? doctrine.rules.find((rule) => outcome.citation.includes(rule.section));
+      // Exact citation only. A substring match would let a bare section name —
+      // which the model is handed in the rendered doctrine — stand in for a rule,
+      // making the code-side coverage check model-asserted.
+      const cited = doctrine.rules.find((rule) => rule.citation === outcome.citation);
       const graduated = await deps.store.isGraduated(outcome.domain);
       const decision = ceilingDecision({
         graduated,
@@ -149,13 +162,7 @@ export async function applyTriageOutcome(
       });
 
       if (!decision.allowed) {
-        return applyPacketOutcome(
-          deps,
-          stop,
-          continueAsPacketDraft(outcome, decision.explanation, cited?.citation ?? null),
-          at,
-          decision.reason,
-        );
+        return applyPacketOutcome(deps, stop, continueAsPacketDraft(outcome, decision.explanation, cited?.citation ?? null), decision.reason);
       }
 
       const stats = (await deps.store.readGraduation()).domains[outcome.domain];
@@ -214,7 +221,7 @@ export async function applyTriageOutcome(
 
       if (!decision.allowed) {
         // A finished piece of work the user has not seen is still a decision.
-        return applyPacketOutcome(deps, stop, closeAsPacketDraft(outcome), at, decision.reason);
+        return applyPacketOutcome(deps, stop, closeAsPacketDraft(outcome), decision.reason);
       }
 
       const stats = (await deps.store.readGraduation()).domains[outcome.domain];
@@ -240,22 +247,10 @@ export async function applyTriageOutcome(
     case "respawn": {
       const respawns = await countRespawns(deps, stop.sessionId);
       if (respawns >= MAX_RESPAWNS) {
-        return applyPacketOutcome(
-          deps,
-          stop,
-          respawnAsPacketDraft(outcome, respawns),
-          at,
-          "respawn-limit",
-        );
+        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns), "respawn-limit");
       }
       if (!stop.sessionFile) {
-        return applyPacketOutcome(
-          deps,
-          stop,
-          respawnAsPacketDraft(outcome, respawns),
-          at,
-          "no-session-file",
-        );
+        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns), "no-session-file");
       }
       await deps.spawner({
         kind: "continuation",
@@ -286,7 +281,6 @@ async function applyPacketOutcome(
   deps: TriageDeps,
   stop: StopRecord,
   draft: PacketDraft,
-  at: string,
   escalationReason: string | null,
 ): Promise<TriageResult> {
   const { packet, violations } = await deps.store.createPacket({
@@ -317,7 +311,6 @@ async function applyPacketOutcome(
   }
 
   await finishStop(deps.store.root, stop.stopId, "packet", packet.id);
-  void at;
   return {
     applied: "packet",
     packetId: packet.id,
@@ -437,9 +430,6 @@ function respawnAsPacketDraft(
 
 /** Counts finished stops for a session that ended in a respawn. */
 export async function countRespawns(deps: TriageDeps, sessionId: string): Promise<number> {
-  const { scanJsonDir } = await import("./io.ts");
-  const { parseStopRecord } = await import("./stops.ts");
-  const { hqPaths } = await import("./paths.ts");
   const scan = await scanJsonDir(
     hqPaths(deps.store.root).stops,
     parseStopRecord,
@@ -452,8 +442,6 @@ export async function countRespawns(deps: TriageDeps, sessionId: string): Promis
 
 /** The queue sweep: re-runs triage for stops that still owe an outcome. */
 export async function sweepStops(deps: TriageDeps): Promise<{ retried: string[] }> {
-  const { findStopsNeedingTriage, claimStop, reopenStop } = await import("./stops.ts");
-  const { TRIAGE_KICKOFF } = await import("./prompts.ts");
   const now = deps.now ?? (() => new Date());
   const stale = await findStopsNeedingTriage(deps.store.root);
   const retried: string[] = [];

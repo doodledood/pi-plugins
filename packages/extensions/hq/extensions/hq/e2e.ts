@@ -2,10 +2,10 @@
  * End-to-end lifecycle exercise.
  *
  * Run it with `npm run test:e2e --workspace @doodledood/pi-hq`, optionally naming
- * stages: `skeleton`, `drill`, `doctrine`, `grammar`, `graduation`, or `all`
- * (the default).
+ * stages: `skeleton`, `drill`, `tiering`, `doctrine`, `grammar`, `graduation`,
+ * or `all` (the default).
  *
- * The skeleton and drill stages spawn real headless pi sessions, so they need a
+ * The skeleton, drill and tiering stages spawn real headless pi sessions, so they need a
  * working model and will spend tokens; the rest exercise the substrate with a
  * recording spawner, where the artifact under test is the routing decision rather
  * than the child process. Every stage asserts on files under a temporary state
@@ -13,6 +13,7 @@
  */
 
 import assert from "node:assert/strict";
+import { spawn as nodeSpawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +26,7 @@ import { applyRuling } from "./rulings.ts";
 import { createSpawner, EXTENSION_ENV, type SpawnRequest, type Spawner } from "./spawn.ts";
 import { HqStore } from "./store.ts";
 import { ensureStopRecord, readStopRecord, type StopRecord } from "./stops.ts";
+import { readTranscriptTail, renderTranscript } from "./transcript.ts";
 import { applyTriageOutcome } from "./triage.ts";
 import type { Packet } from "./types.ts";
 
@@ -114,7 +116,15 @@ async function makeWorld(): Promise<World> {
   await seedProjectDoctrine(root, workspace);
   const real = createSpawner({
     root,
-    env: { ...process.env, HQ_HOME: root, [EXTENSION_ENV]: EXTENSION_PATH, HQ_NO_TITLER: "1" },
+    env: {
+      ...process.env,
+      HQ_HOME: root,
+      [EXTENSION_ENV]: EXTENSION_PATH,
+      HQ_NO_TITLER: "1",
+      // Children write their sessions under the temporary root too, so a run
+      // leaves nothing in the user's real session directory.
+      PI_CODING_AGENT_SESSION_DIR: join(root, "sessions"),
+    },
   });
   return { root, workspace, store, real };
 }
@@ -300,6 +310,271 @@ async function runDrill(world: World, packet: Packet | undefined): Promise<void>
     const state = await world.store.readSessionState(packet.sourceSessionId);
     assert.equal(state?.drillingPacketId, null);
     return "origin row clear";
+  });
+}
+
+/**
+ * Tiering: the ordering claim behind the two drill tiers — reading is tried
+ * first, and a copy is opened only when reading genuinely cannot answer.
+ *
+ * Unit tests can only prove the plumbing honours whichever tier the worker
+ * reports. Whether a real drill worker *chooses* reading when the answer is
+ * sitting in the transcript is a behavioural claim, so it is asserted here with
+ * two fixtures against one real source session: a question whose answer is in
+ * the transcript verbatim, and one that depends on reasoning the session never
+ * wrote down.
+ */
+const TIERING_SEED_PROMPT =
+  `Name the new string-trimming helper. The two candidates on the table are exactly: normalizeInput or cleanInput. Choose one. Reply with the chosen name alone, on one line, with no explanation and no mention of the other candidate. Do not create or edit any file.`;
+
+const VERBATIM_QUESTION =
+  "Quote, word for word, the sentence in the source session that named the two candidate helper names.";
+
+const REASONING_QUESTION =
+  "The session replied with the chosen name alone. What made it reject the other candidate? I want the reasoning behind the choice, not the choice itself.";
+
+interface WatchedCall {
+  request: SpawnRequest;
+  argv: string[];
+}
+
+/** Wraps the real spawner so every child's request and argv can be asserted on. */
+function watchingSpawner(inner: Spawner): { spawner: Spawner; calls: WatchedCall[] } {
+  const calls: WatchedCall[] = [];
+  return {
+    calls,
+    spawner: async (request) => {
+      const result = await inner(request);
+      calls.push({ request, argv: result.argv });
+      return result;
+    },
+  };
+}
+
+/**
+ * Runs one real, unmanaged pi session to act as the drill's source. Unmanaged on
+ * purpose: this stage is about drill tiering, so the session must not drag
+ * triage in behind it.
+ */
+async function seedTieringSession(
+  world: World,
+): Promise<{ sessionId: string; sessionFile: string } | undefined> {
+  const sessionFile = join(world.workspace, "tiering-source.jsonl");
+  const env = { ...process.env };
+  for (const key of ["HQ_MANAGED", "HQ_KIND", "HQ_HOME", "HQ_ORIGIN_SESSION_ID", "HQ_PACKET_ID"]) {
+    delete env[key];
+  }
+  const bin = process.env.HQ_PI_BIN?.trim() || "pi";
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const child = nodeSpawn(bin, ["--session", sessionFile, "--print", TIERING_SEED_PROMPT], {
+      cwd: world.workspace,
+      env,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 0));
+  });
+
+  const header = (await readFile(sessionFile, "utf8").catch(() => "")).split("\n")[0] ?? "";
+  const sessionId = (() => {
+    try {
+      const parsed = JSON.parse(header) as { type?: string; id?: string };
+      return parsed.type === "session" && typeof parsed.id === "string" ? parsed.id : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!sessionId) {
+    fail("a real source session was recorded", new Error(`no session header in ${sessionFile}`));
+    return undefined;
+  }
+
+  const transcript = renderTranscript(await readTranscriptTail(sessionFile, { maxMessages: 40 }));
+  await check("the source session holds the answer to the verbatim question", () => {
+    assert.match(transcript, /normalizeInput or cleanInput/, "both candidates appear verbatim");
+    return `exit ${exitCode}, session ${sessionId}, ${transcript.length} chars of transcript`;
+  });
+  await check("the source session never wrote down why it rejected the other name", () => {
+    // Only the seeded prompt may mention the loser; if the reply argued about it,
+    // the reasoning fixture would be answerable by reading and prove nothing.
+    const assistantText = (assistantBlocks(transcript)).join("\n");
+    assert.equal(/because|rather than|clearer|ambiguous/i.test(assistantText), false, assistantText.slice(0, 200));
+    return assistantText.trim().slice(0, 80) || "(no assistant text)";
+  });
+
+  await world.store.publishSessionState({
+    version: 1,
+    sessionId,
+    sessionFile,
+    pid: process.pid,
+    runtimeId: "e2e-tiering",
+    role: "managed",
+    kind: "worker",
+    project: world.workspace,
+    title: "tiering source",
+    state: "idle",
+    stopState: "stopped-with-question",
+    preview: "chose a helper name",
+    startedAt: new Date().toISOString(),
+    lastEventAt: new Date().toISOString(),
+    drillingPacketId: null,
+    originSessionId: null,
+    packetId: null,
+  });
+
+  return { sessionId, sessionFile };
+}
+
+/** The assistant blocks of a rendered transcript, which is what the reply says. */
+function assistantBlocks(rendered: string): string[] {
+  return rendered
+    .split(/\n\n(?=### )/)
+    .filter((block) => block.startsWith("### assistant"))
+    .map((block) => block.split("\n").slice(1).join("\n"));
+}
+
+async function tieringPacket(
+  world: World,
+  source: { sessionId: string; sessionFile: string },
+  title: string,
+): Promise<Packet> {
+  const { packet } = await world.store.createPacket({
+    sourceSessionId: source.sessionId,
+    sourceSessionFile: source.sessionFile,
+    project: world.workspace,
+    domain: "naming",
+    title,
+    question: "Which name should the helper take?",
+    options: [
+      { id: "normalize", label: "normalizeInput", price: "longer, but says what it does" },
+      { id: "clean", label: "cleanInput", price: "shorter, but vague about what cleaning means" },
+    ],
+    recommendationId: "normalize",
+    flipCondition: "if the codebase already uses one of the two names, follow it",
+    blastRadius: "low",
+    reversibility: "reversible",
+    dependsOn: [],
+    doctrineCitations: [],
+    shadowRuling: null,
+    annotations: [],
+    trivial: true,
+    proposal: null,
+  });
+  return packet;
+}
+
+async function runTiering(world: World): Promise<void> {
+  stage("tiering: reading is tried before the session is resurrected");
+  const source = await seedTieringSession(world);
+  if (!source) return;
+
+  const sourceBefore = await stableSnapshot(source.sessionFile);
+  const { spawner, calls } = watchingSpawner(world.real);
+  const deps = { store: world.store, spawner };
+
+  // Fixture one: the answer is in the transcript, word for word.
+  const readable = await tieringPacket(world, source, "tiering: answerable by reading");
+  await startDrill(deps, readable, VERBATIM_QUESTION);
+  const readAnswered = await waitFor("the verbatim question came back answered", async () => {
+    const current = await world.store.readPacket(readable.id);
+    return current && current.annotations.length > 0 ? current : undefined;
+  }, 300_000);
+  if (readAnswered) {
+    await check("reading answered it, at tier 1", () => {
+      const annotation = readAnswered.annotations[0];
+      assert.ok(annotation, "annotation present");
+      assert.equal(annotation.tier, 1, "answered by reading");
+      return `tier ${annotation.tier}: ${annotation.answer.slice(0, 90)}`;
+    });
+    await check("the answer is the right one, quoted from the source", () => {
+      const annotation = readAnswered.annotations[0]!;
+      const said = `${annotation.answer}\n${annotation.quotes.map((quote) => quote.text).join("\n")}`;
+      assert.match(said, /normalizeInput/, "names the first candidate");
+      assert.match(said, /cleanInput/, "names the second candidate");
+      assert.ok(annotation.quotes.length > 0, "at least one quote");
+      const inSource = annotation.quotes.some((quote) =>
+        sourceBefore.includes(quote.text.trim().replace(/\s+/g, " ").slice(0, 40))
+        || sourceBefore.includes(quote.text.trim().slice(0, 40))
+      );
+      assert.equal(inSource, true, "a quote appears in the source session file verbatim");
+      return `"${annotation.quotes[0]?.text.slice(0, 90)}"`;
+    });
+    await check("no copy was opened and no session was resumed for that run", async () => {
+      const log = await readDrillLog(world.store);
+      const mine = log.filter((entry) => entry.packetId === readable.id);
+      assert.deepEqual(mine.map((entry) => entry.action), ["read", "answered"]);
+      assert.equal(mine.every((entry) => entry.tier === 1), true, "tier 1 throughout");
+      const spawns = calls.filter((call) => call.request.packetId === readable.id);
+      assert.equal(spawns.length, 1, "one child for one drill");
+      for (const spawn of spawns) {
+        assert.equal(spawn.request.forkSessionFile, undefined, "no fork");
+        assert.equal(spawn.request.resumeSessionFile, undefined, "no resume");
+        assert.equal(spawn.argv.includes("--fork"), false, spawn.argv.join(" "));
+        assert.equal(spawn.argv.includes("--session"), false, spawn.argv.join(" "));
+      }
+      return `${mine.map((entry) => `${entry.tier}:${entry.action}`).join(" → ")}; argv had no --fork/--session`;
+    });
+  }
+
+  // Fixture two: the answer depends on reasoning the session never wrote down.
+  const opaque = await tieringPacket(world, source, "tiering: needs the session itself");
+  await startDrill(deps, opaque, REASONING_QUESTION);
+  const escalated = await waitFor("the reasoning question escalated to the copy", async () => {
+    const log = await readDrillLog(world.store);
+    return log.find((entry) => entry.packetId === opaque.id && entry.action === "fork");
+  }, 300_000);
+  if (escalated) {
+    await check("the escalation is tier 2, and the parent never forked anything itself", () => {
+      assert.equal(escalated.tier, 2);
+      // The fork is spawned from inside the tier-1 drill child when it reports
+      // insufficient, so the parent's own children must all still be plain reads.
+      for (const call of calls) {
+        assert.equal(call.request.forkSessionFile, undefined, "parent opened no copy");
+        assert.equal(call.request.resumeSessionFile, undefined, "parent resumed nothing");
+      }
+      return `${escalated.tier}:${escalated.action} run=${escalated.runId}`;
+    });
+    await check("the tier-2 session is a copy of the source, not the source itself", async () => {
+      const copy = await waitFor("the copy published itself on the board", async () => {
+        const fleet = await world.store.listFleet();
+        return fleet.find((entry) =>
+          entry.kind === "drill" && entry.packetId === opaque.id &&
+          entry.sessionFile !== null && entry.sessionFile !== source.sessionFile &&
+          entry.sessionId !== source.sessionId
+        );
+      }, 120_000);
+      assert.ok(copy, "a distinct drill session exists");
+      // A fork carries the source's history; a fresh session would not.
+      const copied = await readFile(copy.sessionFile ?? "", "utf8");
+      assert.match(copied, /normalizeInput or cleanInput/, "the copy carries the source's history");
+      return `${copy.sessionId} ${copy.sessionFile} (source ${source.sessionId})`;
+    });
+    await check("reading was tried first, not skipped", async () => {
+      const log = await readDrillLog(world.store);
+      const mine = log.filter((entry) => entry.packetId === opaque.id);
+      assert.equal(mine[0]?.action, "read", "the first step was a read");
+      assert.equal(mine[0]?.tier, 1);
+      return mine.map((entry) => `${entry.tier}:${entry.action}`).join(" → ");
+    });
+    const finished = await waitFor("the copy answered and the packet came back", async () => {
+      const current = await world.store.readPacket(opaque.id);
+      return current && current.annotations.length > 0 ? current : undefined;
+    }, 300_000);
+    if (finished) {
+      await check("the copy's answer is annotated at tier 2", () => {
+        const annotation = finished.annotations.at(-1)!;
+        assert.equal(annotation.tier, 2);
+        return `tier ${annotation.tier}: ${annotation.answer.slice(0, 90)}`;
+      });
+    }
+  }
+
+  await check("neither run rewrote the source session", async () => {
+    const after = await readFile(source.sessionFile, "utf8");
+    assert.equal(after.startsWith(sourceBefore), true, "the pre-drill history is unchanged");
+    return after.length === sourceBefore.length
+      ? `${sourceBefore.length} bytes, untouched`
+      : `${sourceBefore.length} bytes intact, ${after.length - sourceBefore.length} appended elsewhere`;
   });
 }
 
@@ -564,7 +839,7 @@ async function runGraduation(world: World): Promise<void> {
 async function main(): Promise<void> {
   const requested = process.argv.slice(2).filter((argument) => !argument.startsWith("-"));
   const wanted = requested.length === 0 || requested.includes("all")
-    ? ["skeleton", "drill", "doctrine", "grammar", "graduation"]
+    ? ["skeleton", "drill", "tiering", "doctrine", "grammar", "graduation"]
     : requested;
 
   const world = await makeWorld();
@@ -577,6 +852,7 @@ async function main(): Promise<void> {
       packet = result.packet;
     }
     if (wanted.includes("drill")) await runDrill(world, packet);
+    if (wanted.includes("tiering")) await runTiering(world);
     if (wanted.includes("doctrine")) await runDoctrine(world);
     if (wanted.includes("grammar")) await runGrammar(world);
     if (wanted.includes("graduation")) await runGraduation(world);

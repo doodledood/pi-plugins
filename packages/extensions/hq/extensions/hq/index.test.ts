@@ -7,8 +7,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHqExtension, SEAT_MESSAGE_TYPE } from "./index.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
-import { dropRoot, fixedClock, makeRoot, recordingSpawner } from "./testing.ts";
-import { MANAGED_ENV } from "./spawn.ts";
+import { dropRoot, fixedClock, makeRoot, makeStore, packetDraftFixture, recordingSpawner } from "./testing.ts";
+import { KIND_ENV, MANAGED_ENV, PACKET_ENV } from "./spawn.ts";
+import { DRILL_TIER_ENV } from "./drills.ts";
 
 interface Host {
   pi: ExtensionAPI;
@@ -89,6 +90,7 @@ test("the extension registers its commands and its tools", async () => {
     for (const name of [
       "hq_queue_plan",
       "hq_ask",
+      "hq_drill",
       "hq_fleet",
       "hq_delegate",
       "hq_defect",
@@ -232,6 +234,52 @@ test("graduation asks for confirmation and only then grants the domain", async (
   }
 });
 
+test("a resumed copy can report its answer without being told the packet id", async () => {
+  // A tier-2 drill is a fork of the source session: it is asked a question and
+  // never learns HQ's packet id, so the run's environment must supply it.
+  const root = await makeRoot("hq-drill-env-packet");
+  const previous = { ...process.env };
+  try {
+    const store = makeStore(root, fixedClock());
+    await store.ensure();
+    const { packet } = await store.createPacket(packetDraftFixture());
+
+    const { host } = await activate(root);
+    const { ctx } = fakeCommandCtx();
+    process.env[MANAGED_ENV] = "1";
+    process.env[KIND_ENV] = "drill";
+    process.env[PACKET_ENV] = packet.id;
+    process.env[DRILL_TIER_ENV] = "2";
+
+    const submit = host.tools.get("hq_drill_result");
+    assert.ok(submit);
+    const result = await submit.execute(
+      "call-1",
+      {
+        answer: "It picked normalizeInput because cleanInput did not say what cleaning meant.",
+        quotes: [{ text: "normalizeInput", attribution: "sess-a (copy)" }],
+      } as never,
+      undefined,
+      undefined,
+      ctx as never,
+    );
+    assert.match(
+      result.content.map((part) => ("text" in part ? part.text : "")).join(" "),
+      new RegExp(`Recorded on packet ${packet.id}`),
+    );
+
+    const stored = await store.readPacket(packet.id);
+    assert.equal(stored?.annotations.length, 1);
+    assert.equal(stored?.annotations[0]?.tier, 2);
+  } finally {
+    for (const key of [MANAGED_ENV, KIND_ENV, PACKET_ENV, DRILL_TIER_ENV]) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    await dropRoot(root);
+  }
+});
+
 test("worker tools refuse a session that is not that kind of worker", async () => {
   const root = await makeRoot("hq-worker-guard");
   try {
@@ -254,3 +302,54 @@ test("worker tools refuse a session that is not that kind of worker", async () =
     await dropRoot(root);
   }
 });
+
+test("a fresh seat over the same state sees exactly the same packets to rule", async () => {
+  const root = await makeRoot("hq-seat-restart");
+  try {
+    // Two packets seeded the way triage would, before any seat exists.
+    const { makeStore, packetDraftFixture } = await import("./testing.ts");
+    const store = makeStore(root);
+    await store.ensure();
+    const first = await store.createPacket(packetDraftFixture());
+    const second = await store.createPacket(
+      packetDraftFixture({ title: "raise the CI timeout", domain: "ci-config" }),
+    );
+    assert.equal(first.packet.status, "pending");
+    assert.equal(second.packet.status, "pending");
+
+    const before = await activate(root);
+    const firstCtx = fakeCommandCtx();
+    await before.host.commands.get("hq")?.("", firstCtx.ctx);
+    const firstPlan = await runPlan(before.host, firstCtx.ctx);
+    assert.match(firstCtx.notifications.join("\n"), /2 packets to rule/);
+
+    // The seat dies mid-queue: shutdown, then a completely fresh extension instance.
+    await before.host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, firstCtx.ctx);
+
+    const after = await activate(root);
+    const secondCtx = fakeCommandCtx();
+    await after.host.commands.get("hq")?.("", secondCtx.ctx);
+    const secondPlan = await runPlan(after.host, secondCtx.ctx);
+
+    assert.match(secondCtx.notifications.join("\n"), /2 packets to rule/);
+    assert.deepEqual(
+      idsIn(secondPlan),
+      idsIn(firstPlan),
+      "a restarted seat re-derives the identical pending set from disk",
+    );
+    assert.deepEqual(idsIn(secondPlan).sort(), [first.packet.id, second.packet.id].sort());
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+async function runPlan(host: Host, ctx: ExtensionCommandContext): Promise<string> {
+  const tool = host.tools.get("hq_queue_plan");
+  assert.ok(tool);
+  const result = await tool.execute("call", {} as never, undefined, undefined, ctx as never);
+  return result.content.map((part) => ("text" in part ? part.text : "")).join("\n");
+}
+
+function idsIn(plan: string): string[] {
+  return [...plan.matchAll(/\b(pkt-[A-Za-z0-9-]+)\b/g)].map((match) => match[1] ?? "");
+}

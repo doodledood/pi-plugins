@@ -157,7 +157,7 @@ function noteFor(rowState: RowState, state: SessionState, stale: boolean): strin
       return state.role === "attended" ? "you" : "working";
     case "done":
       return "done";
-    default:
+    case "idle":
       return "idle";
   }
 }
@@ -177,10 +177,8 @@ export function renderFleetCard(model: FleetCardModel, width: number): string[] 
     return lines;
   }
 
-  const labelWidth = Math.max(
-    6,
-    Math.min(16, ...[16, ...model.rows.map((row) => Math.max(6, row.label.length))]),
-  );
+  const longest = model.rows.reduce((width, row) => Math.max(width, row.label.length), 0);
+  const labelWidth = Math.min(16, Math.max(6, longest));
   for (const row of model.rows) {
     const label = row.label.length > labelWidth
       ? `${row.label.slice(0, labelWidth - 1)}…`

@@ -72,6 +72,8 @@ export interface SpawnerOptions {
   spawnImpl?: typeof nodeSpawn;
   /** Overridden in tests; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Where a spawn failure is reported. Without one, failures are logged only. */
+  onError?: (message: string, error: unknown) => void;
 }
 
 export function buildArgv(request: SpawnRequest, extensionPath?: string): string[] {
@@ -128,6 +130,12 @@ export function createSpawner(options: SpawnerOptions): Spawner {
       const pid = child.pid;
 
       if (!request.wait) {
+        // Node throws on an unhandled 'error' event, and a detached spawn resolves
+        // before the failure arrives — without this listener a missing `pi` binary
+        // or a deleted cwd takes down the session that spawned the worker.
+        child.once?.("error", (error: unknown) => {
+          options.onError?.(`Unable to spawn ${request.kind} worker (${bin})`, error);
+        });
         child.unref?.();
         return { runId, pid, logPath, argv };
       }
