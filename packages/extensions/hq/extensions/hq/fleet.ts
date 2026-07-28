@@ -140,10 +140,10 @@ export function buildFleetCard(input: FleetInput): FleetCardModel {
   const collapsed = listed.length === 0;
   const summaryParts: string[] = [];
   if (idleCount > 0) summaryParts.push(`${GLYPHS.idle} ${idleCount} idle`);
-  if (input.doneToday > 0) summaryParts.push(`${GLYPHS.done} ${input.doneToday} done today`);
 
   return {
-    header: `◆ HQ${pending.length > 0 ? ` · ${pending.length} to rule` : ""}`,
+    // Both counts the glance promises, in the card's own vocabulary so they fit.
+    header: `◆ HQ · ${GLYPHS["needs-ruling"]} ${pending.length} · ${GLYPHS.done} ${input.doneToday} today`,
     rows: listed,
     idleCount,
     doneToday: input.doneToday,
@@ -176,15 +176,25 @@ function clamp(line: string, width: number): string {
   return line.length <= width ? line : `${line.slice(0, Math.max(0, width - 1))}…`;
 }
 
-/** Renders the card as plain lines; the overlay component only frames these. */
+/**
+ * Renders the card as plain lines at the width the frame will actually give them.
+ *
+ * The frame spends four columns on its border and padding, so this fills
+ * `width - 4`. Getting that wrong is not cosmetic: rows are right-aligned on the
+ * age, so two columns of over-fill silently clipped the one number the card
+ * exists to show.
+ */
 export function renderFleetCard(model: FleetCardModel, width: number): string[] {
-  const inner = Math.max(18, Math.min(width, 44)) - 2;
-  const lines: string[] = [clamp(model.header, inner)];
+  const inner = contentWidth(width);
 
+  // Collapsed is one line. Nothing is waiting when the card collapses, so the
+  // pending count is dead weight there: the badge, what is idle, and what is done.
   if (model.collapsed) {
-    lines.push(clamp(model.summary, inner));
-    return lines;
+    const done = `${GLYPHS.done} ${model.doneToday} today`;
+    return [clamp(`◆ HQ · ${model.summary} · ${done}`, inner)];
   }
+
+  const lines: string[] = [clamp(model.header, inner)];
 
   const longest = model.rows.reduce((width, row) => Math.max(width, row.label.length), 0);
   const labelWidth = Math.min(16, Math.max(6, longest));
@@ -198,4 +208,9 @@ export function renderFleetCard(model: FleetCardModel, width: number): string[] 
   }
   lines.push(clamp(model.summary, inner));
   return lines;
+}
+
+/** Columns a framed card leaves for content: the border and padding take four. */
+export function contentWidth(width: number): number {
+  return Math.max(18, Math.min(width, 44)) - 4;
 }

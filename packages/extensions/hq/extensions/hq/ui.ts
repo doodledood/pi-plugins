@@ -47,8 +47,8 @@ export class FleetOverlay {
   render(width: number): string[] {
     const model = this.callbacks.getModel();
     if (!model) return [];
-    const body = renderFleetCard(model, width);
-    return frame(body, Math.max(18, Math.min(width, 44)));
+    const framed = Math.max(18, Math.min(width, 44));
+    return frame(renderFleetCard(model, framed), framed);
   }
 
   invalidate(): void {}

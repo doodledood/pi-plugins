@@ -4,7 +4,7 @@ import { META_DEFAULTS } from "./doctrine.ts";
 import { buildFleetCard, formatAge, GLYPHS, renderFleetCard, STALE_GLYPH } from "./fleet.ts";
 import { packetDraftFixture, sessionStateFixture } from "./testing.ts";
 import type { Packet } from "./types.ts";
-import { frame } from "./ui.ts";
+import { FleetOverlay, frame } from "./ui.ts";
 
 const NOW = new Date("2026-07-28T12:00:00.000Z");
 
@@ -74,11 +74,11 @@ test("each state gets its glyph, its age, and the header carries the badge and c
   assert.equal(byLabel.get("drilled")?.glyph, GLYPHS.drilling);
 
   assert.equal(card.header.startsWith("◆ HQ"), true);
-  assert.match(card.header, /1 to rule/);
+  assert.match(card.header, new RegExp(`${GLYPHS["needs-ruling"]} 1`), "pending count in the header");
+  assert.match(card.header, new RegExp(`${GLYPHS.done} 4 today`), "done-today count in the header");
   assert.equal(card.pendingCount, 1);
   assert.equal(card.idleCount, 2, "quiet sessions are summarized, not listed");
   assert.match(card.summary, /2 idle/);
-  assert.match(card.summary, /4 done today/);
   assert.equal(card.collapsed, false);
 });
 
@@ -137,8 +137,9 @@ test("the card collapses to one line when nothing is running or waiting", () => 
   });
   assert.equal(card.collapsed, true);
   const lines = renderFleetCard(card, 34);
-  assert.equal(lines.length, 2, "header plus one summary line");
-  assert.match(lines[1] ?? "", /2 idle/);
+  assert.equal(lines.length, 1, "literally one line when nothing runs or waits");
+  assert.match(lines[0] ?? "", /2 idle/);
+  assert.match(lines[0] ?? "", /◆ HQ/);
 });
 
 test("an attended session is shown as the user's own and never as work", () => {
@@ -211,13 +212,17 @@ test("a long label is not truncated to the shortest one, and the age is in the d
     now: NOW,
     meta: META_DEFAULTS,
   });
-  const lines = renderFleetCard(card, 40);
+  const overlay = new FleetOverlay({ getModel: () => card });
+  const lines = overlay.render(40);
+  overlay.dispose();
   const panelLine = lines.find((line) => line.includes("pi-plugins"));
   assert.ok(panelLine, "the longer label is rendered");
   assert.equal(panelLine?.includes("pi-plugins-panel"), true, "and it is not clipped to the short one");
   for (const row of card.rows) {
     const line = lines.find((candidate) => candidate.includes(row.label.slice(0, 6)));
-    assert.match(line ?? "", new RegExp(`${row.age}\\s*$`), "each row line ends with its age");
+    // The age lives at the right edge, which is exactly what an off-by-two in the
+    // frame's usable width used to eat.
+    assert.match(line ?? "", new RegExp(`${row.age} .$`), `age clipped from: ${line}`);
   }
 });
 
@@ -233,7 +238,7 @@ test("the summary carries the idle and done glyphs, not just the words", () => {
     meta: META_DEFAULTS,
   });
   assert.equal(card.summary.includes(GLYPHS.idle), true);
-  assert.equal(card.summary.includes(GLYPHS.done), true);
+  assert.equal(card.header.includes(GLYPHS.done), true);
 });
 
 test("every state's glyph is distinct, including the stale one", () => {
