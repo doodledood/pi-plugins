@@ -18,7 +18,7 @@
 //     Both mark the total approximate rather than reporting a confident wrong number.
 
 import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 /**
@@ -79,8 +79,8 @@ export interface CostAccumulator {
   cost: number;
   tokens: TokenTotals;
   byModel: Map<string, ModelTotals>;
-  /** Entry ids already counted, so a re-read or a duplicated record cannot inflate. */
-  seenEntryIds: Set<string>;
+  /** Dedupe keys already counted, so a re-read or a duplicated record cannot inflate. */
+  countedKeys: Set<string>;
   /** Billing tier in force for subsequent entries, per the latest tier record. */
   currentTier: "standard" | "priority";
 }
@@ -98,6 +98,8 @@ export interface SessionCost {
   unpricedModels: string[];
   priorityTokens: number;
   uncorrectedPriorityCost: number;
+  /** Dedupe keys this session contributed, so a fork of it cannot re-count them. */
+  countedKeys: ReadonlySet<string>;
 }
 
 export interface TreeCost {
@@ -124,6 +126,12 @@ export interface FoldOptions extends PriceOptions {
    * is dropped rather than added.
    */
   countedSessions?: ReadonlySet<string>;
+  /**
+   * Dedupe keys already counted elsewhere in the tree. A fork copies its parent's
+   * entries verbatim into its own file — BTW asides and pi's own `/fork` both do —
+   * so those turns appear in two session files while having been billed once.
+   */
+  excludeKeys?: ReadonlySet<string>;
 }
 
 /** Price adjustments the scanner cannot derive from the session alone. */
@@ -144,7 +152,7 @@ export function createAccumulator(): CostAccumulator {
     cost: 0,
     tokens: createTokenTotals(),
     byModel: new Map(),
-    seenEntryIds: new Set(),
+    countedKeys: new Set(),
     currentTier: "standard",
   };
 }
@@ -199,11 +207,21 @@ function billedUsage(entry: any): { key: string; usage: UsageLike } | undefined 
   return undefined;
 }
 
-/** Entry id used for dedupe: a cost record's own record id, else the entry id. */
-function entryDedupeId(entry: any): string | undefined {
+/**
+ * Identity of one billed unit, stable across files and re-reads.
+ *
+ * A cost record is identified by its own record id. Everything else uses the entry
+ * id plus its timestamp: pi's entry ids are only 8 hex characters, unique within a
+ * session but not across a large tree, so the timestamp is what makes the key safe
+ * to compare between files — a copied fork entry keeps both verbatim, while two
+ * unrelated entries would have to collide on both to be wrongly merged.
+ */
+export function entryDedupeKey(entry: any): string | undefined {
   const recordId = entry?.type === "custom" ? entry.data?.recordId : undefined;
   if (typeof recordId === "string" && recordId) return `record:${recordId}`;
-  return typeof entry?.id === "string" && entry.id ? entry.id : undefined;
+  if (typeof entry?.id !== "string" || !entry.id) return undefined;
+  const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : entry.message?.timestamp;
+  return timestamp === undefined ? entry.id : `${entry.id}@${timestamp}`;
 }
 
 /**
@@ -238,10 +256,10 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
   if (!billed) return;
   if (restatesCountedSession(entry, price.countedSessions)) return;
 
-  const dedupeId = entryDedupeId(entry);
-  if (dedupeId) {
-    if (acc.seenEntryIds.has(dedupeId)) return;
-    acc.seenEntryIds.add(dedupeId);
+  const dedupeKey = entryDedupeKey(entry);
+  if (dedupeKey) {
+    if (acc.countedKeys.has(dedupeKey) || price.excludeKeys?.has(dedupeKey)) return;
+    acc.countedKeys.add(dedupeKey);
   }
 
   const tokens = addTokens(acc.tokens, billed.usage);
@@ -272,6 +290,7 @@ export function summarize(acc: CostAccumulator, meta: { id?: string; path?: stri
     ...meta,
     cost: acc.cost,
     tokens: acc.tokens,
+    countedKeys: acc.countedKeys,
     models,
     unpricedModels: models.filter((m) => m.unpricedTokens > 0).map((m) => m.key),
     priorityTokens: models.reduce((sum, m) => sum + m.priorityTokens, 0),
@@ -440,8 +459,14 @@ export class SessionTreeScanner {
     this.files.clear();
   }
 
-  /** Cost of one session file, folding only bytes appended since the last scan. */
-  scanFile(path: string, kind: string, countedSessions?: ReadonlySet<string>): SessionCost | undefined {
+  /**
+   * Cost of one session file, folding only bytes appended since the last scan.
+   *
+   * `fold` carries the tree-level suppression sets. They matter only while an entry is
+   * first folded — a fork's copied history is fixed when the fork is created — so a
+   * cached file needs no re-evaluation when they grow.
+   */
+  scanFile(path: string, kind: string, fold: Omit<FoldOptions, keyof PriceOptions> = {}): SessionCost | undefined {
     let stat: import("node:fs").Stats;
     try {
       stat = statSync(path);
@@ -481,7 +506,7 @@ export class SessionTreeScanner {
         entry.header = { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd };
         continue;
       }
-      accumulateEntry(entry.acc, parsed, { ...this.price, countedSessions });
+      accumulateEntry(entry.acc, parsed, { ...this.price, ...fold });
     }
     // Offset tracks bytes consumed; the incomplete tail lives in `remainder`, so the
     // next read starts after it and no byte is ever folded twice.
@@ -515,9 +540,13 @@ export class SessionTreeScanner {
 
   /**
    * Every descendant of `rootFile`/`rootId`, following both discovery signals:
-   * the sidecar directory convention and a `parentSession` header holding either
-   * a session id or a session file path. Cycles and repeats are impossible: a
-   * session is admitted once, by resolved path and by id.
+   * a session's location under an ancestor's sidecar directory, and a `parentSession`
+   * header holding either a session id or a session file path.
+   *
+   * Both signals are evaluated for every candidate rather than one per location, since
+   * real children carry both — a panelist sits in the sidecar directory AND names its
+   * parent's id. Admission is therefore what keeps a session single: once by resolved
+   * path, once by id, which also makes cycles and self-links harmless.
    */
   discover(rootFile: string | undefined, rootId: string | undefined): Array<{ path: string; kind: string; header?: SessionHeader }> {
     const results: Array<{ path: string; kind: string; header?: SessionHeader }> = [];
@@ -528,52 +557,53 @@ export class SessionTreeScanner {
     if (rootFile) seenPaths.add(resolveRealPath(rootFile));
     if (rootId) seenIds.add(rootId);
 
-    // One directory listing serves every node: siblings link by header, not by location.
-    const siblingsByParent = rootFile ? this.indexSiblingsByParent(dirname(rootFile), seenPaths) : new Map();
-
+    const candidates = this.collectCandidates(rootFile, seenPaths);
     const queue: Array<{ file?: string; id?: string }> = [{ file: rootFile, id: rootId }];
     while (queue.length > 0) {
       const node = queue.shift()!;
-      const candidates: Array<{ path: string; kind: string }> = [];
-      if (node.file) candidates.push(...listSidecarSessionFiles(deriveSidecarRoot(node.file)));
-      for (const key of [node.id, node.file].filter((v): v is string => !!v)) {
-        for (const path of siblingsByParent.get(key) ?? []) candidates.push({ path, kind: "forks" });
-      }
-
+      const sidecarPrefix = node.file ? deriveSidecarRoot(node.file) + sep : undefined;
       for (const candidate of candidates) {
-        const real = resolveRealPath(candidate.path);
-        if (seenPaths.has(real)) continue;
-        const header = readSessionHeader(candidate.path);
-        if (header?.id && seenIds.has(header.id)) continue;
-        seenPaths.add(real);
-        if (header?.id) seenIds.add(header.id);
-        results.push({ ...candidate, header });
-        queue.push({ file: candidate.path, id: header?.id });
+        if (seenPaths.has(candidate.real)) continue;
+        if (candidate.header?.id && seenIds.has(candidate.header.id)) continue;
+        const byLocation = sidecarPrefix !== undefined && candidate.path.startsWith(sidecarPrefix);
+        const link = candidate.header?.parentSession;
+        const byHeader = link !== undefined && (link === node.id || link === node.file);
+        if (!byLocation && !byHeader) continue;
+        seenPaths.add(candidate.real);
+        if (candidate.header?.id) seenIds.add(candidate.header.id);
+        results.push({ path: candidate.path, kind: candidate.kind, header: candidate.header });
+        queue.push({ file: candidate.path, id: candidate.header?.id });
       }
     }
     this.lastStats.filesDiscovered = results.length;
     return results;
   }
 
-  private indexSiblingsByParent(dir: string, skip: Set<string>): Map<string, string[]> {
-    const index = new Map<string, string[]>();
-    let names: string[];
+  /**
+   * Session files that could belong to this tree: everything under the root's sidecar
+   * subtree (at any depth), plus the root's own directory, where pi writes forks as
+   * siblings that only a header links back. Headers are read once and cached.
+   */
+  private collectCandidates(
+    rootFile: string | undefined,
+    skip: ReadonlySet<string>,
+  ): Array<{ path: string; real: string; kind: string; header?: SessionHeader }> {
+    if (!rootFile) return [];
+    const byPath = new Map<string, { path: string; real: string; kind: string; header?: SessionHeader }>();
+    const add = (path: string, kind: string) => {
+      const real = resolveRealPath(path);
+      if (skip.has(real) || byPath.has(real)) return;
+      byPath.set(real, { path, real, kind, header: this.cachedHeader(path) });
+    };
+    for (const file of listSidecarSessionFiles(deriveSidecarRoot(rootFile))) add(file.path, file.kind);
     try {
-      names = readdirSync(dir);
+      for (const name of readdirSync(dirname(rootFile))) {
+        if (name.endsWith(".jsonl")) add(join(dirname(rootFile), name), "forks");
+      }
     } catch {
-      return index;
+      // Session directory unreadable: sidecar candidates still stand.
     }
-    for (const name of names) {
-      if (!name.endsWith(".jsonl")) continue;
-      const path = join(dir, name);
-      if (skip.has(resolveRealPath(path))) continue;
-      const header = this.cachedHeader(path);
-      if (!header?.parentSession) continue;
-      const list = index.get(header.parentSession);
-      if (list) list.push(path);
-      else index.set(header.parentSession, [path]);
-    }
-    return index;
+    return [...byPath.values()];
   }
 
   private cachedHeader(path: string): SessionHeader | undefined {
@@ -596,22 +626,30 @@ export class SessionTreeScanner {
   scanTree(args: { ownEntries: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
     this.lastStats = { filesRead: 0, filesDiscovered: 0 };
 
-    // Descendants first: their ids tell the parent's fold which tool results merely
-    // restate a child session's spend.
+    // Discovery first, so the parent's fold knows which tool results merely restate a
+    // child session's spend.
+    const found = this.discover(args.sessionFile, args.sessionId);
+    const countedSessions = new Set<string>();
+    for (const child of found) {
+      if (child.header?.id) countedSessions.add(child.header.id);
+      countedSessions.add(child.path);
+    }
+
+    // The parent is folded before its descendants so its own turns own their identity:
+    // a fork that copied them contributes only what it added afterwards.
+    const ownAcc = createAccumulator();
+    for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { ...this.price, countedSessions });
+    const own = summarize(ownAcc, { id: args.sessionId, path: args.sessionFile, kind: "own" });
+
+    const excludeKeys = new Set(ownAcc.countedKeys);
     const descendants: SessionCost[] = [];
-    const counted = new Set<string>();
-    for (const found of this.discover(args.sessionFile, args.sessionId)) {
-      const cost = this.scanFile(found.path, found.kind);
+    for (const child of found) {
+      const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
       if (!cost) continue;
       descendants.push(cost);
-      if (cost.id) counted.add(cost.id);
-      if (cost.path) counted.add(cost.path);
+      for (const key of cost.countedKeys) excludeKeys.add(key);
     }
     descendants.sort((a, b) => b.cost - a.cost);
-
-    const ownAcc = createAccumulator();
-    for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { ...this.price, countedSessions: counted });
-    const own = summarize(ownAcc, { id: args.sessionId, path: args.sessionFile, kind: "own" });
 
     return combine(own, descendants);
   }

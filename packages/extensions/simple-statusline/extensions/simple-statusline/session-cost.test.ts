@@ -431,3 +431,136 @@ test("a session tree on disk can be analyzed from a fresh process, long after th
   assert.match(parsed.report, /Session tree lifetime cost/);
   assert.match(parsed.report, /Not included/);
 });
+
+// ── forked history is not billed twice ───────────────────────────────────────
+
+test("a fork that copied the parent's history counts only what it added", () => {
+  const root = tempRoot();
+  const parentTurns = [assistant(1), assistant(2)];
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: parentTurns });
+  // BTW asides and pi's own /fork copy the parent's entries verbatim, ids and all.
+  writeSession(join(deriveChildSessionDir(parent, "btw"), "aside.jsonl"), {
+    id: "b1",
+    parentSession: parent,
+    entries: [...parentTurns, assistant(0.5)],
+  });
+
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: parentTurns, sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3.5, "parent 3 + the aside's own 0.5, not the copied history again");
+  assert.equal(tree.own.cost, 3);
+  assert.equal(tree.descendants[0]?.cost, 0.5);
+});
+
+test("two asides copying the same history each add only their own turns", () => {
+  const root = tempRoot();
+  const parentTurns = [assistant(1)];
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: parentTurns });
+  const dir = deriveChildSessionDir(parent, "btw");
+  writeSession(join(dir, "a.jsonl"), { id: "b1", parentSession: parent, entries: [...parentTurns, assistant(0.25)] });
+  writeSession(join(dir, "b.jsonl"), { id: "b2", parentSession: parent, entries: [...parentTurns, assistant(0.75)] });
+
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: parentTurns, sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 2, "1 + 0.25 + 0.75");
+});
+
+test("independent children are fully counted — suppression is not over-eager", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(1)] });
+  writeSession(join(deriveChildSessionDir(parent, "advisor"), "a.jsonl"), { id: "a1", entries: [assistant(2), toolResult(0.5)] });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "t.jsonl"), { id: "t1", entries: [assistant(3)] });
+
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 6.5);
+});
+
+test("an entry id that collides across sessions is still counted when it is a different turn", () => {
+  const root = tempRoot();
+  // pi entry ids are 8 hex chars, so collisions across a large tree are plausible;
+  // the timestamp is what distinguishes a genuine collision from a copied entry.
+  const parentEntry = { type: "message", id: "dupe1234", timestamp: "2026-07-28T10:00:00.000Z", message: { role: "assistant", provider: "openai", model: "m", usage: usage(1) } };
+  const childEntry = { type: "message", id: "dupe1234", timestamp: "2026-07-28T11:30:00.000Z", message: { role: "assistant", provider: "openai", model: "m", usage: usage(2) } };
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [parentEntry] });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [childEntry] });
+
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [parentEntry], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3, "distinct turns that happen to share an id both count");
+});
+
+test("post-hoc analysis suppresses copied fork history the same way", () => {
+  const root = tempRoot();
+  const parentTurns = [assistant(1), assistant(1)];
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: parentTurns });
+  writeSession(join(deriveChildSessionDir(parent, "btw"), "aside.jsonl"), { id: "b1", parentSession: parent, entries: [...parentTurns, assistant(0.5)] });
+  assert.equal(analyzeSessionTree(parent).totalCost, 2.5);
+});
+
+// ── each discovery route stands on its own, and the overlap is deduped ────────
+
+test("the sidecar route alone finds a child that carries no parent link", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2)] });
+  const found = new SessionTreeScanner().discover(parent, "p1");
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.header?.parentSession, undefined, "no header link — location is the only signal");
+});
+
+test("the header route alone finds a sibling outside the sidecar directory", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(root, "fork.jsonl"), { id: "f1", parentSession: "p1", entries: [assistant(2)] });
+  const found = new SessionTreeScanner().discover(parent, "p1");
+  assert.equal(found.length, 1);
+  assert.ok(!found[0]?.path.includes("parent/"), "not under the sidecar dir — the header is the only signal");
+});
+
+test("a child both routes reach is admitted exactly once", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // Real children carry both signals: a panelist sits in the sidecar dir AND names the
+  // parent id; a BTW aside sits there AND names the parent file path.
+  const byId = writeSession(join(deriveChildSessionDir(parent, "panel"), "by-id.jsonl"), { id: "c1", parentSession: "p1", entries: [assistant(2)] });
+  const byPath = writeSession(join(deriveChildSessionDir(parent, "btw"), "by-path.jsonl"), { id: "c2", parentSession: parent, entries: [assistant(3)] });
+
+  // Both premises stated rather than assumed: each file really is reachable by the
+  // sidecar route (its location) and by the header route (its parent link).
+  for (const [path, link] of [[byId, "p1"], [byPath, parent]] as const) {
+    assert.ok(path.startsWith(deriveSidecarRoot(parent)), `${path} is under the sidecar root`);
+    assert.equal(readSessionHeader(path)?.parentSession, link, `${path} also links to the parent by header`);
+  }
+
+  const scanner = new SessionTreeScanner();
+  const found = scanner.discover(parent, "p1");
+  assert.equal(found.length, 2, "two children, each admitted once despite two routes reaching each");
+  assert.deepEqual(found.map((f) => f.header?.id).sort(), ["c1", "c2"]);
+  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 5, "each counted once, not twice");
+});
+
+test("a grandchild reachable from both its parent and the root is admitted once", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(1)] });
+  writeSession(join(deriveChildSessionDir(child, "tasks"), "grand.jsonl"), { id: "g1", parentSession: "c1", entries: [assistant(2)] });
+  const scanner = new SessionTreeScanner();
+  assert.equal(scanner.discover(parent, "p1").length, 2);
+  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 3);
+});
+
+test("a tool result restating a child session is suppressed at any depth, not just the root", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // The child ran a grandchild session and its tool result also reports that usage.
+  const child = writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), {
+    id: "c1",
+    entries: [
+      assistant(1),
+      { type: "message", id: "tr-child", timestamp: "2026-07-28T10:00:00.000Z", message: { role: "toolResult", toolName: "advisor_consult", usage: usage(3), details: { childSessionId: "g1" } } },
+    ],
+  });
+  writeSession(join(deriveChildSessionDir(child, "advisor"), "grand.jsonl"), { id: "g1", entries: [assistant(3)] });
+
+  const scanner = new SessionTreeScanner();
+  const tree = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 4, "child's own 1 + the grandchild's 3 counted once, from its own session");
+  assert.equal(analyzeSessionTree(parent).totalCost, 4, "post-hoc analysis agrees");
+});

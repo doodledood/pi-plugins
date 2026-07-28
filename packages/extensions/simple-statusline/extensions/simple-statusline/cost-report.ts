@@ -117,18 +117,23 @@ export function analyzeSessionTree(sessionFile: string, price: PriceOptions = {}
 
   // Descendants first, so the parent's own tool results can be recognized as
   // restatements of a child session's spend rather than extra spend.
+  const found = scanner.discover(sessionFile, rootId);
+  const countedSessions = new Set<string>();
+  for (const child of found) {
+    if (child.header?.id) countedSessions.add(child.header.id);
+    countedSessions.add(child.path);
+  }
+
+  const own = scanner.scanFile(sessionFile, "own", { countedSessions });
+  const excludeKeys = new Set(own?.countedKeys ?? []);
   const descendants: SessionCost[] = [];
-  const counted = new Set<string>();
-  for (const found of scanner.discover(sessionFile, rootId)) {
-    const cost = scanner.scanFile(found.path, found.kind);
+  for (const child of found) {
+    const cost = scanner.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
     if (!cost) continue;
     descendants.push(cost);
-    if (cost.id) counted.add(cost.id);
-    if (cost.path) counted.add(cost.path);
+    for (const key of cost.countedKeys) excludeKeys.add(key);
   }
   descendants.sort((a, b) => b.cost - a.cost);
-
-  const own = scanner.scanFile(sessionFile, "own", counted);
   return combine(own ?? summarize(createAccumulator(), { id: rootId, path: sessionFile, kind: "own" }), descendants);
 }
 
