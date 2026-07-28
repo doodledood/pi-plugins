@@ -4,7 +4,7 @@
  * Every packet carries a shadow ruling — what the machinery would have decided —
  * and the user's actual ruling grades it. Sustained agreement in a domain earns a
  * *proposal*, never the authority itself: only an explicit user command flips a
- * domain, and only reversible, low-blast decisions can be answered from doctrine
+ * domain, and only reversible, not-high-blast decisions can be answered from doctrine
  * even then (INV-G8, AC-6.2).
  */
 

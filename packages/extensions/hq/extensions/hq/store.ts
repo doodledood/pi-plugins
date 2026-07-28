@@ -86,23 +86,35 @@ export class HqStore {
   }
 
   /**
-   * Read-modify-write of one session row, so two writers can own different
-   * fields of it. The reporter owns lifecycle fields; the titler owns the title;
-   * a drill owns the drilling marker. A whole-record write from any of them would
-   * silently drop the others' work.
+   * Read-modify-write of one session row, so two writers can own different fields
+   * of it. The reporter owns the lifecycle fields; the titler owns the title;
+   * drills own the marker set. A whole-record write from any of them would
+   * silently drop the others' work, and the read has to happen inside the write
+   * queue or two patches can interleave.
    */
-  async patchSessionState(
+  async mutateSessionState(
     sessionId: string,
-    patch: Partial<SessionState>,
+    mutate: (current: SessionState) => SessionState,
   ): Promise<SessionState | undefined> {
     const path = sessionStatePath(this.root, sessionId);
     return this.queue(path, async () => {
       const current = await readJsonFile(path, parseSessionState, this.onError);
       if (!current) return undefined;
-      const next: SessionState = { ...current, ...patch, sessionId: current.sessionId };
+      const next: SessionState = { ...mutate(current), sessionId: current.sessionId };
       await atomicWriteJson(path, next);
       return next;
     });
+  }
+
+  /** Patches named fields. `undefined` values are ignored rather than written. */
+  async patchSessionState(
+    sessionId: string,
+    patch: Partial<SessionState>,
+  ): Promise<SessionState | undefined> {
+    const defined = Object.fromEntries(
+      Object.entries(patch).filter(([, value]) => value !== undefined),
+    ) as Partial<SessionState>;
+    return this.mutateSessionState(sessionId, (current) => ({ ...current, ...defined }));
   }
 
   async readSessionState(sessionId: string): Promise<SessionState | undefined> {
@@ -445,4 +457,49 @@ export async function pruneState(
   }
 
   return result;
+}
+
+/**
+ * Returns packets that have been drilling longer than `minutes` to the queue.
+ *
+ * A drill worker that dies without submitting would otherwise park its packet in
+ * `drilling` forever, which costs the user the decision — the same loss the stop
+ * sweep exists to prevent, one layer up. The packet comes back annotated so the
+ * user can see that the answer never arrived.
+ */
+export async function reopenStalledDrills(
+  store: HqStore,
+  options: { minutes: number; now: Date },
+): Promise<string[]> {
+  const cutoff = options.now.getTime() - options.minutes * 60_000;
+  const reopened: string[] = [];
+
+  for (const packet of await store.listQueue()) {
+    if (packet.status !== "drilling") continue;
+    if (Date.parse(packet.updatedAt) >= cutoff) continue;
+    await store.updatePacket(packet.id, (current) => ({
+      ...current,
+      status: "pending",
+      annotations: [
+        ...current.annotations,
+        {
+          at: options.now.toISOString(),
+          question: "(drill did not report)",
+          answer:
+            `No answer came back within ${options.minutes} minutes, so this is back in the queue undrilled. Ask again if you still want it looked into.`,
+          quotes: [],
+          tier: 1 as const,
+        },
+      ],
+    }));
+    for (const state of await store.listFleet()) {
+      if (!state.drillingPacketIds.includes(packet.id)) continue;
+      await store.mutateSessionState(state.sessionId, (current) => ({
+        ...current,
+        drillingPacketIds: current.drillingPacketIds.filter((id) => id !== packet.id),
+      }));
+    }
+    reopened.push(packet.id);
+  }
+  return reopened;
 }

@@ -166,3 +166,29 @@ test("coverage buckets follow what was cited and whether the user agreed", () =>
   assert.equal(coverageFor({ citations: ["global.md § Doors L4"], shadowAgreed: false }), "contradicts");
   assert.equal(coverageFor({ citations: ["global.md § Doors L4"], shadowAgreed: null }), "covered-agreed");
 });
+
+test("the seed distinguishes a session proceeding from HQ answering for the user", async () => {
+  const root = await makeRoot("hq-doctrine-wildcard");
+  try {
+    await seedDoctrine(root);
+    const doctrine = await loadDoctrine(root, undefined);
+
+    // The bullet that permits unblocked progress must name the session as its
+    // subject; read as a rule about HQ it would be a wildcard citation that
+    // satisfies the coverage gate for any reversible case.
+    const judgment = doctrine.rules.find((rule) =>
+      /may take a reversible, not-high-blast step/.test(rule.text)
+    );
+    assert.ok(judgment, "the worker-judgment bullet exists");
+    assert.match(judgment.text, /delegated session/);
+    assert.equal(/^HQ /.test(judgment.text), false);
+
+    // And the bullet about HQ answering says outright that it is not itself a
+    // rule that decides anything.
+    const answering = doctrine.rules.find((rule) => /^HQ may answer a stop/.test(rule.text));
+    assert.ok(answering, "the HQ-answering bullet exists");
+    assert.match(answering.text, /not such a rule|never a line/);
+  } finally {
+    await dropRoot(root);
+  }
+});

@@ -15,7 +15,7 @@ import { resolveStateRoot } from "./paths.ts";
 import { SEAT_PROMPT } from "./prompts.ts";
 import { SessionReporter } from "./reporter.ts";
 import { createSpawner, isManagedEnv, type Spawner } from "./spawn.ts";
-import { HqStore, pruneState } from "./store.ts";
+import { HqStore, pruneState, reopenStalledDrills } from "./store.ts";
 import { sweepStops } from "./triage.ts";
 import { registerHqTools } from "./tools.ts";
 import { FLEET_OVERLAY_OPTIONS, FleetOverlay } from "./ui.ts";
@@ -24,6 +24,9 @@ export const SEAT_MESSAGE_TYPE = "hq-seat";
 
 /** How long HQ keeps its own bookkeeping before pruning it on the next seat. */
 export const RETENTION_DAYS = 14;
+
+/** A drill silent for this long is assumed dead and its packet is re-queued. */
+export const STALLED_DRILL_MINUTES = 30;
 
 export interface HqExtensionOptions {
   stateRoot?: string;
@@ -169,6 +172,12 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         // rows, finished stops and worker logs age out, so the board and the
         // sweeps stay bounded however long HQ has been running.
         const pruned = await pruneState(root, { days: RETENTION_DAYS, now: now() });
+        // A drill whose worker died leaves its packet parked; the seat returns it
+        // to the queue rather than losing the decision behind it.
+        const revived = await reopenStalledDrills(store, {
+          minutes: STALLED_DRILL_MINUTES,
+          now: now(),
+        });
         await refreshCard();
         await showOverlay(ctx);
 
@@ -180,7 +189,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
             pruned.sessions + pruned.stops + pruned.logs > 0
               ? `; pruned ${pruned.sessions} session rows, ${pruned.stops} stops, ${pruned.logs} logs`
               : ""
-          }${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
+          }${revived.length > 0 ? `; re-queued ${revived.length} stalled drill(s)` : ""}${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
           "info",
         );
         for (const problem of problems.slice(-3)) ctx.ui.notify(problem, "warning");
@@ -216,7 +225,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         }
         const confirmed = await ctx.ui.confirm(
           `Graduate "${domain}"?`,
-          "HQ will answer reversible, low-blast decisions in this domain from doctrine without asking you. Irreversible and high-blast decisions still come to you. Revoke any time with /hq_revoke.",
+          "HQ will answer decisions in this domain from doctrine without asking you, as long as they are reversible and not high-blast. Irreversible and high-blast decisions still come to you. Revoke any time with /hq_revoke.",
         );
         if (!confirmed) return;
         const stats = await graduateDomain(store, domain, now().toISOString());

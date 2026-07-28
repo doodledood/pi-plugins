@@ -60,7 +60,7 @@ export async function startDrill(
   question: string,
 ): Promise<{ spawnedSessionId: string | null }> {
   const now = deps.now ?? (() => new Date());
-  await markOriginDrilling(deps, packet, packet.id);
+  await markOriginDrilling(deps, packet, true);
   // A packet under a drill is not presentable, whichever path started the drill:
   // a deferral from the seat, or triage completing a held packet.
   if (packet.status === "pending") {
@@ -97,27 +97,25 @@ Call the drill context tool for that packet id, then answer.`,
   return { spawnedSessionId: spawned.runId };
 }
 
+/**
+ * Adds or removes this packet from the origin row's drill markers.
+ *
+ * A drill owns only the marker set: the lifecycle state belongs to the session's
+ * own reporter, and the board reads "drilling" from the markers. That means two
+ * drills on one session cannot cancel each other, and no drill has to restore a
+ * state that may have moved on while it ran.
+ */
 async function markOriginDrilling(
   deps: DrillDeps,
   packet: Packet,
-  packetId: string | null,
+  drilling: boolean,
 ): Promise<void> {
-  const state = await deps.store.readSessionState(packet.sourceSessionId);
-  if (!state) return;
-  if (packetId) {
-    await deps.store.patchSessionState(packet.sourceSessionId, {
-      drillingPacketId: packetId,
-      state: "drilling",
-      // Remember what the row said, so clearing the marker can put it back
-      // rather than leaving a finished session reading as forever-drilling.
-      preDrillState: state.state,
-    });
-    return;
-  }
-  await deps.store.patchSessionState(packet.sourceSessionId, {
-    drillingPacketId: null,
-    state: state.preDrillState ?? (state.state === "drilling" ? "done" : state.state),
-    preDrillState: null,
+  await deps.store.mutateSessionState(packet.sourceSessionId, (current) => {
+    const others = current.drillingPacketIds.filter((id) => id !== packet.id);
+    return {
+      ...current,
+      drillingPacketIds: drilling ? [...others, packet.id] : others,
+    };
   });
 }
 
@@ -257,7 +255,7 @@ async function finishWithAnnotation(
     status: current.status === "drilling" ? "pending" : current.status,
     annotations: [...current.annotations, annotation],
   }));
-  await markOriginDrilling(deps, packet, null);
+  await markOriginDrilling(deps, packet, false);
   await logDrill(deps, {
     at: annotation.at,
     packetId: packet.id,

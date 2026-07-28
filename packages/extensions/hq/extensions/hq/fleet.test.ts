@@ -52,7 +52,7 @@ test("each state gets its glyph, its age, and the header carries the badge and c
         sessionId: "drilled",
         title: "drilled",
         state: "running",
-        drillingPacketId: "pkt-x",
+        drillingPacketIds: ["pkt-x"],
         lastEventAt: minutesAgo(1),
       }),
       sessionStateFixture({ sessionId: "quiet-1", title: "quiet-1", state: "idle", stopState: "idle-done", lastEventAt: minutesAgo(5) }),

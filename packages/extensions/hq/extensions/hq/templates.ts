@@ -38,11 +38,13 @@ own ratification adds to it, and HQ never rewrites it.
   doubt, irreversibility, conflict, or a required novel personal fact. Also send
   one when evidence materially conflicts, or at a one-way door or any other
   hard-to-reverse choice.
-- Doctrine silence alone is not a packet. A reversible, low-blast step that no
-  rule decides may continue on the worker's own judgment; a reversible step that
-  needs the user's preference is a packet.
-- Continuing without the user still needs a line to cite. Silence is permission
-  to proceed, never a rule to point at.
+- A delegated session working on its own may take a reversible, not-high-blast
+  step that no rule decides, on its own judgment; if the step needs the user's
+  preference, it stops and that stop becomes a packet.
+- HQ may answer a stop without the user only by citing a rule that decides the
+  case itself. This bullet, and any other bullet about when to escalate, is not
+  such a rule: silence is permission for a session to proceed, never a line HQ
+  can point at to answer for the user.
 - A finished task is a decision too: work the user has not seen arrives as a
   close packet rather than being silently archived.
 
@@ -59,14 +61,15 @@ own ratification adds to it, and HQ never rewrites it.
 ## Meta
 
 These numbers govern HQ itself. They are read from this file on every cycle, so
-editing them is the whole configuration surface. Nothing else changes them.
+editing them is the whole configuration surface. Nothing else changes them. A
+value outside its range is ignored and the default stands.
 
-- batch-max: 4
-- batch-trivial-only: true
-- graduation-consecutive-agreements: 10
-- graduation-min-days: 14
-- audit-sample-rate: 0.2
-- staleness-minutes: 30
+- batch-max: 4                            (1–20)
+- batch-trivial-only: true                (true or false)
+- graduation-consecutive-agreements: 10   (1–1000)
+- graduation-min-days: 14                 (0–3650)
+- audit-sample-rate: 0.2                  (0–1)
+- staleness-minutes: 30                   (1–10080)
 `;
 
 export const DOCTRINE_PROJECT_SEED = (project: string): string =>

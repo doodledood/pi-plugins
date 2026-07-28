@@ -55,10 +55,12 @@ export interface SessionState {
   startedAt: string;
   /** Advances on every publish; staleness is measured from this. */
   lastEventAt: string;
-  /** Set while a drill about this session is running (drilling is shown here). */
-  drillingPacketId: string | null;
-  /** The row's state before a drill claimed it, restored when the drill ends. */
-  preDrillState: FleetState | null;
+  /**
+   * Packets currently being drilled about this session. Drills own this field and
+   * nothing else on the row: the board derives "drilling" from it, so a drill
+   * never writes the lifecycle state and never has to restore one.
+   */
+  drillingPacketIds: string[];
   /** For drill/continuation sessions: the session they were derived from. */
   originSessionId: string | null;
   /** The packet a continuation is carrying, when it is carrying one. */
@@ -333,10 +335,7 @@ export function parseSessionState(value: unknown): SessionState | undefined {
   const lastEventAt = str(value.lastEventAt);
   const sessionFile = strOrNull(value.sessionFile);
   const title = strOrNull(value.title);
-  const drillingPacketId = strOrNull(value.drillingPacketId);
-  const preDrillState = value.preDrillState === null || value.preDrillState === undefined
-    ? null
-    : oneOf(value.preDrillState, FLEET_STATES) ?? null;
+  const drillingPacketIds = strArray(value.drillingPacketIds) ?? [];
   const originSessionId = strOrNull(value.originSessionId);
   const packetId = strOrNull(value.packetId);
 
@@ -345,8 +344,7 @@ export function parseSessionState(value: unknown): SessionState | undefined {
     role === undefined || kind === undefined || project === undefined ||
     state === undefined || stopState === undefined || startedAt === undefined ||
     lastEventAt === undefined || sessionFile === undefined || title === undefined ||
-    drillingPacketId === undefined || originSessionId === undefined ||
-    packetId === undefined
+    originSessionId === undefined || packetId === undefined
   ) {
     return undefined;
   }
@@ -366,8 +364,7 @@ export function parseSessionState(value: unknown): SessionState | undefined {
     preview: str(value.preview) ?? "",
     startedAt,
     lastEventAt,
-    drillingPacketId,
-    preDrillState,
+    drillingPacketIds,
     originSessionId,
     packetId,
   };

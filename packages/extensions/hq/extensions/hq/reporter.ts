@@ -97,8 +97,7 @@ export class SessionReporter {
       preview: truncatePreview(this.latestAssistant?.text ?? ""),
       startedAt: this.startedAt ?? at,
       lastEventAt: at,
-      drillingPacketId: null,
-      preDrillState: null,
+      drillingPacketIds: [],
       originSessionId: this.env[ORIGIN_ENV] ?? null,
       packetId: this.env[PACKET_ENV] ?? null,
     };

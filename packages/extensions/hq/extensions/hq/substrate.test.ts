@@ -219,6 +219,46 @@ test("HQ prunes its own bookkeeping and never the user's records", async () => {
   }
 });
 
+test("a drill that never reports gives its packet back to the queue", async () => {
+  const root = await makeRoot("hq-stalled-drill");
+  try {
+    const store = makeStore(root, () => new Date("2026-07-28T12:00:00.000Z"));
+    await store.ensure();
+    const { reopenStalledDrills } = await import("./store.ts");
+
+    const { packet } = await store.createPacket(packetDraftFixture());
+    await store.mutateSessionState;
+    await store.publishSessionState(
+      sessionStateFixture({ sessionId: packet.sourceSessionId, drillingPacketIds: [packet.id] }),
+    );
+    await store.updatePacket(packet.id, (current) => ({ ...current, status: "drilling" }));
+
+    // Not yet stale: the drill may still be working.
+    assert.deepEqual(
+      await reopenStalledDrills(store, { minutes: 30, now: new Date("2026-07-28T12:10:00.000Z") }),
+      [],
+    );
+    assert.equal((await store.readPacket(packet.id))?.status, "drilling");
+
+    const reopened = await reopenStalledDrills(store, {
+      minutes: 30,
+      now: new Date("2026-07-28T13:00:00.000Z"),
+    });
+    assert.deepEqual(reopened, [packet.id]);
+
+    const revived = await store.readPacket(packet.id);
+    assert.equal(revived?.status, "pending", "the decision comes back rather than being lost");
+    assert.match(revived?.annotations.at(-1)?.answer ?? "", /did not|back in the queue/i);
+    assert.deepEqual(
+      (await store.readSessionState(packet.sourceSessionId))?.drillingPacketIds,
+      [],
+      "and the board stops claiming a drill is running",
+    );
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("a log survives a torn line and keeps the healthy records", async () => {
   const root = await makeRoot("hq-log");
   try {

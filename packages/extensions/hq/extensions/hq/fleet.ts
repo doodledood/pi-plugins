@@ -78,7 +78,9 @@ function shortLabel(state: SessionState): string {
 
 function rowStateFor(state: SessionState, hasPendingPacket: boolean): RowState {
   if (hasPendingPacket) return "needs-ruling";
-  if (state.drillingPacketId || state.state === "drilling") return "drilling";
+  // Drilling is derived from the markers drills own, never from a state a drill
+  // wrote onto the row.
+  if (state.drillingPacketIds.length > 0) return "drilling";
   if (state.stopState === "aborted") return "failed";
   if (state.state === "running") return "running";
   if (state.state === "done") return "done";

@@ -430,8 +430,8 @@ test("a graduation proposal is queued at the threshold and ruling on it grants n
     await writeFile(
       path,
       text
-        .replace("- graduation-consecutive-agreements: 10", "- graduation-consecutive-agreements: 2")
-        .replace("- graduation-min-days: 14", "- graduation-min-days: 0"),
+        .replace(/- graduation-consecutive-agreements: \d+.*/, "- graduation-consecutive-agreements: 2")
+        .replace(/- graduation-min-days: \d+.*/, "- graduation-min-days: 0"),
       "utf8",
     );
 

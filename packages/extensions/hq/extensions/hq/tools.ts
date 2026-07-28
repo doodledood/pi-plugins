@@ -98,7 +98,9 @@ const PacketDraftSchema = Type.Object({
   flipCondition: Type.String({ description: "What evidence would change that recommendation" }),
   blastRadius: BlastSchema,
   reversibility: ReversibilitySchema,
-  doctrineCitations: Type.Optional(Type.Array(Type.String())),
+  doctrineCitations: Type.Optional(Type.Array(Type.String({
+    description: "Doctrine lines you relied on, exactly as they appear in brackets. These decide whether the ruling counts as covered by doctrine.",
+  }))),
   shadowRuling: ShadowSchema,
   trivial: Type.Optional(Type.Boolean({ description: "Cheap enough to decide alongside others" })),
   dependsOn: Type.Optional(Type.Array(Type.String({ description: "Packet ids that must be ruled first" }))),
@@ -238,7 +240,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       "Submit the drill's answer with verbatim quotes. Set insufficient when reading cannot answer it and the session itself must be asked.",
     parameters: Type.Object({
       packetId: Type.Optional(
-        Type.String({ description: "Omit it: the drill's packet is fixed by the run" }),
+        Type.String({ description: "Optional; the run already knows which packet it is about" }),
       ),
       answer: Type.String(),
       quotes: Type.Array(
@@ -277,9 +279,12 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     parameters: Type.Object({ sessionId: Type.String(), title: Type.String() }),
     async execute(_id, params) {
       if (envKind(deps.env) !== "titler") return refuse("this tool belongs to the titler");
-      const state = await deps.store.readSessionState(params.sessionId);
-      if (!state) return text(`no such session: ${params.sessionId}`);
-      await deps.store.publishSessionState({ ...state, title: params.title.trim().slice(0, 48) });
+      // The titler owns the title and nothing else: a whole-record write here
+      // would revert whatever the session published while this ran.
+      const patched = await deps.store.patchSessionState(params.sessionId, {
+        title: params.title.trim().slice(0, 48),
+      });
+      if (!patched) return text(`no such session: ${params.sessionId}`);
       return text("Title set.");
     },
   });

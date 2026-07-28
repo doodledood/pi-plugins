@@ -327,7 +327,7 @@ async function runDrill(world: World, packet: Packet | undefined): Promise<void>
   });
   await check("drilling is no longer shown on the origin row", async () => {
     const state = await world.store.readSessionState(packet.sourceSessionId);
-    assert.equal(state?.drillingPacketId, null);
+    assert.deepEqual(state?.drillingPacketIds, []);
     return "origin row clear";
   });
 }
@@ -436,8 +436,7 @@ async function seedTieringSession(
     preview: "chose a helper name",
     startedAt: new Date().toISOString(),
     lastEventAt: new Date().toISOString(),
-    drillingPacketId: null,
-    preDrillState: null,
+    drillingPacketIds: [],
     originSessionId: null,
     packetId: null,
   });

@@ -16,6 +16,7 @@
     ]
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
@@ -29,6 +30,7 @@
     "verify": "npm run typecheck && npm test"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": ">=0.80.8",
     "@earendil-works/pi-tui": "*",
     "@types/node": "*",

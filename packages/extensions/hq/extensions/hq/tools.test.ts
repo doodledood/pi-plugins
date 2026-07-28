@@ -517,3 +517,41 @@ test("the defect tool records a reported dive", async () => {
     await dropRoot(h.root);
   }
 });
+
+test("the titler writes only the title, leaving the session's own fields alone", async () => {
+  const h = await harness("hq-tools-title", { env: { HQ_MANAGED: "1", HQ_KIND: "titler" } });
+  try {
+    const { sessionStateFixture } = await import("./testing.ts");
+    await h.store.publishSessionState(
+      sessionStateFixture({ sessionId: "sess-a", state: "running", drillingPacketIds: ["pkt-x"] }),
+    );
+    const tool = h.tools.get("hq_set_title");
+    assert.ok(tool);
+    await tool.execute(
+      "call",
+      { sessionId: "sess-a", title: "migrate the eval runner" } as never,
+      undefined,
+      undefined,
+      h.ctx,
+    );
+
+    const state = await h.store.readSessionState("sess-a");
+    assert.equal(state?.title, "migrate the eval runner");
+    assert.equal(state?.state, "running", "the lifecycle field is untouched");
+    assert.deepEqual(state?.drillingPacketIds, ["pkt-x"], "and so is the drill marker");
+
+    const missing = await tool.execute(
+      "call",
+      { sessionId: "nobody", title: "x" } as never,
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    assert.match(
+      missing.content.map((part) => ("text" in part ? part.text : "")).join(" "),
+      /no such session/,
+    );
+  } finally {
+    await dropRoot(h.root);
+  }
+});

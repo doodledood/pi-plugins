@@ -203,13 +203,13 @@ test("a drill in flight stays visible on the session it is about", async () => {
 
     const state = await store.readSessionState("sess-a");
     assert.ok(state);
-    await store.publishSessionState({ ...state, drillingPacketId: "pkt-1" });
+    await store.publishSessionState({ ...state, drillingPacketIds: ["pkt-1"] });
 
     await reporter.onAgentStart();
-    assert.equal(
-      (await store.readSessionState("sess-a"))?.drillingPacketId,
-      "pkt-1",
-      "a publish does not wipe the drill marker",
+    assert.deepEqual(
+      (await store.readSessionState("sess-a"))?.drillingPacketIds,
+      ["pkt-1"],
+      "a publish does not wipe the drill markers",
     );
   } finally {
     await dropRoot(root);
