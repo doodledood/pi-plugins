@@ -258,66 +258,22 @@ test("footer marks the total approximate when some spend cannot be priced exactl
   assert.match(renderFooter(harness), /~\$0\.500/, "an unpriceable model shows the total as a floor");
 });
 
-test("a configured premium prices priority turns exactly, and the floor marker clears", async () => {
-  // The whole two-key contract end to end: gpt-fast-toggle writes the tier record and
-  // holds the multiplier; the footer reads both and stops approximating.
-  const home = mkdtempSync(join(tmpdir(), "statusline-home-"));
-  costRoots.push(home);
-  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-  writeFileSync(join(home, ".pi", "agent", "gpt-fast-toggle.json"), `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
-  const savedHome = process.env.HOME;
-  process.env.HOME = home;
+test("a premium declared by the tier record prices those turns exactly, with no marker", async () => {
+  // The record is self-describing: whichever extension knows about the tier states what
+  // it costs, so the footer prices it without knowing that extension exists.
+  const { parent } = tempSessionTree();
+  const own = [
+    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority", multiplier: 2 } },
+    ownAssistant(0.4, "own-1"),
+  ];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
 
-  try {
-    // Re-imported so the module picks up the redirected HOME for its state path.
-    const { default: statuslineWithHome } = await import(`../simple-statusline.ts?home=${encodeURIComponent(home)}`);
-    const { parent } = tempSessionTree();
-    const own = [
-      { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
-      ownAssistant(0.4, "own-1"),
-    ];
-    const harness: Harness = { handlers: new Map(), commands: new Map(), ctx: undefined, themeCalls: [], notices: [] };
-    const ctx = {
-      cwd: "/tmp/project",
-      model: { id: "gpt-5.6-sol", provider: "openai" },
-      getContextUsage: () => undefined,
-      sessionManager: {
-        getBranch: () => own,
-        getEntries: () => own,
-        getSessionFile: () => parent,
-        getSessionId: () => "parent-1",
-      },
-      ui: {
-        setStatus() {},
-        setFooter(factory: any) {
-          harness.footerFactory = factory;
-        },
-        notify: (message: string) => harness.notices.push(message),
-      },
-    };
-    harness.ctx = ctx;
-    statuslineWithHome({
-      on(event: string, handler: Handler) {
-        harness.handlers.set(event, handler);
-      },
-      getThinkingLevel: () => "off" as const,
-      registerCommand(name: string, options: any) {
-        harness.commands.set(name, options);
-      },
-    });
-    harness.handlers.get("session_start")!({ reason: "startup" }, ctx);
+  const line = renderFooter(harness);
+  assert.match(line, /\$0\.800/, "0.4 at twice the standard rate");
+  assert.doesNotMatch(line, /~\$/, "a declared premium means the total is exact");
 
-    // 0.4 at twice the standard rate, stated exactly rather than as a floor.
-    const line = renderFooter(harness);
-    assert.match(line, /\$0\.800/);
-    assert.doesNotMatch(line, /~\$/, "a configured premium means the total is exact");
-
-    await harness.commands.get("cost")!.handler("", ctx);
-    assert.doesNotMatch(harness.notices.join("\n"), /Approximate, because/);
-  } finally {
-    if (savedHome === undefined) delete process.env.HOME;
-    else process.env.HOME = savedHome;
-  }
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  assert.doesNotMatch(harness.notices.join("\n"), /Approximate, because/);
 });
 
 test("footer prices priority-tier turns as approximate until a multiplier is configured", () => {
@@ -378,8 +334,10 @@ test("/cost reports the tree breakdown, the branch subtotal, and what it cannot 
 
   // Both blind spots named, so deleting either line breaks the test.
   assert.match(report, /Not included/);
-  assert.match(report, /web search \/ source check \(pi-web-access\).*synthesis/);
-  assert.match(report, /image generation \(pi-image-gen\)/);
+  assert.match(report, /Paid work that reports no usage cannot be counted/);
+  assert.match(report, /synthesis/);
+  assert.match(report, /image generation/);
+  assert.doesNotMatch(report, /pi-web-access|pi-image-gen/, "no claim about which extensions are installed");
 });
 
 test("a scan failure leaves the previous total rather than blanking the footer", () => {
@@ -435,7 +393,7 @@ test("/cost states the total is a floor and names each reason, over real fixture
   const report = harness.notices.join("\n");
   assert.match(report, /Session tree lifetime cost: ~\$0\.400/, "the report headline carries the floor marker too");
   assert.match(report, /Approximate, because:/);
-  assert.match(report, /priority-tier turns priced at standard rates/);
+  assert.match(report, /priority-tier turns counted at standard rates/);
   assert.match(report, /no price resolved for openai\/child-model/);
   assert.match(report, /priority-tier turns billed above the \$0\.400 counted here/);
 });

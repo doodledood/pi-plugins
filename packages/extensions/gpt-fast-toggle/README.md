@@ -35,7 +35,7 @@ See `config/` for safe example config and `setup/configs/` for Aviram's current 
 | Key | Meaning |
 | --- | --- |
 | `mode` | `"fast"` or `"deep"` — the toggle's own state. |
-| `priorityMultiplier` | Optional. The priority tier's price as a multiple of the standard rate for your model — `2` means priority turns cost twice the standard rate, not twice plus the standard rate. |
+| `priorityMultiplier` | Optional. The priority tier's price as a multiple of the standard rate for your model — `2` means priority turns cost twice the standard rate, not twice plus the standard rate. It is copied into each tier record, so any cost surface can price those turns. |
 
 ## Cost accounting
 
@@ -49,7 +49,7 @@ and when you switch to or from an OpenAI GPT model. A later scan can then tell
 which turns paid the premium. These are custom entries: durable, but excluded
 from LLM context, and they carry nothing but the tier name.
 
-Set `priorityMultiplier` to have those turns priced. Until you do, the
-`simple-statusline` cost surfaces mark the total with a leading `~` — a floor
-rather than an exact number — instead of quietly reporting it low, and `/cost`
-names priority tier as the reason.
+Set `priorityMultiplier` and the record carries it, so a cost surface prices those
+turns without knowing this extension exists. Until you do, the record states the
+tier alone and cost surfaces mark the total with a leading `~` — a floor rather
+than an exact number — instead of quietly reporting it low.

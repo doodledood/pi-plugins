@@ -7,8 +7,6 @@
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
 // live in the cache-optimization extension.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   computeSessionCacheStats,
@@ -21,15 +19,18 @@ import { SessionTreeScanner, type TreeCost } from "./simple-statusline/session-c
 import { branchCost, renderCostReport } from "./simple-statusline/cost-report.ts";
 
 const STATUSLINE_KEY = "simple-statusline";
-const GPT_FAST_STATUS_KEY = "gpt-fast";
-const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
+/**
+ * Statuses at or under this width ride inline with the model instead of the second row.
+ * A width rule rather than a list of known extensions: any extension's short status gets
+ * the prominent slot, and one that isn't installed simply contributes nothing.
+ */
+const INLINE_STATUS_MAX_WIDTH = 14;
 /** First useful boundary where compaction planning beats waiting for overflow pressure. */
 const COMPACT_HINT_THRESHOLD_PERCENT = 50;
 
 /**
- * Cost is a whole-session-tree figure read off session files, so everything the footer
- * needs from disk — the tree scan and the gpt-fast state — is refreshed on session
- * events. render() paints from those cached values and does no I/O at all.
+ * Cost is a whole-session-tree figure read off session files, so the tree scan happens
+ * on session events. render() paints from the last computed value and does no I/O.
  */
 const COST_REFRESH_INTERVAL_MS = 1_500;
 
@@ -42,8 +43,6 @@ type RuntimeState = {
   scanner: SessionTreeScanner;
   cost?: TreeCost;
   costComputedAt: number;
-  /** Latest gpt-fast state, refreshed with cost so painting reads no files. */
-  gptFast?: { mode?: string; priorityMultiplier?: number };
 };
 type ModelSignal = { plain: string; colored: string };
 type ContextSignal = { plain: string; percent: number | undefined };
@@ -53,9 +52,8 @@ export default function simpleStatusline(pi: any) {
     thinkingLevel: "off",
     turnCount: 0,
     active: false,
-    scanner: new SessionTreeScanner(readPriceOptions()),
+    scanner: new SessionTreeScanner(),
     costComputedAt: 0,
-    gptFast: readGptFastState(),
   };
   const refresh = () => runtime.requestRender?.();
   const refreshCost = (ctx: any, force = false) => {
@@ -63,8 +61,8 @@ export default function simpleStatusline(pi: any) {
     if (!force && runtime.cost && now - runtime.costComputedAt < COST_REFRESH_INTERVAL_MS) return;
     runtime.costComputedAt = now;
     try {
-      runtime.gptFast = readGptFastState();
-      runtime.scanner.setPrice(priceOptionsFrom(runtime.gptFast));
+      // Nothing to configure here: a tier record declares its own premium, so the
+      // scanner needs no knowledge of which extension produced it.
       runtime.cost = runtime.scanner.scanTree({
         ownEntries: ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(),
         sessionFile: ctx.sessionManager.getSessionFile?.(),
@@ -146,7 +144,7 @@ export default function simpleStatusline(pi: any) {
       refreshCost(ctx, true);
       // The branch subtotal uses the same accounting rules as the lifetime figure, so
       // the two numbers in one report can be reasoned about against each other.
-      const activeBranchCost = branchCost(ctx.sessionManager.getBranch(), readPriceOptions());
+      const activeBranchCost = branchCost(ctx.sessionManager.getBranch());
       ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost, scan: runtime.scanner.stats }), "info");
     },
   });
@@ -162,7 +160,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const level = runtime.thinkingLevel;
   const contextSignal = formatContextUsage(usage, ctx.model?.contextWindow);
   const costStr = formatTreeCost(runtime.cost);
-  const modelSignal = formatModelSignal(ctx.model, model, level, runtime.gptFast?.mode === "fast", theme);
+  const modelSignal = formatModelSignal(model, level, inlineStatuses(footerData), theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
   const sep = "  ·  ";
@@ -214,7 +212,8 @@ function renderExtensionStatuses(width: number, theme: any, footerData: any): st
   if (!statuses) return undefined;
 
   const visible = [...statuses.entries()]
-    .filter(([key, value]) => ![STATUSLINE_KEY, GPT_FAST_STATUS_KEY].includes(key) && value.trim().length > 0)
+    // Short statuses already ride beside the model; this row carries the longer ones.
+    .filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0 && !isInlineStatus(value))
     // Hide noisy/ambient statuses. They are useful in /mcp, but too loud in the footer.
     .filter(([key, value]) => !/mcp/i.test(`${key} ${value}`))
     // Keep goal-like statuses if present; dim everything else.
@@ -255,47 +254,32 @@ function formatCacheSignal(stats: SessionCacheStats, theme: any): ModelSignal {
   };
 }
 
-function formatModelSignal(rawModel: any, model: string, level: ThinkingLevel, priorityFast: boolean, theme: any): ModelSignal {
+/**
+ * Model, thinking level, and any short extension status, in the prominent slot.
+ * Extension-agnostic: a status is shown because it is short, not because the footer
+ * recognizes the extension that set it.
+ */
+function formatModelSignal(model: string, level: ThinkingLevel, inline: string[], theme: any): ModelSignal {
   const thinkingSignal = color(theme, thinkingColor(level), level);
-
-  if (isGptModel(rawModel)) {
-    const plainParts = [model, level, priorityFast ? "FAST" : ""];
-    const coloredParts = [color(theme, "dim", model), thinkingSignal, priorityFast ? color(theme, "success", "FAST") : ""];
-
-    return {
-      plain: plainParts.filter((part) => part.length > 0).join(" "),
-      colored: coloredParts.filter((part) => part.length > 0).join(" "),
-    };
-  }
-
   return {
-    plain: `${model} ${level}`,
-    colored: `${color(theme, "dim", model)} ${thinkingSignal}`,
+    plain: [model, level, ...inline].join(" "),
+    colored: [color(theme, "dim", model), thinkingSignal, ...inline.map((value) => color(theme, "success", value))].join(" "),
   };
 }
 
-function readGptFastState(): { mode?: string; priorityMultiplier?: number } | undefined {
-  try {
-    return JSON.parse(readFileSync(GPT_FAST_STATE_PATH, "utf8"));
-  } catch {
-    return undefined;
-  }
+/** Short extension statuses, which ride beside the model rather than in the status row. */
+function inlineStatuses(footerData: any): string[] {
+  const statuses: Map<string, string> | undefined = footerData.getExtensionStatuses?.();
+  if (!statuses) return [];
+  return [...statuses.entries()]
+    .filter(([key, value]) => key !== STATUSLINE_KEY && isInlineStatus(value))
+    .map(([, value]) => value.trim())
+    .slice(0, 2);
 }
 
-/** Priority-tier premium, when the user has configured one. */
-function readPriceOptions(): { priorityMultiplier?: number } {
-  return priceOptionsFrom(readGptFastState());
-}
-
-function priceOptionsFrom(state: { priorityMultiplier?: number } | undefined): { priorityMultiplier?: number } {
-  const multiplier = state?.priorityMultiplier;
-  return typeof multiplier === "number" && multiplier > 0 ? { priorityMultiplier: multiplier } : {};
-}
-
-function isGptModel(model: any): boolean {
-  if (!model?.provider || !model?.id) return false;
-  const fullId = `${model.provider}/${model.id}`;
-  return /(^|\/)gpt-/i.test(fullId);
+function isInlineStatus(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length > 0 && visibleLength(trimmed) <= INLINE_STATUS_MAX_WIDTH && !/mcp/i.test(trimmed);
 }
 
 function thinkingColor(level: ThinkingLevel): string {

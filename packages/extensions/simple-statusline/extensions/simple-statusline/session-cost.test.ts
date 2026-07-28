@@ -71,9 +71,14 @@ function costRecord(cost: number, recordId: string, key = "keepalive") {
   entrySeq += 1;
   return { type: "custom", id: `e${entrySeq}`, customType: COST_RECORD_TYPE, data: { recordId, key, usage: usage(cost) } };
 }
-function tierRecord(tier: "priority" | "standard") {
+function tierRecord(tier: "priority" | "standard", multiplier?: number) {
   entrySeq += 1;
-  return { type: "custom", id: `e${entrySeq}`, customType: PRICE_TIER_RECORD_TYPE, data: { tier } };
+  return {
+    type: "custom",
+    id: `e${entrySeq}`,
+    customType: PRICE_TIER_RECORD_TYPE,
+    data: multiplier === undefined ? { tier } : { tier, multiplier },
+  };
 }
 
 /** Write a session file with a header plus entries. */
@@ -616,4 +621,53 @@ test("a priced call reports its cost with no approximation marker", () => {
   const tree = combine(summarize(acc, { kind: "own" }), []);
   assert.equal(tree.totalCost, 6);
   assert.equal(tree.approximate, false);
+});
+
+// ── plugin-agnostic pricing (INV-G19) ───────────────────────────────────────
+
+test("a tier record's own premium prices its turns, with no configuration passed in", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority", 2));
+  accumulateEntry(acc, assistant(1));
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.equal(tree.totalCost, 2, "priced from the record alone");
+  assert.equal(tree.approximate, false);
+});
+
+test("a declared premium wins over one supplied by the caller", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority", 3), { priorityMultiplier: 10 });
+  accumulateEntry(acc, assistant(1), { priorityMultiplier: 10 });
+  assert.equal(summarize(acc, { kind: "own" }).cost, 3, "the producer knows its own billing, the caller is only a fallback");
+});
+
+test("a tier record that declares no premium leaves the total a marked floor", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority"));
+  accumulateEntry(acc, assistant(1));
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.equal(tree.totalCost, 1);
+  assert.ok(tree.approximate);
+  assert.match(tree.approximateReasons.join(" "), /nothing declared the premium/);
+});
+
+test("dropping a premium back to undefined stops applying the old one", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority", 2));
+  accumulateEntry(acc, assistant(1));
+  accumulateEntry(acc, tierRecord("priority"));
+  accumulateEntry(acc, assistant(1));
+  assert.equal(summarize(acc, { kind: "own" }).cost, 3, "2 then 1, not 2 then 2");
+});
+
+test("a tree with no records from any other extension still totals correctly", () => {
+  // The whole point of the agnostic contract: with nothing else installed there are no
+  // tier records and no cost records, and the tree total is still exact.
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2), toolResult(0.5)] });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3.5);
+  assert.equal(tree.approximate, false);
+  assert.deepEqual(tree.unpricedModels, []);
 });

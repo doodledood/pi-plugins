@@ -104,9 +104,9 @@ _Avoid_: Sub-session, temp session (a BTW-style deleted-on-close session is prec
 A durable, context-excluded session entry that carries the usage and cost of a billed call which produces no Pi session of its own, such as a TTL keepalive ping or a speech synthesis call.
 _Avoid_: Usage entry (Pi's native per-message usage is meant by that).
 
-**Unreported spender**:
-An installed extension that bills real money but returns no usage on its tool result, so its spend cannot be recovered from the session; currently `pi-web-access` search synthesis and `@amaster.ai/pi-image-gen`.
-_Avoid_: Untracked cost when the cause (no reported usage) matters.
+**Unreported spend**:
+Paid work whose tool result reports no usage, so nothing in the session records it and no total can include it — web-search answer synthesis and image generation are the usual cases.
+_Avoid_: Untracked cost when the cause (no reported usage) matters; naming specific packages, since which are installed is not knowable from the cost surfaces.
 
 **Goal controller**:
 A Pi extension in this repo that manages one long-running session goal and delegates completion authority to an independent checker.
@@ -165,7 +165,8 @@ _Avoid_: Terminal goal when resumability matters.
 - The **Cache keeper** and **TTL keepalive** prevent two specific **Cache break** mechanisms (the **20-block lookback** miss and TTL expiry during active foreground/background work); the /cache report in cache-optimization explains the rest after the fact.
 - A **Background-wakeup TTL break** was historically outside the **TTL keepalive**'s foreground-only coverage; generalized background-work arming now covers launches that follow Pi's `run_in_background`-style convention, while idle-with-no-work remains zero-ping.
 - The **Goal reminder message** replaced the goal controller's system-prompt suffix precisely because system-prompt churn was a recurring **Cache break** cause.
-- **Session-tree cost accounting** sums the parent plus every **Sidecar child session** recursively, and adds each **Cost record** for billed calls that produce no session; an **Unreported spender** stays outside the total by necessity and is disclosed rather than estimated.
+- **Session-tree cost accounting** sums the parent plus every **Sidecar child session** recursively, and adds each **Cost record** for billed calls that produce no session; **Unreported spend** stays outside the total by necessity and is disclosed rather than estimated.
+- The cost surfaces stay extension-agnostic: producers reach them only through self-describing session entries (a **Cost record**, or a tier record carrying its own premium) and pi's own status API, so any subset of extensions can be installed and the total stays correct for what is there.
 - Two extensions distort the *price* rather than the discovery: `gpt-fast-toggle` buys OpenAI's priority service tier at a premium Pi's static per-model rates do not model, and `model-aliases` falls back to zero cost when an alias has neither an explicit price nor a resolvable target. Both are surfaced rather than silently absorbed, so a tree total stays honest.
 - The **OpenAI max-output floor** prevents a hard provider 400 during **Context-clamp output underflow**, but at an **Artificial context boundary** the accepted 16-token response can still stop for length; a durable alias must keep Pi's visible compaction window separate from the target model metadata used for provider clamping.
 

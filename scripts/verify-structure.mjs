@@ -213,10 +213,15 @@ for (const name of expectedSkills) {
  * rather than importing them, so every package stays individually installable — which
  * also means a rename on one side would silently stop cost accounting with every
  * package's own tests still green. This is the check that would catch it.
+ *
+ * A missing file is not an error: producers are optional by design, and the reader must
+ * work with any subset of them installed. Only a present file that no longer declares
+ * its side of the contract is a failure.
  */
 const recordTypeContracts = [
   {
     literal: "pi-cost-record",
+    // Optional producers: the reader must not require any of them to be installed.
     writers: [
       "packages/extensions/cache-optimization/extensions/cache-optimization.ts",
       "packages/extensions/openai-tts/extensions/openai-tts/index.ts",
@@ -233,10 +238,7 @@ for (const contract of recordTypeContracts) {
   for (const [role, paths] of [["writer", contract.writers], ["reader", contract.readers]]) {
     for (const relative of paths) {
       const path = join(root, relative);
-      if (!existsSync(path)) {
-        errors.push(`${relative}: missing ${role} of record type "${contract.literal}"`);
-        continue;
-      }
+      if (!existsSync(path)) continue;
       if (!readFileSync(path, "utf8").includes(`"${contract.literal}"`)) {
         errors.push(`${relative}: ${role} no longer declares record type "${contract.literal}" — cost accounting would silently stop`);
       }

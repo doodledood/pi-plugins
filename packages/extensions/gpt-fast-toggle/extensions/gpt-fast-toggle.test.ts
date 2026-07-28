@@ -10,7 +10,7 @@ const home = mkdtempSync(join(tmpdir(), "gpt-fast-"));
 process.env.HOME = home;
 mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 const statePath = join(home, ".pi", "agent", "gpt-fast-toggle.json");
-const { default: gptFastToggle, PRICE_TIER_RECORD_TYPE, effectiveTier } = await import("./gpt-fast-toggle.ts");
+const { default: gptFastToggle, PRICE_TIER_RECORD_TYPE, effectiveTier, readPriorityMultiplier } = await import("./gpt-fast-toggle.ts");
 
 test.after(() => {
   try {
@@ -76,6 +76,34 @@ test("session start records the tier turns will actually be billed at", () => {
   setMode("fast");
   harness.handlers.get("session_start")!({}, harness.ctx);
   assert.deepEqual(harness.entries, [{ customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } }]);
+});
+
+test("the record carries the configured premium, so readers need no knowledge of this extension", () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  assert.deepEqual(harness.entries, [{ customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority", multiplier: 2 } }]);
+  assert.equal(readPriorityMultiplier(), 2);
+});
+
+test("changing the premium mid-session is recorded, so later turns are priced correctly", () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 3 })}\n`);
+  harness.handlers.get("model_select")!({}, harness.ctx);
+  assert.deepEqual(
+    harness.entries.map((e) => e.data),
+    [{ tier: "priority", multiplier: 2 }, { tier: "priority", multiplier: 3 }],
+  );
+});
+
+test("an absent or nonsense premium is simply omitted from the record", () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: "two" })}\n`);
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  assert.deepEqual(harness.entries[0]?.data, { tier: "priority" });
+  assert.equal(readPriorityMultiplier(), undefined);
 });
 
 test("a repeated tier is not appended again", () => {
@@ -178,11 +206,12 @@ test("a corrupt state file does not block the toggle", async () => {
   assert.equal(JSON.parse(readFileSync(statePath, "utf8")).mode, "fast");
 });
 
-test("a configured premium survives and is what the cost surfaces read", () => {
-  // The end-to-end contract of the two-key file: the toggle writes `mode`, the cost
-  // surfaces read `priorityMultiplier`, and neither disturbs the other.
-  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
-  const state = JSON.parse(readFileSync(statePath, "utf8"));
-  assert.equal(effectiveTier(gpt, state.mode), "priority");
-  assert.equal(state.priorityMultiplier, 2, "the premium is present for a reader to find");
+test("a configured premium survives a toggle and is still put into the record", async () => {
+  const harness = createHarness(gpt);
+  writeFileSync(statePath, `${JSON.stringify({ mode: "deep", priorityMultiplier: 2 })}\n`);
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  await harness.commands.get("gpt-fast")!.handler("on", harness.ctx);
+
+  assert.equal(JSON.parse(readFileSync(statePath, "utf8")).priorityMultiplier, 2);
+  assert.deepEqual(harness.entries.at(-1)?.data, { tier: "priority", multiplier: 2 });
 });

@@ -17,13 +17,14 @@ import {
 } from "./session-cost.ts";
 
 /**
- * Spend that no session records, so no total can include it. Both are third-party
- * extensions that return no `usage` on their tool results; naming them keeps a
- * total from reading as every dollar spent.
+ * The class of spend no total can include: paid work whose tool result reports no
+ * usage, so nothing in the session records it. Stated as a class with examples rather
+ * than a list of packages, because which of them are installed is not knowable from
+ * here and the caveat holds either way.
  */
-export const UNREPORTED_SPENDERS = [
-  "web search / source check (pi-web-access): search-answer synthesis and paid search APIs",
-  "image generation (pi-image-gen)",
+export const UNREPORTED_SPEND_NOTE = [
+  "Paid work that reports no usage cannot be counted, so it sits outside this total.",
+  "Tools that typically do this: web-search or source-check answer synthesis, paid search APIs, and image generation.",
 ];
 
 export interface ReportOptions {
@@ -112,8 +113,8 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
   }
 
   lines.push("");
-  lines.push("Not included (these report no usage, so their spend is unrecoverable):");
-  for (const spender of UNREPORTED_SPENDERS) lines.push(`  · ${spender}`);
+  lines.push("Not included:");
+  for (const note of UNREPORTED_SPEND_NOTE) lines.push(`  · ${note}`);
 
   return lines.join("\n");
 }

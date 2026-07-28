@@ -48,9 +48,17 @@ export interface CostRecordData {
   priced?: boolean;
 }
 
-/** Payload of a `pi-price-tier` custom entry. */
+/**
+ * Payload of a `pi-price-tier` custom entry.
+ *
+ * Self-describing on purpose: whichever extension knows about the billing tier states
+ * both the tier and what it costs relative to standard rates, so this module needs no
+ * knowledge of that extension — not its name, not its config file.
+ */
 export interface PriceTierData {
   tier: "standard" | "priority";
+  /** Price as a multiple of the standard rate (2 = twice). Absent means unknown. */
+  multiplier?: number;
 }
 /** Bucket key Pi uses for non-assistant usage (tool results, compaction, branch summaries). */
 export const TOOLS_BUCKET_KEY = "Tools/summaries";
@@ -95,6 +103,8 @@ export interface CostAccumulator {
   countedKeys: Set<string>;
   /** Billing tier in force for subsequent entries, per the latest tier record. */
   currentTier: "standard" | "priority";
+  /** Premium the latest tier record declared, when it declared one. */
+  currentMultiplier?: number;
 }
 
 export interface SessionCost {
@@ -151,11 +161,17 @@ export interface FoldOptions extends PriceOptions {
   excludeKeys?: ReadonlySet<string>;
 }
 
-/** Price adjustments the scanner cannot derive from the session alone. */
+/**
+ * Price adjustments the scanner cannot derive from the session alone.
+ *
+ * Normally nothing needs to be supplied here: a tier record states its own premium.
+ * This is the fallback for a producer that records a tier without one.
+ */
 export interface PriceOptions {
   /**
-   * Multiplier applied to priority-tier turn cost (e.g. 2 = twice the standard rate).
-   * Unset leaves those turns at standard rates and marks the total approximate.
+   * Multiplier applied to priority-tier turn cost (e.g. 2 = twice the standard rate)
+   * when the tier record does not declare one. Unset leaves those turns at standard
+   * rates and marks the total approximate.
    */
   priorityMultiplier?: number;
 }
@@ -261,6 +277,8 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
   if (entry?.type === "custom" && entry.customType === PRICE_TIER_RECORD_TYPE) {
     const tier = entry.data?.tier;
     if (tier === "priority" || tier === "standard") acc.currentTier = tier;
+    const declared = entry.data?.multiplier;
+    acc.currentMultiplier = typeof declared === "number" && declared > 0 ? declared : undefined;
     return;
   }
 
@@ -286,7 +304,9 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
   const ownTier = entry?.type === "custom" ? entry.data?.tier : undefined;
   const tier = ownTier ?? (entry?.type === "custom" ? "standard" : acc.currentTier);
   const priority = tier === "priority";
-  const multiplier = priority ? price.priorityMultiplier : undefined;
+  // The record's own premium wins; a caller-supplied one is only a fallback, so no cost
+  // surface has to know which extension produced the tier.
+  const multiplier = priority ? (acc.currentMultiplier ?? price.priorityMultiplier) : undefined;
   const cost = multiplier != null ? baseCost * multiplier : baseCost;
 
   acc.cost += cost;
@@ -344,7 +364,7 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
   }
   const reasons: string[] = [];
   if (uncorrectedPriorityCost > 0) {
-    reasons.push("priority-tier turns priced at standard rates (set priorityMultiplier in gpt-fast-toggle.json)");
+    reasons.push("priority-tier turns counted at standard rates, because nothing declared the premium they were billed at");
   }
   if (unpriced.size > 0) {
     reasons.push(`no price resolved for ${[...unpriced].join(", ")} (unpriced, or genuinely free)`);

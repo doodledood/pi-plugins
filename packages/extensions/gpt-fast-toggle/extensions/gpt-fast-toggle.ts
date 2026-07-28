@@ -7,8 +7,10 @@
 // surface can tell from the usage alone. The tier in force is therefore recorded in
 // the session as a context-excluded custom entry whenever it changes (and once at
 // session start), so a later scan can tell which turns paid the premium.
-// The premium itself is a configured multiplier: `priorityMultiplier` in the state
-// file below. Without it, cost surfaces mark the total approximate rather than low.
+// The premium travels inside the record: this extension knows what priority billing
+// is and reads its own `priorityMultiplier`, so cost surfaces need no knowledge of this
+// extension at all. Without a configured multiplier they mark the total approximate
+// rather than reporting it low.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,14 +24,20 @@ type TargetMode = "fast" | "deep";
 type BillingTier = "standard" | "priority";
 
 export default function gptFastToggle(pi: any) {
-  // Tier actually recorded in this session, so repeats are not appended per event.
+  // Tier and premium actually recorded in this session, so repeats are not appended per
+  // event while a genuine change to either is.
   let recordedTier: BillingTier | undefined;
+  let recordedMultiplier: number | undefined;
 
   const recordTier = (ctx: any, tier: BillingTier) => {
-    if (tier === recordedTier) return;
+    const multiplier = readPriorityMultiplier();
+    if (tier === recordedTier && multiplier === recordedMultiplier) return;
     recordedTier = tier;
+    recordedMultiplier = multiplier;
     try {
-      pi.appendEntry(PRICE_TIER_RECORD_TYPE, { tier });
+      // Self-describing: the record states both the tier and what it costs relative to
+      // standard rates, so a reader prices it without knowing this extension exists.
+      pi.appendEntry(PRICE_TIER_RECORD_TYPE, multiplier === undefined ? { tier } : { tier, multiplier });
     } catch {
       // Session may be ephemeral or shutting down; the toggle itself still works.
     }
@@ -38,6 +46,7 @@ export default function gptFastToggle(pi: any) {
   pi.on("session_start", (_event: any, ctx: any) => {
     updateStatus(ctx);
     recordedTier = undefined;
+    recordedMultiplier = undefined;
     recordTier(ctx, effectiveTier(ctx.model));
   });
   pi.on("model_select", (_event: any, ctx: any) => {
@@ -115,6 +124,16 @@ function updateStatus(ctx: any): void {
   }
 
   ctx.ui.setStatus(STATUS_KEY, readSavedMode() === "fast" ? "GPT priority" : undefined);
+}
+
+/** Configured priority premium, as a multiple of the standard rate. */
+export function readPriorityMultiplier(): number | undefined {
+  try {
+    const value = JSON.parse(readFileSync(STATE_PATH, "utf8"))?.priorityMultiplier;
+    return typeof value === "number" && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSavedMode(): TargetMode | undefined {

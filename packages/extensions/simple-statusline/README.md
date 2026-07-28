@@ -57,10 +57,12 @@ session events rather than while the footer paints.
 A leading `~` means the total is a **floor rather than an exact number**. Three
 things cause it:
 
-- **Priority-tier turns.** With `gpt-fast-toggle` in fast mode, OpenAI bills the
-  priority service tier above the standard rate Pi prices from. Set
-  `priorityMultiplier` in `~/.pi/agent/gpt-fast-toggle.json` (e.g. `2`) to price
-  those turns; until then they are counted at standard rates and marked.
+- **Premium billing tiers.** A turn billed above the standard rate — OpenAI's
+  priority service tier, for instance — costs more than Pi's per-model rates say.
+  Any extension can record the tier in force and what it costs relative to
+  standard; when it records the tier without the premium, those turns are counted
+  at standard rates and marked. (`gpt-fast-toggle` in this repo does both, from its
+  own `priorityMultiplier` setting.)
 - **Unpriceable models.** A model with no resolvable per-token price — typically
   a `model-aliases` entry whose target Pi does not price — reports real tokens
   at $0. A paid call that says outright it could not be priced counts the same
@@ -119,6 +121,18 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 `simple-statusline` does not require its own config file.
 
-It reads `~/.pi/agent/gpt-fast-toggle.json` when present, for two things: whether the separately installed `gpt-fast-toggle` extension is in priority mode (shown as `FAST`), and the optional `priorityMultiplier` used to price priority-tier turns. If that file is absent or invalid, the priority indicator is omitted and priority turns are counted at standard rates with the total marked `~`.
+It reads no other extension's config or state, and requires none of them to be
+installed. Everything extension-specific reaches it through generic contracts:
 
-This is a read-only dependency on local Pi state. Do not commit a live `gpt-fast-toggle.json`; use `packages/extensions/gpt-fast-toggle/config/gpt-fast-toggle.example.json` or `setup/configs/gpt-fast-toggle.json` as a safe example.
+- **Short extension statuses** ride beside the model; longer ones go in the second
+  row. That is a width rule, not a list of known extensions — an extension you
+  haven't installed simply contributes nothing.
+- **Spend from calls with no session of their own** arrives as `pi-cost-record`
+  session entries, which any extension can write.
+- **Premium billing tiers** arrive as `pi-price-tier` entries carrying both the
+  tier and its price as a multiple of the standard rate, so the extension that
+  knows about the billing states the premium and this one never needs to know
+  which extension that is.
+
+Install any subset of the other extensions in this repo, or none of them, and the
+cost figure stays correct for whatever is there.
