@@ -67,6 +67,10 @@ const OptionSchema = Type.Object({
   price: Type.String({
     description: "What this option costs, risks, or gives up — required by the packet bar",
   }),
+  defers: Type.Optional(Type.Boolean({
+    description:
+      "True for an option that declines to decide yet, like \"hold and tell me more first\". Choosing it is not graded against your shadow ruling.",
+  })),
 });
 
 const BlastSchema = StringEnum(["low", "medium", "high"] as const, {

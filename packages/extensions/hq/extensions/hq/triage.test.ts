@@ -358,6 +358,11 @@ test("a respawn restarts the work, but a session that keeps dying becomes a pack
     const packet = await h.store.readPacket(limited.packetId ?? "");
     assert.match(packet?.title ?? "", /^stuck:/);
     assert.equal(packet?.recommendationId, "abandon");
+    assert.equal(
+      packet?.options.some((option) => option.id === "restart"),
+      true,
+      "a session with a file can genuinely be restarted",
+    );
   } finally {
     await dropRoot(h.root);
   }
@@ -390,6 +395,36 @@ test("a doctrine answer with nowhere to carry it reaches the user instead", asyn
     assert.equal(result.escalationReason, "no-session-file");
     assert.deepEqual(await h.store.readAuditLines(), [], "and nothing claims it was answered");
     assert.equal(h.calls.filter((call) => call.kind === "continuation").length, 0);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a session that cannot be resumed is not offered a restart", async () => {
+  const h = await harness("hq-triage-lost", { sessionFile: null });
+  try {
+    const result = await applyTriageOutcome(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      h.stop.stopId,
+      {
+        kind: "respawn",
+        domain: "stalled",
+        reason: "the build died half way",
+        instruction: "run the build again",
+      },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+    assert.equal(result.escalationReason, "no-session-file");
+
+    const packet = await h.store.readPacket(result.packetId ?? "");
+    // Offering "restart it" for a session with no file would be the packet lying.
+    assert.equal(packet?.options.some((option) => option.id === "restart"), false);
+    assert.match(packet?.question ?? "", /cannot be resumed/);
+    assert.deepEqual(
+      packet?.options.map((option) => option.id),
+      ["restart-fresh", "abandon"],
+    );
   } finally {
     await dropRoot(h.root);
   }

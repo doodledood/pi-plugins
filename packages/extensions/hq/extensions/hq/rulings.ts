@@ -66,6 +66,13 @@ export function chosenOptionId(packet: Packet, request: RulingRequest): string |
  */
 export function gradeShadow(packet: Packet, request: RulingRequest): boolean | null {
   if (request.form === "defer") return null;
+  // Declining to decide yet is not a decision, so it grades nothing — otherwise
+  // "hold and tell me more first" would read as the user overruling doctrine and
+  // would queue an amendment against a rule they never disagreed with.
+  const chosenOption = packet.options.find(
+    (option) => option.id === chosenOptionId(packet, request),
+  );
+  if (chosenOption?.defers) return null;
   const shadow = packet.shadowRuling;
   if (!shadow) return null;
   const chosen = chosenOptionId(packet, request);
@@ -308,7 +315,14 @@ async function applyProposalRuling(
   void deps;
   // A graduation proposal is informational: only the user's command can flip a
   // domain, so ruling on the packet never changes authority (INV-G8).
-  if (proposal.kind === "graduation") return { applied: false };
+  if (proposal.kind === "graduation") {
+    // Both options leave authority untouched, so what distinguishes them is
+    // whether HQ raises the domain again. "Stop proposing" has to actually stop it.
+    if (chosenOptionId(packet, request) === "reject" && proposal.domain) {
+      await markProposed(deps.store, proposal.domain, new Date().toISOString());
+    }
+    return { applied: false };
+  }
 
   const chosen = chosenOptionId(packet, request);
   const ratifying = chosen === "ratify" || (request.form === "custom" && !!request.text.trim());
@@ -425,7 +439,7 @@ async function createGraduationProposal(
       {
         id: "reject",
         label: "Stop proposing this domain for now",
-        price: "the streak keeps building but HQ stays quiet about it",
+        price: "HQ stops raising it; the streak keeps building and you can still run the command",
       },
     ],
     recommendationId: "acknowledge",

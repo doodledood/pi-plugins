@@ -385,6 +385,44 @@ test("a packet that changed since it was shown is not answered blindly", async (
   }
 });
 
+test("declining to decide yet is not graded as overruling doctrine", async () => {
+  const h = await harness("hq-rule-hold");
+  try {
+    const doctrine = await loadDoctrine(h.root, "/work/alpha");
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
+    const packet = await queuePacket(h, {
+      doctrineCitations: [citation],
+      options: [
+        { id: "as-proposed", label: "Do what doctrine implies", price: "what the rule says" },
+        { id: "hold", label: "Hold and tell me more first", price: "the work waits", defers: true },
+      ],
+      recommendationId: "as-proposed",
+      shadowRuling: {
+        optionId: "as-proposed",
+        text: "proceed",
+        rationale: "doctrine covers it",
+        doctrineCitations: [citation],
+      },
+    });
+
+    const result = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "alternative", optionId: "hold" },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+    assert.equal(result.ruling.shadowAgreed, null, "asking to look first grades nothing");
+    assert.notEqual(result.ruling.coverage, "contradicts");
+    assert.equal(
+      result.proposals.some((proposal) => proposal.proposal?.kind === "amendment"),
+      false,
+      "and it cannot manufacture an amendment against a rule the user never disputed",
+    );
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
 test("a deferral drills and leaves the packet in the queue", async () => {
   const h = await harness("hq-rule-defer");
   try {

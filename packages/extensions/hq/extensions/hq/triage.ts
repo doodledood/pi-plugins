@@ -26,7 +26,7 @@ import {
   type StopRecord,
 } from "./stops.ts";
 import { readTranscriptTail, renderTranscript } from "./transcript.ts";
-import type { BlastRadius, Packet, Reversibility, ShadowRuling } from "./types.ts";
+import type { BlastRadius, Packet, PacketOption, Reversibility, ShadowRuling } from "./types.ts";
 
 /** How many times HQ will restart the same session before asking the user. */
 export const MAX_RESPAWNS = 2;
@@ -91,7 +91,7 @@ export interface PacketDraft {
   domain: string;
   title: string;
   question: string;
-  options: Array<{ id: string; label: string; price: string }>;
+  options: PacketOption[];
   recommendationId: string;
   flipCondition: string;
   blastRadius: BlastRadius;
@@ -274,10 +274,10 @@ export async function applyTriageOutcome(
     case "respawn": {
       const respawns = await countRespawns(deps, stop.sessionId);
       if (respawns >= MAX_RESPAWNS) {
-        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns), "respawn-limit");
+        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns, true), "respawn-limit");
       }
       if (!stop.sessionFile) {
-        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns), "no-session-file");
+        return applyPacketOutcome(deps, stop, respawnAsPacketDraft(outcome, respawns, false), "no-session-file");
       }
       await deps.spawner({
         kind: "continuation",
@@ -368,6 +368,7 @@ function continueAsPacketDraft(
         id: "hold",
         label: "Hold and tell me more first",
         price: "the work waits until you have looked",
+        defers: true,
       },
     ],
     recommendationId: "as-proposed",
@@ -423,7 +424,40 @@ function closeAsPacketDraft(outcome: Extract<TriageOutcome, { kind: "close" }>):
 function respawnAsPacketDraft(
   outcome: Extract<TriageOutcome, { kind: "respawn" }>,
   respawns: number,
+  resumable: boolean,
 ): PacketDraft {
+  if (!resumable) {
+    // Offering a restart that cannot happen is the packet lying to the user.
+    return {
+      domain: outcome.domain,
+      title: `lost: ${outcome.reason.slice(0, 60)}`,
+      question:
+        `This session died and cannot be resumed — it kept no session file. Start the work again from scratch, or leave it?`,
+      options: [
+        {
+          id: "restart-fresh",
+          label: `Start it again from scratch: ${outcome.instruction}`,
+          price: "loses whatever context the dead session had",
+        },
+        {
+          id: "abandon",
+          label: "Leave it",
+          price: "the work stays undone until you pick it up",
+        },
+      ],
+      recommendationId: "abandon",
+      flipCondition: "if the task was cheap to redo, starting again is right",
+      blastRadius: "low",
+      reversibility: "reversible",
+      shadowRuling: {
+        optionId: "abandon",
+        text: "leave it",
+        rationale: "work whose context is gone is usually worth re-scoping rather than replaying",
+        doctrineCitations: [],
+      },
+      trivial: false,
+    };
+  }
   return {
     domain: outcome.domain,
     title: `stuck: ${outcome.reason.slice(0, 60)}`,

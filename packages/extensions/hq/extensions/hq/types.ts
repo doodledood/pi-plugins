@@ -81,6 +81,12 @@ export interface PacketOption {
   label: string;
   /** What this option costs or risks. The bar requires options be priced. */
   price: string;
+  /**
+   * True for an option that declines to decide — "hold and tell me more first".
+   * Choosing it is not the user overruling doctrine, so it is not graded against
+   * the shadow ruling and cannot manufacture a contradiction.
+   */
+  defers?: boolean;
 }
 
 export interface PacketAnnotation {
@@ -384,7 +390,7 @@ function parseOptions(value: unknown): PacketOption[] | undefined {
     const label = str(entry.label);
     const price = str(entry.price);
     if (id === undefined || label === undefined || price === undefined) return undefined;
-    out.push({ id, label, price });
+    out.push({ id, label, price, ...(bool(entry.defers) ? { defers: true } : {}) });
   }
   return out;
 }
