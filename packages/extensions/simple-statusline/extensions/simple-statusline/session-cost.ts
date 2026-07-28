@@ -39,7 +39,7 @@ import { StringDecoder } from "node:string_decoder";
  * means sessions or entries may exist that this scan could not see, and a total that
  * omits them must not read as exact.
  */
-function isAbsence(error: unknown): boolean {
+export function isAbsence(error: unknown): boolean {
   const code = errorCode(error);
   return code === "ENOENT" || code === "ENOTDIR";
 }
@@ -536,8 +536,7 @@ export function listSidecarSessionFiles(
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (error) {
-      // No sidecar directory is the ordinary case — most sessions spawn nothing — and
-      // holds no spend. One that exists and cannot be read hides every session below it.
+      // A directory that exists and cannot be listed hides every session below it.
       if (!isAbsence(error)) unreadableDirs += 1;
       return;
     }
@@ -577,7 +576,7 @@ export interface ScanStats {
   /**
    * Parts of the tree this scan could not read: a file it could not open or stat, a
    * directory it could not list, a sibling it could not classify, or a walk that hit its
-   * depth bound. Either way spend may be missing, which is what makes a total a floor.
+   * depth bound. In every case spend may be missing, which is what makes a total a floor.
    * A path that does not exist is not counted here — nothing is missing from nothing.
    */
   filesUnreadable: number;
@@ -592,15 +591,6 @@ export interface ScanStats {
  */
 export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
-  /**
-   * Descendants counted by an earlier scan, as path → kind.
-   *
-   * Discovery runs before any file is read, so a child that disappears — deleted, or
-   * behind a directory that stopped being listable — would never reach the scan at all,
-   * and its spend would drop out of a total the user has already seen. It was still
-   * billed, so it stays counted.
-   */
-  private readonly knownDescendants = new Map<string, string>();
   private lastStats: ScanStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
   /**
@@ -639,14 +629,16 @@ export class SessionTreeScanner {
     try {
       stat = statSync(path);
     } catch (error) {
-      const counted = this.files.get(path);
-      // Nothing folded yet — discovered, then gone before its first read. No spend is lost.
-      if (!counted) return undefined;
-      // Spend already folded from this file has been counted and shown. Dropping it now
-      // would quietly lower a total the user has already seen, so it stands, exactly as it
-      // does when a read fails below. A file that is gone will not grow again, so nothing
-      // further is missing; any other failure means it may have grown out of sight.
+      // Classified before anything else, because the gap is the same whether or not this
+      // file had been read before: a file that is gone hides nothing further, while any
+      // other failure means a discovered session may be holding spend out of sight.
       if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
+      const counted = this.files.get(path);
+      // Never read, so there is no folded total to keep.
+      if (!counted) return undefined;
+      // Spend already folded here has been counted and shown, so it stands rather than
+      // quietly lowering a total the user has seen — the same choice the failed read
+      // below makes.
       return summarize(counted.acc, { id: counted.header?.id, path, kind });
     }
     const cached = this.files.get(path);
@@ -837,18 +829,8 @@ export class SessionTreeScanner {
 
     const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile).header?.id : undefined);
     const found = this.discover(args.sessionFile, rootId);
-    for (const child of found) this.knownDescendants.set(child.path, child.kind);
-    // Everything discovered now, plus everything counted before that discovery can no
-    // longer see. Their folded spend still stands; `scanFile` reports the gap when the
-    // file is unreachable for a reason that could be hiding more.
-    const children = [
-      ...found,
-      ...[...this.knownDescendants]
-        .filter(([path]) => !found.some((child) => child.path === path))
-        .map(([path, kind]) => ({ path, kind, header: this.files.get(path)?.header })),
-    ];
     const countedSessions = new Set<string>();
-    for (const child of children) {
+    for (const child of found) {
       if (child.header?.id) countedSessions.add(child.header.id);
       countedSessions.add(child.path);
     }
@@ -865,7 +847,7 @@ export class SessionTreeScanner {
 
     const excludeKeys = new Set<string>(own.countedKeys);
     const descendants: SessionCost[] = [];
-    for (const child of children) {
+    for (const child of found) {
       const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
       if (!cost) continue;
       descendants.push(cost);

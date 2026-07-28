@@ -266,12 +266,15 @@ function formatExtensionStatus(key: string, value: string, theme: any): string {
  * premium, or spend the scan could not read — with the reasons available in /cost.
  *
  * A tree that priced to nothing is hidden rather than shown as $0.00, since an
- * ambient footer has no room for a figure that says nothing. But a $0 total that is
- * only a floor does say something: real spend went uncounted. Hiding that would be
- * the silent-omission failure the accounting exists to prevent, so it renders.
+ * ambient footer has no room for a figure that says nothing. A $0 total does say
+ * something when spend was billed and could not be counted — an unreadable part of
+ * the tree, or an entry that would not parse — so that case renders. Priced-to-zero
+ * stays hidden even though it is also approximate: an unpriced model may be
+ * genuinely free, and a permanent ~$0.000 on a free local model says nothing.
  */
 function formatTreeCost(cost: TreeCost | undefined): string {
-  if (!cost || (cost.totalCost <= 0 && !cost.approximate)) return "";
+  const missingSpend = cost != null && (cost.unreadableSessions > 0 || cost.corruptEntries > 0);
+  if (!cost || (cost.totalCost <= 0 && !missingSpend)) return "";
   return `${cost.approximate ? "~" : ""}${formatCost(cost.totalCost)}`;
 }
 

@@ -300,6 +300,16 @@ test("a tree that priced to nothing still shows the marker when spend went uncou
   assert.match(renderFooter(harness), /~\$0\.000/, "a zero-priced floor is still worth saying");
 });
 
+test("a session that genuinely cost nothing shows no figure at all", () => {
+  // The other side of the same guard. An unpriced model may be free rather than
+  // unaccounted, so a session with no gap keeps the footer quiet instead of parking a
+  // permanent ~$0.000 on it.
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "free", [0]);
+  const harness = createHarness([], { file: parent, id: "parent-1", entries: [] });
+  assert.doesNotMatch(renderFooter(harness), /\$/, "nothing billed and nothing missing means nothing to report");
+});
+
 test("a premium declared by the tier record prices those turns exactly, with no marker", async () => {
   // The record is self-describing: whichever extension knows about the tier states what
   // it costs, so the footer prices it without knowing that extension exists.

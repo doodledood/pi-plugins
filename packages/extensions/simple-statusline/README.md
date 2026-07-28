@@ -54,9 +54,10 @@ matter how many ways it is reachable. Scanning is incremental: session files are
 append-only, so an unchanged file is never re-read, and the figure refreshes on
 session events rather than while the footer paints.
 
-Spend that has been counted once stays counted. A child session file that is
-deleted or becomes unreadable was still billed, so the figure never quietly
-shrinks below a number already shown.
+A child session file that stops being readable keeps the spend already counted
+from it — it was billed, and dropping it would lower the figure for a file that
+is still there. What the scan can no longer see is disclosed rather than
+subtracted in silence.
 
 A leading `~` means the total is a **floor rather than an exact number**. Two
 kinds of thing cause it — a price it cannot pin down, and spend it cannot read:
