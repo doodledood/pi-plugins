@@ -21,12 +21,12 @@ The owner's requirement is a complete picture in two places: an accurate live st
 ## Decision
 Treat the **Pi session tree** as the accounting system of record, and aggregate it recursively.
 
-1. Every model run this setup spawns persists as a normal Pi session file, linked to its parent through the session header's `parentSession` field, stored under the parent session's sidecar directory. `--no-session` is removed from the advisor and checker runners.
+1. Every model run this setup spawns persists as a normal Pi session file, linked to its parent through the session header's `parentSession` field, stored under the parent session's sidecar directory. The advisor and checker runners stop passing `--no-session`, keeping it only as the fallback for a parent that has no session file of its own — there is then nothing to attach the spend to.
 2. Cost accounting reads Pi's native per-entry usage from those files — assistant, tool-result, compaction, and branch-summary usage — rather than a separate parallel ledger.
 3. `simple-statusline` reports whole-session lifetime cost by recursively summing the root session and all descendant sessions, refreshing as child sessions gain usage.
 4. Direct paid calls that are not Pi sessions — the cache-optimization TTL keepalive, and any speech/image API call — record their own durable cost entries in the session that caused them, because no child session file exists to scan.
 
-Deduplication follows file identity: each descendant session contributes each of its entries exactly once, keyed by session id plus entry id.
+Deduplication spans the tree rather than following file identity, because a fork copies its parent's entries verbatim into its own file: a billed unit is keyed by its cost-record id, or by entry id plus timestamp. Pi's entry ids are eight hex characters, unique within a session but not across a large tree, so the timestamp is what makes the key safe to compare between files — a copied entry keeps both verbatim, while two unrelated turns would have to collide on both.
 
 ## Alternatives Considered
 - **Custom usage ledger in the parent session**: An extension-owned `recordUsage()` API writing context-excluded custom entries, with child sessions instrumented to report upward. Rejected as unnecessary duplication once every child run is a persistent linked session: it would maintain a second source of truth that can disagree with the session files, and it needs its own reconciliation path for crashes.

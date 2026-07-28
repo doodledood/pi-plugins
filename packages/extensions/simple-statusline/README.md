@@ -54,7 +54,7 @@ matter how many ways it is reachable. Scanning is incremental: session files are
 append-only, so an unchanged file is never re-read, and the figure refreshes on
 session events rather than while the footer paints.
 
-A leading `~` means the total is a **floor rather than an exact number**. Two
+A leading `~` means the total is a **floor rather than an exact number**. Three
 things cause it:
 
 - **Priority-tier turns.** With `gpt-fast-toggle` in fast mode, OpenAI bills the

@@ -154,7 +154,7 @@ For the Git root bundle, restore the previous implementation in a new commit whi
 pi update git:github.com/doodledood/pi-plugins@main
 ```
 
-Run `/reload` or restart Pi afterward. This forward-versioned rollback restores the previous code without disabling the repo's other extensions or theme, reusing an immutable release tag, or regressing package history; package filters remain intact. If advisor-consult was installed as its standalone package instead, remove that package from `settings.json` (or Pi package config). Delete `~/.pi/agent/advisor-consult.json` only if you also want to remove its optional configuration; past consult sessions under previous parent sessions' `advisor/` directories are removed with their parent sessions (see **Local state**).
+Run `/reload` or restart Pi afterward. This forward-versioned rollback restores the previous code without disabling the repo's other extensions or theme, reusing an immutable release tag, or regressing package history; package filters remain intact. If advisor-consult was installed as its standalone package instead, remove that package from `settings.json` (or Pi package config). Delete `~/.pi/agent/advisor-consult.json` only if you also want to remove its optional configuration; past consult sessions live under their parent sessions' sidecar directories and are removed by deleting those parent sessions along with the sibling directory of the same name (see **Local state**).
 
 ## Decision record
 
