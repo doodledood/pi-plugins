@@ -55,9 +55,9 @@ append-only, so an unchanged file is never re-read, and the figure refreshes on
 session events rather than while the footer paints.
 
 A child session file that stops being readable keeps the spend already counted
-from it — it was billed, and dropping it would lower the figure for a file that
-is still there. What the scan can no longer see is disclosed rather than
-subtracted in silence.
+from it — it was billed, and a figure you have already seen should not fall just
+because a later read failed. What the scan can no longer see is disclosed rather
+than subtracted in silence.
 
 A leading `~` means the total is a **floor rather than an exact number**. Two
 kinds of thing cause it — a price it cannot pin down, and spend it cannot read:
@@ -74,7 +74,8 @@ kinds of thing cause it — a price it cannot pin down, and spend it cannot read
   way, such as speech with no configured per-character rate.
 - **Parts of the tree it could not read.** A child session file it could not open
   or stat; a directory that exists but cannot be listed, which hides every session
-  beneath it; or a walk that hit its depth bound. Each is spend missing from the
+  in it — the sidecar directory hides the children below, and the session's own
+  directory hides the forks beside it; or a walk that hit its depth bound. Each is spend missing from the
   total, so the figure is marked rather than presented as exact. A directory that
   simply is not there is not a gap — most sessions spawn nothing, and nothing is
   missing from a total with no children in it. Neither is a file whose first line

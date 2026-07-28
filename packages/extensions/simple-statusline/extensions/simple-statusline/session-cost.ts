@@ -688,8 +688,8 @@ export class SessionTreeScanner {
     const text = entry.remainder + chunk.text;
     const lines = text.split("\n");
     // A file being appended to can end mid-line; hold it back until the rest arrives. A
-    // torn write that is never followed by another entry stays held and uncounted, which is
-    // the one gap this module does not disclose — see the note in the module header.
+    // torn write that is never followed by another entry stays held and uncounted — one of
+    // the three gaps this module does not disclose; see the note in the module header.
     entry.remainder = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
