@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import cacheOptimization, { activate } from "../cache-optimization.ts";
+import cacheOptimization, { activate, COST_RECORD_TYPE } from "../cache-optimization.ts";
 import { CacheKeepalive, MIN_PROMPT_TOKENS, PING_AFTER_IDLE_MS } from "./keepalive.ts";
 import type { SessionEntryLike } from "./cache.ts";
 
@@ -691,4 +691,90 @@ test("/cache report surfaces keepalive spend for auditability", async () => {
   const text = await runCacheReport(harness);
   assert.match(text, /TTL keepalive: no pings today/);
   shutdown(harness);
+});
+
+test("keepalive spend is persisted as a durable, context-excluded cost record", async (t) => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join: joinPath } = await import("node:path");
+  const fixtureDir = mkdtempSync(joinPath(tmpdir(), "cache-opt-spend-"));
+  writeFileSync(joinPath(fixtureDir, "auth.json"), "{}\n");
+  const savedDir = process.env.PI_CODING_AGENT_DIR;
+  const savedOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
+  const savedApiKey = process.env.ANTHROPIC_API_KEY;
+  process.env.PI_CODING_AGENT_DIR = fixtureDir;
+  delete process.env.ANTHROPIC_OAUTH_TOKEN;
+  process.env.ANTHROPIC_API_KEY = "sk-ant-api03-test";
+  t.after(() => {
+    if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedDir;
+    if (savedOauth !== undefined) process.env.ANTHROPIC_OAUTH_TOKEN = savedOauth;
+    if (savedApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = savedApiKey;
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  const entries: Array<{ customType: string; data: any }> = [];
+  const harness: Harness = { handlers: new Map(), commands: new Map(), ctx: undefined };
+  const ctx = {
+    model: {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      id: "claude-fable-5",
+      cost: { input: 6, output: 30, cacheRead: 0.6, cacheWrite: 7.5 },
+    },
+    modelRegistry: directAnthropicModelRegistry(),
+    sessionManager: { getBranch: () => [] as SessionEntryLike[] },
+    ui: { async custom() {} },
+  };
+  harness.ctx = ctx;
+  const pi = {
+    on(event: string, handler: Handler) {
+      harness.handlers.set(event, handler);
+    },
+    registerCommand(name: string, options: { handler: (args: string, ctx: any) => Promise<void> | void }) {
+      harness.commands.set(name, options);
+    },
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ customType, data });
+    },
+  };
+
+  // No injected keepalive: this exercises the production wiring, including the
+  // spend callback the extension installs.
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => ({
+      ok: true,
+      text: async () => JSON.stringify({ usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 } }),
+    }),
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => pi.appendEntry(COST_RECORD_TYPE, record),
+  });
+  activate(pi, keepalive);
+  harness.handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+  const CC = { type: "ephemeral" };
+  const payload = {
+    model: "claude-fable-5",
+    system: [{ type: "text", text: "sys", cache_control: { ...CC } }],
+    tools: [],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { ...CC } }] }],
+    max_tokens: 10,
+  };
+  harness.handlers.get("before_provider_request")!({ payload }, ctx);
+  harness.handlers.get("turn_end")!({ message: { role: "assistant", timestamp: 5, usage: { input: MIN_PROMPT_TOKENS, cacheRead: 0, cacheWrite: 0 } } }, ctx);
+  harness.handlers.get("tool_execution_start")!({ toolCallId: "t1" }, ctx);
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged");
+
+  const costRecords = entries.filter((entry) => entry.customType === COST_RECORD_TYPE);
+  assert.equal(costRecords.length, 1, "one durable cost record per billed ping");
+  const record = costRecords[0]!.data;
+  assert.equal(record.usage.cacheRead, 1_000_000);
+  // Priced from the registry rates the wiring plumbed through: $0.60 for 1M cache reads.
+  assert.ok(Math.abs(record.usage.cost.cacheRead - 0.6) < 1e-9);
+  assert.ok(record.recordId);
+  harness.handlers.get("session_shutdown")!({}, ctx);
 });

@@ -27,7 +27,14 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyCacheKeeper, type KeeperState } from "./cache-optimization/keeper.ts";
-import { CacheKeepalive, hasBackgroundLaunchFlag, isAnthropicOAuthToken, isNonApiKeyAnthropicAuth, type RequestRoute } from "./cache-optimization/keepalive.ts";
+import {
+  CacheKeepalive,
+  hasBackgroundLaunchFlag,
+  isAnthropicOAuthToken,
+  isNonApiKeyAnthropicAuth,
+  type KeepaliveSpendRecord,
+  type RequestRoute,
+} from "./cache-optimization/keepalive.ts";
 import {
   acquireSharedMouseLease,
   type SharedMouseLease,
@@ -105,19 +112,37 @@ function hasAnthropicRequestOverrides(modelRegistry: unknown, model: unknown): b
   return false;
 }
 
+/**
+ * Custom-entry type for a billed call that produces no pi session of its own.
+ * Read by the simple-statusline cost surfaces; kept in sync by name, not import,
+ * so each extension stays individually installable.
+ */
+export const COST_RECORD_TYPE = "pi-cost-record";
+
 export default function cacheOptimization(pi: any) {
   activate(pi);
 }
 
 /** Testable entry: inject a CacheKeepalive with fake deps to observe the wiring. */
-export function activate(
-  pi: any,
-  keepalive: CacheKeepalive = new CacheKeepalive({
-    now: () => Date.now(),
-    fetch: (url, init) => fetch(url, init),
-    env: process.env,
-  }),
-) {
+export function activate(pi: any, injectedKeepalive?: CacheKeepalive) {
+  // A keepalive ping is a real, billed Anthropic request that no session records.
+  // Persist its provider-reported usage as a durable, context-excluded cost record so
+  // the spend is countable; a failed ping records nothing.
+  const recordSpend = (record: KeepaliveSpendRecord): void => {
+    try {
+      pi.appendEntry(COST_RECORD_TYPE, record);
+    } catch {
+      // Session may be ephemeral or shutting down; keepalive stays best-effort.
+    }
+  };
+  const keepalive =
+    injectedKeepalive ??
+    new CacheKeepalive({
+      now: () => Date.now(),
+      fetch: (url, init) => fetch(url, init),
+      env: process.env,
+      onSpend: recordSpend,
+    });
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
   let keeperState: KeeperState = {};
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
@@ -172,6 +197,12 @@ export function activate(
         baseUrl: ctx?.model?.baseUrl,
         nonApiKeyAuth: anthropicUsesNonApiKeyAuth() || hasAnthropicRequestOverrides(ctx?.modelRegistry, ctx?.model),
         cacheReadPricePerMTok: ctx?.model?.cost?.cacheRead,
+        pricePerMTok: {
+          input: ctx?.model?.cost?.input,
+          output: ctx?.model?.cost?.output,
+          cacheWrite: ctx?.model?.cost?.cacheWrite,
+        },
+        modelKey: ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
       };
       keepalive.noteProviderRequest(outgoing, route);
     } catch {

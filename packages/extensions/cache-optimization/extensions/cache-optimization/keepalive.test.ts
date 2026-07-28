@@ -14,6 +14,7 @@ import {
   PER_GAP_MAX_PINGS,
   PING_AFTER_IDLE_MS,
   type KeepaliveDeps,
+  type KeepaliveSpendRecord,
   type RequestRoute,
 } from "./keepalive.ts";
 
@@ -702,4 +703,82 @@ test("keepalive: a non-ok HTTP response also abandons the gap", async () => {
   keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
   clock.now += PING_AFTER_IDLE_MS + 1;
   assert.equal(await keepalive.tick(), "pinged", "fresh real request re-arms");
+});
+
+test("a billed ping reports provider usage priced from pi's model rates", async () => {
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const records: KeepaliveSpendRecord[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => ({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          usage: { input_tokens: 12, output_tokens: 1, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 0 },
+        }),
+    }),
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => records.push(record),
+  });
+
+  keepalive.noteProviderRequest(anthropicPayload(), {
+    provider: "anthropic",
+    api: "anthropic-messages",
+    cacheReadPricePerMTok: 0.6,
+    pricePerMTok: { input: 6, output: 30, cacheWrite: 7.5 },
+    modelKey: "anthropic/claude-fable-5",
+  });
+  keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  keepalive.toolStart("t1");
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged");
+
+  assert.equal(records.length, 1);
+  const record = records[0]!;
+  assert.match(record.key, /anthropic\/claude-fable-5/);
+  assert.equal(record.usage.cacheRead, 500_000);
+  assert.equal(record.usage.input, 12);
+  // 500k cache-read tokens at $0.60/MTok = $0.30, plus 12 input at $6/MTok and 1 output at $30/MTok.
+  assert.ok(Math.abs(record.usage.cost.cacheRead - 0.3) < 1e-9, `cacheRead cost ${record.usage.cost.cacheRead}`);
+  assert.ok(Math.abs(record.usage.cost.total - (0.3 + (12 / 1e6) * 6 + (1 / 1e6) * 30)) < 1e-9);
+  assert.ok(record.recordId.length > 0, "carries a stable id so a replay cannot double count");
+});
+
+test("a failed or skipped ping records no spend", async () => {
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const records: KeepaliveSpendRecord[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => ({ ok: false, status: 500 }),
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => records.push(record),
+  });
+
+  // Skipped: nothing armed.
+  assert.equal(await keepalive.tick(), "skipped");
+  assert.equal(records.length, 0);
+
+  keepalive.noteProviderRequest(anthropicPayload(), { provider: "anthropic", api: "anthropic-messages", cacheReadPricePerMTok: 0.6 });
+  keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  keepalive.toolStart("t1");
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged");
+  assert.equal(records.length, 0, "a non-OK response was never billed as a read");
+});
+
+test("a ping whose response reveals no usage records nothing rather than a guess", async () => {
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const records: KeepaliveSpendRecord[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => ({ ok: true, text: async () => "not json" }),
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => records.push(record),
+  });
+  keepalive.noteProviderRequest(anthropicPayload(), { provider: "anthropic", api: "anthropic-messages", cacheReadPricePerMTok: 0.6 });
+  keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  keepalive.toolStart("t1");
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged");
+  assert.equal(records.length, 0);
 });

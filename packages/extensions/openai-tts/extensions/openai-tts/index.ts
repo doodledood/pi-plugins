@@ -52,6 +52,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_CONFIGURED_PLAYBACK_TIMEOUT_MS = 24 * 60 * 60_000;
 const DEFAULT_MAX_CHARS = 4_000;
 const DEFAULT_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+/**
+ * Custom-entry type for a billed call that produces no pi session of its own. Read
+ * by the simple-statusline cost surfaces; matched by name, not import, so each
+ * extension stays individually installable.
+ */
+export const COST_RECORD_TYPE = "pi-cost-record";
+/**
+ * Price per million characters, when configured (OPENAI_TTS_PRICE_PER_MCHAR).
+ * Speech is billed per character, which pi's model registry does not price, so
+ * without this the record carries characters and no dollar figure.
+ */
+const PRICE_ENV = "OPENAI_TTS_PRICE_PER_MCHAR";
 
 const TtsParamsSchema = {
   type: "object",
@@ -90,6 +102,7 @@ export default function openaiTtsExtension(pi: PiApi): void {
       const result = await speakWithOpenAI(pi, params, signal, (message, details) => {
         onUpdate?.({ content: [{ type: "text", text: message }], details });
       });
+      recordSpeechSpend(pi, result);
       return {
         content: [{ type: "text", text: `Spoke ${result.chars} character(s) using OpenAI ${result.model}/${result.voice} (${result.format}) via ${result.player}.` }],
         details: result,
@@ -113,12 +126,44 @@ export default function openaiTtsExtension(pi: PiApi): void {
       try {
         ctx.ui.notify("OpenAI TTS: requesting speech…", "info");
         const result = await speakWithOpenAI(pi, { text }, ctx.signal, (message) => ctx.ui.notify(message, "info"));
+        recordSpeechSpend(pi, result);
         ctx.ui.notify(`OpenAI TTS: spoke ${result.chars} character(s).`, "info");
       } catch (error) {
         ctx.ui.notify(`OpenAI TTS failed: ${errorMessage(error)}`, "error");
       }
     },
   });
+}
+
+/**
+ * Record one successful speech call durably, so its spend is countable: characters,
+ * model, and voice always, plus a dollar figure when a per-character rate is
+ * configured. Only called after audio was produced — a failed call records nothing.
+ */
+export function recordSpeechSpend(pi: unknown, result: SpeakResult): void {
+  const api = pi as { appendEntry?: (customType: string, data: unknown) => unknown };
+  if (typeof api?.appendEntry !== "function") return;
+  const pricePerMChar = normalizeOptionalNumber(process.env[PRICE_ENV], 0, 1_000_000);
+  const total = typeof pricePerMChar === "number" ? (result.chars / 1_000_000) * pricePerMChar : 0;
+  try {
+    api.appendEntry(COST_RECORD_TYPE, {
+      recordId: `tts-${Date.now()}-${randomUUID()}`,
+      key: `openai/${result.model} (speech)`,
+      characters: result.chars,
+      voice: result.voice,
+      priced: typeof pricePerMChar === "number",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total },
+      },
+    });
+  } catch {
+    // Session may be ephemeral or shutting down; speech itself already succeeded.
+  }
 }
 
 async function speakWithOpenAI(

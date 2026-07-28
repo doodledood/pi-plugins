@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import openaiTtsExtension from "./index.ts";
+import openaiTtsExtension, { COST_RECORD_TYPE, recordSpeechSpend } from "./index.ts";
 
 type RegisteredTool = {
   name: string;
@@ -166,4 +166,49 @@ test("enforces configured max text length before network calls", async () => {
     /above the configured OPENAI_TTS_MAX_CHARS limit/,
   );
   assert.equal(fetchCalled, false);
+});
+
+test("a successful speech call records its usage durably, with a price only when configured", () => {
+  const entries: Array<{ customType: string; data: any }> = [];
+  const pi = { appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }) };
+  const result = { model: "gpt-4o-mini-tts", voice: "coral", format: "mp3" as const, chars: 500_000, audioBytes: 1024, player: "afplay" };
+
+  const savedPrice = process.env.OPENAI_TTS_PRICE_PER_MCHAR;
+  try {
+    delete process.env.OPENAI_TTS_PRICE_PER_MCHAR;
+    recordSpeechSpend(pi, result);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.customType, COST_RECORD_TYPE);
+    assert.equal(entries[0]?.data.characters, 500_000);
+    assert.equal(entries[0]?.data.voice, "coral");
+    assert.match(entries[0]?.data.key, /gpt-4o-mini-tts/);
+    assert.equal(entries[0]?.data.priced, false, "no rate configured, so no dollar figure is invented");
+    assert.equal(entries[0]?.data.usage.cost.total, 0);
+
+    process.env.OPENAI_TTS_PRICE_PER_MCHAR = "12";
+    recordSpeechSpend(pi, result);
+    assert.equal(entries.length, 2);
+    assert.equal(entries[1]?.data.priced, true);
+    // 500k characters at $12 per million characters = $6.
+    assert.ok(Math.abs(entries[1]?.data.usage.cost.total - 6) < 1e-9, `got ${entries[1]?.data.usage.cost.total}`);
+    assert.notEqual(entries[1]?.data.recordId, entries[0]?.data.recordId, "each call gets its own id");
+  } finally {
+    if (savedPrice === undefined) delete process.env.OPENAI_TTS_PRICE_PER_MCHAR;
+    else process.env.OPENAI_TTS_PRICE_PER_MCHAR = savedPrice;
+  }
+});
+
+test("recording spend never breaks speech when the session cannot take entries", () => {
+  const result = { model: "gpt-4o-mini-tts", voice: "coral", format: "mp3" as const, chars: 10, audioBytes: 8, player: "afplay" };
+  assert.doesNotThrow(() => recordSpeechSpend({}, result));
+  assert.doesNotThrow(() =>
+    recordSpeechSpend(
+      {
+        appendEntry() {
+          throw new Error("session is shutting down");
+        },
+      },
+      result,
+    ),
+  );
 });

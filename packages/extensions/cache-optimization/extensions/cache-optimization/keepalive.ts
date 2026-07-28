@@ -100,6 +100,37 @@ export interface KeepaliveDeps {
   now(): number;
   fetch(url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }): Promise<KeepaliveFetchResponse>;
   env: Record<string, string | undefined>;
+  /**
+   * Called once per billed ping with provider-reported usage priced from pi's model
+   * rates. A keepalive ping is a real Anthropic request that no session records, so
+   * without this its spend is invisible to every cost surface. Failed and skipped
+   * pings report nothing.
+   */
+  onSpend?(record: KeepaliveSpendRecord): void;
+}
+
+/** One billed keepalive ping, ready to persist as a durable cost record. */
+export interface KeepaliveSpendRecord {
+  /** Stable id for this ping, so a replayed record cannot be counted twice. */
+  recordId: string;
+  /** Provider/model the ping was billed against, used as the cost bucket. */
+  key: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  };
+}
+
+/** Provider-reported usage for one ping, as far as the response revealed it. */
+interface PingUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 /** Abort a hung ping so pingInFlight can never wedge the keepalive. */
@@ -146,6 +177,10 @@ export interface RequestRoute {
   nonApiKeyAuth?: boolean;
   /** Authoritative cache-read $/MTok from pi's model registry (ctx.model.cost.cacheRead). */
   cacheReadPricePerMTok?: number;
+  /** Remaining $/MTok rates from the same registry entry, used to price a ping's usage. */
+  pricePerMTok?: { input?: number; output?: number; cacheWrite?: number };
+  /** provider/id of the model being pinged, used as the cost bucket key. */
+  modelKey?: string;
 }
 
 /**
@@ -279,6 +314,18 @@ interface CapturedPayload {
 interface AnthropicUsage {
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number | null;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+/** Provider usage field names mapped to the neutral shape cost records use. */
+function fromAnthropicUsage(usage: AnthropicUsage): PingUsage {
+  return {
+    input: usage.input_tokens ?? 0,
+    output: usage.output_tokens ?? 0,
+    cacheRead: usage.cache_read_input_tokens ?? 0,
+    cacheWrite: usage.cache_creation_input_tokens ?? 0,
+  };
 }
 
 export class CacheKeepalive {
@@ -297,6 +344,9 @@ export class CacheKeepalive {
   constructor(private readonly deps: KeepaliveDeps) {}
 
   private lastReadPricePerMTok: number | undefined;
+  private lastPrices: { input?: number; output?: number; cacheWrite?: number } | undefined;
+  private lastModelKey: string | undefined;
+  private pingSequence = 0;
 
   /** A real provider request went out: re-anchor the gap and capture the payload. */
   noteProviderRequest(payload: unknown, route?: RequestRoute): void {
@@ -308,6 +358,8 @@ export class CacheKeepalive {
     this.lastCapture = kind && isDict(payload) ? { payload, kind } : undefined;
     this.lastReadPricePerMTok =
       typeof route?.cacheReadPricePerMTok === "number" && route.cacheReadPricePerMTok > 0 ? route.cacheReadPricePerMTok : undefined;
+    this.lastPrices = route?.pricePerMTok;
+    this.lastModelKey = route?.modelKey;
   }
 
   /** Explicitly abandon the current captured provider payload after a fail-closed wiring error. */
@@ -420,8 +472,12 @@ export class CacheKeepalive {
     // abandon only the gap it belongs to, never the freshly captured one.
     const pinged = this.lastCapture;
     try {
-      const success = await this.pingCapturedPayload(pinged, apiKey);
+      const outcome = await this.pingCapturedPayload(pinged, apiKey);
+      const success = outcome.ok;
       this.lastPingOk = success;
+      // A ping that reached the provider was billed whether or not it proved a cache
+      // read, so it is recorded either way; only a throw or a non-OK response is free.
+      this.reportSpend(outcome.usage);
       if (success) {
         // Only a confirmed cache read refreshes the TTL clock.
         this.lastActivityAt = this.deps.now();
@@ -441,12 +497,12 @@ export class CacheKeepalive {
     return "pinged";
   }
 
-  private async pingCapturedPayload(captured: CapturedPayload, apiKey: string): Promise<boolean> {
+  private async pingCapturedPayload(captured: CapturedPayload, apiKey: string): Promise<{ ok: boolean; usage?: PingUsage }> {
     if (captured.kind === "adaptive") return this.pingAdaptivePayload(captured.payload, apiKey);
     return this.pingStandardPayload(captured.payload, apiKey);
   }
 
-  private async pingStandardPayload(payload: Dict, apiKey: string): Promise<boolean> {
+  private async pingStandardPayload(payload: Dict, apiKey: string): Promise<{ ok: boolean; usage?: PingUsage }> {
     // Standard payloads carry no thinking or only the explicit disabled marker,
     // replayed unchanged — the only deltas vs the cached request are
     // max_tokens/stream, neither of which is hashed into the cache prefix.
@@ -457,10 +513,14 @@ export class CacheKeepalive {
       body: JSON.stringify(body),
       signal: timeoutSignal(),
     });
-    return response.ok;
+    if (!response.ok) return { ok: false };
+    // The non-streaming reply carries usage in its body; read it so the ping's real
+    // spend is recorded rather than estimated. An unreadable body still pinged.
+    const usage = await readNonStreamingUsage(response);
+    return usage ? { ok: true, usage } : { ok: true };
   }
 
-  private async pingAdaptivePayload(payload: Dict, apiKey: string): Promise<boolean> {
+  private async pingAdaptivePayload(payload: Dict, apiKey: string): Promise<{ ok: boolean; usage?: PingUsage }> {
     // Adaptive-thinking refreshes must preserve the exact captured provider body
     // and prove that the request read the existing cache. A 200 that writes a new
     // entry is not a keepalive; it is the cold-cache rewrite we are avoiding.
@@ -474,9 +534,14 @@ export class CacheKeepalive {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!response.ok) return false;
+      if (!response.ok) return { ok: false };
       const usage = await readMessageStartUsage(response, () => controller.abort());
-      return usage.cache_read_input_tokens !== undefined && usage.cache_read_input_tokens > 0 && (usage.cache_creation_input_tokens === 0 || usage.cache_creation_input_tokens === null);
+      const ok =
+        usage.cache_read_input_tokens !== undefined &&
+        usage.cache_read_input_tokens > 0 &&
+        (usage.cache_creation_input_tokens === 0 || usage.cache_creation_input_tokens === null);
+      return { ok, usage: fromAnthropicUsage(usage) };
+
     } finally {
       clearTimeout(timeout);
     }
@@ -507,6 +572,39 @@ export class CacheKeepalive {
     for (const [id, work] of this.backgroundWork.entries()) {
       if (now - work.startedAt >= BACKGROUND_WORK_EXPIRE_MS) this.backgroundWork.delete(id);
     }
+  }
+
+  /**
+   * Price provider-reported ping usage with pi's model rates and hand it to the
+   * wiring layer as a durable cost record. Silent when the ping reported no usage.
+   */
+  private reportSpend(usage: PingUsage | undefined): void {
+    if (!this.deps.onSpend || !usage) return;
+    const input = usage.input ?? 0;
+    const output = usage.output ?? 0;
+    const cacheRead = usage.cacheRead ?? 0;
+    const cacheWrite = usage.cacheWrite ?? 0;
+    if (input + output + cacheRead + cacheWrite === 0) return;
+    const perMTok = (tokens: number, price: number | undefined) => (price && price > 0 ? (tokens / 1_000_000) * price : 0);
+    const cost = {
+      input: perMTok(input, this.lastPrices?.input),
+      output: perMTok(output, this.lastPrices?.output),
+      cacheRead: perMTok(cacheRead, this.lastReadPricePerMTok),
+      cacheWrite: perMTok(cacheWrite, this.lastPrices?.cacheWrite),
+    };
+    this.pingSequence += 1;
+    this.deps.onSpend({
+      recordId: `keepalive-${this.dayKey}-${this.pingSequence}-${Math.round(this.deps.now())}`,
+      key: this.lastModelKey ? `${this.lastModelKey} (cache keepalive)` : "cache keepalive",
+      usage: {
+        input,
+        output,
+        cacheRead,
+        cacheWrite,
+        totalTokens: input + output + cacheRead + cacheWrite,
+        cost: { ...cost, total: cost.input + cost.output + cost.cacheRead + cost.cacheWrite },
+      },
+    });
   }
 
   private estimatePingCostUsd(): number {
@@ -541,6 +639,28 @@ function timeoutSignal(): AbortSignal | undefined {
   return typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(PING_TIMEOUT_MS) : undefined;
 }
 
+/**
+ * Usage from a non-streaming Anthropic reply. Best-effort: a body that cannot be
+ * read or parsed simply yields no usage, and the ping is then recorded as unpriced
+ * rather than failing.
+ */
+async function readNonStreamingUsage(response: KeepaliveFetchResponse): Promise<PingUsage | undefined> {
+  if (!response.text) return undefined;
+  try {
+    const parsed = safeJsonParse(await response.text());
+    const usage = isDict(parsed) && isDict(parsed.usage) ? parsed.usage : undefined;
+    if (!usage) return undefined;
+    return fromAnthropicUsage({
+      cache_read_input_tokens: numberValue(usage.cache_read_input_tokens),
+      cache_creation_input_tokens: numberValue(usage.cache_creation_input_tokens),
+      input_tokens: numberValue(usage.input_tokens),
+      output_tokens: numberValue(usage.output_tokens),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 async function readMessageStartUsage(response: KeepaliveFetchResponse, abort: () => void): Promise<AnthropicUsage> {
   if (!response.body) return {};
   const reader = response.body.getReader();
@@ -565,6 +685,8 @@ async function readMessageStartUsage(response: KeepaliveFetchResponse, abort: ()
             ? {
                 cache_read_input_tokens: numberValue(usage.cache_read_input_tokens),
                 cache_creation_input_tokens: usage.cache_creation_input_tokens === null ? null : numberValue(usage.cache_creation_input_tokens),
+                input_tokens: numberValue(usage.input_tokens),
+                output_tokens: numberValue(usage.output_tokens),
               }
             : {};
         }
