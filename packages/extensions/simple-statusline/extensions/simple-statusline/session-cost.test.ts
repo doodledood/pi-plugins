@@ -12,6 +12,8 @@ import {
   createAccumulator,
   deriveChildSessionDir,
   deriveSidecarRoot,
+  listSidecarSessionFiles,
+  MAX_SIDECAR_DEPTH,
   PRICE_TIER_RECORD_TYPE,
   readSessionHeader,
   SessionTreeScanner,
@@ -670,4 +672,33 @@ test("a tree with no records from any other extension still totals correctly", (
   assert.equal(tree.totalCost, 3.5);
   assert.equal(tree.approximate, false);
   assert.deepEqual(tree.unpricedModels, []);
+});
+
+test("sessions nested past the walk's depth bound are reported, not silently dropped", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // Build deeper than a deliberately tiny bound to stage the cliff.
+  let current = parent;
+  for (let i = 0; i < 3; i += 1) {
+    current = writeSession(join(deriveChildSessionDir(current, "tasks"), `c${i}.jsonl`), { id: `c${i}`, entries: [assistant(1)] });
+  }
+
+  const shallow = listSidecarSessionFiles(deriveSidecarRoot(parent), 2);
+  assert.equal(shallow.truncated, true, "the walk knows it stopped early");
+  assert.ok(shallow.files.length < 3, "and really did miss sessions");
+
+  // At the shipped bound nothing is missed, so nothing is reported.
+  const full = listSidecarSessionFiles(deriveSidecarRoot(parent));
+  assert.equal(full.truncated, false);
+  assert.equal(full.files.length, 3);
+
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3);
+  assert.equal(tree.approximate, false, "a tree within the bound is exact");
+});
+
+test("the depth bound allows far deeper nesting than any real session tree", () => {
+  // Each generation costs two directory levels, so the bound must be comfortably even
+  // and large; a cap of 8 would have silently stopped at four generations.
+  assert.ok(MAX_SIDECAR_DEPTH >= 24, `bound is ${MAX_SIDECAR_DEPTH}`);
 });

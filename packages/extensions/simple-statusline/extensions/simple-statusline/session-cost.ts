@@ -370,7 +370,9 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     reasons.push(`no price resolved for ${[...unpriced].join(", ")} (unpriced, or genuinely free)`);
   }
   if (unreadableSessions > 0) {
-    reasons.push(`${unreadableSessions} session file${unreadableSessions === 1 ? "" : "s"} could not be read, so their spend is missing`);
+    reasons.push(
+      `${unreadableSessions} part${unreadableSessions === 1 ? "" : "s"} of the tree could not be read, so that spend is missing`,
+    );
   }
   return {
     own,
@@ -437,11 +439,26 @@ export function readSessionHeader(path: string): SessionHeader | undefined {
   }
 }
 
+/**
+ * How deep the sidecar walk goes. Each generation of nesting costs two levels
+ * (`<session>/<kind>/`), so this allows sessions spawned about sixteen deep — far past
+ * any real tree, while still bounding a pathological one. Hitting it is reported rather
+ * than passed over, since dropped descendants would otherwise lower the total silently.
+ */
+export const MAX_SIDECAR_DEPTH = 32;
+
 /** Every `.jsonl` file under `root`, at any depth, with the top-level folder as its kind. */
-export function listSidecarSessionFiles(root: string, maxDepth = 8): Array<{ path: string; kind: string }> {
+export function listSidecarSessionFiles(
+  root: string,
+  maxDepth = MAX_SIDECAR_DEPTH,
+): { files: Array<{ path: string; kind: string }>; truncated: boolean } {
   const found: Array<{ path: string; kind: string }> = [];
+  let truncated = false;
   const walk = (dir: string, kind: string, depth: number) => {
-    if (depth > maxDepth) return;
+    if (depth > maxDepth) {
+      truncated = true;
+      return;
+    }
     let entries: import("node:fs").Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -458,7 +475,7 @@ export function listSidecarSessionFiles(root: string, maxDepth = 8): Array<{ pat
     }
   };
   walk(root, "", 0);
-  return found;
+  return { files: found, truncated };
 }
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
@@ -652,7 +669,9 @@ export class SessionTreeScanner {
       if (skip.has(real) || byPath.has(real)) return;
       byPath.set(real, { path, real, kind, header: this.cachedHeader(path) });
     };
-    for (const file of listSidecarSessionFiles(deriveSidecarRoot(rootFile))) add(file.path, file.kind);
+    const sidecar = listSidecarSessionFiles(deriveSidecarRoot(rootFile));
+    if (sidecar.truncated) this.lastStats.filesUnreadable += 1;
+    for (const file of sidecar.files) add(file.path, file.kind);
     try {
       for (const name of readdirSync(dirname(rootFile))) {
         if (name.endsWith(".jsonl")) add(join(dirname(rootFile), name), "forks");
