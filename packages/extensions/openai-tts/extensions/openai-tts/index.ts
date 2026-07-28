@@ -142,13 +142,13 @@ export default function openaiTtsExtension(pi: PiApi): void {
  * exists — so a later local playback failure cannot lose it. A call that never
  * reached that point (bad key, HTTP error, over the character limit) records nothing.
  */
-export function recordSpeechSpend(pi: unknown, billed: { model: string; voice: string; chars: number }): void {
-  const api = pi as { appendEntry?: (customType: string, data: unknown) => unknown };
-  if (typeof api?.appendEntry !== "function") return;
+export function recordSpeechSpend(pi: Pick<PiApi, "appendEntry">, billed: { model: string; voice: string; chars: number }): void {
+  // Guarded for hosts older than the appendEntry API, not for type reasons.
+  if (typeof pi?.appendEntry !== "function") return;
   const pricePerMChar = normalizeOptionalNumber(process.env[PRICE_ENV], 0, 1_000_000);
   const total = typeof pricePerMChar === "number" ? (billed.chars / 1_000_000) * pricePerMChar : 0;
   try {
-    api.appendEntry(COST_RECORD_TYPE, {
+    pi.appendEntry(COST_RECORD_TYPE, {
       recordId: `tts-${Date.now()}-${randomUUID()}`,
       key: `openai/${billed.model} (speech)`,
       characters: billed.chars,
@@ -169,7 +169,7 @@ export function recordSpeechSpend(pi: unknown, billed: { model: string; voice: s
 }
 
 async function speakWithOpenAI(
-  pi: Pick<PiApi, "exec">,
+  pi: Pick<PiApi, "exec" | "appendEntry">,
   params: TtsParams,
   signal?: AbortSignal,
   onProgress?: (message: string, details?: Record<string, unknown>) => void,

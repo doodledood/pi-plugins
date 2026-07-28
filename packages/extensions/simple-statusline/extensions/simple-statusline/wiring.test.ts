@@ -44,6 +44,18 @@ const fakeFooterData = {
   onBranchChange: () => () => {},
 };
 
+/** Footer data carrying extension statuses, for the placement rules. */
+function footerDataWith(statuses: Record<string, string>) {
+  return { ...fakeFooterData, getExtensionStatuses: () => new Map(Object.entries(statuses)) };
+}
+
+function renderWithStatuses(harness: Harness, statuses: Record<string, string>): { line: string; row: string; calls: Array<{ tone: string; text: string }> } {
+  const recording = createRecordingTheme();
+  const component = harness.footerFactory!(fakeTui, recording.theme, footerDataWith(statuses));
+  const rendered = component.render(400);
+  return { line: rendered[0] ?? "", row: rendered[1] ?? "", calls: recording.calls };
+}
+
 function assistantEntry(timestamp: number, input: number, read: number, write: number): SessionEntryLike {
   return { type: "message", message: { role: "assistant", timestamp, usage: { input, cacheRead: read, cacheWrite: write } } };
 }
@@ -468,4 +480,66 @@ test("/cost attributes each spawned session its own amount, not the aggregate", 
   const spawned = report.slice(report.indexOf("Spawned sessions"), report.indexOf("By provider/model"));
   assert.equal((spawned.match(/\$2\.50/g) ?? []).length, 0, "no child line reports the aggregate as its own cost");
   assert.equal((spawned.match(/— \$/g) ?? []).length, 3, "exactly three attributed children");
+});
+
+// ── extension status placement (extension-agnostic) ──────────────────────────
+
+test("a short status rides beside the model and leaves the status row", () => {
+  const harness = createHarness([]);
+  const { line, row } = renderWithStatuses(harness, { "gpt-fast": "GPT priority" });
+  assert.match(line, /GPT priority/, "short status takes the prominent slot");
+  assert.doesNotMatch(row, /GPT priority/, "and appears in exactly one place");
+});
+
+test("a longer status stays in the status row", () => {
+  const harness = createHarness([]);
+  const { line, row } = renderWithStatuses(harness, { "goal-controller": "goal active 12m" });
+  assert.doesNotMatch(line, /goal active 12m/);
+  assert.match(row, /goal active 12m/);
+});
+
+test("width decides placement only — it never restyles a status", () => {
+  // A short "goal blocked" must not read as a success just because it fits inline.
+  const harness = createHarness([]);
+  const short = renderWithStatuses(harness, { "goal-controller": "goal blocked" });
+  assert.match(short.line, /goal blocked/, "placed inline");
+  assert.equal(
+    short.calls.some((call) => call.tone === "success" && /goal blocked/.test(call.text)),
+    false,
+    "not painted as a success signal",
+  );
+  const inlineTone = short.calls.find((call) => /goal blocked/.test(call.text))?.tone;
+
+  const long = renderWithStatuses(harness, { "goal-controller": "goal blocked on approval" });
+  const rowTone = long.calls.find((call) => /goal blocked on approval/.test(call.text))?.tone;
+  assert.equal(inlineTone, rowTone, "the same status gets the same tone wherever it lands");
+});
+
+test("an inline status is normalized the same way a row status is", () => {
+  const harness = createHarness([]);
+  const { line } = renderWithStatuses(harness, { loadout: "loadout: 7/12" });
+  assert.match(line, /7\/12/);
+  assert.doesNotMatch(line, /loadout: loadout/, "its own key prefix is stripped, as in the row");
+});
+
+test("at most two statuses ride inline, and the rest are not dropped", () => {
+  const harness = createHarness([]);
+  const { line, row } = renderWithStatuses(harness, { a: "one", b: "two", c: "three" });
+  const inlineCount = ["one", "two", "three"].filter((value) => line.includes(value)).length;
+  assert.equal(inlineCount, 2, "the prominent slot is capped");
+  assert.match(row, /three/, "the third is still shown, in the row");
+});
+
+test("noisy MCP statuses appear in neither place", () => {
+  const harness = createHarness([]);
+  const { line, row } = renderWithStatuses(harness, { "mcp-tool-loadout": "mcp 7/12" });
+  assert.doesNotMatch(line, /mcp/i);
+  assert.doesNotMatch(row, /mcp/i);
+});
+
+test("the footer renders normally when no extension sets a status", () => {
+  const harness = createHarness([]);
+  const { line, row } = renderWithStatuses(harness, {});
+  assert.match(line, /test-model/);
+  assert.equal(row, "", "no second row when there is nothing to put in it");
 });

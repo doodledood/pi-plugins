@@ -131,7 +131,8 @@ export function activate(
 ) {
   // A keepalive ping is a real, billed Anthropic request that no session records.
   // Persist its provider-reported usage as a durable, context-excluded cost record so
-  // the spend is countable; a failed ping records nothing.
+  // the spend is countable. "Billed" is the test, not "succeeded": a ping that reached
+  // the provider without proving a cache read still cost money and is still recorded.
   const recordSpend = (record: KeepaliveSpendRecord): void => {
     observers?.onSpend?.(record);
     try {

@@ -183,5 +183,7 @@ No config file. Runtime behavior:
   These are custom entries: they live in the session file, so they last exactly as
   long as that session does, and they are excluded from LLM context. Each carries
   only model, token counts, cost, and an id — never request content.
-  A ping that failed, was skipped, or reported no usage records nothing rather
-  than an estimate.
+  A ping that never reached the provider, was skipped, or reported no usage records
+  nothing rather than an estimate. A ping that did reach the provider is recorded
+  even when it failed to prove a cache read — the footer calls that a failed ping
+  because it did not refresh the cache, but Anthropic billed it either way.

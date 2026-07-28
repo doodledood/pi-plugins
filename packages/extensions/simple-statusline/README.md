@@ -128,7 +128,10 @@ installed. Everything extension-specific reaches it through generic contracts:
 
 - **Short extension statuses** ride beside the model; longer ones go in the second
   row. That is a width rule, not a list of known extensions — an extension you
-  haven't installed simply contributes nothing.
+  haven't installed simply contributes nothing. Width decides placement only:
+  wherever a status lands it keeps the same tone and normalization, so a short
+  `goal blocked` never reads as a success, and every status a plugin sets appears
+  in exactly one of the two places.
 - **Spend from calls with no session of their own** arrives as `pi-cost-record`
   session entries, which any extension can write.
 - **Premium billing tiers** arrive as `pi-price-tier` entries carrying both the

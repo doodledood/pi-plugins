@@ -23,8 +23,14 @@ const STATUSLINE_KEY = "simple-statusline";
  * Statuses at or under this width ride inline with the model instead of the second row.
  * A width rule rather than a list of known extensions: any extension's short status gets
  * the prominent slot, and one that isn't installed simply contributes nothing.
+ *
+ * Width decides placement only. It says nothing about what a status means, so the tone
+ * and normalization are the same wherever a status lands — a short "goal blocked" must
+ * not read as a success just because it fits.
  */
 const INLINE_STATUS_MAX_WIDTH = 14;
+/** How many statuses the prominent slot holds before the rest fall back to the row. */
+const MAX_INLINE_STATUSES = 2;
 /** First useful boundary where compaction planning beats waiting for overflow pressure. */
 const COMPACT_HINT_THRESHOLD_PERCENT = 50;
 
@@ -45,6 +51,7 @@ type RuntimeState = {
   costComputedAt: number;
 };
 type ModelSignal = { plain: string; colored: string };
+type StatusEntry = { key: string; value: string };
 type ContextSignal = { plain: string; percent: number | undefined };
 
 export default function simpleStatusline(pi: any) {
@@ -85,8 +92,10 @@ export default function simpleStatusline(pi: any) {
         },
         invalidate() {},
         render(width: number): string[] {
-          const line = renderMainLine(width, ctx, theme, footerData, runtime);
-          const statusLine = renderExtensionStatuses(width, theme, footerData);
+          // One partition drives both rows, so a status lands in exactly one of them.
+          const statuses = partitionStatuses(footerData);
+          const line = renderMainLine(width, ctx, theme, footerData, runtime, statuses.inline);
+          const statusLine = renderExtensionStatuses(width, theme, statuses.row);
           return statusLine ? [line, statusLine] : [line];
         },
       };
@@ -150,7 +159,14 @@ export default function simpleStatusline(pi: any) {
   });
 }
 
-function renderMainLine(width: number, ctx: any, theme: any, footerData: any, runtime: RuntimeState): string {
+function renderMainLine(
+  width: number,
+  ctx: any,
+  theme: any,
+  footerData: any,
+  runtime: RuntimeState,
+  inline: StatusEntry[],
+): string {
   const usage = ctx.getContextUsage?.();
   const cacheStats = computeSessionCacheStats(ctx.sessionManager.getBranch());
 
@@ -160,7 +176,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const level = runtime.thinkingLevel;
   const contextSignal = formatContextUsage(usage, ctx.model?.contextWindow);
   const costStr = formatTreeCost(runtime.cost);
-  const modelSignal = formatModelSignal(model, level, inlineStatuses(footerData), theme);
+  const modelSignal = formatModelSignal(model, level, inline.map((status) => formatStatusSignal(status, theme)), theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
   const sep = "  ·  ";
@@ -207,29 +223,41 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   return fitLine(`${left}${" ".repeat(gap)}${right}`, width);
 }
 
-function renderExtensionStatuses(width: number, theme: any, footerData: any): string | undefined {
-  const statuses: Map<string, string> | undefined = footerData.getExtensionStatuses?.();
-  if (!statuses) return undefined;
-
-  const visible = [...statuses.entries()]
-    // Short statuses already ride beside the model; this row carries the longer ones.
-    .filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0 && !isInlineStatus(value))
-    // Hide noisy/ambient statuses. They are useful in /mcp, but too loud in the footer.
-    .filter(([key, value]) => !/mcp/i.test(`${key} ${value}`))
-    // Keep goal-like statuses if present; dim everything else.
-    .slice(0, 3)
-    .map(([key, value]) => formatExtensionStatus(key, value, theme));
-
-  if (visible.length === 0) return undefined;
+function renderExtensionStatuses(width: number, theme: any, row: StatusEntry[]): string | undefined {
+  if (row.length === 0) return undefined;
+  const visible = row.slice(0, 3).map((status) => formatExtensionStatus(status.key, status.value, theme));
   return fitLine(color(theme, "dim", visible.join("  ·  ")), width);
 }
 
-function formatExtensionStatus(key: string, value: string, theme: any): string {
+/**
+ * Split extension statuses between the prominent slot beside the model and the second
+ * row. Placement is by width only — short statuses are easier to read inline — and every
+ * status a plugin sets lands in exactly one of the two, so nothing announced is dropped.
+ * Noisy ambient statuses (MCP loadouts) are useful in /mcp and too loud here.
+ */
+function partitionStatuses(footerData: any): { inline: StatusEntry[]; row: StatusEntry[] } {
+  const statuses: Map<string, string> | undefined = footerData.getExtensionStatuses?.();
+  if (!statuses) return { inline: [], row: [] };
+  const candidates: StatusEntry[] = [...statuses.entries()]
+    .filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0 && !/mcp/i.test(`${key} ${value}`))
+    .map(([key, value]) => ({ key, value }));
+
+  const inline = candidates.filter((status) => isInlineStatus(status.value)).slice(0, MAX_INLINE_STATUSES);
+  const row = candidates.filter((status) => !inline.includes(status));
+  return { inline, row };
+}
+
+/** Status text as displayed: own key prefix and a leading emoji token removed. */
+function normalizeStatus(key: string, value: string): string {
   const trimmed = value.trim().replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "");
-  const plain = trimmed.replace(/^\S+\s+/, (first) => (isEmojiOnlyToken(first.trim()) ? "" : first));
+  const stripped = trimmed.replace(/^\S+\s+/, (first) => (isEmojiOnlyToken(first.trim()) ? "" : first));
+  return compact(stripped || trimmed, 42);
+}
+
+function formatExtensionStatus(key: string, value: string, theme: any): string {
   const normalized = `${key} ${value}`.toLowerCase();
   const tone = /goal|active|running|complete/.test(normalized) ? "muted" : "dim";
-  return color(theme, tone, compact(plain || trimmed, 42));
+  return color(theme, tone, normalizeStatus(key, value));
 }
 
 /**
@@ -259,22 +287,17 @@ function formatCacheSignal(stats: SessionCacheStats, theme: any): ModelSignal {
  * Extension-agnostic: a status is shown because it is short, not because the footer
  * recognizes the extension that set it.
  */
-function formatModelSignal(model: string, level: ThinkingLevel, inline: string[], theme: any): ModelSignal {
+function formatModelSignal(model: string, level: ThinkingLevel, inline: ModelSignal[], theme: any): ModelSignal {
   const thinkingSignal = color(theme, thinkingColor(level), level);
   return {
-    plain: [model, level, ...inline].join(" "),
-    colored: [color(theme, "dim", model), thinkingSignal, ...inline.map((value) => color(theme, "success", value))].join(" "),
+    plain: [model, level, ...inline.map((part) => part.plain)].join(" "),
+    colored: [color(theme, "dim", model), thinkingSignal, ...inline.map((part) => part.colored)].join(" "),
   };
 }
 
-/** Short extension statuses, which ride beside the model rather than in the status row. */
-function inlineStatuses(footerData: any): string[] {
-  const statuses: Map<string, string> | undefined = footerData.getExtensionStatuses?.();
-  if (!statuses) return [];
-  return [...statuses.entries()]
-    .filter(([key, value]) => key !== STATUSLINE_KEY && isInlineStatus(value))
-    .map(([, value]) => value.trim())
-    .slice(0, 2);
+/** An inline status, formatted by the same rules the row uses. */
+function formatStatusSignal(status: StatusEntry, theme: any): ModelSignal {
+  return { plain: normalizeStatus(status.key, status.value), colored: formatExtensionStatus(status.key, status.value, theme) };
 }
 
 function isInlineStatus(value: string): boolean {
