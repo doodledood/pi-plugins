@@ -347,6 +347,21 @@ test("an empty sibling file is not mistaken for spend that could not be read", (
   assert.equal(tree.unreadableSessions, 0);
 });
 
+test("a session directory that has gone missing under a live session is a gap, absence or not", () => {
+  const root = tempRoot();
+  const dir = join(root, "sessions");
+  const parent = writeSession(join(dir, "parent.jsonl"), { id: "p1" });
+  // The turns are in memory, so the session is live while its directory is not. Absence is
+  // benign everywhere else because nothing was ever there; here the parent's own file was,
+  // which means every fork of it was too, and all of them went with the directory.
+  rmSync(dir, { recursive: true, force: true });
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(3)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3, "the live turns still total");
+  assert.ok(tree.approximate);
+  assert.equal(tree.unreadableSessions, 1);
+  assert.match(tree.approximateReasons.join(" "), /1 part of the tree could not be read/);
+});
+
 test("a sibling whose header cannot be read is disclosed, not assumed unrelated", () => {
   // Staged with permission bits, so it cannot be told apart from a readable file as root.
   if (typeof process.getuid === "function" && process.getuid() === 0) return;
