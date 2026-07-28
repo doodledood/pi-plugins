@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -301,21 +301,26 @@ test("a tree that priced to nothing still shows the marker when spend went uncou
 });
 
 test("a zero total is also shown when what went uncounted was a whole session, not an entry", async () => {
-  // The other arm of the same guard, and it has to be staged where the gap really is a
-  // whole unreadable part of the tree. A torn header on a SIDECAR file would not do it:
-  // that file is admitted by where it sits, so it gets scanned and its bad line counts as
-  // a corrupt entry — the arm above. A sibling of the parent is admitted only by its
-  // header, so a torn one leaves its membership unknown.
+  // The other arm of the same guard, staged where the gap really is a whole unreadable part
+  // of the tree rather than one bad entry: a sidecar directory that exists and cannot be
+  // listed, which hides every session under it.
+  if (typeof process.getuid === "function" && process.getuid() === 0) return;
   const { parent } = tempSessionTree();
-  writeFileSync(join(dirname(parent), "torn-header.jsonl"), '{"type":"sess\n');
-  const harness = createHarness([], { file: parent, id: "parent-1", entries: [] });
-  assert.match(renderFooter(harness), /~\$0\.000/, "an unreadable part of the tree still marks a zero total");
+  writeChildSession(parent, "tasks", "hidden", [0.5]);
+  const dir = deriveChildSessionDir(parent, "tasks");
+  chmodSync(dir, 0o000);
+  try {
+    const harness = createHarness([], { file: parent, id: "parent-1", entries: [] });
+    assert.match(renderFooter(harness), /~\$0\.000/, "an unreadable part of the tree still marks a zero total");
 
-  // Named apart from the corrupt-entry arm, so the test cannot drift onto it unnoticed.
-  await harness.commands.get("cost")!.handler("", harness.ctx);
-  const report = harness.notices.join("\n");
-  assert.match(report, /1 part of the tree could not be read/);
-  assert.doesNotMatch(report, /could not be parsed/, "this is the unreadable arm, not the corrupt-entry one");
+    // Named apart from the corrupt-entry arm, so the test cannot drift onto it unnoticed.
+    await harness.commands.get("cost")!.handler("", harness.ctx);
+    const report = harness.notices.join("\n");
+    assert.match(report, /1 part of the tree could not be read/);
+    assert.doesNotMatch(report, /could not be parsed/, "this is the unreadable arm, not the corrupt-entry one");
+  } finally {
+    chmodSync(dir, 0o700);
+  }
 });
 
 test("a session that genuinely cost nothing shows no figure at all", () => {

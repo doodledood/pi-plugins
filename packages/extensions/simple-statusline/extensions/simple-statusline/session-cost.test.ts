@@ -14,7 +14,6 @@ import {
   deriveSidecarRoot,
   isAbsence,
   listSidecarSessionFiles,
-  readFailureIsGap,
   MAX_SIDECAR_DEPTH,
   PRICE_TIER_RECORD_TYPE,
   readSessionHeader,
@@ -348,47 +347,6 @@ test("an empty sibling file is not mistaken for spend that could not be read", (
   assert.equal(tree.unreadableSessions, 0);
 });
 
-test("a session directory that has gone missing under a live session is a gap, absence or not", () => {
-  const root = tempRoot();
-  const dir = join(root, "sessions");
-  const parent = writeSession(join(dir, "parent.jsonl"), { id: "p1" });
-  // The turns are in memory, so the session is live while its directory is not. Absence is
-  // benign everywhere else because nothing was ever there; here the parent's own file was,
-  // which means every fork of it was too, and all of them went with the directory.
-  rmSync(dir, { recursive: true, force: true });
-  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(3)], sessionFile: parent, sessionId: "p1" });
-  assert.equal(tree.totalCost, 3, "the live turns still total");
-  assert.ok(tree.approximate);
-  assert.equal(tree.unreadableSessions, 1);
-  assert.match(tree.approximateReasons.join(" "), /1 part of the tree could not be read/);
-});
-
-test("a sibling whose header cannot be read is disclosed, not assumed unrelated", () => {
-  // Staged with permission bits, so it cannot be told apart from a readable file as root.
-  if (typeof process.getuid === "function" && process.getuid() === 0) return;
-  const root = tempRoot();
-  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
-  // A sibling is part of this tree only if its header links back. Unreadable, that is
-  // unknowable — it could be a fork of this session, whose own turns would go uncounted.
-  const sibling = writeSession(join(root, "sibling.jsonl"), { id: "s1", parentSession: "p1", entries: [assistant(4)] });
-  chmodSync(sibling, 0o000);
-  try {
-    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-    assert.equal(tree.totalCost, 1, "the readable side still totals");
-    assert.ok(tree.approximate, "an unclassifiable sibling leaves the total a floor");
-    assert.match(tree.approximateReasons.join(" "), /could not be read/);
-  } finally {
-    chmodSync(sibling, 0o600);
-  }
-
-  // Readable and simply not ours: an answer, so nothing is marked.
-  const unrelated = writeSession(join(root, "unrelated.jsonl"), { id: "u1", entries: [assistant(7)] });
-  assert.ok(existsSync(unrelated));
-  const clean = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-  assert.equal(clean.totalCost, 5, "the readable sibling links to p1, so it counts; the unrelated one does not");
-  assert.equal(clean.approximate, false);
-});
-
 test("spend already counted for a child does not vanish when its file stops being readable", () => {
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
@@ -459,33 +417,6 @@ test("a deleted child leaves the tree, rather than lingering as spend nothing ca
   assert.equal(after.unreadableSessions, 0);
 });
 
-test("an unreadable parent header costs the tree its id-linked forks, and says so", () => {
-  // The header is read here for one thing only: the session id that id-linked forks are
-  // matched against. With the id handed in there is nothing to lose, so the gap has to be
-  // staged without it — and the parent's own turns come from memory, so no other read of
-  // this file will report the failure instead.
-  if (typeof process.getuid === "function" && process.getuid() === 0) return;
-  const root = tempRoot();
-  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
-  writeSession(join(root, "fork.jsonl"), { id: "f1", parentSession: "p1", entries: [assistant(4)] });
-  chmodSync(parent, 0o000);
-  try {
-    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent });
-    assert.equal(tree.totalCost, 1, "the in-memory turns still total, the unmatched fork does not");
-    assert.ok(tree.approximate);
-    assert.equal(tree.unreadableSessions, 1, "the unreadable header is one gap");
-
-    // Same unreadable header, id supplied: the forks are found anyway, so marking the total
-    // would claim spend was missing when none is — the disclosure failing the other way.
-    const told = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-    assert.equal(told.totalCost, 5, "the fork is matched by the id that was handed in");
-    assert.equal(told.unreadableSessions, 0);
-    assert.equal(told.approximate, false, "nothing was lost, so nothing is marked");
-  } finally {
-    chmodSync(parent, 0o600);
-  }
-});
-
 test("an unreadable parent header read from disk is one gap, not two", () => {
   // Without own entries the parent is scanned as well, and that read reports the same
   // failure. Counting the header read too would inflate the number of missing parts.
@@ -500,78 +431,6 @@ test("an unreadable parent header read from disk is one gap, not two", () => {
   } finally {
     chmodSync(parent, 0o600);
   }
-});
-
-test("whether a failed read is a gap turns on one question, asked by both reads", () => {
-  // Asked wherever a read fails with no proof of its own that the path was there: absence
-  // hides nothing unless this scan had just seen it, in which case it was there a moment ago
-  // and its spend may already have been suppressed elsewhere as a duplicate of it. The read
-  // that follows a successful stat needs no such question — the stat is the proof, so every
-  // failure there is a gap.
-  assert.equal(readFailureIsGap(false, false), true, "there and unreadable is always a gap");
-  assert.equal(readFailureIsGap(false, true), true);
-  assert.equal(readFailureIsGap(true, true), true, "gone, but this scan had just found it");
-  assert.equal(readFailureIsGap(true, false), false, "never there, nothing missing");
-  assert.equal(readFailureIsGap(true, undefined), false, "and unmarked provenance stays forgiving");
-});
-
-test("a session that was discovered and then vanished is a gap, not an absence", () => {
-  // Discovery is proof the file existed, and it is also what puts the session into the
-  // suppression set — so by the time the scan finds it gone, the parent's tool result
-  // restating this session's spend has already been dropped as a duplicate of it. Both
-  // sides of the same money disappear together, which is why absence cannot be forgiven
-  // here the way it is for a path that was never there.
-  //
-  // The window between discovery and the scan is a race no fixture can hold open, so the
-  // branch is pinned where the decision is made rather than through a staged tree.
-  const root = tempRoot();
-  const missing = join(root, "vanished.jsonl");
-
-  const discovered = new SessionTreeScanner();
-  assert.equal(discovered.scanFile(missing, "tasks", { knownToExist: true }), undefined);
-  assert.equal(discovered.stats.filesUnreadable, 1, "a session that existed a moment ago is missing spend");
-
-  const never = new SessionTreeScanner();
-  assert.equal(never.scanFile(missing, "tasks"), undefined);
-  assert.equal(never.stats.filesUnreadable, 0, "a path nothing ever saw hides nothing");
-});
-
-test("the scan marks the children it discovered, which is what makes the rule above bite", () => {
-  const root = tempRoot();
-  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
-  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2)] });
-
-  // The rule is pinned at the decision point above, because the race it guards cannot be
-  // staged. That leaves one thing a test still has to hold: that the scan actually says so
-  // where it matters. Without this, dropping the flag at the call site changes nothing that
-  // any assertion can see.
-  type ScanFile = SessionTreeScanner["scanFile"];
-  const marks: Array<{ kind: string; knownToExist?: boolean }> = [];
-  const watch = (scanner: SessionTreeScanner) => {
-    const original: ScanFile = scanner.scanFile.bind(scanner);
-    (scanner as { scanFile: ScanFile }).scanFile = (path, kind, fold) => {
-      marks.push({ kind, knownToExist: fold?.knownToExist });
-      return original(path, kind, fold);
-    };
-    return scanner;
-  };
-
-  watch(new SessionTreeScanner()).scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-  const children = marks.filter((mark) => mark.kind !== "own");
-  assert.ok(children.length > 0, "a discovered child was scanned");
-  assert.ok(
-    children.every((mark) => mark.knownToExist === true),
-    "every child came from a listing that just proved it exists",
-  );
-
-  // The parent's own file is named by the caller rather than discovered, so it is not
-  // marked: a session file that was never written is an absence like any other.
-  marks.length = 0;
-  watch(new SessionTreeScanner()).scanTree({ sessionFile: parent, sessionId: "p1" });
-  assert.deepEqual(
-    marks.filter((mark) => mark.kind === "own").map((mark) => mark.knownToExist),
-    [undefined],
-  );
 });
 
 test("corrupt entries in different sessions add up across the tree", () => {
@@ -709,56 +568,17 @@ test("blank lines and header lines are not mistaken for corruption", () => {
 
 test("a header-less or unreadable file yields no header rather than throwing", () => {
   const root = tempRoot();
+  // The three ways a candidate is not a session of this tree: readable and not a header, an
+  // unparseable first line, and nothing at that path at all. None of them is a failed read
+  // of a session's spend, so none of them marks a total.
   const notASession = join(root, "other.jsonl");
   writeFileSync(notASession, `${JSON.stringify({ type: "message", id: "x" })}\n`);
-  assert.equal(readSessionHeader(notASession).header, undefined);
-  assert.equal(readSessionHeader(join(root, "missing.jsonl")).header, undefined);
-
-  // An answer, versus no answer at all. Only the second can be hiding spend, and the line
-  // between them is whether the first line could be read and parsed — not whether it
-  // happened to be a header.
-  assert.equal(readSessionHeader(notASession).unreadable, undefined, "parsed, and says it is not a session");
-  assert.equal(readSessionHeader(join(root, "missing.jsonl")).unreadable, undefined, "an absent file holds nothing");
-
-  // A line that will not parse is what a torn write leaves behind, so it says nothing
-  // about whether this file belongs to the tree.
+  assert.equal(readSessionHeader(notASession), undefined);
   const torn = join(root, "torn.jsonl");
   writeFileSync(torn, '{"type":"sess\n');
-  assert.equal(readSessionHeader(torn).unreadable, true, "an unparseable first line is unknown, not unrelated");
-
-  // Nothing written is not the same as something unreadable. Pi opens a session file before
-  // writing its header, so an empty one is an ordinary sight and holds no spend.
-  const empty = join(root, "empty.jsonl");
-  writeFileSync(empty, "");
-  assert.equal(readSessionHeader(empty).unreadable, undefined, "an empty file hides nothing");
-  const blank = join(root, "blank.jsonl");
-  writeFileSync(blank, "\n");
-  assert.equal(readSessionHeader(blank).unreadable, undefined, "nor does one holding only a newline");
-
-  const locked = join(root, "locked.jsonl");
-  writeFileSync(locked, "{}\n");
-  chmodSync(locked, 0o000);
-  try {
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
-    assert.equal(readSessionHeader(locked).unreadable, true, "a file that exists but cannot be read is unknown");
-  } finally {
-    chmodSync(locked, 0o600);
-  }
+  assert.equal(readSessionHeader(torn), undefined);
+  assert.equal(readSessionHeader(join(root, "missing.jsonl")), undefined);
 });
-
-test("a sibling whose header was torn mid-write is disclosed rather than read as unrelated", () => {
-  const root = tempRoot();
-  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
-  // A fork of this session whose first line was cut short. Nothing here can say whether it
-  // belongs to the tree, and reading it as "not ours" would drop every turn it holds.
-  writeFileSync(join(root, "torn.jsonl"), `{"type":"sess\n${JSON.stringify(assistant(6))}\n`);
-  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-  assert.equal(tree.totalCost, 1);
-  assert.ok(tree.approximate, "an unanswerable sibling leaves the total a floor");
-  assert.equal(tree.unreadableSessions, 1);
-});
-
-// ── price fidelity (D2) ─────────────────────────────────────────────────────
 
 test("priority-tier turns are marked approximate when no multiplier is configured", () => {
   const acc = createAccumulator();
@@ -981,7 +801,7 @@ test("a child both routes reach is admitted exactly once", () => {
   // sidecar route (its location) and by the header route (its parent link).
   for (const [path, link] of [[byId, "p1"], [byPath, parent]] as const) {
     assert.ok(path.startsWith(deriveSidecarRoot(parent)), `${path} is under the sidecar root`);
-    assert.equal(readSessionHeader(path).header?.parentSession, link, `${path} also links to the parent by header`);
+    assert.equal(readSessionHeader(path)?.parentSession, link, `${path} also links to the parent by header`);
   }
 
   const scanner = new SessionTreeScanner();

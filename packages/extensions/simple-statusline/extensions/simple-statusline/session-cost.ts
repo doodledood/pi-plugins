@@ -17,11 +17,14 @@
 // is not failure — most sessions spawn nothing, and a sidecar directory that was never
 // created hides nothing.
 //
-// One case sits outside that claim on purpose. A file whose last line is incomplete is
+// Two cases sit outside that claim on purpose. A file whose last line is incomplete is
 // being appended to as far as any single read can tell, so the partial line is held for
-// the rest to arrive rather than counted as a gap. If the process writing it died there,
-// that entry's spend is missing and the total will not say so — the alternative marks
-// every session that is mid-turn.
+// the rest to arrive rather than counted as a gap; if the process writing it died there,
+// that entry's spend is missing and the total will not say so, and the alternative marks
+// every session that is mid-turn. And a file that vanishes between this scan's discovery
+// of it and its own read reports nothing, because absence is read the same way wherever it
+// appears — a narrow race whose cost is one scan of one session, against a rule that would
+// otherwise need a second notion of what absence means.
 //
 // Two additions Pi has no equivalent for:
 //   - `pi-cost-record` custom entries, for billed calls that produce no session.
@@ -48,23 +51,6 @@ import { StringDecoder } from "node:string_decoder";
 export function isAbsence(error: unknown): boolean {
   const code = errorCode(error);
   return code === "ENOENT" || code === "ENOTDIR";
-}
-
-/**
- * Does a failed read leave spend missing from the total?
- *
- * Absence normally answers no: a path that was never there was never holding anything, and
- * most sessions spawn nothing. It answers yes for a path this scan just discovered — that
- * one existed moments ago, and discovery is also what put its session into the suppression
- * set, so the parent's tool result restating its spend has already been dropped as a
- * duplicate of it. Forgiving that loses the same money from both sides at once and still
- * reads as exact.
- *
- * Asked wherever a read fails without prior proof of its own — the stat of a session file,
- * and a directory the walk was told to descend into. `knownToExist` is that proof.
- */
-export function readFailureIsGap(absent: boolean, knownToExist?: boolean): boolean {
-  return !absent || Boolean(knownToExist);
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -498,22 +484,10 @@ export interface SessionHeader {
   cwd?: string;
 }
 
-/**
- * Outcome of a header read. The two ways to have no header are worth keeping apart: a
- * file whose first line read and parsed and simply is not a session header belongs to
- * nobody, while a file whose first line could not be read or could not be parsed might
- * be a session of this tree — an unanswerable question rather than a negative answer.
- */
-export interface SessionHeaderRead {
-  header?: SessionHeader;
-  /** True when something is there but could not be read, leaving its membership unknown. */
-  unreadable?: boolean;
-}
-
 const HEADER_READ_BYTES = 16 * 1024;
 
 /** Read a session file's first line without loading the whole file. */
-export function readSessionHeader(path: string): SessionHeaderRead {
+export function readSessionHeader(path: string): SessionHeader | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
@@ -522,20 +496,11 @@ export function readSessionHeader(path: string): SessionHeaderRead {
     const text = buffer.subarray(0, read).toString("utf8");
     const newline = text.indexOf("\n");
     const line = newline >= 0 ? text.slice(0, newline) : text;
-    // Nothing written yet is the same as nothing there: an empty file holds no spend, and
-    // pi leaves one behind whenever it opens a session file before writing its header.
-    // Parsing "" would throw, and reading that as unknown would mark a total that is exact.
-    if (!line.trim()) return {};
     const parsed = JSON.parse(line);
-    if (parsed?.type !== "session") return {};
-    return { header: { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd } };
-  } catch (error) {
-    // Absence answers the question — nothing is there to belong to this tree. Nothing else
-    // does. A first line that will not parse is the shape a torn write leaves behind, and a
-    // header longer than the bytes read above is truncated rather than absent, so neither
-    // says the file is unrelated; treating them as an answer would drop a fork of this
-    // session on a bad byte.
-    return isAbsence(error) ? {} : { unreadable: true };
+    if (parsed?.type !== "session") return undefined;
+    return { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd };
+  } catch {
+    return undefined;
   } finally {
     if (fd != null) {
       try {
@@ -578,12 +543,10 @@ export function listSidecarSessionFiles(
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (error) {
-      // A directory that exists and cannot be listed hides every session below it. Absence
-      // is the ordinary case only at the top: most sessions spawn nothing, so their sidecar
-      // root was never created. Deeper down, this path came from a listing that had just
-      // shown it as a directory, so it was there moments ago — gone now means it took every
-      // session beneath it while this walk was running.
-      if (readFailureIsGap(isAbsence(error), depth > 0)) unreadableDirs += 1;
+      // A directory that was never created holds nothing — the ordinary case, since most
+      // sessions spawn nothing. One that exists and cannot be listed hides every session
+      // below it, which is spend this total will be missing.
+      if (!isAbsence(error)) unreadableDirs += 1;
       return;
     }
     for (const entry of entries) {
@@ -623,8 +586,7 @@ export interface ScanStats {
    * Parts of the tree this scan could not read: a file it could not open or stat, a
    * directory it could not list, a sibling it could not classify, or a walk that hit its
    * depth bound. In every case spend may be missing, which is what makes a total a floor.
-   * A path that never existed is not counted here — nothing is missing from nothing. One
-   * this scan discovered and then could not read is, since it was there a moment ago.
+   * A path that is not there is not counted here — nothing is missing from nothing.
    */
   filesUnreadable: number;
 }
@@ -635,12 +597,11 @@ export interface ScanStats {
  * Session files are append-only, so an unchanged file is never re-read and a grown
  * file is read only from its previous end.
  *
- * Nothing here throws on a bad read; what it does instead is the point. A path that was
- * never there holds nothing, so it costs the total nothing — but one this scan discovered
- * and then found gone does count, for the reason `scanFile` gives. Anything else that
- * cannot be read — a failed open or stat, a directory that will not list, a line that will
- * not parse — keeps whatever was already folded and is counted as a gap, so the total
- * reads as a floor with a reason rather than as an exact smaller number.
+ * Nothing here throws on a bad read; what it does instead is the point. A path that is not
+ * there holds nothing, so it costs the total nothing. Anything else that cannot be read — a
+ * failed open or stat, a directory that will not list, a line that will not parse — keeps
+ * whatever was already folded and is counted as a gap, so the total reads as a floor with a
+ * reason rather than as an exact smaller number.
  */
 export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
@@ -677,25 +638,21 @@ export class SessionTreeScanner {
    * first folded — a fork's copied history is fixed when the fork is created — so a
    * cached file needs no re-evaluation when they grow.
    */
-  scanFile(
-    path: string,
-    kind: string,
-    fold: Omit<FoldOptions, keyof PriceOptions> & { knownToExist?: boolean } = {},
-  ): SessionCost | undefined {
+  scanFile(path: string, kind: string, fold: Omit<FoldOptions, keyof PriceOptions> = {}): SessionCost | undefined {
     let stat: import("node:fs").Stats;
     try {
       stat = statSync(path);
     } catch (error) {
-      // Asked before anything else, because the answer does not depend on whether this file
-      // had been read before.
-      if (readFailureIsGap(isAbsence(error), fold.knownToExist)) this.lastStats.filesUnreadable += 1;
+      // Classified before anything else, so the gap does not depend on whether this file had
+      // been read before: a path that is gone hides nothing further, while any other failure
+      // means a discovered session may be holding spend out of sight.
+      if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
       const counted = this.files.get(path);
       if (!counted) return undefined; // never read, so there is no folded total to keep
       // Spend already folded here has been counted and shown, so it stands rather than
       // quietly lowering a total the user has seen — the same choice the failed read below
-      // makes. Reached when a discovered file stops being readable, and for the one scan
-      // that catches a deletion mid-pass; by the next scan a deleted file is no longer
-      // discovered, and then it is no longer part of the tree at all.
+      // makes. A file deleted outright stops being discovered on the next scan, and then it
+      // is no longer part of the tree at all.
       return summarize(counted.acc, { id: counted.header?.id, path, kind });
     }
     const cached = this.files.get(path);
@@ -709,10 +666,9 @@ export class SessionTreeScanner {
 
     const chunk = this.readRange(path, entry.offset, stat.size, entry.decoder);
     if (chunk == null) {
-      // Always a gap, and this is the one read that needs no provenance to say so: the stat
-      // just above succeeded, so this file existed moments ago whatever the caller knew
-      // about it. Whatever was already folded is kept, so a total missing the rest of this
-      // file's spend is not presented as exact.
+      // The stat just above succeeded, so this file is there and could not be read — a gap
+      // whatever the errno. Whatever was already folded is kept, so a total missing the rest
+      // of this file's spend is not presented as exact.
       this.lastStats.filesUnreadable += 1;
       return summarize(entry.acc, { id: entry.header?.id, path, kind });
     }
@@ -831,14 +787,10 @@ export class SessionTreeScanner {
   ): Array<{ path: string; real: string; kind: string; header?: SessionHeader }> {
     if (!rootFile) return [];
     const byPath = new Map<string, { path: string; real: string; kind: string; header?: SessionHeader }>();
-    const add = (path: string, kind: string): SessionHeaderRead => {
+    const add = (path: string, kind: string) => {
       const real = resolveRealPath(path);
-      if (skip.has(real)) return {};
-      const existing = byPath.get(real);
-      if (existing) return { header: existing.header };
-      const read = this.cachedHeader(path);
-      byPath.set(real, { path, real, kind, header: read.header });
-      return read;
+      if (skip.has(real) || byPath.has(real)) return;
+      byPath.set(real, { path, real, kind, header: this.cachedHeader(path) });
     };
     const sidecar = listSidecarSessionFiles(deriveSidecarRoot(rootFile), this.maxSidecarDepth);
     if (sidecar.truncated) this.lastStats.filesUnreadable += 1;
@@ -846,34 +798,27 @@ export class SessionTreeScanner {
     for (const file of sidecar.files) add(file.path, file.kind);
     try {
       for (const name of readdirSync(dirname(rootFile))) {
-        if (!name.endsWith(".jsonl")) continue;
-        // A sibling belongs to this tree only if its header says so. When its first line
-        // cannot be read or cannot be parsed, that question has no answer, and a fork of
-        // this session would drop out of the total unnoticed — so the ambiguity is disclosed
-        // rather than resolved as "unrelated". A sidecar file needs no such care: it is
-        // admitted by where it sits, and its own read failure is reported when it is scanned.
-        if (add(join(dirname(rootFile), name), "forks").unreadable) this.lastStats.filesUnreadable += 1;
+        if (name.endsWith(".jsonl")) add(join(dirname(rootFile), name), "forks");
       }
-    } catch {
-      // This directory holds the parent session file itself, so it existed; every failure
-      // here is a real one, absence included — a directory that has gone missing under a
-      // live session took every fork of it along. Sidecar candidates still stand, but the
-      // forks are now unaccounted for.
-      this.lastStats.filesUnreadable += 1;
+    } catch (error) {
+      // This directory holds the parent session file itself, so a real failure here means
+      // every fork of this session went unlooked-for. Sidecar candidates still stand, but
+      // the forks are now unaccounted for, so the gap is reported rather than swallowed.
+      if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
     }
     return [...byPath.values()];
   }
 
-  private cachedHeader(path: string): SessionHeaderRead {
+  private cachedHeader(path: string): SessionHeader | undefined {
     const cached = this.files.get(path);
-    if (cached?.header) return { header: cached.header };
-    const read = readSessionHeader(path);
-    if (read.header) {
+    if (cached?.header) return cached.header;
+    const header = readSessionHeader(path);
+    if (header) {
       const entry = cached ?? this.freshFileCache();
-      entry.header = read.header;
+      entry.header = header;
       this.files.set(path, entry);
     }
-    return read;
+    return header;
   }
 
   /**
@@ -893,14 +838,7 @@ export class SessionTreeScanner {
   scanTree(args: { ownEntries?: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
     this.lastStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
-    const rootRead = args.sessionFile ? this.cachedHeader(args.sessionFile) : undefined;
-    const rootId = args.sessionId ?? rootRead?.header?.id;
-    // An unreadable root header costs the tree every fork that links back by session id —
-    // but only when the id was not handed in, since that is the only thing the header was
-    // needed for here. Counted only when the parent's entries come from memory too, because
-    // otherwise this same file is scanned below and reports the failure there. Anything else
-    // would mark a total that is missing nothing.
-    if (rootRead?.unreadable && args.ownEntries && !args.sessionId) this.lastStats.filesUnreadable += 1;
+    const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile)?.id : undefined);
     const found = this.discover(args.sessionFile, rootId);
     const countedSessions = new Set<string>();
     for (const child of found) {
@@ -921,7 +859,7 @@ export class SessionTreeScanner {
     const excludeKeys = new Set<string>(own.countedKeys);
     const descendants: SessionCost[] = [];
     for (const child of found) {
-      const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys, knownToExist: true });
+      const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
       if (!cost) continue;
       descendants.push(cost);
       for (const key of cost.countedKeys) excludeKeys.add(key);
