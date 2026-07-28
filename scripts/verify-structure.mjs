@@ -4,8 +4,8 @@ import { validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const root = process.cwd();
 const errors = [];
-const expectedExtensions = ["advisor-consult", "btw", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "panel", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
-const directoryEntryExtensions = new Set(["advisor-consult", "btw", "goal-controller", "mcp-tool-loadout", "model-aliases", "openai-tts", "panel"]);
+const expectedExtensions = ["advisor-consult", "btw", "cache-optimization", "goal-controller", "hq", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "managed-chrome-devtools", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "panel", "simple-statusline", "skill-argument-hints", "tool-activity-renderer"];
+const directoryEntryExtensions = new Set(["advisor-consult", "btw", "goal-controller", "hq", "mcp-tool-loadout", "model-aliases", "openai-tts", "panel"]);
 const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi"];

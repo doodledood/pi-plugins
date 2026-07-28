@@ -1,0 +1,299 @@
+/**
+ * Doctrine: the user's rules, as plain files.
+ *
+ * Global rules live in doctrine/global.md and project rules in
+ * doctrine/projects/<slug>.md, with the project file taking precedence where
+ * both speak. Rules enter one of two ways only: the user edits the file, or the
+ * user ratifies a proposal. No inference from watching, ever (AC-4.3).
+ *
+ * The Meta section of the global file is HQ's own configuration — batching,
+ * graduation thresholds, audit rate — so the numbers that govern HQ are as
+ * reviewable as the rules that govern the work.
+ */
+
+import { readFile } from "node:fs/promises";
+import { atomicWriteText, materializeIfAbsent, type ErrorReporter, silentReporter } from "./io.ts";
+import { hqPaths, projectDoctrinePath, projectSlug } from "./paths.ts";
+import { DOCTRINE_GLOBAL_SEED, DOCTRINE_PROJECT_SEED } from "./templates.ts";
+
+export interface DoctrineRule {
+  /** Citable location, e.g. "global.md § Doors L14". */
+  citation: string;
+  section: string;
+  text: string;
+  scope: "global" | "project";
+}
+
+export interface MetaDoctrine {
+  batchMax: number;
+  batchRequiresSameProject: boolean;
+  batchTrivialOnly: boolean;
+  graduationConsecutiveAgreements: number;
+  graduationMinDays: number;
+  auditSampleRate: number;
+  stalenessMinutes: number;
+}
+
+export const META_DEFAULTS: MetaDoctrine = {
+  batchMax: 4,
+  batchRequiresSameProject: true,
+  batchTrivialOnly: true,
+  graduationConsecutiveAgreements: 10,
+  graduationMinDays: 14,
+  auditSampleRate: 0.2,
+  stalenessMinutes: 30,
+};
+
+export interface Doctrine {
+  globalText: string;
+  projectText: string | undefined;
+  rules: DoctrineRule[];
+  meta: MetaDoctrine;
+}
+
+/** Creates the global file if absent. Never touches an existing file. */
+export async function seedDoctrine(root: string): Promise<{ created: boolean }> {
+  const created = await materializeIfAbsent(hqPaths(root).doctrineGlobal, DOCTRINE_GLOBAL_SEED);
+  return { created };
+}
+
+export async function seedProjectDoctrine(
+  root: string,
+  project: string,
+): Promise<{ created: boolean }> {
+  const created = await materializeIfAbsent(
+    projectDoctrinePath(root, project),
+    DOCTRINE_PROJECT_SEED(project),
+  );
+  return { created };
+}
+
+async function readIfPresent(path: string, onError: ErrorReporter): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      onError(`Unable to read doctrine ${path}`, error);
+    }
+    return undefined;
+  }
+}
+
+/** Parses `- rule text` bullets under `## Section` headings. */
+export function parseRules(
+  text: string,
+  fileLabel: string,
+  scope: "global" | "project",
+): DoctrineRule[] {
+  const rules: DoctrineRule[] = [];
+  let section = "(preamble)";
+  const lines = text.split("\n");
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const heading = /^##\s+(.*\S)\s*$/.exec(line);
+    if (heading?.[1]) {
+      section = heading[1];
+      continue;
+    }
+    const bullet = /^\s*[-*]\s+(.*\S)\s*$/.exec(line);
+    if (!bullet?.[1]) continue;
+    if (section === "Meta") continue;
+
+    // Fold continuation lines so a wrapped rule reads as one rule.
+    let body = bullet[1];
+    let lookahead = index + 1;
+    while (lookahead < lines.length) {
+      const next = lines[lookahead] ?? "";
+      if (/^\s+\S/.test(next) && !/^\s*[-*]\s/.test(next)) {
+        body += ` ${next.trim()}`;
+        lookahead += 1;
+        index = lookahead - 1;
+        continue;
+      }
+      break;
+    }
+
+    rules.push({
+      citation: `${fileLabel} § ${section} L${index + 1}`,
+      section,
+      text: body,
+      scope,
+    });
+  }
+  return rules;
+}
+
+function parseMetaValue(raw: string): string {
+  return raw.trim().replace(/\.$/, "");
+}
+
+export function parseMeta(text: string): MetaDoctrine {
+  const meta = { ...META_DEFAULTS };
+  const metaSection = /^##\s+Meta\s*$/m.exec(text);
+  if (!metaSection || metaSection.index === undefined) return meta;
+
+  const rest = text.slice(metaSection.index);
+  const end = /\n##\s+/.exec(rest.slice(1));
+  const body = end?.index !== undefined ? rest.slice(0, end.index + 1) : rest;
+
+  const numeric = (key: string, current: number, min: number, max: number): number => {
+    const match = new RegExp(`^\\s*[-*]\\s+${key}\\s*:\\s*(.+)$`, "m").exec(body);
+    if (!match?.[1]) return current;
+    const value = Number(parseMetaValue(match[1]));
+    if (!Number.isFinite(value) || value < min || value > max) return current;
+    return value;
+  };
+  const boolean = (key: string, current: boolean): boolean => {
+    const match = new RegExp(`^\\s*[-*]\\s+${key}\\s*:\\s*(.+)$`, "m").exec(body);
+    if (!match?.[1]) return current;
+    const value = parseMetaValue(match[1]).toLowerCase();
+    if (value === "true" || value === "yes") return true;
+    if (value === "false" || value === "no") return false;
+    return current;
+  };
+
+  meta.batchMax = numeric("batch-max", meta.batchMax, 1, 20);
+  meta.batchRequiresSameProject = boolean(
+    "batch-requires-same-project",
+    meta.batchRequiresSameProject,
+  );
+  meta.batchTrivialOnly = boolean("batch-trivial-only", meta.batchTrivialOnly);
+  meta.graduationConsecutiveAgreements = numeric(
+    "graduation-consecutive-agreements",
+    meta.graduationConsecutiveAgreements,
+    1,
+    1000,
+  );
+  meta.graduationMinDays = numeric("graduation-min-days", meta.graduationMinDays, 0, 3650);
+  meta.auditSampleRate = numeric("audit-sample-rate", meta.auditSampleRate, 0, 1);
+  meta.stalenessMinutes = numeric("staleness-minutes", meta.stalenessMinutes, 1, 10080);
+  return meta;
+}
+
+/**
+ * Loads the doctrine that applies to a project: global rules plus project rules,
+ * with project rules last so a later rule in the same section reads as the
+ * governing one.
+ */
+export async function loadDoctrine(
+  root: string,
+  project: string | undefined,
+  onError: ErrorReporter = silentReporter,
+): Promise<Doctrine> {
+  const paths = hqPaths(root);
+  const globalText = (await readIfPresent(paths.doctrineGlobal, onError)) ?? "";
+  const projectText = project
+    ? await readIfPresent(projectDoctrinePath(root, project), onError)
+    : undefined;
+
+  const rules = [
+    ...parseRules(globalText, "global.md", "global"),
+    ...(projectText && project
+      ? parseRules(projectText, `projects/${projectSlug(project)}.md`, "project")
+      : []),
+  ];
+
+  return { globalText, projectText, rules, meta: parseMeta(globalText) };
+}
+
+/** Renders doctrine for a prompt: citable, compact, in precedence order. */
+export function renderDoctrine(doctrine: Doctrine): string {
+  if (doctrine.rules.length === 0) return "(no doctrine yet)";
+  return doctrine.rules
+    .map((rule) => `- [${rule.citation}] ${rule.text}`)
+    .join("\n");
+}
+
+export type ProposalKind = "new-rule" | "amendment";
+
+export interface RatificationRequest {
+  root: string;
+  scope: "global" | "project";
+  project?: string;
+  section: string;
+  ruleText: string;
+  /** For an amendment: the existing rule text being replaced. */
+  replaces?: string;
+}
+
+/**
+ * Applies a ratified rule. This is the only write path into a doctrine file, and
+ * it is reachable only from a user ruling that ratified a proposal.
+ */
+export async function applyRatifiedRule(
+  request: RatificationRequest,
+): Promise<{ applied: boolean; reason?: string }> {
+  const path = request.scope === "global"
+    ? hqPaths(request.root).doctrineGlobal
+    : projectDoctrinePath(request.root, request.project ?? "");
+  if (request.scope === "project" && !request.project) {
+    return { applied: false, reason: "project scope requires a project path" };
+  }
+  if (request.scope === "project") {
+    await seedProjectDoctrine(request.root, request.project ?? "");
+  } else {
+    await seedDoctrine(request.root);
+  }
+
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return { applied: false, reason: `doctrine file missing: ${path}` };
+  }
+
+  if (request.replaces) {
+    if (!text.includes(request.replaces)) {
+      return { applied: false, reason: "the rule being amended is no longer present verbatim" };
+    }
+    await atomicWriteText(path, text.replace(request.replaces, request.ruleText));
+    return { applied: true };
+  }
+
+  const updated = insertUnderSection(text, request.section, `- ${request.ruleText}`);
+  await atomicWriteText(path, updated);
+  return { applied: true };
+}
+
+/** Appends a bullet at the end of a section, creating the section if needed. */
+export function insertUnderSection(text: string, section: string, bullet: string): string {
+  const lines = text.split("\n");
+  const headingIndex = lines.findIndex(
+    (line) => new RegExp(`^##\\s+${escapeRegExp(section)}\\s*$`).test(line),
+  );
+  if (headingIndex === -1) {
+    const trailing = text.endsWith("\n") ? "" : "\n";
+    return `${text}${trailing}\n## ${section}\n\n${bullet}\n`;
+  }
+
+  let insertAt = lines.length;
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index] ?? "")) {
+      insertAt = index;
+      break;
+    }
+  }
+  let cursor = insertAt;
+  while (cursor > headingIndex + 1 && (lines[cursor - 1] ?? "").trim() === "") cursor -= 1;
+  lines.splice(cursor, 0, bullet);
+  return lines.join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Which coverage bucket a ruling fell into. Buckets are decided from what the
+ * shadow ruling cited and whether the user agreed with it, not from guessing at
+ * novelty: cited-and-agreed is evidence, cited-and-overruled is a contradiction
+ * to resolve, and uncited is a gap.
+ */
+export function coverageFor(input: {
+  citations: string[];
+  shadowAgreed: boolean | null;
+}): "covered-agreed" | "contradicts" | "uncovered" {
+  if (input.citations.length === 0) return "uncovered";
+  return input.shadowAgreed === false ? "contradicts" : "covered-agreed";
+}

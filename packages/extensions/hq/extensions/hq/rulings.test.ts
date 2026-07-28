@@ -1,0 +1,360 @@
+import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import test from "node:test";
+import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
+import { hqPaths, projectDoctrinePath } from "./paths.ts";
+import { applyRuling, chosenOptionId, gradeShadow, recordDive } from "./rulings.ts";
+import { HqStore } from "./store.ts";
+import {
+  dropRoot,
+  fixedClock,
+  makeRoot,
+  makeStore,
+  packetDraftFixture,
+  recordingSpawner,
+} from "./testing.ts";
+import type { SpawnRequest, Spawner } from "./spawn.ts";
+import type { Packet } from "./types.ts";
+
+interface Harness {
+  root: string;
+  store: HqStore;
+  spawner: Spawner;
+  calls: SpawnRequest[];
+  now: () => Date;
+}
+
+async function harness(label: string): Promise<Harness> {
+  const root = await makeRoot(label);
+  const now = fixedClock();
+  const store = makeStore(root, now);
+  await store.ensure();
+  await seedDoctrine(root);
+  await seedProjectDoctrine(root, "/work/alpha");
+  const { spawner, calls } = recordingSpawner();
+  return { root, store, spawner, calls, now };
+}
+
+async function queuePacket(h: Harness, overrides: Partial<Packet> = {}): Promise<Packet> {
+  const { packet } = await h.store.createPacket({
+    ...packetDraftFixture(),
+    ...overrides,
+  } as never);
+  return packet;
+}
+
+test("choosing and grading read the packet, not the phrasing", () => {
+  const packet: Packet = {
+    ...packetDraftFixture(),
+    version: 1,
+    id: "pkt-1",
+    createdAt: "2026-07-28T12:00:00.000Z",
+    updatedAt: "2026-07-28T12:00:00.000Z",
+    generation: 1,
+    status: "pending",
+  };
+  assert.equal(chosenOptionId(packet, { packetId: "pkt-1", form: "accept" }), "retry");
+  assert.equal(
+    chosenOptionId(packet, { packetId: "pkt-1", form: "alternative", optionId: "investigate" }),
+    "investigate",
+  );
+  assert.equal(chosenOptionId(packet, { packetId: "pkt-1", form: "custom", text: "do neither" }), null);
+
+  assert.equal(gradeShadow(packet, { packetId: "pkt-1", form: "accept" }), true);
+  assert.equal(
+    gradeShadow(packet, { packetId: "pkt-1", form: "alternative", optionId: "investigate" }),
+    false,
+  );
+  assert.equal(gradeShadow(packet, { packetId: "pkt-1", form: "custom", text: "neither" }), false);
+  assert.equal(gradeShadow(packet, { packetId: "pkt-1", form: "defer", question: "why?" }), null);
+  assert.equal(
+    gradeShadow({ ...packet, shadowRuling: null }, { packetId: "pkt-1", form: "accept" }),
+    null,
+  );
+});
+
+test("accepting the recommendation records the ruling and resumes the waiting session", async () => {
+  const h = await harness("hq-rule-accept");
+  try {
+    const packet = await queuePacket(h);
+    const result = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "accept" },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+
+    assert.equal(result.ruling.form, "accept");
+    assert.equal(result.ruling.optionId, "retry");
+    assert.equal(result.ruling.shadowAgreed, true);
+    assert.equal(result.ruling.routing.action, "resume");
+
+    const rulings = await h.store.listRulings();
+    assert.equal(rulings.length, 1);
+    assert.equal(rulings[0]?.packetGeneration, packet.generation);
+
+    // The packet leaves the queue but stays readable for audit. (The doctrine
+    // proposal this ruling produced is a new packet, so the queue is not empty.)
+    const presentable = (await h.store.listPresentable()).map((p) => p.id);
+    assert.equal(presentable.includes(packet.id), false);
+    assert.equal((await h.store.readPacket(packet.id))?.status, "ruled");
+
+    const continuation = h.calls.filter((call) => call.kind === "continuation");
+    assert.equal(continuation.length, 1);
+    assert.equal(continuation[0]?.resumeSessionFile, packet.sourceSessionFile);
+    assert.match(continuation[0]?.prompt ?? "", /Retry the suite/);
+    assert.equal(continuation[0]?.packetId, packet.id);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("an uncovered ruling proposes a rule; a covered, agreed one proposes nothing", async () => {
+  const h = await harness("hq-rule-coverage");
+  try {
+    const uncovered = await queuePacket(h);
+    const first = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: uncovered.id, form: "accept" },
+    );
+    assert.equal("error" in first, false);
+    if ("error" in first) return;
+    assert.equal(first.ruling.coverage, "uncovered");
+    assert.equal(first.proposals.length, 1);
+    assert.equal(first.proposals[0]?.proposal?.kind, "new-rule");
+
+    const doctrine = await loadDoctrine(h.root, "/work/alpha");
+    const covered = await queuePacket(h, {
+      doctrineCitations: [doctrine.rules[0]?.citation ?? ""],
+    });
+    const second = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: covered.id, form: "accept" },
+    );
+    assert.equal("error" in second, false);
+    if ("error" in second) return;
+    assert.equal(second.ruling.coverage, "covered-agreed");
+    assert.deepEqual(second.proposals, []);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("overruling a cited rule proposes an amendment and leaves the rule alone until ratified", async () => {
+  const h = await harness("hq-rule-contradicts");
+  try {
+    const doctrine = await loadDoctrine(h.root, "/work/alpha");
+    const citation = doctrine.rules[0]?.citation ?? "";
+    const before = await readFile(hqPaths(h.root).doctrineGlobal, "utf8");
+
+    const packet = await queuePacket(h, { doctrineCitations: [citation] });
+    const result = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "alternative", optionId: "investigate" },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+
+    assert.equal(result.ruling.shadowAgreed, false);
+    assert.equal(result.ruling.coverage, "contradicts");
+    assert.equal(result.proposals[0]?.proposal?.kind, "amendment");
+    assert.equal(
+      await readFile(hqPaths(h.root).doctrineGlobal, "utf8"),
+      before,
+      "doctrine is untouched until the amendment is ratified",
+    );
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("ratifying a proposal writes the rule; rejecting leaves doctrine byte-identical", async () => {
+  const h = await harness("hq-rule-ratify");
+  try {
+    const packet = await queuePacket(h);
+    const first = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "accept" },
+    );
+    assert.equal("error" in first, false);
+    if ("error" in first) return;
+    const proposal = first.proposals[0];
+    assert.ok(proposal);
+
+    const projectPath = projectDoctrinePath(h.root, "/work/alpha");
+    const beforeReject = await readFile(projectPath, "utf8");
+    const rejected = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: proposal.id, form: "alternative", optionId: "reject" },
+    );
+    assert.equal("error" in rejected, false);
+    if ("error" in rejected) return;
+    assert.equal(rejected.doctrineApplied, false);
+    assert.equal(await readFile(projectPath, "utf8"), beforeReject);
+
+    // A second proposal, ratified this time.
+    const another = await queuePacket(h);
+    const second = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: another.id, form: "accept" },
+    );
+    assert.equal("error" in second, false);
+    if ("error" in second) return;
+    const ratifiable = second.proposals[0];
+    assert.ok(ratifiable);
+    const ratified = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: ratifiable.id, form: "accept" },
+    );
+    assert.equal("error" in ratified, false);
+    if ("error" in ratified) return;
+    assert.equal(ratified.doctrineApplied, true);
+    assert.match(await readFile(projectPath, "utf8"), /ci-flake/);
+
+    // Ratifying doctrine never routes work anywhere.
+    assert.equal(ratified.ruling.routing.action, "none");
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a deferral drills and leaves the packet in the queue", async () => {
+  const h = await harness("hq-rule-defer");
+  try {
+    const packet = await queuePacket(h);
+    const drilled: string[] = [];
+    const result = await applyRuling(
+      {
+        store: h.store,
+        spawner: h.spawner,
+        now: h.now,
+        startDrill: async (target, question) => {
+          drilled.push(`${target.id}:${question}`);
+          return { spawnedSessionId: "drill-1" };
+        },
+      },
+      { packetId: packet.id, form: "defer", question: "what did the log actually say?" },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+
+    assert.deepEqual(drilled, [`${packet.id}:what did the log actually say?`]);
+    assert.equal(result.ruling.routing.action, "drill");
+    assert.equal(result.ruling.shadowAgreed, null, "a deferral is not a decision to grade");
+    assert.equal((await h.store.readPacket(packet.id))?.status, "drilling");
+    assert.deepEqual(await h.store.listPresentable(), [], "it is not presentable while drilling");
+    assert.equal(h.calls.filter((call) => call.kind === "continuation").length, 0);
+
+    const rulings = await h.store.listRulings();
+    assert.equal(rulings.length, 1);
+    assert.equal(rulings[0]?.question, "what did the log actually say?");
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a ruling in one's own words is recorded and carried as written", async () => {
+  const h = await harness("hq-rule-custom");
+  try {
+    const packet = await queuePacket(h);
+    const result = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      {
+        packetId: packet.id,
+        form: "custom",
+        text: "Skip the suite for now and open an issue for the flake.",
+      },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+    assert.equal(result.ruling.optionId, null);
+    assert.match(result.ruling.text, /open an issue/);
+    const continuation = h.calls.find((call) => call.kind === "continuation");
+    assert.match(continuation?.prompt ?? "", /open an issue/);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("nonsense rulings are refused rather than half-applied", async () => {
+  const h = await harness("hq-rule-refuse");
+  try {
+    const packet = await queuePacket(h);
+    const deps = { store: h.store, spawner: h.spawner, now: h.now };
+
+    assert.deepEqual(
+      await applyRuling(deps, { packetId: "nope", form: "accept" }),
+      { error: "no such packet: nope" },
+    );
+    assert.equal(
+      "error" in (await applyRuling(deps, {
+        packetId: packet.id,
+        form: "alternative",
+        optionId: "invented",
+      })),
+      true,
+    );
+    assert.equal("error" in (await applyRuling(deps, { packetId: packet.id, form: "defer" })), true);
+
+    await applyRuling(deps, { packetId: packet.id, form: "accept" });
+    assert.equal("error" in (await applyRuling(deps, { packetId: packet.id, form: "accept" })), true);
+    assert.equal((await h.store.listRulings()).length, 1, "a refused ruling records nothing");
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a graduation proposal is queued at the threshold and ruling on it grants nothing", async () => {
+  const h = await harness("hq-rule-graduation");
+  try {
+    // Retune the thresholds the way the user would: by editing the file.
+    const path = hqPaths(h.root).doctrineGlobal;
+    const text = await readFile(path, "utf8");
+    await writeFile(
+      path,
+      text
+        .replace("- graduation-consecutive-agreements: 10", "- graduation-consecutive-agreements: 2")
+        .replace("- graduation-min-days: 14", "- graduation-min-days: 0"),
+      "utf8",
+    );
+
+    const deps = { store: h.store, spawner: h.spawner, now: h.now };
+    const first = await queuePacket(h);
+    await applyRuling(deps, { packetId: first.id, form: "accept" });
+    const second = await queuePacket(h);
+    const result = await applyRuling(deps, { packetId: second.id, form: "accept" });
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+
+    const graduation = result.proposals.find((p) => p.proposal?.kind === "graduation");
+    assert.ok(graduation, "the streak earns a proposal");
+    assert.equal(await h.store.isGraduated("ci-flake"), false);
+
+    await applyRuling(deps, { packetId: graduation.id, form: "accept" });
+    assert.equal(
+      await h.store.isGraduated("ci-flake"),
+      false,
+      "acknowledging the proposal is not the command that grants it",
+    );
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a dive is recorded as a packet-format defect", async () => {
+  const h = await harness("hq-rule-defect");
+  try {
+    await recordDive(h.store, {
+      packetId: "pkt-1",
+      missing: "which test failed",
+      ruling: "investigate",
+      at: "2026-07-28T12:30:00.000Z",
+    });
+    const defects = await h.store.readDefects();
+    assert.equal(defects.length, 1);
+    assert.equal(defects[0]?.packetId, "pkt-1");
+    assert.equal(defects[0]?.missing, "which test failed");
+  } finally {
+    await dropRoot(h.root);
+  }
+});

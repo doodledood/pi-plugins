@@ -1,0 +1,59 @@
+{
+  "name": "@doodledood/pi-hq",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi HQ: supervise delegated Pi sessions as one ordered decision queue — headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you can rule on without opening the session.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "supervision",
+    "queue",
+    "delegation"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/hq/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/hq/*.test.ts",
+    "test:e2e": "tsx extensions/hq/e2e.ts",
+    "setup": "tsx extensions/hq/install.ts",
+    "setup:uninstall": "tsx extensions/hq/install.ts --uninstall",
+    "verify": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typebox": "*",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/hq"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/hq#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

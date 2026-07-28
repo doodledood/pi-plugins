@@ -270,6 +270,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-sol` at `xhigh` while the extension default remains `inherit`.
+- `hq` — `/hq` decision-queue supervision of delegated sessions: headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you rule on without opening the session; `/fleet` shows the board.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.

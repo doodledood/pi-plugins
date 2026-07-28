@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.28.3",
+  "version": "0.29.0",
   "private": true,
   "type": "module",
   "description": "Aviram's portable Pi setup, extensions, and theme.",
@@ -18,6 +18,7 @@
       "./packages/extensions/advisor-consult/extensions/advisor-consult/index.ts",
       "./packages/extensions/btw/index.ts",
       "./packages/extensions/goal-controller/extensions/goal-controller/index.ts",
+      "./packages/extensions/hq/extensions/hq/index.ts",
       "./packages/extensions/mcp-tool-loadout/extensions/mcp-tool-loadout/index.ts",
       "./packages/extensions/context-breakdown/extensions/context-breakdown.ts",
       "./packages/extensions/gpt-fast-toggle/extensions/gpt-fast-toggle.ts",
@@ -37,9 +38,9 @@
     ]
   },
   "scripts": {
-    "test": "npm run test:mouse-overlays && npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-gpt-fast-toggle && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-panel && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "test": "npm run test:mouse-overlays && npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-gpt-fast-toggle && npm run test --workspace @doodledood/pi-hq && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-panel && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer",
     "test:mouse-overlays": "tsx --test scripts/mouse-overlay-integration.test.ts",
-    "typecheck": "npm run typecheck --workspace @doodledood/pi-advisor-consult && npm run typecheck --workspace @doodledood/pi-btw && npm run typecheck --workspace @doodledood/pi-cache-optimization && npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-gpt-fast-toggle && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-openai-max-output-floor && npm run typecheck --workspace @doodledood/pi-openai-tts && npm run typecheck --workspace @doodledood/pi-panel && npm run typecheck --workspace @doodledood/pi-simple-statusline && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
+    "typecheck": "npm run typecheck --workspace @doodledood/pi-advisor-consult && npm run typecheck --workspace @doodledood/pi-btw && npm run typecheck --workspace @doodledood/pi-cache-optimization && npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-gpt-fast-toggle && npm run typecheck --workspace @doodledood/pi-hq && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-openai-max-output-floor && npm run typecheck --workspace @doodledood/pi-openai-tts && npm run typecheck --workspace @doodledood/pi-panel && npm run typecheck --workspace @doodledood/pi-simple-statusline && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
     "verify:structure": "node --test scripts/*.test.mjs && node scripts/verify-structure.mjs",
     "verify": "npm run verify:structure && npm run typecheck && npm test"
   },

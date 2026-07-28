@@ -71,6 +71,7 @@ The examples track the `@main` branch so `pi update --extensions` always reconci
 git clone git@github.com:doodledood/pi-plugins.git
 pi install /path/to/pi-plugins/packages/extensions/btw
 pi install /path/to/pi-plugins/packages/extensions/goal-controller
+pi install /path/to/pi-plugins/packages/extensions/hq
 pi install /path/to/pi-plugins/packages/extensions/panel
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
 ```
