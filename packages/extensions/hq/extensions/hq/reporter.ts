@@ -98,6 +98,7 @@ export class SessionReporter {
       startedAt: this.startedAt ?? at,
       lastEventAt: at,
       drillingPacketId: null,
+      preDrillState: null,
       originSessionId: this.env[ORIGIN_ENV] ?? null,
       packetId: this.env[PACKET_ENV] ?? null,
     };
@@ -116,14 +117,33 @@ export class SessionReporter {
 
   private async publish(fleetState: FleetState, stopState: StopState): Promise<void> {
     if (this.closed) return;
-    // Titler runs are noise on the board; they exist for a few seconds.
-    if (this.kind === "titler") return;
+    // Internal workers are plumbing, not work: they would fill the board with
+    // rows for triage and drill processes that live for seconds.
+    if (this.internal) return;
+
     const next = this.state(fleetState, stopState);
     const previous = await this.store.readSessionState(this.sessionId);
-    const preserved: SessionState = previous
-      ? { ...next, drillingPacketId: previous.drillingPacketId }
-      : next;
-    await this.store.publishSessionState(preserved);
+    if (!previous) {
+      await this.store.publishSessionState(next);
+      return;
+    }
+    // Other processes own fields on this row — the titler owns the title, a drill
+    // owns the drilling marker — so publish only what this session knows.
+    this.title = previous.title ?? this.title;
+    await this.store.patchSessionState(this.sessionId, {
+      sessionFile: next.sessionFile,
+      pid: next.pid,
+      runtimeId: next.runtimeId,
+      role: next.role,
+      kind: next.kind,
+      project: next.project,
+      state: next.state,
+      stopState: next.stopState,
+      preview: next.preview,
+      lastEventAt: next.lastEventAt,
+      originSessionId: next.originSessionId,
+      packetId: next.packetId,
+    });
   }
 
   async onAgentStart(): Promise<void> {

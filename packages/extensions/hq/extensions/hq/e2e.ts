@@ -75,6 +75,17 @@ async function waitFor<T>(
   return undefined;
 }
 
+/** Every pi session file the children have written into the temp session dir. */
+async function sessionFiles(world: World): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const dir = join(world.root, "sessions");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  return names
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()
+    .map((name) => join(dir, name));
+}
+
 /** Reads a file once it has stopped changing, so a snapshot is not a race. */
 async function stableSnapshot(path: string, quietMs = 4_000): Promise<string> {
   let previous = "";
@@ -285,12 +296,20 @@ async function runDrill(world: World, packet: Packet | undefined): Promise<void>
     return `${annotated.id} pending again`;
   });
   await check("the drill ran in its own session, not the source one", async () => {
-    const fleet = await world.store.listFleet();
-    const drill = fleet.find((entry) => entry.kind === "drill");
-    assert.ok(drill, "a drill session published itself");
-    assert.notEqual(drill?.sessionId, packet.sourceSessionId);
-    assert.notEqual(drill?.sessionFile, packet.sourceSessionFile);
-    return `${drill?.sessionId} (source ${packet.sourceSessionId})`;
+    // Internal workers are plumbing and publish no fleet row, so the evidence is
+    // the session file the drill child wrote: a new one, not the source's.
+    const drillFile = await waitFor("the drill wrote its own session file", async () => {
+      for (const file of await sessionFiles(world)) {
+        if (file === packet.sourceSessionFile) continue;
+        const text = await readFile(file, "utf8").catch(() => "");
+        // The drill kickoff is distinctive: no other worker is told to drill.
+        if (text.includes("## This drill")) return file;
+      }
+      return undefined;
+    }, 60_000);
+    assert.ok(drillFile);
+    assert.notEqual(drillFile, packet.sourceSessionFile);
+    return `${drillFile} (source ${packet.sourceSessionFile})`;
   });
   await check("nothing the drill did rewrote the source session's history", async () => {
     // The source session may still grow on its own — a continuation resumes the
@@ -418,6 +437,7 @@ async function seedTieringSession(
     startedAt: new Date().toISOString(),
     lastEventAt: new Date().toISOString(),
     drillingPacketId: null,
+    preDrillState: null,
     originSessionId: null,
     packetId: null,
   });
@@ -535,19 +555,21 @@ async function runTiering(world: World): Promise<void> {
       return `${escalated.tier}:${escalated.action} run=${escalated.runId}`;
     });
     await check("the tier-2 session is a copy of the source, not the source itself", async () => {
-      const copy = await waitFor("the copy published itself on the board", async () => {
-        const fleet = await world.store.listFleet();
-        return fleet.find((entry) =>
-          entry.kind === "drill" && entry.packetId === opaque.id &&
-          entry.sessionFile !== null && entry.sessionFile !== source.sessionFile &&
-          entry.sessionId !== source.sessionId
-        );
-      }, 120_000);
-      assert.ok(copy, "a distinct drill session exists");
-      // A fork carries the source's history; a fresh session would not.
-      const copied = await readFile(copy.sessionFile ?? "", "utf8");
-      assert.match(copied, /normalizeInput or cleanInput/, "the copy carries the source's history");
-      return `${copy.sessionId} ${copy.sessionFile} (source ${source.sessionId})`;
+      // The fork writes a new session file carrying the source's history; the copy
+      // is plumbing, so it publishes no fleet row to look it up by.
+      const copy = await waitFor("a forked copy of the source appeared", async () => {
+        for (const file of await sessionFiles(world)) {
+          if (file === source.sessionFile) continue;
+          const text = await readFile(file, "utf8").catch(() => "");
+          if (text.includes("normalizeInput or cleanInput") && text.includes("resumed as a copy")) {
+            return file;
+          }
+        }
+        return undefined;
+      }, 180_000);
+      assert.ok(copy, "a distinct forked session file exists");
+      assert.notEqual(copy, source.sessionFile);
+      return `${copy} (source ${source.sessionFile})`;
     });
     await check("reading was tried first, not skipped", async () => {
       const log = await readDrillLog(world.store);

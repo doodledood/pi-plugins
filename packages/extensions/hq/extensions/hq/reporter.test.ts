@@ -215,3 +215,57 @@ test("a drill in flight stays visible on the session it is about", async () => {
     await dropRoot(root);
   }
 });
+
+test("a title set by the titler survives the session's next publish", async () => {
+  const root = await makeRoot("hq-title-keep");
+  try {
+    const store = makeStore(root);
+    const { spawner } = recordingSpawner();
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: fakeCtx(),
+      env: { [TITLER_ENV]: "1" },
+      now: fixedClock(),
+    });
+    await reporter.start();
+
+    // The titler is a separate process; it owns only the title field.
+    await store.patchSessionState("sess-a", { title: "migrate the eval runner" });
+
+    await reporter.onAgentStart();
+    await reporter.onAgentSettled();
+    await reporter.onShutdown();
+
+    assert.equal(
+      (await store.readSessionState("sess-a"))?.title,
+      "migrate the eval runner",
+      "the reporter must not write its own null over the titler's value",
+    );
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a triage or drill worker never appears on the board", async () => {
+  const root = await makeRoot("hq-internal-rows");
+  try {
+    const store = makeStore(root);
+    const { spawner } = recordingSpawner();
+    for (const kind of ["triage", "drill"] as const) {
+      const reporter = new SessionReporter({
+        store,
+        spawner,
+        ctx: fakeCtx({ sessionId: `sess-${kind}` }),
+        env: { [MANAGED_ENV]: "1", [KIND_ENV]: kind },
+        now: fixedClock(),
+      });
+      await reporter.start();
+      await reporter.onAgentStart();
+      await reporter.onAgentSettled();
+    }
+    assert.deepEqual(await store.listFleet(), [], "plumbing is not work on the glance");
+  } finally {
+    await dropRoot(root);
+  }
+});

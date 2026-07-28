@@ -105,6 +105,120 @@ test("an append-only log rejects a record it cannot trust instead of typing it a
   }
 });
 
+test("today's count is per record, not per line, and stops at the day boundary", async () => {
+  const root = await makeRoot("hq-count-today");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const paths = hqPaths(root);
+
+    // Two appends of one ruling (record-before-route), one deferral, one ruling on
+    // an earlier day, and one on a later day.
+    const ruling = (id: string, at: string, form: string) =>
+      `${JSON.stringify({ version: 1, id, at, form, packetId: "p" })}\n`;
+    await appendFile(paths.rulingsLog, ruling("rul-old", "2026-07-27T10:00:00.000Z", "accept"), "utf8");
+    await appendFile(paths.rulingsLog, ruling("rul-1", "2026-07-28T10:00:00.000Z", "accept"), "utf8");
+    await appendFile(paths.rulingsLog, ruling("rul-1", "2026-07-28T10:00:00.000Z", "accept"), "utf8");
+    await appendFile(paths.rulingsLog, ruling("rul-2", "2026-07-28T11:00:00.000Z", "defer"), "utf8");
+    await appendFile(paths.rulingsLog, ruling("rul-3", "2026-07-28T12:00:00.000Z", "alternative"), "utf8");
+
+    const counts = await store.countToday("2026-07-28");
+    assert.equal(counts.rulings, 2, "the double-appended ruling counts once; the deferral not at all");
+    assert.equal((await store.countToday("2026-07-27")).rulings, 1);
+    assert.equal((await store.countToday("2026-07-29")).rulings, 0);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a real ruling counts once, however many times it was appended", async () => {
+  const root = await makeRoot("hq-count-real");
+  try {
+    const store = makeStore(root, () => new Date("2026-07-28T09:00:00.000Z"));
+    await store.ensure();
+    const { packet } = await store.createPacket(packetDraftFixture());
+    const { applyRuling } = await import("./rulings.ts");
+    const { recordingSpawner } = await import("./testing.ts");
+    const result = await applyRuling(
+      { store, spawner: recordingSpawner().spawner, now: () => new Date("2026-07-28T09:00:00.000Z") },
+      { packetId: packet.id, form: "accept" },
+    );
+    assert.equal("error" in result, false);
+    assert.equal((await store.listRulings()).length, 1);
+    assert.equal((await store.countToday("2026-07-28")).rulings, 1);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("HQ prunes its own bookkeeping and never the user's records", async () => {
+  const root = await makeRoot("hq-retention");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const { pruneState } = await import("./store.ts");
+    const { writeStopRecord } = await import("./stops.ts");
+    const now = new Date("2026-08-30T12:00:00.000Z");
+    const old = "2026-07-01T12:00:00.000Z";
+
+    await store.publishSessionState(
+      sessionStateFixture({ sessionId: "gone", pid: 999_999_999, lastEventAt: old }),
+    );
+    await store.publishSessionState(
+      sessionStateFixture({ sessionId: "alive", pid: process.pid, lastEventAt: old }),
+    );
+    await store.publishSessionState(
+      sessionStateFixture({ sessionId: "recent", pid: 999_999_999, lastEventAt: now.toISOString() }),
+    );
+    await writeStopRecord(root, {
+      version: 1,
+      stopId: "old--done",
+      sessionId: "gone",
+      sessionFile: null,
+      project: "/work/alpha",
+      kind: "worker",
+      stopState: "idle-done",
+      preview: "",
+      createdAt: old,
+      status: "done",
+      claimedByPid: null,
+      claimedAt: null,
+      outcome: "packet",
+      packetId: "pkt-1",
+    });
+    await writeStopRecord(root, {
+      version: 1,
+      stopId: "old--open",
+      sessionId: "gone",
+      sessionFile: null,
+      project: "/work/alpha",
+      kind: "worker",
+      stopState: "idle-done",
+      preview: "",
+      createdAt: old,
+      status: "open",
+      claimedByPid: null,
+      claimedAt: null,
+      outcome: null,
+      packetId: null,
+    });
+    const { packet } = await store.createPacket(packetDraftFixture());
+
+    const pruned = await pruneState(root, { days: 14, now });
+    assert.equal(pruned.sessions, 1, "only the dead, aged-out session row goes");
+    assert.equal(pruned.stops, 1, "only the finished, aged-out stop goes");
+
+    const remaining = (await store.listFleet()).map((state) => state.sessionId).sort();
+    assert.deepEqual(remaining, ["alive", "recent"]);
+    const { readStopRecord } = await import("./stops.ts");
+    assert.equal(await readStopRecord(root, "old--done"), undefined);
+    assert.notEqual(await readStopRecord(root, "old--open"), undefined, "unfinished work survives");
+    assert.notEqual(await store.readPacket(packet.id), undefined, "packets are never pruned");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("a log survives a torn line and keeps the healthy records", async () => {
   const root = await makeRoot("hq-log");
   try {

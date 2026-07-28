@@ -6,11 +6,7 @@
  * queue tools, and the fleet card.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type HqConfig } from "./config.ts";
 import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
 import { buildFleetCard, type FleetCardModel } from "./fleet.ts";
@@ -19,12 +15,15 @@ import { resolveStateRoot } from "./paths.ts";
 import { SEAT_PROMPT } from "./prompts.ts";
 import { SessionReporter } from "./reporter.ts";
 import { createSpawner, isManagedEnv, type Spawner } from "./spawn.ts";
-import { HqStore } from "./store.ts";
+import { HqStore, pruneState } from "./store.ts";
 import { sweepStops } from "./triage.ts";
 import { registerHqTools } from "./tools.ts";
 import { FLEET_OVERLAY_OPTIONS, FleetOverlay } from "./ui.ts";
 
 export const SEAT_MESSAGE_TYPE = "hq-seat";
+
+/** How long HQ keeps its own bookkeeping before pruning it on the next seat. */
+export const RETENTION_DAYS = 14;
 
 export interface HqExtensionOptions {
   stateRoot?: string;
@@ -72,7 +71,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
       const [fleet, packets, doctrine, done] = await Promise.all([
         store.listFleet(),
         store.listQueue(),
-        loadDoctrine(root, undefined),
+        loadDoctrine(root, undefined, report),
         doneToday(),
       ]);
       // The doctrine file is the only source for the staleness threshold, so the
@@ -165,7 +164,11 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         await seedDoctrine(root);
         // Anything whose triage never finished is picked up here, so a crashed
         // worker cannot quietly cost the user a decision.
-        const swept = await sweepStops({ store, spawner, now });
+        const swept = await sweepStops({ store, spawner, now, onError: report });
+        // HQ's own bookkeeping is not history the user asked to keep: dead session
+        // rows, finished stops and worker logs age out, so the board and the
+        // sweeps stay bounded however long HQ has been running.
+        const pruned = await pruneState(root, { days: RETENTION_DAYS, now: now() });
         await refreshCard();
         await showOverlay(ctx);
 
@@ -173,6 +176,10 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         ctx.ui.notify(
           `HQ seat active. ${pending} packet${pending === 1 ? "" : "s"} to rule${
             swept.retried.length > 0 ? `; ${swept.retried.length} stop(s) re-triaged` : ""
+          }${
+            pruned.sessions + pruned.stops + pruned.logs > 0
+              ? `; pruned ${pruned.sessions} session rows, ${pruned.stops} stops, ${pruned.logs} logs`
+              : ""
           }${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
           "info",
         );
@@ -214,7 +221,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         if (!confirmed) return;
         const stats = await graduateDomain(store, domain, now().toISOString());
         ctx.ui.notify(
-          `Graduated ${domain} (${stats.agreements} prior agreements). Sampled decisions appear in /hq_audit.`,
+          `Graduated ${domain} (${stats.agreements} prior agreements). Ask me for the audit sample to see what it answers without you.`,
           "info",
         );
       },

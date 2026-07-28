@@ -137,7 +137,6 @@ The Meta section is HQ's configuration, in the same file as the rules:
 ## Meta
 
 - batch-max: 4
-- batch-requires-same-project: true
 - batch-trivial-only: true
 - graduation-consecutive-agreements: 10
 - graduation-min-days: 14
@@ -174,6 +173,10 @@ Everything, under `~/.pi/hq/` (override with `HQ_HOME`; resolved from
 
 Nothing is held in a session's memory: kill the seat mid-queue and a fresh one
 picks up exactly where it was. Whole-file writes are atomic; logs are append-only.
+
+Taking the seat prunes HQ's own bookkeeping — dead session rows, finished stop
+records, and worker logs older than two weeks. Packets, rulings, audits, defects,
+and doctrine are never pruned; they are yours.
 
 Optional mechanical settings live in `~/.pi/agent/hq.json` (see
 [`config/hq.example.json`](config/hq.example.json)) — a fast model for titling the

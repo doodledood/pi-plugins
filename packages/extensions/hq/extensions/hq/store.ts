@@ -7,10 +7,12 @@
  * killing the seat mid-queue must lose nothing.
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   appendJsonl,
   atomicWriteJson,
+  isPidAlive,
   createWriteQueue,
   ensureLayout,
   type ErrorReporter,
@@ -27,6 +29,7 @@ import {
   packetPath,
   sessionStatePath,
 } from "./paths.ts";
+import { parseStopRecord } from "./stops.ts";
 import {
   AUDIT_VERSION,
   type AuditRecord,
@@ -79,6 +82,26 @@ export class HqStore {
     const path = sessionStatePath(this.root, state.sessionId);
     await this.queue(path, async () => {
       await atomicWriteJson(path, state);
+    });
+  }
+
+  /**
+   * Read-modify-write of one session row, so two writers can own different
+   * fields of it. The reporter owns lifecycle fields; the titler owns the title;
+   * a drill owns the drilling marker. A whole-record write from any of them would
+   * silently drop the others' work.
+   */
+  async patchSessionState(
+    sessionId: string,
+    patch: Partial<SessionState>,
+  ): Promise<SessionState | undefined> {
+    const path = sessionStatePath(this.root, sessionId);
+    return this.queue(path, async () => {
+      const current = await readJsonFile(path, parseSessionState, this.onError);
+      if (!current) return undefined;
+      const next: SessionState = { ...current, ...patch, sessionId: current.sessionId };
+      await atomicWriteJson(path, next);
+      return next;
     });
   }
 
@@ -254,15 +277,19 @@ export class HqStore {
   }
 
   /**
-   * Counts today's records without reading a lifetime of history: the logs are
-   * append-only and time-ordered, so a reverse scan can stop at the first line
-   * older than the day being counted.
+   * Counts distinct records dated `day`. The logs are append-only and roughly
+   * time-ordered, so the scan walks backwards and stops parsing at the first
+   * older line; it still reads the file, so the saving is parse work, not IO.
+   *
+   * Distinctness matters for rulings: a ruling is appended twice (once when
+   * recorded, once when its routing is known), and both lines share an id.
    */
   async countToday(day: string): Promise<{ rulings: number; audits: number }> {
     const [rulings, audits] = await Promise.all([
       countTailMatching(this.paths.rulingsLog, day, (line) => !line.includes('"form":"defer"')),
       countTailMatching(this.paths.auditLog, day, () => true),
     ]);
+
     return { rulings, audits };
   }
 
@@ -339,6 +366,7 @@ async function countTailMatching(
     return 0;
   }
   const lines = text.split("\n");
+  const seen = new Set<string>();
   let count = 0;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
@@ -348,7 +376,73 @@ async function countTailMatching(
     const lineDay = at.slice(0, 10);
     if (lineDay > day) continue;
     if (lineDay < day) break;
-    if (accept(line)) count += 1;
+    if (!accept(line)) continue;
+    // Records that carry an id are counted once, however many times they were
+    // appended; records without one (audits) are counted per line.
+    const id = /"id":"([^"]+)"/.exec(line)?.[1];
+    if (id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    count += 1;
   }
   return count;
+}
+
+/** Removes state that has aged out, so the glance and the sweeps stay bounded. */
+export interface RetentionResult {
+  sessions: number;
+  stops: number;
+  logs: number;
+}
+
+/**
+ * Retention: HQ's own bookkeeping is not history the user asked to keep. Session
+ * rows for dead sessions, finished stop records, and worker logs are dropped once
+ * they are older than `days`, which keeps the board readable and the sweeps cheap.
+ * Packets, rulings, audits, defects and doctrine are never touched.
+ */
+export async function pruneState(
+  root: string,
+  options: { days: number; now: Date; alive?: (pid: number) => boolean },
+): Promise<RetentionResult> {
+  const cutoff = options.now.getTime() - options.days * 86_400_000;
+  const alive = options.alive ?? isPidAlive;
+  const paths = hqPaths(root);
+  const result: RetentionResult = { sessions: 0, stops: 0, logs: 0 };
+
+  const sessions = await scanJsonDir(
+    paths.sessions,
+    parseSessionState,
+    (record) => record.sessionId,
+  );
+  for (const { path, record } of sessions.records) {
+    const old = Date.parse(record.lastEventAt) < cutoff;
+    if (!old || alive(record.pid)) continue;
+    await rm(path, { force: true });
+    result.sessions += 1;
+  }
+
+  const stops = await scanJsonDir(paths.stops, parseStopRecord, (record) => record.stopId);
+  for (const { path, record } of stops.records) {
+    if (record.status !== "done") continue;
+    if (Date.parse(record.createdAt) >= cutoff) continue;
+    await rm(path, { force: true });
+    await rm(`${path.slice(0, -".json".length)}.claim`, { force: true });
+    result.stops += 1;
+  }
+
+  try {
+    for (const name of await readdir(paths.logs)) {
+      const path = join(paths.logs, name);
+      const info = await stat(path).catch(() => undefined);
+      if (!info || info.mtimeMs >= cutoff) continue;
+      await rm(path, { force: true });
+      result.logs += 1;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  return result;
 }

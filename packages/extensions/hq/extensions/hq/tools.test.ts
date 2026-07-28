@@ -176,6 +176,7 @@ test("deferring one packet does not block the next one in the same ask", async (
     const first = await queue(h);
     const second = await queue(h);
 
+    h.answers.push("Decide them one at a time"); // the batch ask comes first
     h.answers.push(buildAskRows(first)[2]?.label); // "Ask first"
     h.typed.push("what did the failure log actually say?");
     h.answers.push(buildAskRows(second)[0]?.label); // accept the second
@@ -346,20 +347,22 @@ test("the seat can drill a packet without waiting for the answer", async () => {
 });
 
 test("a triage submission missing its required parts is refused, not half-applied", () => {
-  assert.deepEqual(toTriageOutcome({ outcome: "packet" }), {
+  const stopId = "sess-a--leaf1";
+  assert.deepEqual(toTriageOutcome({ stopId, outcome: "packet" }), {
     error: "a packet outcome needs the packet",
   });
   assert.equal(
-    "error" in toTriageOutcome({ outcome: "continue", domain: "d", instruction: "i" }),
+    "error" in toTriageOutcome({ stopId, outcome: "continue", domain: "d", instruction: "i" }),
     true,
   );
-  assert.equal("error" in toTriageOutcome({ outcome: "close", domain: "d" }), true);
+  assert.equal("error" in toTriageOutcome({ stopId, outcome: "close", domain: "d" }), true);
   assert.equal(
-    "error" in toTriageOutcome({ outcome: "respawn", domain: "d", reason: "r" }),
+    "error" in toTriageOutcome({ stopId, outcome: "respawn", domain: "d", reason: "r" }),
     true,
   );
 
   const complete = toTriageOutcome({
+    stopId,
     outcome: "continue",
     domain: "ci-flake",
     citation: "global.md § Doors L4",
@@ -370,8 +373,36 @@ test("a triage submission missing its required parts is refused, not half-applie
   assert.equal(complete.outcome.kind, "continue");
   if (complete.outcome.kind !== "continue") return;
   assert.equal(complete.outcome.summary, "retry once", "summary falls back to the instruction");
-  assert.equal(complete.outcome.blastRadius, "low");
-  assert.equal(complete.outcome.reversibility, "reversible");
+  // Undeclared consequences fail closed, so an unstated continue reaches the user.
+  assert.equal(complete.outcome.blastRadius, "high");
+  assert.equal(complete.outcome.reversibility, "one-way");
+});
+
+test("a close and a respawn construct their outcomes with what they were given", () => {
+  const stopId = "sess-a--leaf1";
+  const closed = toTriageOutcome({
+    stopId,
+    outcome: "close",
+    domain: "routine-fix",
+    summary: "fixed the parser test",
+    unverified: "the slow suite was not run",
+  });
+  assert.equal("outcome" in closed, true);
+  if (!("outcome" in closed) || closed.outcome.kind !== "close") return;
+  assert.equal(closed.outcome.summary, "fixed the parser test");
+  assert.equal(closed.outcome.unverified, "the slow suite was not run");
+
+  const respawned = toTriageOutcome({
+    stopId,
+    outcome: "respawn",
+    domain: "stalled",
+    reason: "the build died",
+    instruction: "run it again",
+  });
+  assert.equal("outcome" in respawned, true);
+  if (!("outcome" in respawned) || respawned.outcome.kind !== "respawn") return;
+  assert.equal(respawned.outcome.reason, "the build died");
+  assert.equal(respawned.outcome.instruction, "run it again");
 });
 
 test("worker tools answer to the environment they were spawned with", async () => {
@@ -393,6 +424,95 @@ test("worker tools answer to the environment they were spawned with", async () =
     const body = result.content.map((part) => ("text" in part ? part.text : "")).join("\n");
     assert.match(body, /Question: what failed\?/);
     assert.match(body, /Tier: 1 \(reading\)/);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a batch is put as one ask, and accepting all rules every packet in it", async () => {
+  const h = await harness("hq-tools-batch");
+  try {
+    const first = await queue(h);
+    const second = await queue(h);
+    const third = await queue(h);
+
+    h.answers.push("Accept all 3 recommendations");
+    const report = await ask(h, [first.id, second.id, third.id]);
+
+    assert.equal(h.selects.length, 1, "three packets cost the user one dialog");
+    assert.match(h.selects[0] ?? "", /3 decisions in/);
+    assert.equal(report.split("\n").length, 3);
+    for (const packet of [first, second, third]) {
+      assert.equal((await h.store.readPacket(packet.id))?.status, "ruled");
+    }
+    assert.equal((await h.store.listRulings()).length, 3);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("declining the batch falls through to deciding them one at a time", async () => {
+  const h = await harness("hq-tools-batch-decline");
+  try {
+    const first = await queue(h);
+    const second = await queue(h);
+    h.answers.push("Decide them one at a time");
+    h.answers.push(buildAskRows(first)[0]?.label);
+    h.answers.push(buildAskRows(second)[1]?.label);
+
+    await ask(h, [first.id, second.id]);
+    assert.equal(h.selects.length, 3, "the batch ask plus one per packet");
+    const rulings = await h.store.listRulings();
+    assert.deepEqual(rulings.map((ruling) => ruling.form).sort(), ["accept", "alternative"]);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("a worker that is still booting still counts against the cap", async () => {
+  const h = await harness("hq-tools-cap-burst", { maxWorkers: 1 });
+  try {
+    const { sessionStateFixture } = await import("./testing.ts");
+    // A freshly spawned worker publishes "idle" before it starts working.
+    await h.store.publishSessionState(
+      sessionStateFixture({ sessionId: "booting", pid: process.pid, state: "idle" }),
+    );
+    const tool = h.tools.get("hq_delegate");
+    assert.ok(tool);
+    const result = await tool.execute(
+      "call",
+      { task: "one more thing" } as never,
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    assert.match(
+      result.content.map((part) => ("text" in part ? part.text : "")).join(" "),
+      /already running/,
+      "a burst of delegations cannot walk past the cap",
+    );
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("the defect tool records a reported dive", async () => {
+  const h = await harness("hq-tools-defect-tool");
+  try {
+    const packet = await queue(h);
+    const tool = h.tools.get("hq_defect");
+    assert.ok(tool);
+    await tool.execute(
+      "call",
+      { packetId: packet.id, missing: "which test failed", ruling: "investigated it" } as never,
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    const defects = await h.store.readDefects();
+    assert.equal(defects.length, 1);
+    assert.equal(defects[0]?.missing, "which test failed");
+    assert.equal(defects[0]?.ruling, "investigated it");
   } finally {
     await dropRoot(h.root);
   }

@@ -235,3 +235,22 @@ test("the summary carries the idle and done glyphs, not just the words", () => {
   assert.equal(card.summary.includes(GLYPHS.idle), true);
   assert.equal(card.summary.includes(GLYPHS.done), true);
 });
+
+test("every state's glyph is distinct, including the stale one", () => {
+  const glyphs = [...Object.values(GLYPHS), STALE_GLYPH];
+  assert.equal(new Set(glyphs).size, glyphs.length, `two states share a glyph: ${glyphs.join(" ")}`);
+});
+
+test("a session quiet for days is not counted among today's idle sessions", () => {
+  const card = buildFleetCard({
+    fleet: [
+      sessionStateFixture({ sessionId: "recent", state: "idle", stopState: "idle-done", lastEventAt: minutesAgo(60) }),
+      sessionStateFixture({ sessionId: "ancient", state: "idle", stopState: "idle-done", lastEventAt: minutesAgo(60 * 24 * 30) }),
+    ],
+    packets: [],
+    doneToday: 0,
+    now: NOW,
+    meta: META_DEFAULTS,
+  });
+  assert.equal(card.idleCount, 1, "the month-old session is history, not a live idle row");
+});

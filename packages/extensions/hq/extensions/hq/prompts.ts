@@ -128,10 +128,12 @@ work is finished, or respawned if the session died mid-task.
 
 - **continue** — doctrine decides this case AND the domain is graduated AND the
   next step is reversible and not high-blast. If any of those three is missing,
-  this is not a continue. Cite the controlling line exactly as it appears in
-  brackets in the doctrine you were given, for example "global.md § Doors L14" —
-  a citation that does not match a real line is treated
-  as no citation at all, and the stop goes to the user instead.
+  this is not a continue. Cite the controlling line by copying the text inside the
+  brackets in the doctrine you were given, for example "global.md § Doors L14" — a
+  citation that does not match a real line is treated as no citation at all, and
+  the stop goes to the user instead. Say what the next step's blast radius and
+  reversibility are: leaving them out is read as high and one-way, which sends the
+  stop to the user.
 - **packet** — the stop needs the user's judgment. Write the packet to the bar
   below, and include the ruling you would have made yourself (the shadow ruling)
   with its reasoning. The shadow ruling is measured against what the user decides;

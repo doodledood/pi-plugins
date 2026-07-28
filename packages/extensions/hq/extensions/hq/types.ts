@@ -57,6 +57,8 @@ export interface SessionState {
   lastEventAt: string;
   /** Set while a drill about this session is running (drilling is shown here). */
   drillingPacketId: string | null;
+  /** The row's state before a drill claimed it, restored when the drill ends. */
+  preDrillState: FleetState | null;
   /** For drill/continuation sessions: the session they were derived from. */
   originSessionId: string | null;
   /** The packet a continuation is carrying, when it is carrying one. */
@@ -332,6 +334,9 @@ export function parseSessionState(value: unknown): SessionState | undefined {
   const sessionFile = strOrNull(value.sessionFile);
   const title = strOrNull(value.title);
   const drillingPacketId = strOrNull(value.drillingPacketId);
+  const preDrillState = value.preDrillState === null || value.preDrillState === undefined
+    ? null
+    : oneOf(value.preDrillState, FLEET_STATES) ?? null;
   const originSessionId = strOrNull(value.originSessionId);
   const packetId = strOrNull(value.packetId);
 
@@ -362,6 +367,7 @@ export function parseSessionState(value: unknown): SessionState | undefined {
     startedAt,
     lastEventAt,
     drillingPacketId,
+    preDrillState,
     originSessionId,
     packetId,
   };

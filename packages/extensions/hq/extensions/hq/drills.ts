@@ -104,10 +104,20 @@ async function markOriginDrilling(
 ): Promise<void> {
   const state = await deps.store.readSessionState(packet.sourceSessionId);
   if (!state) return;
-  await deps.store.publishSessionState({
-    ...state,
-    drillingPacketId: packetId,
-    state: packetId ? "drilling" : state.state,
+  if (packetId) {
+    await deps.store.patchSessionState(packet.sourceSessionId, {
+      drillingPacketId: packetId,
+      state: "drilling",
+      // Remember what the row said, so clearing the marker can put it back
+      // rather than leaving a finished session reading as forever-drilling.
+      preDrillState: state.state,
+    });
+    return;
+  }
+  await deps.store.patchSessionState(packet.sourceSessionId, {
+    drillingPacketId: null,
+    state: state.preDrillState ?? (state.state === "drilling" ? "done" : state.state),
+    preDrillState: null,
   });
 }
 
@@ -168,6 +178,7 @@ export type PacketPatch = Partial<
     | "title"
     | "domain"
     | "trivial"
+    | "shadowRuling"
   >
 >;
 

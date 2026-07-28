@@ -55,6 +55,8 @@ export interface FleetInput {
   meta: MetaDoctrine;
   /** Rows beyond this are summarized rather than listed. */
   maxRows?: number;
+  /** Sessions quiet for longer than this are not counted as idle. Default 24h. */
+  idleWindowMs?: number;
 }
 
 export function formatAge(ms: number): string {
@@ -126,7 +128,12 @@ export function buildFleetCard(input: FleetInput): FleetCardModel {
 
   const maxRows = input.maxRows ?? 6;
   const listed = rows.filter((row) => row.state !== "idle" && row.state !== "done").slice(0, maxRows);
-  const idleCount = rows.filter((row) => row.state === "idle" || row.state === "done").length;
+  // "N idle" is only useful while those sessions are still work in progress; every
+  // session HQ has ever seen would make the number meaningless.
+  const idleWindowMs = input.idleWindowMs ?? 24 * 60 * 60_000;
+  const idleCount = rows.filter(
+    (row) => (row.state === "idle" || row.state === "done") && row.ageMs <= idleWindowMs,
+  ).length;
 
   const collapsed = listed.length === 0;
   const summaryParts: string[] = [];

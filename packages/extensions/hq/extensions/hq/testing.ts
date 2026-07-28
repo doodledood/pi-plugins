@@ -70,6 +70,7 @@ export function sessionStateFixture(overrides: Partial<SessionState> = {}): Sess
     startedAt: "2026-07-28T11:00:00.000Z",
     lastEventAt: "2026-07-28T11:59:00.000Z",
     drillingPacketId: null,
+    preDrillState: null,
     originSessionId: null,
     packetId: null,
     ...overrides,

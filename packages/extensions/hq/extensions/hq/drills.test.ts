@@ -225,3 +225,33 @@ test("a drill on a packet that has gone is refused", async () => {
     await dropRoot(h.root);
   }
 });
+
+test("a finished drill hands the origin row back its real state", async () => {
+  const h = await harness("hq-drill-restore");
+  try {
+    // The source session had already finished when the drill started.
+    const before = await h.deps.store.readSessionState("sess-a");
+    assert.ok(before);
+    await h.deps.store.publishSessionState({ ...before, state: "done", stopState: "idle-done" });
+
+    await startDrill(h.deps, h.packet, "what did it try?");
+    const during = await h.deps.store.readSessionState("sess-a");
+    assert.equal(during?.state, "drilling");
+    assert.equal(during?.drillingPacketId, h.packet.id);
+
+    await submitDrillResult(h.deps, {
+      packetId: h.packet.id,
+      question: "what did it try?",
+      tier: 1,
+      answer: "it retried twice",
+      quotes: [{ text: "retrying", attribution: "sess-a" }],
+    });
+
+    const after = await h.deps.store.readSessionState("sess-a");
+    assert.equal(after?.drillingPacketId, null);
+    assert.equal(after?.state, "done", "a finished session must not read as forever-drilling");
+    assert.equal(after?.preDrillState, null);
+  } finally {
+    await dropRoot(h.root);
+  }
+});

@@ -11,10 +11,17 @@
  * bespoke UI to keep working.
  */
 
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadDoctrine } from "./doctrine.ts";
-import { drillContext, startDrill, submitDrillResult, type DrillDeps } from "./drills.ts";
+import {
+  drillContext,
+  type DrillDeps,
+  type PacketPatch,
+  startDrill,
+  submitDrillResult,
+} from "./drills.ts";
 import { buildFleetCard } from "./fleet.ts";
 import { isPidAlive } from "./io.ts";
 import { planPresentation } from "./queue.ts";
@@ -29,7 +36,7 @@ import {
   type PacketDraft,
   type TriageOutcome,
 } from "./triage.ts";
-import type { Packet } from "./types.ts";
+import { meetsPacketBar, type Packet } from "./types.ts";
 
 export interface ToolDeps {
   store: HqStore;
@@ -44,8 +51,6 @@ export interface ToolDeps {
   maxConcurrentWorkers: number;
   /** Read instead of process.env, so a worker tool's audience is injectable. */
   env: NodeJS.ProcessEnv;
-  /** Set between the dive signal and the ruling it precedes; internal. */
-  pendingDive?: { packetId: string; missing: string };
 }
 
 function text(body: string) {
@@ -64,13 +69,22 @@ const OptionSchema = Type.Object({
   }),
 });
 
+const BlastSchema = StringEnum(["low", "medium", "high"] as const, {
+  description: "How much this decision touches: low, medium, or high",
+});
+const ReversibilitySchema = StringEnum(["reversible", "one-way"] as const, {
+  description: "Whether the decided step can be undone",
+});
+
 const ShadowSchema = Type.Object({
-  optionId: Type.Union([Type.String(), Type.Null()], {
-    description: "The option you would have chosen, or null if none fits",
-  }),
+  optionId: Type.Optional(Type.String({
+    description: "The option you would have chosen; omit it if none fits",
+  })),
   text: Type.String({ description: "The ruling you would have made" }),
   rationale: Type.String({ description: "Why — one or two sentences" }),
-  doctrineCitations: Type.Optional(Type.Array(Type.String())),
+  doctrineCitations: Type.Array(Type.String({
+    description: "Citations you relied on, exactly as they appear in brackets",
+  })),
 });
 
 const PacketDraftSchema = Type.Object({
@@ -82,13 +96,46 @@ const PacketDraftSchema = Type.Object({
   options: Type.Array(OptionSchema, { description: "At least two priced options" }),
   recommendationId: Type.String({ description: "Which option you recommend" }),
   flipCondition: Type.String({ description: "What evidence would change that recommendation" }),
-  blastRadius: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  reversibility: Type.Union([Type.Literal("reversible"), Type.Literal("one-way")]),
+  blastRadius: BlastSchema,
+  reversibility: ReversibilitySchema,
   doctrineCitations: Type.Optional(Type.Array(Type.String())),
-  shadowRuling: Type.Optional(Type.Union([ShadowSchema, Type.Null()])),
+  shadowRuling: ShadowSchema,
   trivial: Type.Optional(Type.Boolean({ description: "Cheap enough to decide alongside others" })),
   dependsOn: Type.Optional(Type.Array(Type.String({ description: "Packet ids that must be ruled first" }))),
 });
+
+const DrillPatchSchema = Type.Object({
+  question: Type.Optional(Type.String()),
+  options: Type.Optional(Type.Array(OptionSchema)),
+  recommendationId: Type.Optional(Type.String()),
+  flipCondition: Type.Optional(Type.String()),
+  title: Type.Optional(Type.String()),
+  domain: Type.Optional(Type.String()),
+  blastRadius: Type.Optional(BlastSchema),
+  reversibility: Type.Optional(ReversibilitySchema),
+  trivial: Type.Optional(Type.Boolean()),
+  shadowRuling: Type.Optional(ShadowSchema),
+}, { description: "Only for a completion drill: the packet fields you filled in" });
+
+const TriageOutcomeSchema = Type.Object({
+  stopId: Type.String(),
+  outcome: StringEnum(["packet", "continue", "close", "respawn"] as const, {
+    description: "The one outcome for this stop",
+  }),
+  packet: Type.Optional(PacketDraftSchema),
+  domain: Type.Optional(Type.String()),
+  citation: Type.Optional(Type.String({
+    description: "The doctrine line that decides it, copied exactly from inside the brackets",
+  })),
+  instruction: Type.Optional(Type.String({ description: "What the session should do next" })),
+  summary: Type.Optional(Type.String()),
+  unverified: Type.Optional(Type.String({ description: "What was not checked, for a close" })),
+  reason: Type.Optional(Type.String({ description: "What it was doing, for a respawn" })),
+  blastRadius: Type.Optional(BlastSchema),
+  reversibility: Type.Optional(ReversibilitySchema),
+});
+
+export type TriageOutcomeParams = Static<typeof TriageOutcomeSchema>;
 
 export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
   const drillDeps: DrillDeps = { store: deps.store, spawner: deps.spawner, now: deps.now };
@@ -128,28 +175,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     label: "HQ triage outcome",
     description:
       "Submit the one outcome for a stop: continue (doctrine decides it and the domain is graduated), packet (the user must rule), close (finished), or respawn (died mid-task).",
-    parameters: Type.Object({
-      stopId: Type.String(),
-      outcome: Type.Union([
-        Type.Literal("packet"),
-        Type.Literal("continue"),
-        Type.Literal("close"),
-        Type.Literal("respawn"),
-      ]),
-      packet: Type.Optional(PacketDraftSchema),
-      domain: Type.Optional(Type.String()),
-      citation: Type.Optional(Type.String({ description: "The doctrine line that decides it" })),
-      instruction: Type.Optional(Type.String({ description: "What the session should do next" })),
-      summary: Type.Optional(Type.String()),
-      unverified: Type.Optional(Type.String({ description: "What was not checked, for a close" })),
-      reason: Type.Optional(Type.String({ description: "What it was doing, for a respawn" })),
-      blastRadius: Type.Optional(
-        Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-      ),
-      reversibility: Type.Optional(
-        Type.Union([Type.Literal("reversible"), Type.Literal("one-way")]),
-      ),
-    }),
+    parameters: TriageOutcomeSchema,
     async execute(_id, params) {
       if (envKind(deps.env) !== "triage") return refuse("this tool belongs to stop triage");
       const outcome = toTriageOutcome(params);
@@ -222,26 +248,11 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
         }),
       ),
       insufficient: Type.Optional(Type.Boolean()),
-      patch: Type.Optional(
-        Type.Object({
-          question: Type.Optional(Type.String()),
-          options: Type.Optional(Type.Array(OptionSchema)),
-          recommendationId: Type.Optional(Type.String()),
-          flipCondition: Type.Optional(Type.String()),
-          title: Type.Optional(Type.String()),
-          domain: Type.Optional(Type.String()),
-          blastRadius: Type.Optional(
-            Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-          ),
-          reversibility: Type.Optional(
-            Type.Union([Type.Literal("reversible"), Type.Literal("one-way")]),
-          ),
-          trivial: Type.Optional(Type.Boolean()),
-        }, { description: "Only for a completion drill: the packet fields you filled in" }),
-      ),
+      patch: Type.Optional(DrillPatchSchema),
     }),
     async execute(_id, params) {
       if (envKind(deps.env) !== "drill") return refuse("this tool belongs to drill workers");
+      const patch = params.patch ? toPacketPatch(params.patch) : undefined;
       const outcome = await submitDrillResult(drillDeps, {
         packetId: drillPacketId(params.packetId),
         question: deps.env.HQ_DRILL_QUESTION ?? "",
@@ -249,7 +260,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
         answer: params.answer,
         quotes: params.quotes,
         ...(params.insufficient ? { insufficient: true } : {}),
-        ...(params.patch ? { patch: params.patch } : {}),
+        ...(patch ? { patch } : {}),
       });
       if ("error" in outcome) return text(outcome.error);
       if (outcome.kind === "escalated") {
@@ -323,19 +334,33 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
       if (!ctx.hasUI) return refuse("there is no interactive surface to ask on");
 
       const lines: string[] = [];
+      const presentable: Packet[] = [];
       for (const packetId of params.packetIds) {
         const packet = await deps.store.readPacket(packetId);
         if (!packet) {
           lines.push(`${packetId}: gone from the queue`);
           continue;
         }
-        if (packet.status !== "pending") {
+        // Status is store-maintained, but re-checking the bar here means the
+        // presentation path defends itself against any writer, including a hand
+        // edit of the queue file.
+        if (packet.status !== "pending" || !meetsPacketBar(packet)) {
           lines.push(`${packetId}: ${packet.status}, not presentable`);
           continue;
         }
-        const outcome = await askOne(ctx, deps, packet);
-        lines.push(outcome);
+        presentable.push(packet);
       }
+
+      // A batch the plan grouped is put as one ask, which is the whole point of
+      // batching: fewer interruptions, not just a tidier order.
+      if (presentable.length > 1) {
+        const batched = await askBatch(ctx, deps, presentable);
+        lines.push(...batched.lines);
+        for (const packet of batched.remaining) lines.push(await askOne(ctx, deps, packet));
+        return text(lines.join("\n"));
+      }
+
+      for (const packet of presentable) lines.push(await askOne(ctx, deps, packet));
       return text(lines.join("\n"));
     },
   });
@@ -410,11 +435,13 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const denied = seatGuard(deps);
       if (denied) return refuse(denied);
-      // A worker killed without publishing would otherwise hold its slot forever,
-      // so the cap probes liveness rather than trusting the last published state.
+      // Counting only "running" would miss a worker that is still booting, so a
+      // burst of delegations could walk past the cap; counting anything not done
+      // catches those. Liveness is probed so a worker killed without publishing
+      // does not hold its slot forever.
       const live = (await deps.store.listFleet()).filter(
         (state) =>
-          state.role === "managed" && state.kind === "worker" && state.state === "running" &&
+          state.role === "managed" && state.kind === "worker" && state.state !== "done" &&
           isPidAlive(state.pid),
       );
       if (live.length >= deps.maxConcurrentWorkers) {
@@ -528,7 +555,7 @@ export interface AskRow {
  *
  * Each row carries the ruling it means, so the choice is resolved by exact row
  * rather than by re-reading the display text. Option labels are model-authored,
- * and one label being a prefix of another used to record the wrong decision.
+ * and one label can be a prefix of another.
  */
 export function buildAskRows(packet: Packet): AskRow[] {
   const recommended = packet.options.find((option) => option.id === packet.recommendationId);
@@ -554,6 +581,26 @@ export function buildAskRows(packet: Packet): AskRow[] {
   ];
 }
 
+/**
+ * Narrows a drill's patch to the fields a drill may rewrite, spelling the shadow
+ * ruling's "no option fits" as null the way the stored shape does.
+ */
+function toPacketPatch(
+  patch: Static<typeof DrillPatchSchema>,
+): PacketPatch {
+  const { shadowRuling, ...rest } = patch;
+  if (!shadowRuling) return rest;
+  return {
+    ...rest,
+    shadowRuling: {
+      text: shadowRuling.text,
+      rationale: shadowRuling.rationale,
+      doctrineCitations: shadowRuling.doctrineCitations,
+      optionId: shadowRuling.optionId ?? null,
+    },
+  };
+}
+
 /** Fills in the text a defer or a custom ruling still needs from the user. */
 async function completeRequest(
   ctx: ExtensionContext,
@@ -571,6 +618,55 @@ async function completeRequest(
 }
 
 /**
+ * One ask covering a whole batch: accept every recommendation at once, or fall
+ * through to deciding them one at a time. Anything not settled here comes back as
+ * `remaining` for the per-packet path.
+ */
+async function askBatch(
+  ctx: ExtensionContext,
+  deps: ToolDeps,
+  packets: readonly Packet[],
+): Promise<{ lines: string[]; remaining: Packet[] }> {
+  const summary = packets
+    .map((packet) => {
+      const recommended = packet.options.find((option) => option.id === packet.recommendationId);
+      return `• ${packet.title} → ${recommended?.label ?? "(no recommendation)"}`;
+    })
+    .join("\n");
+  const acceptAll = `Accept all ${packets.length} recommendations`;
+  const oneAtATime = "Decide them one at a time";
+
+  const chosen = await ctx.ui.select(
+    `${packets.length} decisions in ${packets[0]?.project ?? "this project"}:\n${summary}`,
+    [acceptAll, oneAtATime],
+  );
+  if (chosen === undefined) {
+    return { lines: [`left ${packets.length} packets pending`], remaining: [] };
+  }
+  if (chosen !== acceptAll) return { lines: [], remaining: [...packets] };
+
+  const lines: string[] = [];
+  for (const packet of packets) {
+    const result = await applyRuling(
+      {
+        store: deps.store,
+        spawner: deps.spawner,
+        now: deps.now,
+        startDrill: (target, question) =>
+          startDrill({ store: deps.store, spawner: deps.spawner, now: deps.now }, target, question),
+      },
+      { packetId: packet.id, form: "accept" },
+    );
+    lines.push(
+      "error" in result
+        ? `${packet.id}: ${result.error}`
+        : `${packet.id}: ruled (accept, ${result.ruling.coverage}). ${result.note}.`,
+    );
+  }
+  return { lines, remaining: [] };
+}
+
+/**
  * One ask, presented through pi's own dialogs, ending in a recorded ruling.
  */
 async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Promise<string> {
@@ -580,11 +676,10 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
   const chosen = await ctx.ui.select(title, rows.map((row) => row.label));
   if (chosen === undefined) return `${packet.id}: left pending`;
 
-  let dived = false;
+  let dive: { packetId: string; missing: string } | undefined;
   let selected = rows.find((row) => row.label === chosen);
 
   if (chosen === DIVE_LABEL) {
-    dived = true;
     const missing = await ctx.ui.input(
       "What was missing from the packet?",
       "what you had to go and find out",
@@ -602,15 +697,15 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
       return `${packet.id}: defect logged, left pending`;
     }
     selected = remaining.find((row) => row.label === second);
-    deps.pendingDive = { packetId: packet.id, missing: missing?.trim() || "(not stated)" };
+    dive = { packetId: packet.id, missing: missing?.trim() || "(not stated)" };
   }
 
   if (!selected) return `${packet.id}: could not read that choice; left pending`;
 
   const request = await completeRequest(ctx, selected.request);
   if (!request) {
-    if (dived) await flushDive(deps, "(left pending)");
-    return `${packet.id}: left pending${dived ? " (defect logged)" : ""}`;
+    if (dive) await flushDive(deps, dive, "(left pending)");
+    return `${packet.id}: left pending${dive ? " (defect logged)" : ""}`;
   }
 
   const result = await applyRuling(
@@ -624,13 +719,13 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
     request,
   );
   if ("error" in result) {
-    if (dived) await flushDive(deps, "(ruling failed)");
+    if (dive) await flushDive(deps, dive, "(ruling failed)");
     return `${packet.id}: ${result.error}`;
   }
 
   // The defect is written after the ruling so it can name what the user decided
   // once they had looked — that pairing is the whole value of the log.
-  if (dived) await flushDive(deps, result.ruling.text || result.ruling.form);
+  if (dive) await flushDive(deps, dive, result.ruling.text || result.ruling.form);
 
   const proposals = result.proposals.length > 0
     ? ` Queued ${result.proposals.length} proposal${result.proposals.length === 1 ? "" : "s"}.`
@@ -638,37 +733,42 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
   return `${packet.id}: ruled (${result.ruling.form}, ${result.ruling.coverage}). ${result.note}.${proposals}`;
 }
 
-async function flushDive(deps: ToolDeps, ruling: string): Promise<void> {
-  const pending = deps.pendingDive;
-  if (!pending) return;
-  deps.pendingDive = undefined;
+async function flushDive(
+  deps: ToolDeps,
+  dive: { packetId: string; missing: string },
+  ruling: string,
+): Promise<void> {
   await recordDive(deps.store, {
-    packetId: pending.packetId,
-    missing: pending.missing,
+    packetId: dive.packetId,
+    missing: dive.missing,
     ruling,
     at: deps.now().toISOString(),
   });
 }
 
-/** Validates the model's outcome submission into the typed union. */
+/**
+ * Validates the model's outcome submission into the typed union.
+ *
+ * An omitted blast radius or reversibility fails *closed* — high and one-way —
+ * so a continue that forgot to declare its consequences reaches the user rather
+ * than sliding under the ceiling.
+ */
 export function toTriageOutcome(
-  params: {
-    outcome: "packet" | "continue" | "close" | "respawn";
-    packet?: unknown;
-    domain?: string;
-    citation?: string;
-    instruction?: string;
-    summary?: string;
-    unverified?: string;
-    reason?: string;
-    blastRadius?: "low" | "medium" | "high";
-    reversibility?: "reversible" | "one-way";
-  },
+  params: TriageOutcomeParams,
 ): { outcome: TriageOutcome } | { error: string } {
   switch (params.outcome) {
     case "packet": {
       if (!params.packet) return { error: "a packet outcome needs the packet" };
-      return { outcome: { kind: "packet", packet: params.packet as PacketDraft } };
+      // The schema lets the model omit the shadow ruling's option (nothing fits);
+      // the stored shape spells that as null.
+      const packet: PacketDraft = {
+        ...params.packet,
+        shadowRuling: {
+          ...params.packet.shadowRuling,
+          optionId: params.packet.shadowRuling.optionId ?? null,
+        },
+      };
+      return { outcome: { kind: "packet", packet } };
     }
     case "continue": {
       if (!params.domain || !params.citation || !params.instruction) {
@@ -684,8 +784,8 @@ export function toTriageOutcome(
           citation: params.citation,
           instruction: params.instruction,
           summary: params.summary ?? params.instruction,
-          blastRadius: params.blastRadius ?? "low",
-          reversibility: params.reversibility ?? "reversible",
+          blastRadius: params.blastRadius ?? "high",
+          reversibility: params.reversibility ?? "one-way",
         },
       };
     }

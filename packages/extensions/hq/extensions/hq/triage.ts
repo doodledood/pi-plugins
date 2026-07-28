@@ -8,7 +8,7 @@
  */
 
 import { loadDoctrine, renderDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
-import { scanJsonDir } from "./io.ts";
+import { type ErrorReporter, scanJsonDir } from "./io.ts";
 import { hqPaths } from "./paths.ts";
 import { TRIAGE_KICKOFF } from "./prompts.ts";
 import { ceilingDecision, shouldSampleForAudit } from "./graduation.ts";
@@ -35,6 +35,8 @@ export interface TriageDeps {
   spawner: Spawner;
   now?: () => Date;
   random?: () => number;
+  /** Where an unreadable doctrine file or stop record is reported. */
+  onError?: ErrorReporter;
 }
 
 export interface TriageContext {
@@ -52,13 +54,13 @@ export async function triageContext(
   deps: TriageDeps,
   stopId: string,
 ): Promise<TriageContext | { error: string }> {
-  const stop = await readStopRecord(deps.store.root, stopId);
+  const stop = await readStopRecord(deps.store.root, stopId, deps.onError);
   if (!stop) return { error: `no such stop: ${stopId}` };
 
   await seedDoctrine(deps.store.root);
   await seedProjectDoctrine(deps.store.root, stop.project);
 
-  const doctrine = await loadDoctrine(deps.store.root, stop.project);
+  const doctrine = await loadDoctrine(deps.store.root, stop.project, deps.onError);
   const graduation = await deps.store.readGraduation();
   const transcript = await readTranscriptTail(stop.sessionFile, { maxMessages: 40 });
 
@@ -139,7 +141,7 @@ export async function applyTriageOutcome(
 ): Promise<TriageResult | { error: string }> {
   const now = deps.now ?? (() => new Date());
   const at = now().toISOString();
-  const stop = await readStopRecord(deps.store.root, stopId);
+  const stop = await readStopRecord(deps.store.root, stopId, deps.onError);
   if (!stop) return { error: `no such stop: ${stopId}` };
   if (stop.status === "done") return { error: `stop ${stopId} already has an outcome` };
 
@@ -148,7 +150,7 @@ export async function applyTriageOutcome(
       return applyPacketOutcome(deps, stop, outcome.packet, null);
 
     case "continue": {
-      const doctrine = await loadDoctrine(deps.store.root, stop.project);
+      const doctrine = await loadDoctrine(deps.store.root, stop.project, deps.onError);
       // Exact citation only. A substring match would let a bare section name —
       // which the model is handed in the rendered doctrine — stand in for a rule,
       // making the code-side coverage check model-asserted.
@@ -207,7 +209,7 @@ export async function applyTriageOutcome(
     }
 
     case "close": {
-      const doctrine = await loadDoctrine(deps.store.root, stop.project);
+      const doctrine = await loadDoctrine(deps.store.root, stop.project, deps.onError);
       const graduated = await deps.store.isGraduated(outcome.domain);
       const cited = outcome.citation
         ? doctrine.rules.find((rule) => rule.citation === outcome.citation)
@@ -434,6 +436,7 @@ export async function countRespawns(deps: TriageDeps, sessionId: string): Promis
     hqPaths(deps.store.root).stops,
     parseStopRecord,
     (record) => record.stopId,
+    deps.onError,
   );
   return scan.records.filter(
     (entry) => entry.record.sessionId === sessionId && entry.record.outcome === "respawn",
@@ -443,7 +446,7 @@ export async function countRespawns(deps: TriageDeps, sessionId: string): Promis
 /** The queue sweep: re-runs triage for stops that still owe an outcome. */
 export async function sweepStops(deps: TriageDeps): Promise<{ retried: string[] }> {
   const now = deps.now ?? (() => new Date());
-  const stale = await findStopsNeedingTriage(deps.store.root);
+  const stale = await findStopsNeedingTriage(deps.store.root, deps.onError);
   const retried: string[] = [];
 
   for (const { record, reason } of stale) {
