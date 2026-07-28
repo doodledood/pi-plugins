@@ -335,7 +335,21 @@ test("a session directory that cannot be listed discloses the forks it could not
   }
 });
 
+test("an empty sibling file is not mistaken for spend that could not be read", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // Reported as a gap, this would put a permanent floor marker on an exact total — the
+  // disclosure failing in the other direction, and just as misleading.
+  writeFileSync(join(root, "empty.jsonl"), "");
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(2)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 2);
+  assert.equal(tree.approximate, false, "nothing is missing from a file with nothing in it");
+  assert.equal(tree.unreadableSessions, 0);
+});
+
 test("a sibling whose header cannot be read is disclosed, not assumed unrelated", () => {
+  // Staged with permission bits, so it cannot be told apart from a readable file as root.
+  if (typeof process.getuid === "function" && process.getuid() === 0) return;
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
   // A sibling is part of this tree only if its header links back. Unreadable, that is
@@ -343,7 +357,6 @@ test("a sibling whose header cannot be read is disclosed, not assumed unrelated"
   const sibling = writeSession(join(root, "sibling.jsonl"), { id: "s1", parentSession: "p1", entries: [assistant(4)] });
   chmodSync(sibling, 0o000);
   try {
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
     assert.equal(tree.totalCost, 1, "the readable side still totals");
     assert.ok(tree.approximate, "an unclassifiable sibling leaves the total a floor");
@@ -565,6 +578,15 @@ test("a header-less or unreadable file yields no header rather than throwing", (
   const torn = join(root, "torn.jsonl");
   writeFileSync(torn, '{"type":"sess\n');
   assert.equal(readSessionHeader(torn).unreadable, true, "an unparseable first line is unknown, not unrelated");
+
+  // Nothing written is not the same as something unreadable. Pi opens a session file before
+  // writing its header, so an empty one is an ordinary sight and holds no spend.
+  const empty = join(root, "empty.jsonl");
+  writeFileSync(empty, "");
+  assert.equal(readSessionHeader(empty).unreadable, undefined, "an empty file hides nothing");
+  const blank = join(root, "blank.jsonl");
+  writeFileSync(blank, "\n");
+  assert.equal(readSessionHeader(blank).unreadable, undefined, "nor does one holding only a newline");
 
   const locked = join(root, "locked.jsonl");
   writeFileSync(locked, "{}\n");

@@ -17,6 +17,12 @@
 // is not failure — most sessions spawn nothing, and a sidecar directory that was never
 // created hides nothing.
 //
+// One case sits outside that claim on purpose. A file whose last line is incomplete is
+// being appended to as far as any single read can tell, so the partial line is held for
+// the rest to arrive rather than counted as a gap. If the process writing it died there,
+// that entry's spend is missing and the total will not say so — the alternative marks
+// every session that is mid-turn.
+//
 // Two additions Pi has no equivalent for:
 //   - `pi-cost-record` custom entries, for billed calls that produce no session.
 //   - price fidelity: turns issued at OpenAI's priority tier cost more than Pi's
@@ -490,6 +496,10 @@ export function readSessionHeader(path: string): SessionHeaderRead {
     const text = buffer.subarray(0, read).toString("utf8");
     const newline = text.indexOf("\n");
     const line = newline >= 0 ? text.slice(0, newline) : text;
+    // Nothing written yet is the same as nothing there: an empty file holds no spend, and
+    // pi leaves one behind whenever it opens a session file before writing its header.
+    // Parsing "" would throw, and reading that as unknown would mark a total that is exact.
+    if (!line.trim()) return {};
     const parsed = JSON.parse(line);
     // Parsed, and says what it is: whatever it is, it is not a session of this tree.
     if (parsed?.type !== "session") return {};
@@ -674,7 +684,9 @@ export class SessionTreeScanner {
 
     const text = entry.remainder + chunk.text;
     const lines = text.split("\n");
-    // A file being appended to can end mid-line; hold it back until the rest arrives.
+    // A file being appended to can end mid-line; hold it back until the rest arrives. A
+    // torn write that is never followed by another entry stays held and uncounted, which is
+    // the one gap this module does not disclose — see the note in the module header.
     entry.remainder = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -794,11 +806,11 @@ export class SessionTreeScanner {
     try {
       for (const name of readdirSync(dirname(rootFile))) {
         if (!name.endsWith(".jsonl")) continue;
-        // A sibling belongs to this tree only if its header says so. When the file cannot
-        // be read at all, that question has no answer, and a fork of this session would
-        // drop out of the total unnoticed — so the ambiguity is disclosed rather than
-        // resolved as "unrelated". A sidecar file needs no such care: it is admitted by
-        // where it sits, and its own read failure is reported when it is scanned.
+        // A sibling belongs to this tree only if its header says so. When its first line
+        // cannot be read or cannot be parsed, that question has no answer, and a fork of
+        // this session would drop out of the total unnoticed — so the ambiguity is disclosed
+        // rather than resolved as "unrelated". A sidecar file needs no such care: it is
+        // admitted by where it sits, and its own read failure is reported when it is scanned.
         if (add(join(dirname(rootFile), name), "forks").unreadable) this.lastStats.filesUnreadable += 1;
       }
     } catch (error) {
@@ -839,7 +851,12 @@ export class SessionTreeScanner {
   scanTree(args: { ownEntries?: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
     this.lastStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
-    const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile).header?.id : undefined);
+    const rootRead = args.sessionFile ? this.cachedHeader(args.sessionFile) : undefined;
+    const rootId = args.sessionId ?? rootRead?.header?.id;
+    // An unreadable root header costs the tree every fork that links back by session id.
+    // Counted only when the parent's entries come from memory, because otherwise this same
+    // file is scanned below and reports the failure there — one gap, counted once.
+    if (rootRead?.unreadable && args.ownEntries) this.lastStats.filesUnreadable += 1;
     const found = this.discover(args.sessionFile, rootId);
     const countedSessions = new Set<string>();
     for (const child of found) {

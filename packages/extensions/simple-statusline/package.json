@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-simple-statusline",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "description": "Aviram's ambient custom Pi footer/statusline.",
   "keywords": [

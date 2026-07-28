@@ -300,6 +300,19 @@ test("a tree that priced to nothing still shows the marker when spend went uncou
   assert.match(renderFooter(harness), /~\$0\.000/, "a zero-priced floor is still worth saying");
 });
 
+test("a zero total is also shown when what went uncounted was a whole session, not an entry", () => {
+  // The other arm of the same guard. Here the gap is an unreadable part of the tree rather
+  // than an unparseable entry, and it has to reach the footer by the same route — a $0
+  // figure hidden here would be the silent omission all of this exists to prevent.
+  const { parent } = tempSessionTree();
+  const dir = deriveChildSessionDir(parent, "tasks");
+  mkdirSync(dir, { recursive: true });
+  // A torn header: the file cannot be classified, so whether it belongs here is unknown.
+  writeFileSync(join(dir, "torn-header.jsonl"), '{"type":"sess\n');
+  const harness = createHarness([], { file: parent, id: "parent-1", entries: [] });
+  assert.match(renderFooter(harness), /~\$0\.000/, "an unreadable part of the tree still marks a zero total");
+});
+
 test("a session that genuinely cost nothing shows no figure at all", () => {
   // The other side of the same guard. An unpriced model may be free rather than
   // unaccounted, so a session with no gap keeps the footer quiet instead of parking a

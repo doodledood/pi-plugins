@@ -74,8 +74,9 @@ kinds of thing cause it — a price it cannot pin down, and spend it cannot read
   way, such as speech with no configured per-character rate.
 - **Parts of the tree it could not read.** A child session file it could not
   open; a directory that exists but cannot be listed, which hides every session
-  beneath it; a session file whose header cannot be read, leaving it unknown
-  whether it belongs to this tree; or a walk that hit its depth bound. Each is
+  beneath it; a session file whose header cannot be read or cannot be parsed — a
+  torn or truncated first line leaves it unknown whether the file belongs to this
+  tree; or a walk that hit its depth bound. Each is
   spend missing from the total, so the figure is marked rather than presented as
   exact. A directory that simply is not there is not a gap — most sessions spawn
   nothing, and nothing is missing from a total with no children in it.
@@ -83,7 +84,11 @@ kinds of thing cause it — a price it cannot pin down, and spend it cannot read
   so a torn write merges with the following entry into a single unreadable line
   and takes that entry's cost with it. Those bytes are never read again, so the
   mark stays for the rest of the session — the spend is gone for good, not
-  pending.
+  pending. One case is deliberately left unmarked: a file whose *last* line is
+  incomplete looks the same as one being written to right now, so it is held for
+  the rest to arrive rather than counted. If the process writing it died there,
+  that entry's cost is missing and nothing says so — the alternative marks every
+  session that is mid-turn.
 
 `/cost` names whichever of these applies.
 
