@@ -17,6 +17,11 @@ This file is the behavior surface for every project. HQ may rely on a rule only
 when it can cite the line that decides the case. Edit it freely: nothing but your
 own ratification adds to it, and HQ never rewrites it.
 
+Only rules under **Doors**, **Directives**, and **Precedents** can decide a case.
+Rules under any other heading — including Tastes and Escalation rules, and any
+section you add — shape how decisions are made but cannot be cited to answer a
+stop on your behalf.
+
 ## Tastes
 
 A taste shapes how a decision is made; it is not a line that decides one, so it

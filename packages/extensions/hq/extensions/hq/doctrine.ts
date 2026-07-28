@@ -23,9 +23,8 @@ import { DOCTRINE_GLOBAL_SEED, DOCTRINE_PROJECT_SEED } from "./templates.ts";
  *
  * Tastes shape how a decision is made; escalation rules say when to ask. Neither
  * decides anything, but both parse as bullets with real citations, so prose alone
- * could not keep them out of the coverage check — a caveat in section text is
- * never rendered to the worker, and three review rounds found a way past each
- * prose attempt. This list is the gate instead.
+ * cannot keep them out of the coverage check: a caveat in section text is never
+ * rendered to the worker. This list is the gate instead.
  */
 export const DECIDING_SECTIONS: ReadonlySet<string> = new Set([
   "Doors",
@@ -34,7 +33,7 @@ export const DECIDING_SECTIONS: ReadonlySet<string> = new Set([
 ]);
 
 export interface DoctrineRule {
-  /** Citable location, e.g. "global.md § Doors L14". */
+  /** Citable identity, e.g. "global.md § Doors #a1b2c3d4" — content, not position. */
   citation: string;
   section: string;
   /** The rule as one line, with any wrapped continuation folded in. */

@@ -201,7 +201,11 @@ export class HqStore {
     mutate: (packet: Packet) => Packet,
   ): Promise<Packet | undefined> {
     const path = packetPath(this.root, packetId);
-    return this.queue(path, async () => {
+    // Locked as well as queued: the seat, a drill worker and a triage worker are
+    // separate processes and all read-modify-write packets, so the in-process
+    // queue alone would let one overwrite another's annotation or patch.
+    return this.queue(path, () =>
+      withFileLock(path, async () => {
       const current = await readJsonFile(path, parsePacket, this.onError);
       if (!current) return undefined;
       const mutated = mutate(current);
@@ -221,7 +225,7 @@ export class HqStore {
         : (next.status === "held" ? { ...next, status: "pending" } : next);
       await atomicWriteJson(path, guarded);
       return guarded;
-    });
+      }, { onError: this.onError }));
   }
 
   /** Everything still in the queue, in any live status. */
@@ -497,12 +501,26 @@ export async function reopenStalledDrills(
   const cutoff = options.now.getTime() - options.minutes * 60_000;
   const reopened: string[] = [];
 
+  // A completion drill is started on a packet that is *held*, not drilling, so
+  // recovery keys off the origin row's markers as well as the packet status —
+  // otherwise a dead completion drill strands the packet and leaves the board
+  // claiming a drill is still running.
+  const markers = new Map<string, string[]>();
+  for (const state of await store.listFleet()) {
+    for (const packetId of state.drillingPacketIds) {
+      markers.set(packetId, [...(markers.get(packetId) ?? []), state.sessionId]);
+    }
+  }
+
   for (const packet of await store.listQueue()) {
-    if (packet.status !== "drilling") continue;
+    const marked = markers.has(packet.id);
+    if (packet.status !== "drilling" && !(packet.status === "held" && marked)) continue;
     if (Date.parse(packet.updatedAt) >= cutoff) continue;
     await store.updatePacket(packet.id, (current) => ({
       ...current,
-      status: "pending",
+      // A held packet stays held: its gaps are still unfilled. The bar decides
+      // whether the annotation made it presentable.
+      status: current.status === "drilling" ? "pending" : current.status,
       annotations: [
         ...current.annotations,
         {
@@ -515,9 +533,8 @@ export async function reopenStalledDrills(
         },
       ],
     }));
-    for (const state of await store.listFleet()) {
-      if (!state.drillingPacketIds.includes(packet.id)) continue;
-      await store.mutateSessionState(state.sessionId, (current) => ({
+    for (const sessionId of markers.get(packet.id) ?? []) {
+      await store.mutateSessionState(sessionId, (current) => ({
         ...current,
         drillingPacketIds: current.drillingPacketIds.filter((id) => id !== packet.id),
       }));

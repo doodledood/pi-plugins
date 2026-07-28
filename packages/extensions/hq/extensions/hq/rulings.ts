@@ -29,11 +29,12 @@ import type {
  * cannot be missing its words, and a deferral cannot be missing its question, so
  * those states are unrepresentable rather than guarded at runtime.
  */
-export type RulingRequest =
+export type RulingRequest = { presentedGeneration?: number } & (
   | { packetId: string; form: "accept"; text?: string }
   | { packetId: string; form: "alternative"; optionId: string; text?: string }
   | { packetId: string; form: "custom"; text: string }
-  | { packetId: string; form: "defer"; question: string };
+  | { packetId: string; form: "defer"; question: string }
+);
 
 export interface RulingDeps {
   store: HqStore;
@@ -92,6 +93,17 @@ export async function applyRuling(
   const packet = await deps.store.readPacket(request.packetId);
   if (!packet) return { error: `no such packet: ${request.packetId}` };
   if (packet.status === "ruled") return { error: `packet ${packet.id} already has a ruling` };
+  // The packet may have been drilled or patched between being shown and being
+  // answered. Answering the version the user did not see is worse than asking again.
+  if (
+    request.presentedGeneration !== undefined &&
+    request.presentedGeneration !== packet.generation
+  ) {
+    return {
+      error:
+        `packet ${packet.id} changed since it was shown (generation ${request.presentedGeneration} → ${packet.generation}); present it again`,
+    };
+  }
   if (request.form === "alternative" && !packet.options.some((o) => o.id === request.optionId)) {
     return { error: `option ${request.optionId} is not on packet ${packet.id}` };
   }
@@ -215,7 +227,7 @@ function buildRuling(input: {
     id: newId("rul", new Date(input.at)),
     at: input.at,
     packetId: input.packet.id,
-    packetGeneration: input.packet.generation,
+    packetGeneration: input.request.presentedGeneration ?? input.packet.generation,
     domain: input.packet.domain,
     project: input.packet.project,
     form: input.request.form,

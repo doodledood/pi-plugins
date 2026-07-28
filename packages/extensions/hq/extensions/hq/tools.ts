@@ -686,7 +686,7 @@ async function askBatch(
         startDrill: (target, question) =>
           startDrill({ store: deps.store, spawner: deps.spawner, now: deps.now }, target, question),
       },
-      { packetId: packet.id, form: "accept" },
+      { packetId: packet.id, form: "accept", presentedGeneration: packet.generation },
     );
     lines.push(
       "error" in result
@@ -734,7 +734,8 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
   if (!selected) return `${packet.id}: could not read that choice; left pending`;
 
   const request = await requestFor(ctx, packet.id, selected.intent);
-  if (!request) {
+  const answered = request ? { ...request, presentedGeneration: packet.generation } : undefined;
+  if (!answered) {
     if (dive) await flushDive(deps, dive, "(left pending)");
     return `${packet.id}: left pending${dive ? " (defect logged)" : ""}`;
   }
@@ -747,7 +748,7 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
       startDrill: (target, question) =>
         startDrill({ store: deps.store, spawner: deps.spawner, now: deps.now }, target, question),
     },
-    request,
+    answered,
   );
   if ("error" in result) {
     if (dive) await flushDive(deps, dive, "(ruling failed)");

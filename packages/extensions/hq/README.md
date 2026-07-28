@@ -178,6 +178,9 @@ Taking the seat prunes HQ's own bookkeeping — dead session rows, finished stop
 records, and worker logs older than two weeks. Packets, rulings, audits, defects,
 and doctrine are never pruned; they are yours.
 
+`HQ_PI_BIN` overrides which `pi` binary workers are spawned with — the escape
+hatch when spawning fails.
+
 Optional mechanical settings live in `~/.pi/agent/hq.json` (see
 [`config/hq.example.json`](config/hq.example.json)) — a fast model for titling the
 board, and a cap on concurrent workers. Everything else, including the staleness
@@ -204,6 +207,16 @@ section, so there is exactly one place to look.
   because a distilled answer you cannot check is one you have to go and verify.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
+
+## Reading the change
+
+This shipped as one package rather than stacked slices, deliberately: the appetite
+was the whole loop working, there is no pull request to review it in, and 36
+independent gates verify it. If you want to read it in stages, take them in the
+order the end-to-end runner does — `skeleton` (substrate, reporter, stop, triage,
+packet, ruling), `drill` and `tiering` (the two drill tiers), `doctrine` (capture
+and ratification), `grammar` (the ruling forms), `graduation` (authority). Each
+stage's assertions name what that slice owes.
 
 ## Development
 

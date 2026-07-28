@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -10,6 +10,7 @@ import {
   readJsonl,
   scanJsonDir,
   truncatePreview,
+  withFileLock,
 } from "./io.ts";
 import { assertSafeId, hqPaths, projectSlug, resolveStateRoot } from "./paths.ts";
 import { dropRoot, makeRoot, makeStore, packetDraftFixture, sessionStateFixture } from "./testing.ts";
@@ -229,6 +230,40 @@ test("HQ prunes its own bookkeeping and never the user's records", async () => {
   }
 });
 
+test("a dead completion drill stops claiming the board and the packet stays honest", async () => {
+  const root = await makeRoot("hq-stalled-held");
+  try {
+    const store = makeStore(root, () => new Date("2026-07-28T12:00:00.000Z"));
+    await store.ensure();
+    const { reopenStalledDrills } = await import("./store.ts");
+
+    // A completion drill runs against a packet that is held, not drilling.
+    const { packet } = await store.createPacket(packetDraftFixture({ flipCondition: "TBD" }));
+    assert.equal(packet.status, "held");
+    await store.publishSessionState(
+      sessionStateFixture({ sessionId: packet.sourceSessionId, drillingPacketIds: [packet.id] }),
+    );
+
+    const reopened = await reopenStalledDrills(store, {
+      minutes: 30,
+      now: new Date("2026-07-28T13:00:00.000Z"),
+    });
+    assert.deepEqual(reopened, [packet.id]);
+    assert.equal(
+      (await store.readPacket(packet.id))?.status,
+      "held",
+      "its gaps are still unfilled, so it stays held rather than reaching the user",
+    );
+    assert.deepEqual(
+      (await store.readSessionState(packet.sourceSessionId))?.drillingPacketIds,
+      [],
+      "but the board stops showing a drill that is not running",
+    );
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("an unreadable authority file is kept aside, never overwritten as empty", async () => {
   const root = await makeRoot("hq-grad-corrupt");
   try {
@@ -363,6 +398,56 @@ test("a scan reports an identity mismatch instead of trusting the file", async (
   }
 });
 
+test("a lock left behind by a dead holder is broken, not waited on", async () => {
+  const root = await makeRoot("hq-lock-stale");
+  try {
+    const target = join(root, "row.json");
+    await atomicWriteJson(target, { a: 1 });
+    // A holder that died leaves its lock file behind.
+    await writeFile(`${target}.lock`, "999999999\n", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    let ran = false;
+    const result = await withFileLock(target, async () => {
+      ran = true;
+      return "done";
+    }, { staleMs: 10 });
+    assert.equal(ran, true, "a stale lock must not park the caller forever");
+    assert.equal(result, "done");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a lock that never frees is reported and the work still happens", async () => {
+  const root = await makeRoot("hq-lock-busy");
+  try {
+    const target = join(root, "row.json");
+    await atomicWriteJson(target, { a: 1 });
+    // Held continuously and never stale: the give-up path.
+    await writeFile(`${target}.lock`, "1\n", "utf8");
+    const held = setInterval(() => {
+      const when = new Date();
+      void utimes(`${target}.lock`, when, when).catch(() => undefined);
+    }, 5);
+    const problems: string[] = [];
+    try {
+      const result = await withFileLock(target, async () => "ran anyway", {
+        staleMs: 60_000,
+        attempts: 3,
+        onError: (message) => problems.push(message),
+      });
+      assert.equal(result, "ran anyway", "a stuck lock must not stall the seat");
+      assert.equal(problems.length, 1);
+      assert.match(problems[0] ?? "", /Could not take the lock/);
+    } finally {
+      clearInterval(held);
+    }
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("same-key writes are serialized", async () => {
   const queue = createWriteQueue();
   const order: number[] = [];
@@ -391,6 +476,25 @@ test("parsers refuse records they cannot trust", () => {
   assert.notEqual(parseSessionState(sessionStateFixture()), undefined);
   assert.equal(parsePacket({ version: 1 }), undefined);
   assert.equal(parseRuling({ version: 1, id: "r" }), undefined);
+});
+
+test("a packet whose sub-fields are malformed is untrusted, not silently emptied", () => {
+  const base = {
+    ...packetDraftFixture(),
+    version: 1,
+    id: "pkt-1",
+    createdAt: "2026-07-28T12:00:00.000Z",
+    updatedAt: "2026-07-28T12:00:00.000Z",
+    generation: 1,
+    status: "pending",
+  };
+  // Each of these drives a different decision: coverage, ratification, ordering.
+  assert.equal(parsePacket({ ...base, doctrineCitations: [1, 2] }), undefined);
+  assert.equal(parsePacket({ ...base, dependsOn: "pkt-9" }), undefined);
+  assert.equal(parsePacket({ ...base, proposal: { kind: "bogus" } }), undefined);
+  // Absent is different from malformed, and stays healthy.
+  const { doctrineCitations, dependsOn, proposal, ...withoutOptionals } = base;
+  assert.notEqual(parsePacket(withoutOptionals), undefined);
 });
 
 test("the packet bar rejects placeholders as firmly as blanks", () => {

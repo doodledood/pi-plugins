@@ -350,6 +350,41 @@ test("ratifying a proposal writes the rule; rejecting leaves doctrine byte-ident
   }
 });
 
+test("a packet that changed since it was shown is not answered blindly", async () => {
+  const h = await harness("hq-rule-stale-generation");
+  try {
+    const packet = await queuePacket(h);
+    // A drill annotates it between presentation and the click.
+    await h.store.updatePacket(packet.id, (current) => ({
+      ...current,
+      annotations: [
+        ...current.annotations,
+        { at: "2026-07-28T12:05:00.000Z", question: "q", answer: "a", quotes: [], tier: 1 as const },
+      ],
+    }));
+
+    const stale = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "accept", presentedGeneration: packet.generation },
+    );
+    assert.equal("error" in stale, true, "the ruling is refused rather than applied to a changed packet");
+    if ("error" in stale) assert.match(stale.error, /changed since it was shown/);
+    assert.deepEqual(await h.store.listRulings(), []);
+
+    // Presented again at its current generation, it rules normally and records it.
+    const fresh = await h.store.readPacket(packet.id);
+    const ok = await applyRuling(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      { packetId: packet.id, form: "accept", presentedGeneration: fresh?.generation },
+    );
+    assert.equal("error" in ok, false);
+    if ("error" in ok) return;
+    assert.equal(ok.ruling.packetGeneration, fresh?.generation);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
 test("a deferral drills and leaves the packet in the queue", async () => {
   const h = await harness("hq-rule-defer");
   try {

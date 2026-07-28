@@ -147,10 +147,29 @@ export async function claimStop(
   );
   if (!won) return false;
   const record = await readStopRecord(root, stopId);
-  if (record) {
-    await writeStopRecord(root, { ...record, status: "claimed", claimedByPid: pid, claimedAt: at });
+  if (!record) {
+    // The claim exists but no record could be read, so nothing owes an outcome
+    // under this claim: release it rather than leaving a stop nobody can sweep.
+    await releaseClaim(root, stopId);
+    return false;
   }
+  await writeStopRecord(root, { ...record, status: "claimed", claimedByPid: pid, claimedAt: at });
   return true;
+}
+
+/** The pid recorded in the claim file, when the record itself lost it. */
+async function readClaimPid(root: string, stopId: string): Promise<number | undefined> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const parsed: unknown = JSON.parse(await readFile(claimPath(root, stopId), "utf8"));
+    if (typeof parsed === "object" && parsed !== null) {
+      const pid = (parsed as { pid?: unknown }).pid;
+      if (typeof pid === "number" && Number.isSafeInteger(pid)) return pid;
+    }
+  } catch {
+    // No readable claim file means no claimant to trust.
+  }
+  return undefined;
 }
 
 export async function releaseClaim(root: string, stopId: string): Promise<void> {
@@ -209,8 +228,12 @@ export async function findStopsNeedingTriage(
       stale.push({ record, reason: "unclaimed" });
       continue;
     }
-    if (record.claimedByPid !== null && !alive(record.claimedByPid)) {
-      const claimedAt = record.claimedAt ? Date.parse(record.claimedAt) : 0;
+    // A claimed record with no claimant is a claim that died between its two
+    // steps; past the grace window it is abandoned work like any other, and the
+    // pid on the claim file is the last word on who held it.
+    const claimant = record.claimedByPid ?? (await readClaimPid(root, record.stopId));
+    const claimedAt = Date.parse(record.claimedAt ?? record.createdAt);
+    if (claimant === undefined || !alive(claimant)) {
       if (now.getTime() - claimedAt < CLAIM_GRACE_MS) continue;
       stale.push({ record, reason: "claimant-dead" });
     }
@@ -218,7 +241,6 @@ export async function findStopsNeedingTriage(
   return stale;
 }
 
-/** Clears a dead claim so the stop can be retried. */
 /** Moves the claim to the process that will actually produce the outcome. */
 export async function takeOverClaim(
   root: string,

@@ -501,6 +501,9 @@ export function describePacket(packet: Packet): string {
         `- ${option.id === packet.recommendationId ? "[recommended] " : ""}${option.label} — ${option.price}`,
     ),
     `Flips if: ${packet.flipCondition}`,
+    packet.doctrineCitations.length > 0
+      ? `Rests on: ${packet.doctrineCitations.join("; ")}`
+      : "Rests on: no doctrine line",
     recommended ? `Recommended: ${recommended.label}` : "",
     ...packet.annotations.map(
       (annotation) =>

@@ -93,6 +93,34 @@ test("a stop whose triage never finished is found again; a finished one is not",
   }
 });
 
+test("a claim that died between its two steps is still recoverable", async () => {
+  const root = await makeRoot("hq-claim-halfway");
+  try {
+    const stop = stopFixture({ stopId: "sess-a--halfway", status: "claimed", claimedByPid: null });
+    await writeStopRecord(root, stop);
+    // The claim file landed; the record write did not. The pid is only on the file.
+    const { atomicWriteText } = await import("./io.ts");
+    await atomicWriteText(
+      `${hqPaths(root).stops}/${stop.stopId}.claim`,
+      `${JSON.stringify({ pid: 999_999_999, at: stop.createdAt })}\n`,
+    );
+
+    const stale = await findStopsNeedingTriage(
+      root,
+      undefined,
+      () => false,
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    assert.deepEqual(
+      stale.map((entry) => entry.reason),
+      ["claimant-dead"],
+      "a stop nobody owes an outcome for must not be skipped forever",
+    );
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("a claim being handed over is not mistaken for an abandoned one", async () => {
   const root = await makeRoot("hq-claim-handover");
   try {

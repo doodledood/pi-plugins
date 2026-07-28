@@ -285,6 +285,11 @@ export function bool(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+/** Absent reads as an empty list; present-but-wrong reads as untrustworthy. */
+function optionalStrArray(value: unknown): string[] | undefined {
+  return value === undefined || value === null ? [] : strArray(value);
+}
+
 function strArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const out: string[] = [];
@@ -441,16 +446,18 @@ export function parsePacket(value: unknown): Packet | undefined {
   const blastRadius = oneOf(value.blastRadius, BLASTS);
   const reversibility = oneOf(value.reversibility, REVERSIBILITIES);
   const status = oneOf(value.status, PACKET_STATUSES);
-  const dependsOn = strArray(value.dependsOn) ?? [];
-  const doctrineCitations = strArray(value.doctrineCitations) ?? [];
+  const dependsOn = optionalStrArray(value.dependsOn);
+  const doctrineCitations = optionalStrArray(value.doctrineCitations);
   const shadowRuling = parseShadow(value.shadowRuling);
   const annotations = parseAnnotations(value.annotations);
+  const proposal = parseProposal(value.proposal);
 
   if (
     id === undefined || createdAt === undefined || updatedAt === undefined ||
     generation === undefined || sourceSessionId === undefined ||
     sourceSessionFile === undefined || project === undefined || domain === undefined ||
     title === undefined || question === undefined || options === undefined ||
+    dependsOn === undefined || doctrineCitations === undefined || proposal === undefined ||
     recommendationId === undefined || flipCondition === undefined ||
     blastRadius === undefined || reversibility === undefined || status === undefined ||
     shadowRuling === undefined || annotations === undefined
@@ -481,18 +488,20 @@ export function parsePacket(value: unknown): Packet | undefined {
     shadowRuling,
     annotations,
     trivial: bool(value.trivial) ?? false,
-    proposal: parseProposal(value.proposal),
+    proposal,
   };
 }
 
-function parseProposal(value: unknown): PacketProposal | null {
-  if (!isRecord(value)) return null;
+/** `undefined` means the record cannot be trusted; `null` means there is no proposal. */
+function parseProposal(value: unknown): PacketProposal | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) return undefined;
   const kind = oneOf(value.kind, ["new-rule", "amendment", "graduation"] as const);
   const scope = oneOf(value.scope, ["global", "project"] as const);
   const section = str(value.section);
   const ruleText = str(value.ruleText);
   if (kind === undefined || scope === undefined || section === undefined || ruleText === undefined) {
-    return null;
+    return undefined;
   }
   return {
     kind,
