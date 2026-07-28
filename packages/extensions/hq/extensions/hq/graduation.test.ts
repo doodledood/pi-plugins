@@ -153,3 +153,15 @@ test("the audit rate is the configured one, decaying only with a long record", (
   assert.equal(shouldSampleForAudit({ ...meta, auditSampleRate: 1 }, fresh, () => 0.99), true);
   assert.equal(shouldSampleForAudit({ ...meta, auditSampleRate: 0 }, fresh, () => 0), false);
 });
+
+test("audit decay keeps ageing after a domain graduates", () => {
+  const meta = { ...META_DEFAULTS, auditSampleRate: 0.2 };
+  // A graduated domain stops collecting rulings, so its agreements freeze. If decay
+  // keyed only off those, the rate would stay at the young-domain value forever —
+  // exactly when the track record it is supposed to reward starts accumulating.
+  const graduated = { ...emptyDomainStats("d"), agreements: 12, graduated: true };
+  const young = effectiveAuditRate(meta, graduated);
+  const seasoned = effectiveAuditRate(meta, { ...graduated, autoAnswered: 300 });
+  assert.ok(seasoned < young, "300 doctrine-answered stops must lower the rate");
+  assert.ok(seasoned >= 0.05, "and it never reaches zero");
+});

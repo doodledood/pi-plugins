@@ -11,7 +11,7 @@ import { loadDoctrine, renderDoctrine, seedDoctrine, seedProjectDoctrine } from 
 import { type ErrorReporter, scanJsonDir } from "./io.ts";
 import { hqPaths } from "./paths.ts";
 import { TRIAGE_KICKOFF } from "./prompts.ts";
-import { ceilingDecision, shouldSampleForAudit } from "./graduation.ts";
+import { ceilingDecision, recordAutoAnswer, shouldSampleForAudit } from "./graduation.ts";
 import { startCompletionDrill, type DrillDeps } from "./drills.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
@@ -195,6 +195,7 @@ export async function applyTriageOutcome(
       }
 
       const stats = (await deps.store.readGraduation()).domains[outcome.domain];
+      await recordAutoAnswer(deps.store, outcome.domain);
       const sampled = shouldSampleForAudit(doctrine.meta, stats, deps.random);
       await deps.store.appendAudit({
         at,
@@ -252,6 +253,7 @@ export async function applyTriageOutcome(
       }
 
       const stats = (await deps.store.readGraduation()).domains[outcome.domain];
+      await recordAutoAnswer(deps.store, outcome.domain);
       await deps.store.appendAudit({
         at,
         sourceSessionId: stop.sessionId,

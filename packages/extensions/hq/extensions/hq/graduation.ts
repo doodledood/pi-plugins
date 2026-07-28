@@ -40,6 +40,14 @@ export function foldShadowOutcome(stats: DomainStats, outcome: ShadowOutcome): D
   return next;
 }
 
+/** Counts one stop this domain answered from doctrine, which ages its audit rate. */
+export async function recordAutoAnswer(
+  store: Pick<HqStore, "updateDomain">,
+  domain: string,
+): Promise<void> {
+  await store.updateDomain(domain, (stats) => ({ ...stats, autoAnswered: stats.autoAnswered + 1 }));
+}
+
 export async function recordShadowOutcome(
   store: HqStore,
   outcome: ShadowOutcome,
@@ -183,7 +191,9 @@ export function ceilingDecision(input: CeilingInput): CeilingDecision {
 export function effectiveAuditRate(meta: MetaDoctrine, stats: DomainStats | undefined): number {
   const base = meta.auditSampleRate;
   if (base <= 0) return 0;
-  const answered = stats?.agreements ?? 0;
+  // Agreements stop arriving the moment a domain graduates, so decaying on them
+  // alone froze the rate forever at exactly the point the record starts to matter.
+  const answered = (stats?.agreements ?? 0) + (stats?.autoAnswered ?? 0);
   const decayed = base / (1 + Math.floor(answered / 100));
   return Math.max(Math.min(base, 0.05), decayed);
 }

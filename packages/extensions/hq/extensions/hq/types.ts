@@ -238,6 +238,12 @@ export interface DomainStats {
   firstConsecutiveAt: string | null;
   lastRulingAt: string | null;
   overrides: number;
+  /**
+   * Stops this domain answered from doctrine without asking. This is the record
+   * that lengthens once a domain is graduated — rulings stop arriving, so audit
+   * decay has to key off work done rather than agreements recorded.
+   */
+  autoAnswered: number;
   /** True only after an explicit user command. */
   graduated: boolean;
   graduatedAt: string | null;
@@ -259,6 +265,7 @@ export function emptyDomainStats(domain: string): DomainStats {
     firstConsecutiveAt: null,
     lastRulingAt: null,
     overrides: 0,
+    autoAnswered: 0,
     graduated: false,
     graduatedAt: null,
     proposedAt: null,
@@ -667,6 +674,7 @@ export function parseGraduationState(value: unknown): GraduationState | undefine
       firstConsecutiveAt: strOrNull(raw.firstConsecutiveAt) ?? null,
       lastRulingAt: strOrNull(raw.lastRulingAt) ?? null,
       overrides: num(raw.overrides) ?? 0,
+      autoAnswered: num(raw.autoAnswered) ?? 0,
       graduated: bool(raw.graduated) ?? false,
       graduatedAt: strOrNull(raw.graduatedAt) ?? null,
       proposedAt: strOrNull(raw.proposedAt) ?? null,
