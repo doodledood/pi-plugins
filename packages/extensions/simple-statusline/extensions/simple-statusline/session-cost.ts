@@ -50,6 +50,23 @@ export function isAbsence(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+/**
+ * Does a failed read leave spend missing from the total?
+ *
+ * Absence normally answers no: a path that was never there was never holding anything, and
+ * most sessions spawn nothing. It answers yes for a path this scan just discovered — that
+ * one existed moments ago, and discovery is also what put its session into the suppression
+ * set, so the parent's tool result restating its spend has already been dropped as a
+ * duplicate of it. Forgiving that loses the same money from both sides at once and still
+ * reads as exact.
+ *
+ * Both reads a scan makes — the stat and the open — decide this the same way, which is why
+ * they ask here rather than each spelling it out.
+ */
+export function readFailureIsGap(absent: boolean, knownToExist?: boolean): boolean {
+  return !absent || Boolean(knownToExist);
+}
+
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   const code = (error as { code: unknown }).code;
@@ -665,16 +682,9 @@ export class SessionTreeScanner {
     try {
       stat = statSync(path);
     } catch (error) {
-      // Classified before anything else, because the gap is the same whether or not this
-      // file had been read before: a path that is gone hides nothing further, while any
-      // other failure means a discovered session may be holding spend out of sight.
-      //
-      // Absence is not forgiven for a file this scan just discovered. It existed moments
-      // ago, which is why its id already sits in `countedSessions` — so the parent's tool
-      // result restating this session's spend has been dropped as a duplicate of a file
-      // that then disappeared. Treating that as benign loses the same money twice over and
-      // still reads as exact.
-      if (!isAbsence(error) || fold.knownToExist) this.lastStats.filesUnreadable += 1;
+      // Asked before anything else, because the answer does not depend on whether this file
+      // had been read before.
+      if (readFailureIsGap(isAbsence(error), fold.knownToExist)) this.lastStats.filesUnreadable += 1;
       const counted = this.files.get(path);
       if (!counted) return undefined; // never read, so there is no folded total to keep
       // Spend already folded here has been counted and shown, so it stands rather than
@@ -696,10 +706,9 @@ export class SessionTreeScanner {
     const chunk = this.readRange(path, entry.offset, stat.size, entry.decoder);
     if (!("text" in chunk)) {
       // Keep whatever was already folded, so a total missing this file's spend is not
-      // presented as exact — and report the gap on the same rule the stat above uses: a
-      // path that was never seen hides nothing, but one this scan just discovered was there
-      // moments ago, and its bytes are spend nothing else will account for.
-      if (!chunk.absent || fold.knownToExist) this.lastStats.filesUnreadable += 1;
+      // presented as exact — and ask the same question the stat above asked, since a file
+      // can vanish between the two.
+      if (readFailureIsGap(chunk.absent, fold.knownToExist)) this.lastStats.filesUnreadable += 1;
       return summarize(entry.acc, { id: entry.header?.id, path, kind });
     }
     entry.reads += 1;
