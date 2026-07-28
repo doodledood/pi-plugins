@@ -503,10 +503,11 @@ test("an unreadable parent header read from disk is one gap, not two", () => {
 });
 
 test("whether a failed read is a gap turns on one question, asked by both reads", () => {
-  // A scan reads twice — the stat, then the open — and a file can vanish between them. Both
-  // answer here, so this is the whole rule for both: absence hides nothing unless the scan
-  // had just discovered the path, in which case it was there a moment ago and its spend has
-  // already been suppressed elsewhere as a duplicate of it.
+  // Asked wherever a read fails with no proof of its own that the path was there: absence
+  // hides nothing unless this scan had just seen it, in which case it was there a moment ago
+  // and its spend may already have been suppressed elsewhere as a duplicate of it. The read
+  // that follows a successful stat needs no such question — the stat is the proof, so every
+  // failure there is a gap.
   assert.equal(readFailureIsGap(false, false), true, "there and unreadable is always a gap");
   assert.equal(readFailureIsGap(false, true), true);
   assert.equal(readFailureIsGap(true, true), true, "gone, but this scan had just found it");

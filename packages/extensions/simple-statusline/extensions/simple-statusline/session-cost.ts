@@ -60,8 +60,8 @@ export function isAbsence(error: unknown): boolean {
  * duplicate of it. Forgiving that loses the same money from both sides at once and still
  * reads as exact.
  *
- * Both reads a scan makes — the stat and the open — decide this the same way, which is why
- * they ask here rather than each spelling it out.
+ * Asked wherever a read fails without prior proof of its own — the stat of a session file,
+ * and a directory the walk was told to descend into. `knownToExist` is that proof.
  */
 export function readFailureIsGap(absent: boolean, knownToExist?: boolean): boolean {
   return !absent || Boolean(knownToExist);
@@ -578,8 +578,12 @@ export function listSidecarSessionFiles(
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (error) {
-      // A directory that exists and cannot be listed hides every session below it.
-      if (!isAbsence(error)) unreadableDirs += 1;
+      // A directory that exists and cannot be listed hides every session below it. Absence
+      // is the ordinary case only at the top: most sessions spawn nothing, so their sidecar
+      // root was never created. Deeper down, this path came from a listing that had just
+      // shown it as a directory, so it was there moments ago — gone now means it took every
+      // session beneath it while this walk was running.
+      if (readFailureIsGap(isAbsence(error), depth > 0)) unreadableDirs += 1;
       return;
     }
     for (const entry of entries) {
@@ -704,11 +708,12 @@ export class SessionTreeScanner {
     }
 
     const chunk = this.readRange(path, entry.offset, stat.size, entry.decoder);
-    if (!("text" in chunk)) {
-      // Keep whatever was already folded, so a total missing this file's spend is not
-      // presented as exact — and ask the same question the stat above asked, since a file
-      // can vanish between the two.
-      if (readFailureIsGap(chunk.absent, fold.knownToExist)) this.lastStats.filesUnreadable += 1;
+    if (chunk == null) {
+      // Always a gap, and this is the one read that needs no provenance to say so: the stat
+      // just above succeeded, so this file existed moments ago whatever the caller knew
+      // about it. Whatever was already folded is kept, so a total missing the rest of this
+      // file's spend is not presented as exact.
+      this.lastStats.filesUnreadable += 1;
       return summarize(entry.acc, { id: entry.header?.id, path, kind });
     }
     entry.reads += 1;
@@ -749,17 +754,10 @@ export class SessionTreeScanner {
   }
 
   /**
-   * Bytes in `[from, to)`, or why the read failed. `absent` separates a file that vanished
-   * between the stat and the open from one that is there and could not be read. The caller
-   * decides what that means: absence hides nothing for a path it never saw, and hides this
-   * file's whole contribution for one it just discovered.
+   * Bytes in `[from, to)`, or `undefined` when the read failed. The failure needs no errno:
+   * the caller has already stat-ed this path, so every way this can fail is a gap.
    */
-  private readRange(
-    path: string,
-    from: number,
-    to: number,
-    decoder: StringDecoder,
-  ): { text: string; bytesRead: number } | { absent: boolean } {
+  private readRange(path: string, from: number, to: number, decoder: StringDecoder): { text: string; bytesRead: number } | undefined {
     if (to <= from) return { text: "", bytesRead: 0 };
     let fd: number | undefined;
     try {
@@ -768,8 +766,8 @@ export class SessionTreeScanner {
       const buffer = Buffer.allocUnsafe(length);
       const read = readSync(fd, buffer, 0, length, from);
       return { text: decoder.write(buffer.subarray(0, read)), bytesRead: read };
-    } catch (error) {
-      return { absent: isAbsence(error) };
+    } catch {
+      return undefined;
     } finally {
       if (fd != null) {
         try {
