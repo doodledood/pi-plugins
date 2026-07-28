@@ -476,6 +476,27 @@ test("an unreadable parent header read from disk is one gap, not two", () => {
   }
 });
 
+test("a session that was discovered and then vanished is a gap, not an absence", () => {
+  // Discovery is proof the file existed, and it is also what puts the session into the
+  // suppression set — so by the time the scan finds it gone, the parent's tool result
+  // restating this session's spend has already been dropped as a duplicate of it. Both
+  // sides of the same money disappear together, which is why absence cannot be forgiven
+  // here the way it is for a path that was never there.
+  //
+  // The window between discovery and the scan is a race no fixture can hold open, so the
+  // branch is pinned where the decision is made rather than through a staged tree.
+  const root = tempRoot();
+  const missing = join(root, "vanished.jsonl");
+
+  const discovered = new SessionTreeScanner();
+  assert.equal(discovered.scanFile(missing, "tasks", { knownToExist: true }), undefined);
+  assert.equal(discovered.stats.filesUnreadable, 1, "a session that existed a moment ago is missing spend");
+
+  const never = new SessionTreeScanner();
+  assert.equal(never.scanFile(missing, "tasks"), undefined);
+  assert.equal(never.stats.filesUnreadable, 0, "a path nothing ever saw hides nothing");
+});
+
 test("corrupt entries in different sessions add up across the tree", () => {
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(1)] });

@@ -654,7 +654,11 @@ export class SessionTreeScanner {
    * first folded — a fork's copied history is fixed when the fork is created — so a
    * cached file needs no re-evaluation when they grow.
    */
-  scanFile(path: string, kind: string, fold: Omit<FoldOptions, keyof PriceOptions> = {}): SessionCost | undefined {
+  scanFile(
+    path: string,
+    kind: string,
+    fold: Omit<FoldOptions, keyof PriceOptions> & { knownToExist?: boolean } = {},
+  ): SessionCost | undefined {
     let stat: import("node:fs").Stats;
     try {
       stat = statSync(path);
@@ -662,13 +666,20 @@ export class SessionTreeScanner {
       // Classified before anything else, because the gap is the same whether or not this
       // file had been read before: a path that is gone hides nothing further, while any
       // other failure means a discovered session may be holding spend out of sight.
-      if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
+      //
+      // Absence is not forgiven for a file this scan just discovered. It existed moments
+      // ago, which is why its id already sits in `countedSessions` — so the parent's tool
+      // result restating this session's spend has been dropped as a duplicate of a file
+      // that then disappeared. Treating that as benign loses the same money twice over and
+      // still reads as exact.
+      if (!isAbsence(error) || fold.knownToExist) this.lastStats.filesUnreadable += 1;
       const counted = this.files.get(path);
       if (!counted) return undefined; // never read, so there is no folded total to keep
       // Spend already folded here has been counted and shown, so it stands rather than
       // quietly lowering a total the user has seen — the same choice the failed read below
-      // makes. Reached when a discovered file stops being readable; a file deleted outright
-      // stops being discovered too, and then it is no longer part of the tree at all.
+      // makes. Reached when a discovered file stops being readable, and for the one scan
+      // that catches a deletion mid-pass; by the next scan a deleted file is no longer
+      // discovered, and then it is no longer part of the tree at all.
       return summarize(counted.acc, { id: counted.header?.id, path, kind });
     }
     const cached = this.files.get(path);
@@ -896,7 +907,7 @@ export class SessionTreeScanner {
     const excludeKeys = new Set<string>(own.countedKeys);
     const descendants: SessionCost[] = [];
     for (const child of found) {
-      const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
+      const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys, knownToExist: true });
       if (!cost) continue;
       descendants.push(cost);
       for (const key of cost.countedKeys) excludeKeys.add(key);
