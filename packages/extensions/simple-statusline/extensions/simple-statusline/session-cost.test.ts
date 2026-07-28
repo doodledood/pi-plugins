@@ -360,6 +360,24 @@ test("toggling the tier mid-session prices each turn by the tier in force", () =
   assert.equal(summarize(acc, { kind: "own" }).cost, 1 + 3 + 1);
 });
 
+test("everything billed in a priority window takes the premium, not just assistant turns", () => {
+  // pi issues compaction, branch-summary, and tool-nested calls through the same
+  // provider path, so they are billed at whatever tier is in force.
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
+  for (const entry of [assistant(1), toolResult(1), compaction(1), branchSummary(1)]) {
+    accumulateEntry(acc, entry, { priorityMultiplier: 2 });
+  }
+  assert.equal(summarize(acc, { kind: "own" }).cost, 8, "all four sources doubled");
+});
+
+test("a keepalive cost record is not swept into a priority window it never joined", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
+  accumulateEntry(acc, costRecord(1, "ping-1"), { priorityMultiplier: 2 });
+  assert.equal(summarize(acc, { kind: "own" }).cost, 1, "a separate paid call keeps its own price");
+});
+
 test("real tokens priced at zero are surfaced as unpriced, not silently free", () => {
   const acc = createAccumulator();
   accumulateEntry(acc, { type: "message", id: "z1", message: { role: "assistant", provider: "openai", model: "mystery-alias", usage: usage(0) } });
@@ -367,6 +385,7 @@ test("real tokens priced at zero are surfaced as unpriced, not silently free", (
   assert.deepEqual(tree.unpricedModels, ["openai/mystery-alias"]);
   assert.ok(tree.approximate);
   assert.match(tree.approximateReasons.join(" "), /no price resolved for openai\/mystery-alias/);
+  assert.match(tree.approximateReasons.join(" "), /unpriced, or genuinely free/, "the reason does not assert a bug that may just be a free model");
 });
 
 test("a zero-token, zero-cost entry is not reported as unpriced", () => {

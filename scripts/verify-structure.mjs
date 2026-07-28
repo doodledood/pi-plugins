@@ -208,6 +208,42 @@ for (const name of expectedSkills) {
     else if (readlinkSync(claudeSkillPath) !== `../../.agents/skills/${name}`) errors.push(`${claudeSkillPath}: symlink target must be ../../.agents/skills/${name}`);
   }
 }
+/**
+ * Cross-package record-type contracts. Each extension declares these literals itself
+ * rather than importing them, so every package stays individually installable — which
+ * also means a rename on one side would silently stop cost accounting with every
+ * package's own tests still green. This is the check that would catch it.
+ */
+const recordTypeContracts = [
+  {
+    literal: "pi-cost-record",
+    writers: [
+      "packages/extensions/cache-optimization/extensions/cache-optimization.ts",
+      "packages/extensions/openai-tts/extensions/openai-tts/index.ts",
+    ],
+    readers: ["packages/extensions/simple-statusline/extensions/simple-statusline/session-cost.ts"],
+  },
+  {
+    literal: "pi-price-tier",
+    writers: ["packages/extensions/gpt-fast-toggle/extensions/gpt-fast-toggle.ts"],
+    readers: ["packages/extensions/simple-statusline/extensions/simple-statusline/session-cost.ts"],
+  },
+];
+for (const contract of recordTypeContracts) {
+  for (const [role, paths] of [["writer", contract.writers], ["reader", contract.readers]]) {
+    for (const relative of paths) {
+      const path = join(root, relative);
+      if (!existsSync(path)) {
+        errors.push(`${relative}: missing ${role} of record type "${contract.literal}"`);
+        continue;
+      }
+      if (!readFileSync(path, "utf8").includes(`"${contract.literal}"`)) {
+        errors.push(`${relative}: ${role} no longer declares record type "${contract.literal}" — cost accounting would silently stop`);
+      }
+    }
+  }
+}
+
 ensureNoForbiddenNames();
 
 if (errors.length) {

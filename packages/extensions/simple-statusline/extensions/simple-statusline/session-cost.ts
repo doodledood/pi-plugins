@@ -188,11 +188,6 @@ function modelTotals(acc: CostAccumulator, key: string): ModelTotals {
   return totals;
 }
 
-/** Whether an entry is an assistant turn, whose cost the billing tier can modify. */
-function isAssistantEntry(entry: any): boolean {
-  return entry?.type === "message" && entry.message?.role === "assistant";
-}
-
 /** Usage plus its bucket key for one session entry, or undefined when the entry is not billed. */
 function billedUsage(entry: any): { key: string; usage: UsageLike } | undefined {
   if (entry?.type === "branch_summary" || entry?.type === "compaction") {
@@ -277,10 +272,13 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
   addTokens(totals, billed.usage);
 
   const baseCost = billed.usage.cost?.total ?? 0;
-  // A record stating the tier it paid wins over the ambient tier.
+  // The ambient tier covers every request pi issues on the session's model — assistant
+  // turns, but also the compaction, branch-summary, and tool-nested calls that go
+  // through the same provider path and are billed at the same tier. A cost record is a
+  // separate paid call, so it is only priority when it says so itself.
   const ownTier = entry?.type === "custom" ? entry.data?.tier : undefined;
-  const tier = ownTier ?? acc.currentTier;
-  const priority = tier === "priority" && (isAssistantEntry(entry) || ownTier === "priority");
+  const tier = ownTier ?? (entry?.type === "custom" ? "standard" : acc.currentTier);
+  const priority = tier === "priority";
   const multiplier = priority ? price.priorityMultiplier : undefined;
   const cost = multiplier != null ? baseCost * multiplier : baseCost;
 
@@ -342,7 +340,7 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     reasons.push("priority-tier turns priced at standard rates (set priorityMultiplier in gpt-fast-toggle.json)");
   }
   if (unpriced.size > 0) {
-    reasons.push(`no price resolved for ${[...unpriced].join(", ")}`);
+    reasons.push(`no price resolved for ${[...unpriced].join(", ")} (unpriced, or genuinely free)`);
   }
   if (unreadableSessions > 0) {
     reasons.push(`${unreadableSessions} session file${unreadableSessions === 1 ? "" : "s"} could not be read, so their spend is missing`);

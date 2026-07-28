@@ -346,3 +346,36 @@ test("/cost's branch subtotal counts tool and compaction usage, not assistant tu
   // 1 + 0.5 + 0.25: the assistant-only rule would have reported $1.00.
   assert.match(report, /active branch \(this session only\): \$1\.75/);
 });
+
+test("/cost states the total is a floor and names each reason, over real fixtures", async () => {
+  const { parent } = tempSessionTree();
+  // A child whose model has no resolvable price, and a priority-tier window in the
+  // parent with no configured premium: both reasons must reach the report.
+  writeChildSession(parent, "tasks", "unpriced", [0]);
+  const own = [
+    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
+    ownAssistant(0.4, "own-1"),
+  ];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  assert.match(report, /Session tree lifetime cost: ~\$0\.400/, "the report headline carries the floor marker too");
+  assert.match(report, /Approximate, because:/);
+  assert.match(report, /priority-tier turns priced at standard rates/);
+  assert.match(report, /no price resolved for openai\/child-model/);
+  assert.match(report, /priority-tier turns billed above the \$0\.400 counted here/);
+});
+
+test("/cost drops the approximation section once everything is priced", async () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "priced", [0.5]);
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  assert.match(report, /Session tree lifetime cost: \$1\.00/);
+  assert.doesNotMatch(report, /Approximate, because/);
+  assert.doesNotMatch(report, /~\$/);
+});
