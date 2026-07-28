@@ -267,14 +267,14 @@ function formatExtensionStatus(key: string, value: string, theme: any): string {
  *
  * A tree that priced to nothing is hidden rather than shown as $0.00, since an
  * ambient footer has no room for a figure that says nothing. A $0 total does say
- * something when spend was billed and could not be counted — an unreadable part of
- * the tree, or an entry that would not parse — so that case renders. Priced-to-zero
- * stays hidden even though it is also approximate: an unpriced model may be
- * genuinely free, and a permanent ~$0.000 on a free local model says nothing.
+ * something when spend was billed and could not be counted, so that case renders.
+ * Priced-to-zero stays hidden even though it is also approximate: an unpriced model
+ * may be genuinely free, and a permanent ~$0.000 on a free local model says nothing.
+ * Which gaps count as uncounted spend is the accounting's call, not the footer's.
  */
 function formatTreeCost(cost: TreeCost | undefined): string {
-  const missingSpend = cost != null && (cost.unreadableSessions > 0 || cost.corruptEntries > 0);
-  if (!cost || (cost.totalCost <= 0 && !missingSpend)) return "";
+  if (!cost) return "";
+  if (cost.totalCost <= 0 && !cost.missingSpend) return "";
   return `${cost.approximate ? "~" : ""}${formatCost(cost.totalCost)}`;
 }
 

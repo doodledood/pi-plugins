@@ -443,6 +443,55 @@ test("a deleted child leaves the tree, rather than lingering as spend nothing ca
   assert.equal(after.unreadableSessions, 0);
 });
 
+test("an unreadable parent header costs the tree its id-linked forks, and says so", () => {
+  // The parent's own turns come from memory here, so nothing else reads this file: without
+  // this disclosure the scan would quietly lose every fork that links back by session id.
+  if (typeof process.getuid === "function" && process.getuid() === 0) return;
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  chmodSync(parent, 0o000);
+  try {
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    assert.equal(tree.totalCost, 1, "the in-memory turns still total");
+    assert.ok(tree.approximate);
+    assert.equal(tree.unreadableSessions, 1, "the unreadable header is one gap");
+  } finally {
+    chmodSync(parent, 0o600);
+  }
+});
+
+test("an unreadable parent header read from disk is one gap, not two", () => {
+  // Without own entries the parent is scanned as well, and that read reports the same
+  // failure. Counting the header read too would inflate the number of missing parts.
+  if (typeof process.getuid === "function" && process.getuid() === 0) return;
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(4)] });
+  chmodSync(parent, 0o000);
+  try {
+    const tree = new SessionTreeScanner().scanTree({ sessionFile: parent, sessionId: "p1" });
+    assert.equal(tree.unreadableSessions, 1, "one unreadable file, one gap");
+    assert.ok(tree.approximate);
+  } finally {
+    chmodSync(parent, 0o600);
+  }
+});
+
+test("corrupt entries in different sessions add up across the tree", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(1)] });
+  appendFileSync(parent, "{not json\n");
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(2)] });
+  appendFileSync(child, "{also not json\n");
+
+  // One from the parent's own file, one from a child: the tree total has to sum both, not
+  // report whichever it looked at last.
+  const tree = new SessionTreeScanner().scanTree({ sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3);
+  assert.equal(tree.corruptEntries, 2);
+  assert.match(tree.approximateReasons.join(" "), /2 session entries could not be parsed/);
+});
+
 test("absence and unreadability are told apart by error code, not by guesswork", () => {
   // The permission-based tests above stage this through the filesystem, and skip when the
   // process can read anything (root). This pins the decision itself, so the classification

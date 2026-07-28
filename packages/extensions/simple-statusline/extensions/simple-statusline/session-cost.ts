@@ -191,6 +191,14 @@ export interface TreeCost {
   unreadableSessions: number;
   /** Session entries across the tree that could not be parsed, so their spend is missing. */
   corruptEntries: number;
+  /**
+   * True when spend was billed and could not be counted, as opposed to counted and found
+   * to be nothing. Both make a total approximate, and surfaces need to tell them apart: a
+   * $0 total is worth showing when money went uncounted and worth hiding when the session
+   * genuinely cost nothing. Derived here rather than by each surface enumerating the gap
+   * counters, so a later kind of gap reaches them without their having to know about it.
+   */
+  missingSpend: boolean;
 }
 
 /** Folding options: price adjustments plus double-count suppression. */
@@ -445,6 +453,7 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     uncorrectedPriorityCost,
     unreadableSessions,
     corruptEntries,
+    missingSpend: unreadableSessions > 0 || corruptEntries > 0,
   };
 }
 
@@ -501,7 +510,6 @@ export function readSessionHeader(path: string): SessionHeaderRead {
     // Parsing "" would throw, and reading that as unknown would mark a total that is exact.
     if (!line.trim()) return {};
     const parsed = JSON.parse(line);
-    // Parsed, and says what it is: whatever it is, it is not a session of this tree.
     if (parsed?.type !== "session") return {};
     return { header: { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd } };
   } catch (error) {
@@ -673,10 +681,11 @@ export class SessionTreeScanner {
     }
 
     const chunk = this.readRange(path, entry.offset, stat.size, entry.decoder);
-    if (chunk == null) {
-      // Unreadable now; keep whatever was already folded and report the gap, so a
-      // total missing this file's spend is not presented as exact.
-      this.lastStats.filesUnreadable += 1;
+    if (!("text" in chunk)) {
+      // Keep whatever was already folded, so a total missing this file's spend is not
+      // presented as exact — and report the gap unless the file is simply gone, which is
+      // the same absence the stat above forgives.
+      if (!chunk.absent) this.lastStats.filesUnreadable += 1;
       return summarize(entry.acc, { id: entry.header?.id, path, kind });
     }
     entry.reads += 1;
@@ -716,7 +725,17 @@ export class SessionTreeScanner {
     return summarize(entry.acc, { id: entry.header?.id, path, kind });
   }
 
-  private readRange(path: string, from: number, to: number, decoder: StringDecoder): { text: string; bytesRead: number } | undefined {
+  /**
+   * Bytes in `[from, to)`, or why the read failed. `absent` separates a file that vanished
+   * between the stat and the open — nothing there, nothing missing — from one that is there
+   * and could not be read, which is the only one of the two that hides spend.
+   */
+  private readRange(
+    path: string,
+    from: number,
+    to: number,
+    decoder: StringDecoder,
+  ): { text: string; bytesRead: number } | { absent: boolean } {
     if (to <= from) return { text: "", bytesRead: 0 };
     let fd: number | undefined;
     try {
@@ -725,8 +744,8 @@ export class SessionTreeScanner {
       const buffer = Buffer.allocUnsafe(length);
       const read = readSync(fd, buffer, 0, length, from);
       return { text: decoder.write(buffer.subarray(0, read)), bytesRead: read };
-    } catch {
-      return undefined;
+    } catch (error) {
+      return { absent: isAbsence(error) };
     } finally {
       if (fd != null) {
         try {
