@@ -57,10 +57,10 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
   const lines: string[] = [];
   const approx = cost.approximate ? "~" : "";
   lines.push(`Session tree lifetime cost: ${approx}${formatCost(cost.totalCost)}`);
+  lines.push(`  this session's own turns: ${formatCost(cost.own.cost)} · runs it spawned: ${formatCost(cost.totalCost - cost.own.cost)}`);
   if (options.activeBranchCost != null) {
-    lines.push(`  active branch (this session only): ${formatCost(options.activeBranchCost)}`);
+    lines.push(`  of its own turns, the active branch alone: ${formatCost(options.activeBranchCost)}`);
   }
-  lines.push(`  this session: ${formatCost(cost.own.cost)} · spawned runs: ${formatCost(cost.totalCost - cost.own.cost)}`);
   lines.push(`  tokens: ${tokenSummary({ tokens: cost.totalTokens })}`);
 
   if (cost.descendants.length > 0) {
@@ -95,9 +95,6 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
     lines.push("");
     lines.push("Approximate, because:");
     for (const reason of cost.approximateReasons) lines.push(`  · ${reason}`);
-    if (cost.unreadableSessions > 0) {
-      lines.push(`  · ${cost.unreadableSessions} session file(s) unreadable — that spend is missing entirely`);
-    }
     if (cost.uncorrectedPriorityCost > 0) {
       lines.push(`  · priority-tier turns billed above the ${formatCost(cost.uncorrectedPriorityCost)} counted here`);
     }

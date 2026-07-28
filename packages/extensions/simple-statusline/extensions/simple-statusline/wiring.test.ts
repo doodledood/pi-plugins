@@ -322,8 +322,8 @@ test("/cost reports the tree breakdown, the branch subtotal, and what it cannot 
 
   // Amounts, not just the presence of lines: own 0.25 + one child 0.75.
   assert.match(report, /Session tree lifetime cost: \$1\.00/);
-  assert.match(report, /active branch \(this session only\): \$0\.250/);
-  assert.match(report, /this session: \$0\.250 · spawned runs: \$0\.750/);
+  assert.match(report, /this session's own turns: \$0\.250 · runs it spawned: \$0\.750/);
+  assert.match(report, /of its own turns, the active branch alone: \$0\.250/);
   assert.match(report, /tasks\/\S+ — \$0\.750/, "the child is attributed its own amount");
   assert.match(report, /openai\/child-model — \$0\.750/);
   assert.match(report, /openai\/parent-model — \$0\.250/);
@@ -375,7 +375,7 @@ test("/cost's branch subtotal counts tool and compaction usage, not assistant tu
   await harness.commands.get("cost")!.handler("", harness.ctx);
   const report = harness.notices.join("\n");
   // 1 + 0.5 + 0.25: the assistant-only rule would have reported $1.00.
-  assert.match(report, /active branch \(this session only\): \$1\.75/);
+  assert.match(report, /of its own turns, the active branch alone: \$1\.75/);
 });
 
 test("/cost states the total is a floor and names each reason, over real fixtures", async () => {
@@ -443,4 +443,29 @@ test("the footer does no file I/O while painting", () => {
     JSON.parse = realParse;
   }
   assert.equal(parses, 0, "painting reads and parses nothing — every disk read happens on session events");
+});
+
+test("/cost attributes each spawned session its own amount, not the aggregate", async () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "audit", [1.5]);
+  writeChildSession(parent, "advisor", "consult", [0.25]);
+  writeChildSession(parent, "panel", "panelist", [0.75]);
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+
+  // Three distinct amounts, none equal to the $2.50 spawned aggregate or the $3.00 total.
+  assert.match(report, /tasks\/\S+ — \$1\.50/);
+  assert.match(report, /advisor\/\S+ — \$0\.250/);
+  assert.match(report, /panel\/\S+ — \$0\.750/);
+  assert.match(report, /Session tree lifetime cost: \$3\.00/);
+
+  // Scoped to the per-session section: the $2.50 spawned aggregate must not appear as
+  // any one child's cost there (it legitimately appears in the per-model rollup, since
+  // all three children ran the same model).
+  const spawned = report.slice(report.indexOf("Spawned sessions"), report.indexOf("By provider/model"));
+  assert.equal((spawned.match(/\$2\.50/g) ?? []).length, 0, "no child line reports the aggregate as its own cost");
+  assert.equal((spawned.match(/— \$/g) ?? []).length, 3, "exactly three attributed children");
 });

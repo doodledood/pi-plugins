@@ -73,10 +73,11 @@ things cause it:
 
 ### `/cost`
 
-`/cost` takes the figure apart: lifetime total versus active-branch subtotal (both
-by the same accounting rules), per spawned session, per provider/model with token
-counts, why the total is approximate when it is, how much scanning the last
-refresh actually did, and what it cannot see at all.
+`/cost` takes the figure apart: this session's own turns versus the runs it
+spawned, the active branch alone within its own turns, each spawned session's own
+amount, each provider/model with token counts, why the total is approximate when it
+is, how much scanning the last refresh actually did, and what it cannot see at all.
+Every figure uses the same accounting rules, so they can be compared.
 
 Two installed extensions spend money without reporting any usage —
 `pi-web-access` (search-answer synthesis and paid search APIs) and
