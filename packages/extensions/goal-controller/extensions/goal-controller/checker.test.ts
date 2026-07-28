@@ -207,6 +207,7 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
       maxTokens: 8_192,
     },
     thinkingLevel: "xhigh",
+    sessionDir: "/sessions/--proj--/parent/goal-checker",
   });
 
   assert.equal(verdict.complete, true);
@@ -215,7 +216,8 @@ test("PiSubprocessCheckerRunner resolves inherit model and thinking into subproc
   assert.equal(capturedArgs[capturedArgs.indexOf("--model") + 1], "openai/gpt-5.5");
   assert.equal(capturedArgs.includes("--thinking"), true);
   assert.equal(capturedArgs[capturedArgs.indexOf("--thinking") + 1], "xhigh");
-  assert.equal(capturedArgs.includes("--no-session"), true);
+  assert.equal(capturedArgs.includes("--no-session"), false, "the checker run persists so its spend can be found");
+  assert.equal(capturedArgs[capturedArgs.indexOf("--session-dir") + 1], "/sessions/--proj--/parent/goal-checker");
   assertAuditOnlyCheckerArgs(capturedArgs);
   const checkerPrompt = capturedArgs.at(-1) ?? "";
   assert.match(checkerPrompt, /Session navigation context:/iu);
@@ -1379,3 +1381,71 @@ async function runChecker(
 ): Promise<void> {
   await runCheckerVerdict(runner, config, overrides);
 }
+
+test("checker sessions land in the parent's sidecar dir, and fall back to no session without a parent", async () => {
+  const captured: string[][] = [];
+  const runner = new PiSubprocessCheckerRunner({
+    exec: async (_cmd: string, args: string[]) => {
+      captured.push(args);
+      return {
+        stdout: settledJsonl(JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant", ...JSON_ASSISTANT_FIELDS,
+            content: [{ type: "text", text: JSON.stringify({ decision: "complete", complete: true, reason: "all requirements proven", evidence: ["fake evidence"], requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake evidence" }] }) }],
+            stopReason: "stop",
+          },
+        })),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+  const base = {
+    goal: createGoal("fake goal", DEFAULT_CONFIG, 0),
+    context: checkerContext("/tmp/pi-session.jsonl"),
+    config: DEFAULT_CONFIG,
+    cwd: "/tmp",
+    model: undefined,
+    thinkingLevel: "off" as const,
+    checkerModelBootstrapPaths: [],
+  };
+
+  await runner.run({ ...base, sessionDir: "/sessions/--proj--/2026-07-28_abc/goal-checker" });
+  await runner.run({ ...base });
+
+  assert.equal(captured[0]?.[captured[0].indexOf("--session-dir") + 1], "/sessions/--proj--/2026-07-28_abc/goal-checker");
+  assert.equal(captured[0]?.includes("--no-session"), false);
+  assert.equal(captured[1]?.includes("--no-session"), true, "no parent session means nothing to attach the spend to");
+  assert.equal(captured[1]?.includes("--session-dir"), false);
+  // Persisting must not weaken the audit-only profile.
+  for (const args of captured) assertAuditOnlyCheckerArgs(args);
+});
+
+test("a checker run that fails still leaves its session behind for cost accounting", async () => {
+  const captured: string[][] = [];
+  const runner = new PiSubprocessCheckerRunner({
+    exec: async (_cmd: string, args: string[]) => {
+      captured.push(args);
+      // Ran, burned tokens, then errored out with no usable verdict.
+      return { stdout: "", stderr: "boom", code: 1, killed: false };
+    },
+  });
+  await assert.rejects(
+    runner.run({
+      goal: createGoal("fake goal", DEFAULT_CONFIG, 0),
+      context: checkerContext("/tmp/pi-session.jsonl"),
+      config: DEFAULT_CONFIG,
+      cwd: "/tmp",
+      model: undefined,
+      thinkingLevel: "off",
+      checkerModelBootstrapPaths: [],
+      sessionDir: "/sessions/--proj--/parent/goal-checker",
+    }),
+  );
+  // The failure path does not remove or bypass the session, so whatever the run
+  // already wrote stays countable.
+  assert.equal(captured[0]?.[captured[0].indexOf("--session-dir") + 1], "/sessions/--proj--/parent/goal-checker");
+  assert.equal(captured[0]?.includes("--no-session"), false);
+});

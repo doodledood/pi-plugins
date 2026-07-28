@@ -57,6 +57,12 @@ export interface AdvisorRunInput {
   systemPrompt: string;
   /** Absolute path to the child tool-loadout bootstrap extension (`-e`). */
   bootstrapExtensionPath: string;
+  /**
+   * Directory the advisor's own session file is written to (`--session-dir`), so its
+   * spend and transcript stay discoverable from the parent. Undefined when the parent
+   * has no session file, in which case the advisor runs without one.
+   */
+  sessionDir?: string;
   /** Tool names to remove from the advisor subprocess registry. */
   excludedTools: readonly string[];
   /** Cancellation for the whole consult. */

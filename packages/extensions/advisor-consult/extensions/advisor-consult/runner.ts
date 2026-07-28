@@ -13,6 +13,11 @@ const MAX_DIAGNOSTIC_CHARS = 2_000;
  * user's normal extensions (so the advisor keeps a broad tool surface) but with
  * a replaced advisor system prompt, the hazardous tools excluded, and a child
  * bootstrap that broadens the active non-MCP tool set.
+ *
+ * The run persists its session into the parent's sidecar directory rather than
+ * discarding it: an advisor consult costs real money, and a run with no session
+ * leaves nothing for any cost surface to find. See `sidecar.ts` for why that
+ * location keeps the consult out of the user's session list.
  */
 export class PiSubprocessAdvisorRunner implements AdvisorRunner {
   public constructor(private readonly pi: Pick<ExtensionAPI, "exec">) {}
@@ -71,7 +76,9 @@ export function advisorArgs(input: AdvisorRunInput): string[] {
     "--mode",
     "json",
     "-p",
-    "--no-session",
+    // Persist into the parent's sidecar when the parent has a session file; fall back
+    // to no session only when there is no parent session to attach the spend to.
+    ...(input.sessionDir ? ["--session-dir", input.sessionDir] : ["--no-session"]),
     "--no-context-files",
     "--system-prompt",
     input.systemPrompt,

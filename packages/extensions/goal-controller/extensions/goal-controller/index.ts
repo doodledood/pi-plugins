@@ -20,6 +20,7 @@ import {
   updateUsage,
 } from "./controller.ts";
 import { PiSubprocessCheckerRunner, safeCheckerFailureMessage, type CheckerRunner } from "./checker.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import {
   CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
   CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
@@ -32,6 +33,9 @@ import {
 import { buildActiveGoalSystemPrompt, buildCheckerSessionContext, buildContinuationPrompt, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
 import type { GoalControllerHost } from "./host.ts";
 import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike, SessionEntryLike } from "./types.ts";
+
+/** Sidecar folder name for goal-checker sessions under the parent session. */
+export const CHECKER_SESSION_KIND = "goal-checker";
 
 const STATUS_KEY = "goal-controller";
 const STATE_ENTRY_TYPE = "goal-controller-state";
@@ -589,6 +593,7 @@ export function activate(
         model: checkerModel,
         thinkingLevel: pi.getThinkingLevel(),
         checkerModelBootstrapPaths: trustedCheckerModelBootstrapPaths(),
+        sessionDir: deriveChildSessionDir(ctx.sessionManager.getSessionFile(), CHECKER_SESSION_KIND),
         signal: run.controller.signal,
       });
 

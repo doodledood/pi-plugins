@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { dirname } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { activate, consult, modelsDiffer, resolveModel, resolveTimeout } from "./index.ts";
+import { activate, ADVISOR_SESSION_KIND, consult, modelsDiffer, resolveModel, resolveTimeout } from "./index.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { HARD_DENIED_TOOLS } from "./child-profile.ts";
 import type { AdvisorResult, AdvisorRunInput, AdvisorRunner } from "./types.ts";
@@ -353,4 +355,44 @@ test("renderCall escapes terminal and directional controls and obeys narrow widt
     assert.ok(rendered.includes(escaped), `missing visible directional escape ${escaped}`);
   }
   assert.match(rendered, /\\x1b\[31m\\x07\\x0d\\x7f\\x9b\\u061c/);
+});
+
+test("advisor sessions land in the parent's sidecar dir, outside pi's session list", () => {
+  const parent = "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0.jsonl";
+  assert.equal(
+    deriveChildSessionDir(parent, ADVISOR_SESSION_KIND),
+    "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0/advisor",
+  );
+  // pi lists sessions from one directory non-recursively, so a nested file is invisible
+  // to /resume; this asserts the path is nested rather than a sibling.
+  assert.notEqual(
+    dirname(deriveChildSessionDir(parent, ADVISOR_SESSION_KIND)!),
+    dirname(parent),
+    "the advisor session is nested under the parent, not beside it",
+  );
+});
+
+test("no sidecar dir is derived when the parent session is not persisted", () => {
+  assert.equal(deriveChildSessionDir(undefined, ADVISOR_SESSION_KIND), undefined);
+});
+
+test("consult passes the sidecar session dir through to the runner", async () => {
+  const captured: { input?: AdvisorRunInput } = {};
+  const runner = {
+    async run(input: AdvisorRunInput) {
+      captured.input = input;
+      return { ok: true, advice: "advice", elapsedMs: 5 };
+    },
+  };
+  await consult(
+    { query: "a".repeat(60) },
+    {
+      runner,
+      config: DEFAULT_CONFIG,
+      cwd: "/tmp",
+      bootstrapExtensionPath: "/abs/bootstrap.ts",
+      sessionDir: "/sessions/--proj--/parent/advisor",
+    },
+  );
+  assert.equal(captured.input?.sessionDir, "/sessions/--proj--/parent/advisor");
 });

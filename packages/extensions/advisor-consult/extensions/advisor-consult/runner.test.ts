@@ -42,10 +42,11 @@ function fakeExec(result: ExecResult, capture?: { args?: string[] }): { exec: (c
 }
 
 test("advisorArgs builds the expected subprocess invocation", () => {
-  const args = advisorArgs(baseInput());
+  const args = advisorArgs(baseInput({ sessionDir: "/sessions/--proj--/parent/advisor" }));
   assert.ok(args.includes("--mode") && args.includes("json"));
   assert.ok(args.includes("-p"));
-  assert.ok(args.includes("--no-session"));
+  assert.equal(args.includes("--no-session"), false, "the consult persists so its spend can be found");
+  assert.equal(args[args.indexOf("--session-dir") + 1], "/sessions/--proj--/parent/advisor");
   assert.ok(args.includes("--no-context-files"));
   const sysIdx = args.indexOf("--system-prompt");
   assert.equal(args[sysIdx + 1], "ADVISOR SYSTEM PROMPT");
@@ -192,4 +193,18 @@ test("run redacts secrets echoed in a model error", async () => {
   assert.equal(result.ok, false);
   assert.match(result.error ?? "", /\[REDACTED\]/);
   assert.doesNotMatch(result.error ?? "", /supersecret999/);
+});
+
+test("advisorArgs persists the consult into the parent's sidecar directory", () => {
+  const args = advisorArgs(baseInput({ sessionDir: "/sessions/--proj--/2026-07-28_abc/advisor" }));
+  const idx = args.indexOf("--session-dir");
+  assert.ok(idx >= 0, "--session-dir passed");
+  assert.equal(args[idx + 1], "/sessions/--proj--/2026-07-28_abc/advisor");
+  assert.equal(args.includes("--no-session"), false);
+});
+
+test("advisorArgs falls back to no session when the parent has none", () => {
+  const args = advisorArgs(baseInput({ sessionDir: undefined }));
+  assert.ok(args.includes("--no-session"), "nothing to attach the spend to, so nothing is persisted");
+  assert.equal(args.includes("--session-dir"), false);
 });

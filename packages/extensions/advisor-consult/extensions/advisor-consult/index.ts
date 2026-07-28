@@ -6,6 +6,7 @@ import { clampTimeout, loadConfig } from "./config.ts";
 import { resolveExcludedTools } from "./child-profile.ts";
 import { formatDuration } from "./format.ts";
 import { PiSubprocessAdvisorRunner } from "./runner.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import {
   ADVISOR_PROMPT_SNIPPET,
   ADVISOR_SYSTEM_PROMPT,
@@ -25,6 +26,9 @@ import {
   type ThinkingLevel,
 } from "./types.ts";
 import type { AdvisorConsultHost } from "./host.ts";
+
+/** Sidecar folder name for advisor sessions under the parent session. */
+export const ADVISOR_SESSION_KIND = "advisor";
 
 /** Absolute path to the child bootstrap, passed to the subprocess via `-e`. */
 const BOOTSTRAP_EXTENSION_PATH = fileURLToPath(new URL("./child-bootstrap.ts", import.meta.url));
@@ -84,6 +88,8 @@ export interface ConsultDeps {
   cwd: string;
   parentModelPattern?: string;
   bootstrapExtensionPath: string;
+  /** Where the advisor's session file goes; undefined when the parent has none. */
+  sessionDir?: string;
   signal?: AbortSignal;
 }
 
@@ -119,6 +125,7 @@ export async function consult(params: AdvisorParams, deps: ConsultDeps): Promise
     cwd: deps.cwd,
     systemPrompt: ADVISOR_SYSTEM_PROMPT,
     bootstrapExtensionPath: deps.bootstrapExtensionPath,
+    ...(deps.sessionDir ? { sessionDir: deps.sessionDir } : {}),
     excludedTools,
     signal: deps.signal,
   });
@@ -390,6 +397,7 @@ export function activate(
         cwd: ctx.cwd,
         parentModelPattern: resolveModelPattern(ctx.model),
         bootstrapExtensionPath: BOOTSTRAP_EXTENSION_PATH,
+        sessionDir: deriveChildSessionDir(ctx.sessionManager?.getSessionFile?.(), ADVISOR_SESSION_KIND),
         signal,
       });
       return {

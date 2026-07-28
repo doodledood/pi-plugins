@@ -12,6 +12,12 @@ export interface CheckerRunInput {
   model: ExtensionContext["model"];
   thinkingLevel: ThinkingLevel;
   checkerModelBootstrapPaths?: readonly string[];
+  /**
+   * Directory the checker's own session file is written to (`--session-dir`), so the
+   * spend of every audit stays discoverable from the parent session. Undefined when
+   * the parent has no session file, in which case the checker runs without one.
+   */
+  sessionDir?: string;
   signal?: AbortSignal;
 }
 
@@ -208,7 +214,10 @@ function checkerArgs(input: CheckerRunInput, prompt: string, model: string | und
     "--mode",
     "json",
     "-p",
-    "--no-session",
+    // A checker run costs real money on every audit. Persist it into the parent's
+    // sidecar directory so that spend is countable, falling back to no session only
+    // when there is no parent session to attach it to. See sidecar.ts.
+    ...(input.sessionDir ? ["--session-dir", input.sessionDir] : ["--no-session"]),
     "--tools",
     CHECKER_AUDIT_TOOLS_ARG,
     ...CHECKER_DISABLED_RESOURCE_ARGS,
