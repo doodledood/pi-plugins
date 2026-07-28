@@ -15,9 +15,13 @@ function model() {
   });
 }
 
-test("the card sits in the corner and claims a fixed narrow width", () => {
+test("the card sits in the corner, claims a fixed width, and never takes focus", () => {
   assert.equal(FLEET_OVERLAY_OPTIONS.anchor, "top-right");
   assert.equal(typeof FLEET_OVERLAY_OPTIONS.width, "number");
+  // Non-capturing is how the TUI expresses "not part of focus at all". Releasing
+  // focus instead would hand it to no component and leave the editor unable to
+  // receive a keystroke.
+  assert.equal(FLEET_OVERLAY_OPTIONS.nonCapturing, true);
 });
 
 test("the overlay handles no input at all", () => {

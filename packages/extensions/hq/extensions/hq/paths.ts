@@ -38,12 +38,24 @@ export interface HqPaths {
 /** Resolves the HQ state root without creating anything. */
 export function resolveStateRoot(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.HQ_HOME?.trim();
-  if (explicit) return isAbsolute(explicit) ? explicit : resolve(explicit);
+  if (explicit) return expandHome(explicit);
 
   const agentDir = env.PI_CODING_AGENT_DIR?.trim();
-  if (agentDir) return join(dirname(resolve(agentDir)), "hq");
+  if (agentDir) return join(dirname(expandHome(agentDir)), "hq");
 
   return join(homedir(), ".pi", "hq");
+}
+
+/**
+ * Expands a leading `~` before resolving, the way pi expands the same variables.
+ * Without this, `PI_CODING_AGENT_DIR=~/custom/agent` would resolve against the
+ * session's cwd and give every project its own literal `~`-named state root —
+ * fragmenting the one substrate the seat and its workers share.
+ */
+export function expandHome(value: string): string {
+  if (value === "~") return homedir();
+  const expanded = value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+  return isAbsolute(expanded) ? expanded : resolve(expanded);
 }
 
 export function hqPaths(root: string): HqPaths {

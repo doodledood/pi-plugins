@@ -7,7 +7,8 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { expandHome } from "./paths.ts";
 
 export interface HqConfig {
   /** Small, fast model used only to label sessions on the board. */
@@ -24,7 +25,7 @@ export const DEFAULT_CONFIG: HqConfig = {
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   const agentDir = env.PI_CODING_AGENT_DIR?.trim();
   return agentDir
-    ? join(resolve(agentDir), "hq.json")
+    ? join(expandHome(agentDir), "hq.json")
     : join(homedir(), ".pi", "agent", "hq.json");
 }
 

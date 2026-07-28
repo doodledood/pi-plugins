@@ -103,16 +103,23 @@ test("the ask rows put the recommendation first and carry the ruling each one me
   try {
     const packet = await queue(h);
     const rows = buildAskRows(packet);
-    assert.match(rows[0]?.label ?? "", /^Retry the suite \(recommended\)/);
+    assert.match(rows[0]?.label ?? "", /^1\) Retry the suite \(recommended\)/);
     assert.match(rows[0]?.label ?? "", /eight minutes of CI/);
-    assert.deepEqual(rows[0]?.request, { packetId: packet.id, form: "accept" });
-    assert.match(rows[1]?.label ?? "", /^Investigate the flake now — an hour of work/);
-    assert.deepEqual(rows[1]?.request, {
-      packetId: packet.id,
-      form: "alternative",
-      optionId: "investigate",
+    assert.deepEqual(rows[0]?.intent, {
+      kind: "ruling",
+      request: { packetId: packet.id, form: "accept" },
     });
-    assert.deepEqual(rows.slice(2).map((row) => row.request.form), ["defer", "custom", "accept"]);
+    assert.match(rows[1]?.label ?? "", /^2\) Investigate the flake now — an hour of work/);
+    assert.deepEqual(rows[1]?.intent, {
+      kind: "ruling",
+      request: { packetId: packet.id, form: "alternative", optionId: "investigate" },
+    });
+    assert.deepEqual(
+      rows.slice(2).map((row) => row.intent.kind),
+      ["needs-question", "needs-words", "dive"],
+    );
+    // Every row is distinguishable even if the model wrote identical labels.
+    assert.equal(new Set(rows.map((row) => row.label)).size, rows.length);
     assert.match(rows[2]?.label ?? "", /Ask first/);
     assert.match(rows[3]?.label ?? "", /own words/);
     assert.match(rows[4]?.label ?? "", /had to open the session/);

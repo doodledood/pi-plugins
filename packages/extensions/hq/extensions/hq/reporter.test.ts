@@ -269,3 +269,30 @@ test("a triage or drill worker never appears on the board", async () => {
     await dropRoot(root);
   }
 });
+
+test("a run that died on an error is recorded as a death, not as finished work", async () => {
+  const root = await makeRoot("hq-error-stop");
+  try {
+    const store = makeStore(root);
+    const { spawner } = recordingSpawner();
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: fakeCtx(),
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker", [TITLER_ENV]: "1" },
+      now: fixedClock(),
+    });
+    await reporter.start();
+    // A provider error is a terminal outcome, and its text will not end in "?".
+    reporter.onAgentEnd([
+      { role: "assistant", content: "The request failed after retries.", stopReason: "error" },
+    ]);
+    assert.equal(reporter.classifyStop(), "aborted");
+    await reporter.onAgentSettled();
+
+    const state = await store.readSessionState("sess-a");
+    assert.equal(state?.stopState, "aborted", "the board shows it failed, not done");
+  } finally {
+    await dropRoot(root);
+  }
+});

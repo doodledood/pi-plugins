@@ -648,7 +648,7 @@ async function runDoctrine(world: World): Promise<void> {
   const { spawner, calls } = recordingSpawner();
   const deps = { store: world.store, spawner };
 
-  const first = await seedStop(world, "doc-1", null);
+  const first = await seedStop(world, "doc-1", `${world.root}/doc-1.jsonl`);
   const firstOutcome = await applyTriageOutcome(deps, first.stopId, {
     kind: "packet",
     packet: draft("ci-flake"),
@@ -687,7 +687,7 @@ async function runDoctrine(world: World): Promise<void> {
   // The same situation again: triage can now cite the ratified rule.
   const doctrine = await loadDoctrine(world.root, world.workspace);
   const citation = doctrine.rules.find((rule) => rule.text.includes("ci-flake"))?.citation ?? "";
-  const second = await seedStop(world, "doc-2", null);
+  const second = await seedStop(world, "doc-2", `${world.root}/doc-2.jsonl`);
   const secondOutcome = await applyTriageOutcome(deps, second.stopId, {
     kind: "packet",
     packet: { ...draft("ci-flake"), doctrineCitations: [citation] },
@@ -777,7 +777,7 @@ async function runGraduation(world: World): Promise<void> {
   const doctrine = await loadDoctrine(world.root, world.workspace);
   const citation = doctrine.rules[0]?.citation ?? "";
 
-  const before = await seedStop(world, "grad-1", null);
+  const before = await seedStop(world, "grad-1", `${world.root}/grad-1.jsonl`);
   const escalated = await applyTriageOutcome(deps, before.stopId, {
     kind: "continue",
     domain: "grad-domain",
@@ -798,7 +798,7 @@ async function runGraduation(world: World): Promise<void> {
   });
 
   await graduateDomain(world.store, "grad-domain", new Date().toISOString());
-  const after = await seedStop(world, "grad-2", null);
+  const after = await seedStop(world, "grad-2", `${world.root}/grad-2.jsonl`);
   const answered = await applyTriageOutcome(deps, after.stopId, {
     kind: "continue",
     domain: "grad-domain",
@@ -821,7 +821,7 @@ async function runGraduation(world: World): Promise<void> {
     return `audit: ${last?.action} ${last?.ruleCitation} sampled=${String(last?.sampledForReview)}`;
   });
 
-  const ceiling = await seedStop(world, "grad-3", null);
+  const ceiling = await seedStop(world, "grad-3", `${world.root}/grad-3.jsonl`);
   const stopped = await applyTriageOutcome(deps, ceiling.stopId, {
     kind: "continue",
     domain: "grad-domain",
@@ -838,8 +838,25 @@ async function runGraduation(world: World): Promise<void> {
     return "escalated: blast-reversibility-ceiling";
   });
 
+  const ephemeral = await seedStop(world, "grad-5", null);
+  const nowhere = await applyTriageOutcome(deps, ephemeral.stopId, {
+    kind: "continue",
+    domain: "grad-domain",
+    citation,
+    instruction: "retry the suite once",
+    summary: "retry a flaky suite",
+    blastRadius: "low",
+    reversibility: "reversible",
+  });
+  if ("error" in nowhere) return;
+  await check("a doctrine answer with nowhere to carry it still reaches the user", () => {
+    assert.equal(nowhere.applied, "packet");
+    assert.equal(nowhere.escalationReason, "no-session-file");
+    return "escalated: no-session-file";
+  });
+
   await revokeDomain(world.store, "grad-domain");
-  const revoked = await seedStop(world, "grad-4", null);
+  const revoked = await seedStop(world, "grad-4", `${world.root}/grad-4.jsonl`);
   const backToUser = await applyTriageOutcome(deps, revoked.stopId, {
     kind: "continue",
     domain: "grad-domain",

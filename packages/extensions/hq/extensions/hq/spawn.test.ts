@@ -131,3 +131,17 @@ test("a detached spawn that fails is reported rather than taking down the sessio
     await dropRoot(root);
   }
 });
+
+test("a task that starts like a flag still reaches the worker as its prompt", () => {
+  // pi's CLI drops the argument after --print when it starts with "-" or "@", so a
+  // bulleted or @path-leading task would run a worker with no instruction at all.
+  for (const prompt of ["- read the notes and decide", "@notes.md summarize this"]) {
+    const argv = buildArgv({ kind: "worker", prompt, cwd: "/work" });
+    assert.equal(argv[0], "--print");
+    const delivered = argv[1] ?? "";
+    assert.equal(delivered.includes(prompt), true, "the task survives");
+    assert.equal(/^[-@]/.test(delivered), false, "and no longer looks like a flag");
+  }
+  const plain = buildArgv({ kind: "worker", prompt: "do the thing", cwd: "/work" });
+  assert.deepEqual(plain, ["--print", "do the thing"], "an ordinary task is untouched");
+});

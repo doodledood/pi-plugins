@@ -411,7 +411,16 @@ test("nonsense rulings are refused rather than half-applied", async () => {
       })),
       true,
     );
-    assert.equal("error" in (await applyRuling(deps, { packetId: packet.id, form: "defer" })), true);
+    // The type now makes an incomplete ruling unrepresentable; the runtime guard
+    // stays for callers that arrive without it, so it is exercised through a cast.
+    assert.equal(
+      "error" in (await applyRuling(deps, { packetId: packet.id, form: "defer", question: "  " })),
+      true,
+    );
+    assert.equal(
+      "error" in (await applyRuling(deps, { packetId: packet.id, form: "custom", text: "" })),
+      true,
+    );
 
     await applyRuling(deps, { packetId: packet.id, form: "accept" });
     assert.equal("error" in (await applyRuling(deps, { packetId: packet.id, form: "accept" })), true);

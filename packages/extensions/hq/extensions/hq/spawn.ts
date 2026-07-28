@@ -33,7 +33,11 @@ export const BIN_ENV = "HQ_PI_BIN";
 export const EXTENSION_ENV = "HQ_EXTENSION_PATH";
 
 /** A worker kind that must never itself be triaged or titled. */
-export const INTERNAL_KINDS: ReadonlySet<string> = new Set(["triage", "drill", "titler"]);
+export const INTERNAL_KINDS: ReadonlySet<SessionKind | "titler"> = new Set([
+  "triage",
+  "drill",
+  "titler",
+]);
 
 export interface SpawnRequest {
   kind: SessionKind | "titler";
@@ -84,7 +88,11 @@ export function buildArgv(request: SpawnRequest, extensionPath?: string): string
   if (request.model) argv.push("--model", request.model);
   if (request.name) argv.push("--name", request.name);
   if (request.tools && request.tools.length > 0) argv.push("--tools", request.tools.join(","));
-  argv.push("--print", request.prompt);
+  // pi's CLI only treats the argument after --print as the prompt when it does
+  // not start with "-" or "@"; a task written as a bullet or an @path would
+  // otherwise be parsed as a flag or a file and the worker would run with no
+  // instruction at all. A leading newline is inert to the model and defeats both.
+  argv.push("--print", /^[-@]/.test(request.prompt) ? `\n${request.prompt}` : request.prompt);
   return argv;
 }
 

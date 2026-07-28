@@ -157,7 +157,13 @@ export class SessionReporter {
 
   /** Classification is deliberately shallow; triage does the real reading. */
   classifyStop(): StopState {
-    if (this.latestAssistant?.stopReason === "aborted") return "aborted";
+    // A provider error or a context overflow is a death, not a delivery: reported
+    // as finished it would point triage at "close" instead of "respawn", and tell
+    // the user work shipped that never ran.
+    const stopReason = this.latestAssistant?.stopReason;
+    if (stopReason === "aborted" || stopReason === "error" || stopReason === "length") {
+      return "aborted";
+    }
     if (this.latestAssistant?.text.trimEnd().endsWith("?")) return "stopped-with-question";
     return "idle-done";
   }

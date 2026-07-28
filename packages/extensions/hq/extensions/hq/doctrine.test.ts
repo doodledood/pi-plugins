@@ -13,6 +13,7 @@ import {
   seedProjectDoctrine,
 } from "./doctrine.ts";
 import { hqPaths, projectDoctrinePath } from "./paths.ts";
+import { DOCTRINE_GLOBAL_SEED } from "./templates.ts";
 import { dropRoot, makeRoot } from "./testing.ts";
 
 test("rules parse with a citable location, and Meta is not a rule", () => {
@@ -68,6 +69,28 @@ test("Meta values come from the file, and nonsense falls back to the default", (
   assert.equal(parsed.auditSampleRate, 0.5);
   assert.equal(parsed.graduationMinDays, META_DEFAULTS.graduationMinDays);
   assert.deepEqual(parseMeta("# no meta here"), META_DEFAULTS);
+});
+
+test("the range hint the seeded file writes next to each value is not read as the value", () => {
+  // The seed annotates every Meta line with its range. If the annotation broke
+  // parsing, every number would silently fall back to META_DEFAULTS and editing
+  // the file would do nothing.
+  const parsed = parseMeta(
+    `## Meta\n\n- batch-max: 2                            (1\u201320)\n- batch-trivial-only: no                  (true or false)\n- staleness-minutes: 15                   (1\u201310080)\n`,
+  );
+  assert.equal(parsed.batchMax, 2);
+  assert.equal(parsed.batchTrivialOnly, false);
+  assert.equal(parsed.stalenessMinutes, 15);
+});
+
+test("the seeded file's own Meta numbers are the ones HQ runs on", () => {
+  const parsed = parseMeta(DOCTRINE_GLOBAL_SEED);
+  for (const [key, value] of Object.entries(parsed)) {
+    const bullet = key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+    const match = new RegExp(`^-\\s+${bullet}\\s*:\\s*(\\S+)`, "m").exec(DOCTRINE_GLOBAL_SEED);
+    assert.notEqual(match, null, `${bullet} is written in the seeded Meta section`);
+    assert.equal(String(value), match?.[1], `${bullet} is parsed from the file, not defaulted`);
+  }
 });
 
 test("seeding is idempotent and never overwrites an edited file", async () => {

@@ -167,6 +167,19 @@ export async function applyTriageOutcome(
         return applyPacketOutcome(deps, stop, continueAsPacketDraft(outcome, decision.explanation, cited?.citation ?? null), decision.reason);
       }
 
+      // Without a session file there is nothing to carry the ruling to, so
+      // answering it here would mark the stop done with nothing acting on it —
+      // the silent lost decision the stop record exists to prevent. Every sibling
+      // path guards this; so does this one.
+      if (!stop.sessionFile) {
+        return applyPacketOutcome(
+          deps,
+          stop,
+          continueAsPacketDraft(outcome, "the session was ephemeral, so nothing can carry a ruling to it", cited?.citation ?? null),
+          "no-session-file",
+        );
+      }
+
       const stats = (await deps.store.readGraduation()).domains[outcome.domain];
       const sampled = shouldSampleForAudit(doctrine.meta, stats, deps.random);
       await deps.store.appendAudit({
@@ -180,22 +193,20 @@ export async function applyTriageOutcome(
         sampledForReview: sampled,
       });
 
-      if (stop.sessionFile) {
-        await deps.spawner({
-          kind: "continuation",
-          prompt: [
-            "A ruling has come back on the question you stopped for, from standing doctrine.",
-            "",
-            `Doctrine: ${cited?.text ?? outcome.citation}`,
-            `Ruling: ${outcome.instruction}`,
-            "",
-            "Continue on that basis. Stop again if it does not settle what you needed.",
-          ].join("\n"),
-          cwd: stop.project,
-          resumeSessionFile: stop.sessionFile,
-          originSessionId: stop.sessionId,
-        });
-      }
+      await deps.spawner({
+        kind: "continuation",
+        prompt: [
+          "A ruling has come back on the question you stopped for, from standing doctrine.",
+          "",
+          `Doctrine: ${cited?.text ?? outcome.citation}`,
+          `Ruling: ${outcome.instruction}`,
+          "",
+          "Continue on that basis. Stop again if it does not settle what you needed.",
+        ].join("\n"),
+        cwd: stop.project,
+        resumeSessionFile: stop.sessionFile,
+        originSessionId: stop.sessionId,
+      });
 
       await finishStop(deps.store.root, stopId, "continue", null);
       return {

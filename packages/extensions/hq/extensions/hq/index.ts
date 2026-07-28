@@ -18,6 +18,7 @@ import { createSpawner, isManagedEnv, type Spawner } from "./spawn.ts";
 import { HqStore, pruneState, reopenStalledDrills } from "./store.ts";
 import { sweepStops } from "./triage.ts";
 import { registerHqTools } from "./tools.ts";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { FLEET_OVERLAY_OPTIONS, FleetOverlay } from "./ui.ts";
 
 export const SEAT_MESSAGE_TYPE = "hq-seat";
@@ -59,7 +60,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
     let seatActive = false;
     let seatPromptSent = false;
     let overlayVisible = false;
-    let overlayHandle: { hide(): void; setHidden(hidden: boolean): void; unfocus(options?: unknown): void } | undefined;
+    let overlayHandle: OverlayHandle | undefined;
     let overlayComponent: FleetOverlay | undefined;
     let cardModel: FleetCardModel | undefined;
     let cardTimer: ReturnType<typeof setInterval> | undefined;
@@ -280,10 +281,10 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
           overlay: true,
           overlayOptions: FLEET_OVERLAY_OPTIONS,
           onHandle: (handle) => {
+            // The card is declared non-capturing, so it never holds focus and
+            // there is nothing to release. Releasing it here would hand focus to
+            // no component at all and leave the terminal unable to route input.
             overlayHandle = handle;
-            // The card is a glance, never a seat: it releases input immediately so
-            // the editor keeps every keystroke.
-            handle.unfocus({ target: null });
           },
         },
       );

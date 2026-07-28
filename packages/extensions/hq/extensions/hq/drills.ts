@@ -177,6 +177,7 @@ export type PacketPatch = Partial<
     | "domain"
     | "trivial"
     | "shadowRuling"
+    | "doctrineCitations"
   >
 >;
 

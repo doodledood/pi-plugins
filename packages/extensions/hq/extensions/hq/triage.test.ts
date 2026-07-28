@@ -331,6 +331,38 @@ test("a respawn restarts the work, but a session that keeps dying becomes a pack
   }
 });
 
+test("a doctrine answer with nowhere to carry it reaches the user instead", async () => {
+  const h = await harness("hq-triage-ephemeral", { sessionFile: null });
+  try {
+    await graduateDomain(h.store, "ci-flake", "2026-07-20T00:00:00.000Z");
+    const doctrine = await loadDoctrine(h.root, "/work/alpha");
+    const citation = doctrine.rules[0]?.citation ?? "";
+
+    const result = await applyTriageOutcome(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      h.stop.stopId,
+      {
+        kind: "continue",
+        domain: "ci-flake",
+        citation,
+        instruction: "retry the suite once",
+        summary: "retry a flaky suite",
+        blastRadius: "low",
+        reversibility: "reversible",
+      },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+
+    assert.equal(result.applied, "packet", "the decision is not silently swallowed");
+    assert.equal(result.escalationReason, "no-session-file");
+    assert.deepEqual(await h.store.readAuditLines(), [], "and nothing claims it was answered");
+    assert.equal(h.calls.filter((call) => call.kind === "continuation").length, 0);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
 test("the sweep re-triages a stop whose triage never finished", async () => {
   const h = await harness("hq-triage-sweep", { status: "open", claimedByPid: null, claimedAt: null });
   try {

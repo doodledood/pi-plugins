@@ -138,8 +138,15 @@ export function parseRules(
 /** Instructional bullets shipped in the seed, which are never citable rules. */
 const PLACEHOLDER_RULE = /^Add (current directives|only precedents|approved project-specific|project-specific directives)/i;
 
+/**
+ * A Meta value as the user leaves it in the file. The seeded file annotates each
+ * value with its allowed range — `- batch-max: 4    (1-20)` — and a user editing
+ * the number keeps that hint, so the trailing parenthetical is part of the
+ * expected shape and must be stripped rather than turning the value into
+ * nonsense that silently falls back to the default.
+ */
 function parseMetaValue(raw: string): string {
-  return raw.trim().replace(/\.$/, "");
+  return raw.trim().replace(/\s*\([^()]*\)\s*$/, "").trim().replace(/\.$/, "");
 }
 
 export function parseMeta(text: string): MetaDoctrine {
@@ -217,10 +224,8 @@ export function renderDoctrine(doctrine: Doctrine): string {
 
 export type ProposalKind = "new-rule" | "amendment";
 
-export interface RatificationRequest {
+export type RatificationRequest = {
   root: string;
-  scope: "global" | "project";
-  project?: string;
   section: string;
   ruleText: string;
   /**
@@ -229,7 +234,7 @@ export interface RatificationRequest {
    * several lines is replaced whole.
    */
   replaces?: string;
-}
+} & ({ scope: "global" } | { scope: "project"; project: string });
 
 /**
  * Applies a ratified rule. This is the only write path into a doctrine file, and
@@ -240,12 +245,9 @@ export async function applyRatifiedRule(
 ): Promise<{ applied: boolean; reason?: string }> {
   const path = request.scope === "global"
     ? hqPaths(request.root).doctrineGlobal
-    : projectDoctrinePath(request.root, request.project ?? "");
-  if (request.scope === "project" && !request.project) {
-    return { applied: false, reason: "project scope requires a project path" };
-  }
+    : projectDoctrinePath(request.root, request.project);
   if (request.scope === "project") {
-    await seedProjectDoctrine(request.root, request.project ?? "");
+    await seedProjectDoctrine(request.root, request.project);
   } else {
     await seedDoctrine(request.root);
   }

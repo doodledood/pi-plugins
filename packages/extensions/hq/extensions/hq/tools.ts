@@ -82,9 +82,6 @@ const ShadowSchema = Type.Object({
   })),
   text: Type.String({ description: "The ruling you would have made" }),
   rationale: Type.String({ description: "Why — one or two sentences" }),
-  doctrineCitations: Type.Array(Type.String({
-    description: "Citations you relied on, exactly as they appear in brackets",
-  })),
 });
 
 const PacketDraftSchema = Type.Object({
@@ -98,9 +95,10 @@ const PacketDraftSchema = Type.Object({
   flipCondition: Type.String({ description: "What evidence would change that recommendation" }),
   blastRadius: BlastSchema,
   reversibility: ReversibilitySchema,
-  doctrineCitations: Type.Optional(Type.Array(Type.String({
-    description: "Doctrine lines you relied on, exactly as they appear in brackets. These decide whether the ruling counts as covered by doctrine.",
-  }))),
+  doctrineCitations: Type.Array(Type.String({
+    description:
+      "The doctrine lines this decision rests on, copied exactly from inside the brackets. Empty means no rule covered it. This is what decides whether the user's ruling counted as covered by doctrine, so it is not optional.",
+  })),
   shadowRuling: ShadowSchema,
   trivial: Type.Optional(Type.Boolean({ description: "Cheap enough to decide alongside others" })),
   dependsOn: Type.Optional(Type.Array(Type.String({ description: "Packet ids that must be ruled first" }))),
@@ -108,6 +106,7 @@ const PacketDraftSchema = Type.Object({
 
 const DrillPatchSchema = Type.Object({
   question: Type.Optional(Type.String()),
+  doctrineCitations: Type.Optional(Type.Array(Type.String())),
   options: Type.Optional(Type.Array(OptionSchema)),
   recommendationId: Type.Optional(Type.String()),
   flipCondition: Type.Optional(Type.String()),
@@ -549,9 +548,21 @@ const DEFER_LABEL = "Ask first — I want something checked";
 const CUSTOM_LABEL = "In my own words…";
 const DIVE_LABEL = "I had to open the session to decide";
 
+/**
+ * What a row means. Two rows cannot carry a finished ruling because the user has
+ * not typed it yet — a deferral needs its question and a custom ruling needs its
+ * words — so the row says what it still needs rather than carrying a half-built
+ * request.
+ */
+export type AskIntent =
+  | { kind: "ruling"; request: RulingRequest }
+  | { kind: "needs-question" }
+  | { kind: "needs-words" }
+  | { kind: "dive" };
+
 export interface AskRow {
   label: string;
-  request: RulingRequest;
+  intent: AskIntent;
 }
 
 /**
@@ -565,25 +576,32 @@ export interface AskRow {
 export function buildAskRows(packet: Packet): AskRow[] {
   const recommended = packet.options.find((option) => option.id === packet.recommendationId);
   const alternatives = packet.options.filter((option) => option.id !== packet.recommendationId);
-  return [
+  const rows: AskRow[] = [
     ...(recommended
       ? [{
         label: `${recommended.label} (recommended) — ${recommended.price}`,
-        request: { packetId: packet.id, form: "accept" } as RulingRequest,
+        intent: {
+          kind: "ruling",
+          request: { packetId: packet.id, form: "accept" },
+        } satisfies AskIntent,
       }]
       : []),
-    ...alternatives.map((option) => ({
+    ...alternatives.map((option): AskRow => ({
       label: `${option.label} — ${option.price}`,
-      request: {
-        packetId: packet.id,
-        form: "alternative",
-        optionId: option.id,
-      } as RulingRequest,
+      intent: {
+        kind: "ruling",
+        request: { packetId: packet.id, form: "alternative", optionId: option.id },
+      },
     })),
-    { label: DEFER_LABEL, request: { packetId: packet.id, form: "defer" } },
-    { label: CUSTOM_LABEL, request: { packetId: packet.id, form: "custom" } },
-    { label: DIVE_LABEL, request: { packetId: packet.id, form: "accept" } },
+    { label: DEFER_LABEL, intent: { kind: "needs-question" } },
+    { label: CUSTOM_LABEL, intent: { kind: "needs-words" } },
+    { label: DIVE_LABEL, intent: { kind: "dive" } },
   ];
+
+  // The dialog returns the chosen *string*, so two rows that render identically
+  // would be indistinguishable and the first would win. Numbering makes every row
+  // unique whatever the model wrote in the labels.
+  return rows.map((row, index) => ({ ...row, label: `${index + 1}) ${row.label}` }));
 }
 
 /**
@@ -600,26 +618,34 @@ function toPacketPatch(
     shadowRuling: {
       text: shadowRuling.text,
       rationale: shadowRuling.rationale,
-      doctrineCitations: shadowRuling.doctrineCitations,
+      // Citations live on the packet; the shadow ruling repeats whatever the
+      // patch set, so one record still reads as self-contained.
+      doctrineCitations: patch.doctrineCitations ?? [],
       optionId: shadowRuling.optionId ?? null,
     },
   };
 }
 
-/** Fills in the text a defer or a custom ruling still needs from the user. */
-async function completeRequest(
+/** Turns a chosen row into a ruling, asking for the words it still needs. */
+async function requestFor(
   ctx: ExtensionContext,
-  request: RulingRequest,
+  packetId: string,
+  intent: AskIntent,
 ): Promise<RulingRequest | undefined> {
-  if (request.form === "defer") {
-    const question = await ctx.ui.input("What should be checked?", "the question to drill");
-    return question?.trim() ? { ...request, question } : undefined;
+  switch (intent.kind) {
+    case "ruling":
+      return intent.request;
+    case "needs-question": {
+      const question = await ctx.ui.input("What should be checked?", "the question to drill");
+      return question?.trim() ? { packetId, form: "defer", question } : undefined;
+    }
+    case "needs-words": {
+      const words = await ctx.ui.input("Your ruling", "what should happen");
+      return words?.trim() ? { packetId, form: "custom", text: words } : undefined;
+    }
+    case "dive":
+      return undefined;
   }
-  if (request.form === "custom") {
-    const words = await ctx.ui.input("Your ruling", "what should happen");
-    return words?.trim() ? { ...request, text: words } : undefined;
-  }
-  return request;
 }
 
 /**
@@ -684,12 +710,12 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
   let dive: { packetId: string; missing: string } | undefined;
   let selected = rows.find((row) => row.label === chosen);
 
-  if (chosen === DIVE_LABEL) {
+  if (selected?.intent.kind === "dive") {
     const missing = await ctx.ui.input(
       "What was missing from the packet?",
       "what you had to go and find out",
     );
-    const remaining = rows.filter((row) => row.label !== DIVE_LABEL);
+    const remaining = rows.filter((row) => row.intent.kind !== "dive");
     const second = await ctx.ui.select(title, remaining.map((row) => row.label));
     if (second === undefined) {
       // The dive itself is the signal worth keeping, even with no ruling behind it.
@@ -707,7 +733,7 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
 
   if (!selected) return `${packet.id}: could not read that choice; left pending`;
 
-  const request = await completeRequest(ctx, selected.request);
+  const request = await requestFor(ctx, packet.id, selected.intent);
   if (!request) {
     if (dive) await flushDive(deps, dive, "(left pending)");
     return `${packet.id}: left pending${dive ? " (defect logged)" : ""}`;
@@ -769,8 +795,12 @@ export function toTriageOutcome(
       const packet: PacketDraft = {
         ...params.packet,
         shadowRuling: {
-          ...params.packet.shadowRuling,
+          text: params.packet.shadowRuling.text,
+          rationale: params.packet.shadowRuling.rationale,
           optionId: params.packet.shadowRuling.optionId ?? null,
+          // Coverage is decided by the packet's citations; the shadow ruling
+          // repeats them so a reader of one record sees what it rested on.
+          doctrineCitations: params.packet.doctrineCitations,
         },
       };
       return { outcome: { kind: "packet", packet } };

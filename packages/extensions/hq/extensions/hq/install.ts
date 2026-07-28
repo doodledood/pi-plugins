@@ -12,10 +12,10 @@
 
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { seedDoctrine } from "./doctrine.ts";
 import { atomicWriteText, ensureLayout, materializeIfAbsent, pathExists } from "./io.ts";
-import { hqPaths, resolveStateRoot } from "./paths.ts";
+import { expandHome, hqPaths, resolveStateRoot } from "./paths.ts";
 import { HQ_EXAMPLE_CONFIG } from "./templates.ts";
 import { configPath } from "./config.ts";
 
@@ -27,7 +27,9 @@ export function referenceLine(doctrinePath: string): string {
 
 export function defaultAgentInstructionsPath(env: NodeJS.ProcessEnv = process.env): string {
   const agentDir = env.PI_CODING_AGENT_DIR?.trim();
-  return agentDir ? join(resolve(agentDir), "AGENTS.md") : join(homedir(), ".pi", "agent", "AGENTS.md");
+  return agentDir
+    ? join(expandHome(agentDir), "AGENTS.md")
+    : join(homedir(), ".pi", "agent", "AGENTS.md");
 }
 
 /** Adds the reference line once; a second run changes nothing. */

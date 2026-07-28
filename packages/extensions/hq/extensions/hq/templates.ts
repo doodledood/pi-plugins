@@ -19,6 +19,9 @@ own ratification adds to it, and HQ never rewrites it.
 
 ## Tastes
 
+A taste shapes how a decision is made; it is not a line that decides one, so it
+cannot be cited as the rule that answers a stop.
+
 - Prefer the simplest durable solution that fixes the root cause and leaves the
   touched area easier to reason about.
 - Preserve attention for choices where preference, risk, or irreversibility

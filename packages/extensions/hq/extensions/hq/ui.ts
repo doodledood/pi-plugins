@@ -1,10 +1,13 @@
 /**
  * The fleet overlay: a corner card that never takes the seat.
  *
- * It is registered as an overlay and immediately unfocused, so the editor keeps
- * input while the card is visible, and it handles no keys at all — there is
- * nothing to drill into from here by design. It refreshes on a timer from a
- * getter, so the substrate stays the only source of truth.
+ * It is declared non-capturing, which is how pi's TUI expresses "this overlay is
+ * not part of focus at all": the editor keeps every keystroke while the card is
+ * visible. Releasing focus afterwards is not equivalent — handing focus to no
+ * component leaves the terminal with nothing to route input to.
+ *
+ * It handles no keys by design, and refreshes on a timer from a getter, so the
+ * substrate stays the only source of truth.
  */
 
 import type { OverlayOptions } from "@earendil-works/pi-tui";
@@ -15,6 +18,8 @@ export const FLEET_OVERLAY_OPTIONS = {
   width: 34,
   minWidth: 24,
   margin: { top: 1, right: 1 },
+  /** The card is never focusable, so the editor never loses input to it. */
+  nonCapturing: true,
 } satisfies OverlayOptions;
 
 export interface FleetOverlayCallbacks {

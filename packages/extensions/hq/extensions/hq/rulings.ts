@@ -23,16 +23,17 @@ import type {
   RulingRouting,
 } from "./types.ts";
 
-export interface RulingRequest {
-  packetId: string;
-  form: RulingForm;
-  /** For "alternative": which option was chosen. */
-  optionId?: string;
-  /** The user's words: a custom ruling, or a note on an accepted one. */
-  text?: string;
-  /** For "defer": what to go and find out. */
-  question?: string;
-}
+/**
+ * What the user decided, in the only four shapes that exist. `form` is a real
+ * discriminant: an alternative cannot be missing its option, a custom ruling
+ * cannot be missing its words, and a deferral cannot be missing its question, so
+ * those states are unrepresentable rather than guarded at runtime.
+ */
+export type RulingRequest =
+  | { packetId: string; form: "accept"; text?: string }
+  | { packetId: string; form: "alternative"; optionId: string; text?: string }
+  | { packetId: string; form: "custom"; text: string }
+  | { packetId: string; form: "defer"; question: string };
 
 export interface RulingDeps {
   store: HqStore;
@@ -54,7 +55,7 @@ export interface RulingResult {
 /** Which option the user effectively chose, or null when they wrote their own. */
 export function chosenOptionId(packet: Packet, request: RulingRequest): string | null {
   if (request.form === "accept") return packet.recommendationId;
-  if (request.form === "alternative") return request.optionId ?? null;
+  if (request.form === "alternative") return request.optionId;
   return null;
 }
 
@@ -76,7 +77,7 @@ export function gradeShadow(packet: Packet, request: RulingRequest): boolean | n
 }
 
 function rulingText(packet: Packet, request: RulingRequest): string {
-  if (request.text?.trim()) return request.text.trim();
+  if (request.form !== "defer" && request.text?.trim()) return request.text.trim();
   const chosen = chosenOptionId(packet, request);
   const option = packet.options.find((candidate) => candidate.id === chosen);
   return option ? option.label : "";
@@ -92,10 +93,13 @@ export async function applyRuling(
   if (!packet) return { error: `no such packet: ${request.packetId}` };
   if (packet.status === "ruled") return { error: `packet ${packet.id} already has a ruling` };
   if (request.form === "alternative" && !packet.options.some((o) => o.id === request.optionId)) {
-    return { error: `option ${request.optionId ?? "(none)"} is not on packet ${packet.id}` };
+    return { error: `option ${request.optionId} is not on packet ${packet.id}` };
   }
-  if (request.form === "defer" && !request.question?.trim()) {
+  if (request.form === "defer" && !request.question.trim()) {
     return { error: "a deferral needs a question to drill" };
+  }
+  if (request.form === "custom" && !request.text.trim()) {
+    return { error: "a ruling in your own words needs the words" };
   }
 
   const shadowAgreed = gradeShadow(packet, request);
@@ -106,7 +110,7 @@ export async function applyRuling(
 
   // --- deferral: hand off to a drill and leave the packet in the queue --------
   if (request.form === "defer") {
-    const question = request.question?.trim() ?? "";
+    const question = request.question.trim();
     const drill = deps.startDrill
       ? await deps.startDrill(packet, question)
       : { spawnedSessionId: null };
@@ -217,7 +221,7 @@ function buildRuling(input: {
     form: input.request.form,
     optionId: chosenOptionId(input.packet, input.request),
     text: rulingText(input.packet, input.request),
-    question: input.request.question?.trim() || null,
+    question: input.request.form === "defer" ? input.request.question.trim() : null,
     coverage: input.coverage,
     shadowAgreed: input.shadowAgreed,
     routing: input.routing,
@@ -254,12 +258,13 @@ async function routeRuling(
 
   const chosen = chosenOptionId(packet, request);
   const option = packet.options.find((candidate) => candidate.id === chosen);
+  const words = request.form === "defer" ? undefined : request.text?.trim();
   const decision = [
     `A ruling has come back on the question you stopped for.`,
     ``,
     `Question: ${packet.question}`,
     `Ruling: ${option ? option.label : rulingText(packet, request)}`,
-    request.text?.trim() ? `In the user's words: ${request.text.trim()}` : "",
+    words ? `In the user's words: ${words}` : "",
     ``,
     `Continue the work on that basis. If the ruling does not settle something you`,
     `need, stop again and say exactly what is missing.`,
@@ -294,10 +299,10 @@ async function applyProposalRuling(
   if (proposal.kind === "graduation") return { applied: false };
 
   const chosen = chosenOptionId(packet, request);
-  const ratifying = chosen === "ratify" || (request.form === "custom" && !!request.text?.trim());
+  const ratifying = chosen === "ratify" || (request.form === "custom" && !!request.text.trim());
   if (!ratifying) return { applied: false };
 
-  const ruleText = request.form === "custom" && request.text?.trim()
+  const ruleText = request.form === "custom" && request.text.trim()
     ? request.text.trim()
     : proposal.ruleText;
 

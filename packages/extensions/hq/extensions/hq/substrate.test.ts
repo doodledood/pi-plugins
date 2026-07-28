@@ -30,6 +30,16 @@ test("the state root resolves from HQ_HOME, then the pi dir, then the default", 
   assert.match(resolveStateRoot({}), /\/\.pi\/hq$/);
 });
 
+test("a tilde in the pi directory is expanded, not resolved against the cwd", () => {
+  // pi expands ~ itself; resolving it instead would give every project its own
+  // literal "~" state root and split the one substrate the fleet shares.
+  const root = resolveStateRoot({ PI_CODING_AGENT_DIR: "~/custom/agent" });
+  assert.equal(root.startsWith("~"), false);
+  assert.equal(root.includes("/~/"), false);
+  assert.equal(root.endsWith("/custom/hq"), true);
+  assert.equal(resolveStateRoot({ HQ_HOME: "~" }).includes("~"), false);
+});
+
 test("ids that would escape the state root are refused", () => {
   assert.throws(() => assertSafeId("../escape", "session id"));
   assert.throws(() => assertSafeId("a/b", "session id"));
@@ -357,6 +367,30 @@ test("the packet bar rejects placeholders as firmly as blanks", () => {
     "options[1].label",
     "recommendationId",
   ]);
+});
+
+test("two options sharing an id keep the packet off the desk", async () => {
+  const root = await makeRoot("hq-dup-option");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const { packet, violations } = await store.createPacket(
+      packetDraftFixture({
+        options: [
+          { id: "hold", label: "Hold and wait for CI", price: "the branch waits an hour" },
+          { id: "hold", label: "Ship it now", price: "ships without a green run" },
+        ],
+        recommendationId: "hold",
+      }),
+    );
+    // A ruling is carried by option id, so a collision would send the user's
+    // decision to whichever option happened to be first.
+    assert.equal(packet.status, "held");
+    assert.deepEqual(violations.map((violation) => violation.reason), ["two options share an id"]);
+    assert.deepEqual(await store.listPresentable(), []);
+  } finally {
+    await dropRoot(root);
+  }
 });
 
 test("a packet that misses the bar is held, and filling the gap presents it", async () => {

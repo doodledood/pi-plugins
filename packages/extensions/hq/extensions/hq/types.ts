@@ -701,6 +701,13 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
       });
     }
   });
+  const ids = packet.options.map((option) => option.id);
+  if (new Set(ids).size !== ids.length) {
+    // A ruling names the option it chose by id, and the id is looked up again when
+    // the ruling is carried; two options sharing one id would send the user's
+    // decision somewhere they did not choose.
+    violations.push({ field: "options", reason: "two options share an id" });
+  }
   if (!packet.options.some((option) => option.id === packet.recommendationId)) {
     violations.push({
       field: "recommendationId",
