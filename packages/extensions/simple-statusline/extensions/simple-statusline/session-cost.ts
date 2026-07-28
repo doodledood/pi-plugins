@@ -513,7 +513,14 @@ export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
   private lastStats: ScanStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
-  constructor(private readonly price: PriceOptions = {}) {}
+  /**
+   * `maxSidecarDepth` exists so the truncation disclosure can be exercised without
+   * building a sixteen-generation tree; production uses the default.
+   */
+  constructor(
+    private readonly price: PriceOptions = {},
+    private readonly maxSidecarDepth: number = MAX_SIDECAR_DEPTH,
+  ) {}
 
   private freshFileCache(header?: SessionHeader, reads = 0): FileCacheEntry {
     return { size: 0, mtimeMs: 0, offset: 0, remainder: "", decoder: new StringDecoder("utf8"), acc: createAccumulator(), header, reads };
@@ -669,7 +676,7 @@ export class SessionTreeScanner {
       if (skip.has(real) || byPath.has(real)) return;
       byPath.set(real, { path, real, kind, header: this.cachedHeader(path) });
     };
-    const sidecar = listSidecarSessionFiles(deriveSidecarRoot(rootFile));
+    const sidecar = listSidecarSessionFiles(deriveSidecarRoot(rootFile), this.maxSidecarDepth);
     if (sidecar.truncated) this.lastStats.filesUnreadable += 1;
     for (const file of sidecar.files) add(file.path, file.kind);
     try {

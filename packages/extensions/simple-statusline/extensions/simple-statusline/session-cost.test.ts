@@ -697,6 +697,23 @@ test("sessions nested past the walk's depth bound are reported, not silently dro
   assert.equal(tree.approximate, false, "a tree within the bound is exact");
 });
 
+test("a tree deeper than the bound reports the gap instead of reading exact", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  let current = parent;
+  for (let i = 0; i < 3; i += 1) {
+    current = writeSession(join(deriveChildSessionDir(current, "tasks"), `c${i}.jsonl`), { id: `c${i}`, entries: [assistant(1)] });
+  }
+
+  // Same disclosure path an unreadable file takes: spend is missing, so the figure is
+  // a floor and says why — never a confident number over an incomplete walk.
+  const tree = new SessionTreeScanner({}, 2).scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.ok(tree.totalCost < 3, `expected a partial total, got ${tree.totalCost}`);
+  assert.ok(tree.approximate, "a truncated walk cannot report an exact total");
+  assert.equal(tree.unreadableSessions, 1);
+  assert.match(tree.approximateReasons.join(" "), /could not be read/);
+});
+
 test("the depth bound allows far deeper nesting than any real session tree", () => {
   // Each generation costs two directory levels, so the bound must be comfortably even
   // and large; a cap of 8 would have silently stopped at four generations.

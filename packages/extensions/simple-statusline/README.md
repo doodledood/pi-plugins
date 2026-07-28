@@ -130,8 +130,10 @@ installed. Everything extension-specific reaches it through generic contracts:
   row. That is a width rule, not a list of known extensions — an extension you
   haven't installed simply contributes nothing. Width decides placement only:
   wherever a status lands it keeps the same tone and normalization, so a short
-  `goal blocked` never reads as a success, and every status a plugin sets appears
-  in exactly one of the two places.
+  `goal blocked` never reads as a success, and no status is shown in both places
+  at once. Two caveats: the footer stays quiet by holding at most two statuses
+  inline and three in the row, and it hides MCP loadout statuses, which belong in
+  `/mcp` rather than in a footer.
 - **Spend from calls with no session of their own** arrives as `pi-cost-record`
   session entries, which any extension can write.
 - **Premium billing tiers** arrive as `pi-price-tier` entries carrying both the
