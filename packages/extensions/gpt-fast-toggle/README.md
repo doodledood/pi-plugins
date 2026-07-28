@@ -48,9 +48,10 @@ whenever the effective tier changes, recorded from the same read of the state fi
 that decides the outgoing request. That matters because the file is shared across
 pi processes: toggling fast mode in one session changes what every other session is
 billed, and a record derived only from session or model events would go stale —
-turns billed at the premium while the session's own records still said standard. A later scan can then tell
-which turns paid the premium. These are custom entries: durable, but excluded
-from LLM context, and they carry nothing but the tier name.
+turns billed at the premium while the session's own records still said standard. A later scan can then tell which turns paid
+the premium. These are custom entries: they live in the session file, so they last
+exactly as long as it does, they are excluded from LLM context, and they carry
+nothing but the tier and its configured premium — no request or response content.
 
 Set `priorityMultiplier` and the record carries it, so a cost surface prices those
 turns without knowing this extension exists. Until you do, the record states the

@@ -35,6 +35,11 @@ import {
   type ChildRuntimeHandle,
 } from "../src/runtime.ts";
 
+// Hermetic by intent: these tests pass an in-memory credential store and no models
+// path, but ModelRuntime still consults the provider catalog unless pi is told it is
+// offline — which can cost 15s on a slow network leg and time the test out.
+process.env.PI_OFFLINE ??= "1";
+
 const PROVIDER = "btw-integration";
 const API = "btw-integration-api";
 const MODEL_ID = "deterministic";

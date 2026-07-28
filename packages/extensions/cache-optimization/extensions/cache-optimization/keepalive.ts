@@ -103,8 +103,11 @@ export interface KeepaliveDeps {
   /**
    * Called once per billed ping with provider-reported usage priced from pi's model
    * rates. A keepalive ping is a real Anthropic request that no session records, so
-   * without this its spend is invisible to every cost surface. Failed and skipped
-   * pings report nothing.
+   * without this its spend is invisible to every cost surface.
+   *
+   * "Billed" is the test, not "succeeded": a ping that reached the provider without
+   * proving a cache read still cost money and is still reported. Only a ping that never
+   * reached the provider, was skipped, or reported no usage reports nothing.
    */
   onSpend?: ((record: KeepaliveSpendRecord) => void) | undefined;
 }
