@@ -4,6 +4,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCheckerVerdict, PiSubprocessCheckerRunner, redactSecrets, type CheckerRunInput } from "./checker.ts";
+import { CHECKER_SESSION_KIND } from "./index.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { createGoal } from "./controller.ts";
 import type { CheckerSessionContext, GoalControllerConfig } from "./types.ts";
@@ -1412,10 +1414,16 @@ test("checker sessions land in the parent's sidecar dir, and fall back to no ses
     checkerModelBootstrapPaths: [],
   };
 
-  await runner.run({ ...base, sessionDir: "/sessions/--proj--/2026-07-28_abc/goal-checker" });
+  // Derived, not hardcoded: a drift in this package's copy of the convention must
+  // break the test rather than pass a stale literal.
+  const parentSessionFile = "/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0.jsonl";
+  const derived = deriveChildSessionDir(parentSessionFile, CHECKER_SESSION_KIND);
+  assert.equal(derived, "/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0/goal-checker");
+
+  await runner.run({ ...base, sessionDir: derived });
   await runner.run({ ...base });
 
-  assert.equal(captured[0]?.[captured[0].indexOf("--session-dir") + 1], "/sessions/--proj--/2026-07-28_abc/goal-checker");
+  assert.equal(captured[0]?.[captured[0].indexOf("--session-dir") + 1], derived);
   assert.equal(captured[0]?.includes("--no-session"), false);
   assert.equal(captured[1]?.includes("--no-session"), true, "no parent session means nothing to attach the spend to");
   assert.equal(captured[1]?.includes("--session-dir"), false);
@@ -1441,11 +1449,23 @@ test("a checker run that fails still leaves its session behind for cost accounti
       model: undefined,
       thinkingLevel: "off",
       checkerModelBootstrapPaths: [],
-      sessionDir: "/sessions/--proj--/parent/goal-checker",
+      sessionDir: deriveChildSessionDir("/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0.jsonl", CHECKER_SESSION_KIND),
     }),
   );
   // The failure path does not remove or bypass the session, so whatever the run
   // already wrote stays countable.
-  assert.equal(captured[0]?.[captured[0].indexOf("--session-dir") + 1], "/sessions/--proj--/parent/goal-checker");
+  assert.equal(
+    captured[0]?.[captured[0].indexOf("--session-dir") + 1],
+    "/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0/goal-checker",
+  );
   assert.equal(captured[0]?.includes("--no-session"), false);
+});
+
+test("the checker sidecar convention is pinned, and absent when the parent has no session", () => {
+  // Same layout the cost scanner walks and pi-subagents already writes `tasks/` into.
+  assert.equal(
+    deriveChildSessionDir("/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0.jsonl", CHECKER_SESSION_KIND),
+    "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0/goal-checker",
+  );
+  assert.equal(deriveChildSessionDir(undefined, CHECKER_SESSION_KIND), undefined);
 });

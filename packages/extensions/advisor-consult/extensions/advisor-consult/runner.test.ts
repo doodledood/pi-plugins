@@ -208,3 +208,36 @@ test("advisorArgs falls back to no session when the parent has none", () => {
   assert.ok(args.includes("--no-session"), "nothing to attach the spend to, so nothing is persisted");
   assert.equal(args.includes("--session-dir"), false);
 });
+
+test("a failed consult still leaves its session behind, so partial usage stays countable", async () => {
+  // A consult that burns tokens and then fails has still spent money. The failure path
+  // must not fall back to --no-session, or that spend becomes unrecoverable.
+  const failures: Array<{ label: string; result: ExecResult }> = [
+    { label: "timeout", result: { stdout: "", stderr: "", code: 143, killed: true } },
+    { label: "nonzero exit", result: { stdout: "", stderr: "boom", code: 3, killed: false } },
+    { label: "clean exit, no advice", result: { stdout: "", stderr: "", code: 0, killed: false } },
+    {
+      label: "model error on exit 0",
+      result: {
+        stdout: `${JSON.stringify({ type: "message_end", message: { role: "assistant", model: "m", stopReason: "error", errorMessage: "model not found", content: [] } })}\n`,
+        stderr: "",
+        code: 0,
+        killed: false,
+      },
+    },
+  ];
+
+  for (const { label, result } of failures) {
+    const capture: { args?: string[] } = {};
+    const runner = new PiSubprocessAdvisorRunner(fakeExec(result, capture));
+    const outcome = await runner.run(baseInput({ sessionDir: "/sessions/--proj--/parent/advisor" }));
+
+    assert.equal(outcome.ok, false, `${label} still fails to the parent`);
+    assert.equal(
+      capture.args?.[capture.args.indexOf("--session-dir") + 1],
+      "/sessions/--proj--/parent/advisor",
+      `${label} keeps the session, so whatever it already wrote stays countable`,
+    );
+    assert.equal(capture.args?.includes("--no-session"), false, `${label} does not discard the session`);
+  }
+});

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { registerCheckerModelBootstrap as registerRealModelAliasesBootstrap } from "../../../model-aliases/extensions/model-aliases/index.ts";
 import realModelAliasesCheckerBootstrap from "../../../model-aliases/extensions/model-aliases/checker-bootstrap.ts";
 import { createEventBus, type AgentEndEvent, type BeforeAgentStartEvent, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent, type SessionTreeEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { activate as activateGoalController, activeStatusRefreshDelayMs, formatStatus } from "./index.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
+import { activate as activateGoalController, activeStatusRefreshDelayMs, CHECKER_SESSION_KIND, formatStatus } from "./index.ts";
 import {
   CHECKER_MODEL_BOOTSTRAP_KIND,
   CHECKER_MODEL_BOOTSTRAP_PROTOCOL_VERSION,
@@ -1421,4 +1422,32 @@ test("configured settings do not load the old pi-goal package", () => {
   const settings = readFileSync(settingsPath, "utf8");
   assert.equal(settings.includes("npm:@narumitw/pi-goal"), false);
   assert.equal(settings.includes("goal_complete"), false);
+});
+
+test("a failing checker pauses the goal safely AND still ran against the derived sidecar session", async () => {
+  const host = new FakeHost();
+  const checker = new DeferredChecker();
+  activate(host, checker);
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const sessionFile = "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0.jsonl";
+  const ctx = makeCtx([], { sessionFile, onNotify: (message, level) => notifications.push({ message, level }) });
+  await host.commandHandler?.("goal whose checker will fail", ctx);
+
+  const run = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  await new Promise((resolve) => setImmediate(resolve));
+  checker.reject(new Error("checker died"));
+  await run;
+
+  // Existing safe-failure behavior.
+  assert.equal(latestGoal(host)?.status, "paused");
+  assert.match(latestGoal(host)?.lastTransitionReason ?? "", /checker failed unexpectedly/iu);
+
+  // And the run that failed was still pointed at the parent's sidecar directory, so
+  // whatever it spent before dying remains discoverable from the parent session.
+  assert.equal(
+    checker.inputs[0]?.sessionDir,
+    deriveChildSessionDir(sessionFile, CHECKER_SESSION_KIND),
+    "index.ts must wire the derived sidecar dir, not leave it undefined",
+  );
+  assert.equal(checker.inputs[0]?.sessionDir, "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15-096Z_019fa7c0/goal-checker");
 });
