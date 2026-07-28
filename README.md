@@ -266,11 +266,11 @@ Use these descriptions when guiding a partial sync. The user may select individu
 ### Extensions
 
 - `advisor-consult` — independent second-opinion advisor tool.
-- `btw` — `/btw` side conversations with ephemeral child history and a shared project workspace.
+- `btw` — `/btw` side conversations with separate child history and a shared project workspace; the aside persists under the parent session so its spend stays countable.
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-sol` at `xhigh` while the extension default remains `inherit`.
-- `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle.
+- `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
@@ -278,7 +278,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
-- `simple-statusline` — compact Pi footer/statusline.
+- `simple-statusline` — compact Pi footer/statusline, including whole-session-tree cost (this session plus every run it spawned) and the `/cost` breakdown.
 - `skill-argument-hints` — argument hints for skill commands.
 - `tool-activity-renderer` — compact rendering wrappers for built-in tools.
 

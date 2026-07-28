@@ -34,6 +34,58 @@ prefix fingerprinting, cache keeper, and TTL keepalive — live in the separatel
 installable `cache-optimization` extension in this repo. The footer here is the
 ambient signal; `/cache` is the on-demand "why".
 
+## Cost metric
+
+The footer's dollar figure is the **whole session tree's lifetime spend**: this
+session plus every run it spawned — subagents, advisor consults, goal-checker
+audits, panelists, BTW asides — plus billed calls that produce no session of
+their own (cache keepalive pings, speech).
+
+Pi itself prices one session file and never aggregates related ones, so its own
+footer and `/session` report only this session's turns and will read lower.
+That is expected: this figure is the one that answers "what did this cost".
+
+How it is computed: every session reachable from this one is scanned and summed
+with Pi's own rules (assistant usage, tool-result usage, compaction and
+branch-summary usage) over all entries, not just the active branch. Children are
+found two ways — by their location under this session's directory, and by the
+`parentSession` link in their header — and each session is counted once no
+matter how many ways it is reachable. Scanning is incremental: session files are
+append-only, so an unchanged file is never re-read, and the figure refreshes on
+session events rather than while the footer paints.
+
+A leading `~` means the total is a **floor rather than an exact number**. Two
+things cause it:
+
+- **Priority-tier turns.** With `gpt-fast-toggle` in fast mode, OpenAI bills the
+  priority service tier above the standard rate Pi prices from. Set
+  `priorityMultiplier` in `~/.pi/agent/gpt-fast-toggle.json` (e.g. `2`) to price
+  those turns; until then they are counted at standard rates and marked.
+- **Unpriceable models.** A model with no resolvable per-token price — typically
+  a `model-aliases` entry whose target Pi does not price — reports real tokens
+  at $0.
+
+### `/cost`
+
+`/cost` takes the figure apart: lifetime total versus active-branch subtotal,
+per spawned session, per provider/model with token counts, why the total is
+approximate when it is, and what it cannot see at all.
+
+Two installed extensions spend money without reporting any usage —
+`pi-web-access` (search-answer synthesis and paid search APIs) and
+`pi-image-gen` — so their spend is unrecoverable from the session and sits
+outside this total. `/cost` names them rather than letting the number read as
+every dollar spent.
+
+### Retention
+
+Child sessions live under the parent session's directory
+(`<sessions>/<parent-session-id>/<kind>/`) and are kept for the life of the
+parent session: they are the evidence behind the number, and deleting them
+lowers it. Removing a parent session's `.jsonl` file and its sibling directory
+of the same name removes the whole tree. Pi lists sessions from one directory
+non-recursively, so these nested files never appear in `/resume`.
+
 ## Install
 
 From a local clone:

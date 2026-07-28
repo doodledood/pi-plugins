@@ -50,6 +50,22 @@ The extension reads configuration from environment variables in the process that
 | `OPENAI_TTS_MAX_AUDIO_BYTES` | `26214400` | Max downloaded audio response size. |
 | `OPENAI_TTS_TIMEOUT_MS` | `30000` | OpenAI request timeout in milliseconds. |
 | `OPENAI_TTS_PLAYBACK_TIMEOUT_MS` | unset | Optional local playback timeout in milliseconds. Leave unset for uncapped playback so long audio is not cut off; use Pi/tool abort if playback hangs. |
+| `OPENAI_TTS_PRICE_PER_MCHAR` | unset | Price in USD per million characters. Set it to have speech spend counted in dollars (see **Cost accounting**). |
+
+## Cost accounting
+
+Each successful call appends one `pi-cost-record` entry to the session, recording
+the characters spoken plus the model and voice. Speech is a paid call with no pi
+session of its own, so without this record its spend is invisible to every cost
+surface; the `simple-statusline` footer and `/cost` read these records into the
+session-tree total.
+
+OpenAI bills speech **per character** while pi prices tokens, so the dollar
+figure only appears once you set `OPENAI_TTS_PRICE_PER_MCHAR` to the rate for
+your model. Until then the record carries characters with no invented price. A
+failed call records nothing, and the record never contains the spoken text.
+
+These are custom entries: durable, but excluded from LLM context.
 
 Example:
 

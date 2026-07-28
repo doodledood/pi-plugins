@@ -173,6 +173,14 @@ No config file. Runtime behavior:
   keepalive's long-retention guard is payload-based, not env-based: requests
   whose `cache_control` markers carry `ttl: "1h"` are never pinged, which also
   covers provider-scoped retention settings the process env can't see.
-- Keeps all state (fingerprint hashes, keeper anchor, keepalive budgets)
-  in-memory only; nothing is persisted to the session file or disk, and nothing
-  is injected into LLM context.
+- Keeps fingerprint hashes, the keeper anchor, and keepalive budgets in-memory
+  only; no request content is persisted anywhere.
+- Writes one `pi-cost-record` entry to the session per **billed** keepalive ping:
+  the usage the provider reported, priced with pi's own model rates. A keepalive
+  ping is a real Anthropic request that no session records, so without this its
+  spend is invisible; the `simple-statusline` cost surfaces read these records
+  into the session-tree total and `/cost` shows them as a keepalive bucket.
+  These are custom entries, which are durable but excluded from LLM context, and
+  they carry only model, token counts, cost, and an id — never request content.
+  A ping that failed, was skipped, or reported no usage records nothing rather
+  than an estimate.

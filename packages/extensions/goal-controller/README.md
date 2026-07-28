@@ -232,6 +232,29 @@ The default checker timeout is 300000ms (5 minutes), which gives tool-assisted c
 
 Missing config uses defaults. Invalid JSON or non-object config surfaces a warning and uses defaults. Invalid scalar field values are ignored, surfaced in a warning, and replaced with documented defaults. Unsupported checker fields are also surfaced in a warning and ignored.
 
+## Checker sessions and cost accounting
+
+Each checker run is a real `pi` subprocess that costs money on every audit. Its
+session is written to `<parent-session-dir>/<parent-session-id>/goal-checker/`, a
+directory alongside the parent session file, instead of running with no session
+and discarding the record.
+
+That makes audit spend countable — the `simple-statusline` cost surfaces sum
+these into the session-tree total and `/cost` attributes them — and leaves each
+audit's reasoning readable afterwards. A run that errored, timed out, or returned
+an unusable verdict still leaves whatever it already wrote, so its spend is not
+lost either.
+
+Because pi lists sessions from one directory non-recursively, these nested files
+never appear in the session list or the `/resume` picker. They are retained for
+the life of the parent session; deleting the parent's `.jsonl` file and the
+sibling directory of the same name removes them with it. When the parent session
+is not persisted, the checker also runs without one.
+
+Persisting changes nothing about the checker's capabilities: it keeps the same
+fixed audit-only profile, the same disabled resource surfaces, and the same
+secret-safe failure reporting.
+
 ## Reload
 
 After changing extension files or config:

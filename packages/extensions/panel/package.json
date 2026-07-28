@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-panel",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "type": "module",
   "description": "Pi /panel: user-triggered parallel consultation of independent models over a fork of the live conversation, with attributed answers returned to the main model.",
   "keywords": [

@@ -128,11 +128,12 @@ Denied tools are removed from the subprocess registry via `--exclude-tools`. A s
 
 ## How it works
 
-Each consult spawns `pi --mode json -p --no-session` with:
+Each consult spawns `pi --mode json -p` with:
 
 - `--system-prompt` set to the advisor persona (replacing the default coding-agent posture), and `--no-context-files` for a neutral, independent frame;
 - `--exclude-tools <denylist>` to remove the hazardous tools;
 - `-e <child-bootstrap>` to broaden the active non-MCP tool set after the child's extensions load;
+- `--session-dir <parent-session>/advisor` so the consult's own session persists (see **Local state**);
 - `--model` / `--thinking` resolved from config and per-call overrides.
 
 The runner parses JSON-mode output for the advisor's final message, redacts secrets from any diagnostics, and returns a clear result for success, empty output, nonzero exit, timeout, or a model/provider error. Pi reports a failed model call (e.g. an unknown model id) on an assistant message with `stopReason: "error"` while still exiting 0, so the runner surfaces that error explicitly; for model-not-found it points you at `pi --list-models` to see what's available in this environment.
@@ -153,7 +154,7 @@ For the Git root bundle, restore the previous implementation in a new commit whi
 pi update git:github.com/doodledood/pi-plugins@main
 ```
 
-Run `/reload` or restart Pi afterward. This forward-versioned rollback restores the previous code without disabling the repo's other extensions or theme, reusing an immutable release tag, or regressing package history; package filters remain intact. If advisor-consult was installed as its standalone package instead, remove that package from `settings.json` (or Pi package config). Delete `~/.pi/agent/advisor-consult.json` only if you also want to remove its optional configuration; no other persistent state is written.
+Run `/reload` or restart Pi afterward. This forward-versioned rollback restores the previous code without disabling the repo's other extensions or theme, reusing an immutable release tag, or regressing package history; package filters remain intact. If advisor-consult was installed as its standalone package instead, remove that package from `settings.json` (or Pi package config). Delete `~/.pi/agent/advisor-consult.json` only if you also want to remove its optional configuration; past consult sessions under previous parent sessions' `advisor/` directories are removed with their parent sessions (see **Local state**).
 
 ## Decision record
 
@@ -161,4 +162,10 @@ Design rationale — independent subprocess (not subagents, not Anthropic-native
 
 ## Local state
 
-This extension writes no runtime state. It reads optional config from `~/.pi/agent/advisor-consult.json` and spawns a `pi` subprocess per consult.
+It reads optional config from `~/.pi/agent/advisor-consult.json` and spawns a `pi` subprocess per consult.
+
+Each consult writes its own Pi session file to `<parent-session-dir>/<parent-session-id>/advisor/`, a directory alongside the parent session file. A consult costs real money, and a run with `--no-session` leaves nothing behind, so its spend cannot be counted and its reasoning cannot be reviewed. Persisting it fixes both: the `simple-statusline` cost surfaces sum these into the session-tree total and `/cost` attributes them, and the transcript stays available for inspection.
+
+Because Pi lists sessions from one directory non-recursively, these nested files never appear in the session list or the `/resume` picker — the consult stays invisible during use. They are retained for the life of the parent session; deleting the parent's `.jsonl` file and the sibling directory of the same name removes them with it. When the parent session is not persisted at all (for example `pi --no-session`), the consult also runs without a session, since there would be nothing to attach its spend to.
+
+No advisory query text, advice, or model output is written anywhere else.

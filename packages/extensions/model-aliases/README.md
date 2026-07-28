@@ -148,7 +148,7 @@ That explicit bootstrap lets the checker subprocess register the same alias mode
 | `contextWindow` | no | Pi-visible context window used for display and compaction accounting. Defaults to inherited target metadata or `128000`. |
 | `targetContextWindow` | no | Hard context window used by the delegated provider request and its output-token clamp. Defaults to `contextWindow`, preserving prior behavior. Set this explicitly when the visible window is an earlier operating/compaction boundary. |
 | `maxTokens` | no | Max output metadata. Defaults to inherited target metadata or `16384`. |
-| `cost` | no | Cost metadata per million tokens. Defaults to inherited target metadata or zeros. |
+| `cost` | no | Cost metadata per million tokens. Defaults to the target model's pricing when pi knows the target; falls back to zeros, which is warned about (see **Pricing**). |
 | `compat` | no | Provider compatibility overrides passed through to the target provider. |
 
 ## Auth behavior
@@ -164,6 +164,21 @@ If normal chat appears to work but `/compact` or automatic compaction fails with
 If a deliberately smaller visible window causes repeated `maximum output token limit` stops immediately before compaction, set `targetContextWindow` to the provider's real hard capacity. Do not represent an early compaction boundary by lowering both the visible and target windows.
 
 For Git installs that track `main`, run `pi update --extensions` (or otherwise fast-forward the installed package clone), then `/reload` or restart Pi.
+
+## Pricing
+
+An alias with no `cost` block inherits its target model's pricing, which is the
+normal case: point `targetModel` at a model pi already prices and cost accounting
+is exact.
+
+When an alias has neither its own `cost` nor a resolvable target, pi still needs
+a cost object, so it gets zeros — which means real token spend is reported as
+$0. That failure is silent by nature, so this extension warns at load naming
+each affected alias, and the `simple-statusline` cost surfaces mark any total
+containing unpriced usage with a leading `~` and name the model in `/cost`.
+
+Fix it by adding a `cost` block to the alias or by pointing `targetModel` at a
+model in pi's registry.
 
 ## Local state
 

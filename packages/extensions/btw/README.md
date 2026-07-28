@@ -1,6 +1,6 @@
 # @doodledood/pi-btw
 
-A `/btw` side conversation for Pi. BTW opens one ephemeral child `AgentSession` in a Pi-owned right overlay so you can ask or try something without adding the child conversation or its tool results to the parent history.
+A `/btw` side conversation for Pi. BTW opens one child `AgentSession` in a Pi-owned right overlay so you can ask or try something without adding the child conversation or its tool results to the parent history.
 
 BTW requires Pi 0.80.6 or newer and its interactive TUI. It refuses to register under an older Pi host with an actionable compatibility error, because prompt cancellation depends on Pi's `preflightResult` behavior (introduced in 0.80.6). It does not open in RPC, JSON, or print mode.
 
@@ -28,7 +28,7 @@ Inside the pane:
 | `/main` | Return focus to the parent while keeping BTW visible. |
 | `done`, `/done`, `/btw done` | Close BTW. |
 
-The overlay presents separate parent/child activity, streaming output, tool progress and results, retries, compaction, errors, and aborts. Its transcript projection is bounded; the temp-backed child session remains authoritative while the pane is open.
+The overlay presents separate parent/child activity, streaming output, tool progress and results, retries, compaction, errors, and aborts. Its transcript projection is bounded; the child's own session file remains authoritative while the pane is open.
 
 ## Parent updates
 
@@ -76,9 +76,15 @@ The repository's root Git package already includes BTW alongside all other root 
 
 ## Configuration, state, and workspace
 
-BTW has no package-specific config file, environment variables, credentials, or persistent local state.
+BTW has no package-specific config file, environment variables, or credentials.
 
-Each child uses a mode-`0600` JSONL session clone inside an OS temporary directory named `pi-btw-*`. Normal close removes the whole directory; no child session is written beneath Pi's persistent `sessions/` directory. A hard process kill can leave a temporary directory that the terminated process can no longer clean up.
+Each aside is a mode-`0600` JSONL session clone. When the parent session is persisted, the clone is written to `<parent-session-dir>/<parent-session-id>/btw/` — nested beneath Pi's `sessions/` directory, alongside the parent session file — and **kept when the pane closes**. An aside is a real model conversation that costs real money; deleting it on close destroyed the only record of that spend. Keeping it lets the `simple-statusline` cost surfaces count it in the session-tree total and `/cost` attribute it, and leaves the aside readable afterwards. Its header records the parent session file as `parentSession`.
+
+Because Pi lists sessions from one directory non-recursively, these nested files never appear in the session list or the `/resume` picker. They are retained for the life of the parent session; deleting the parent's `.jsonl` file and the sibling directory of the same name removes every aside with it.
+
+When the parent session is **not** persisted, the aside falls back to an OS temporary directory named `pi-btw-*` and normal close removes that whole directory, as before — there is no parent session to attach the spend to. A hard process kill can leave such a temporary directory that the terminated process can no longer clean up.
+
+Parent history is never modified either way.
 
 Parent and child tools share the same working directory and can mutate the same files concurrently. This is deliberate shared-workspace behavior, not filesystem isolation: coordinate conflicting edits and re-read shared state before writing. Files changed by child tools remain after the child closes.
 

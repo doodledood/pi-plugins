@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-cache-optimization",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Prompt-cache efficiency toolkit for Pi: /cache diagnostics, Anthropic 4th-breakpoint keeper, and a runaway-proof TTL keepalive.",
   "keywords": [

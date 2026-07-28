@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-btw",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "/btw side conversations for Pi with ephemeral isolated history and a shared project workspace.",
   "keywords": [

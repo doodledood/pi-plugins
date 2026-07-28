@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   accumulateEntry,
@@ -405,4 +407,27 @@ test("analyzeSessionTree totals a tree on disk without a live session", () => {
   assert.equal(tree.totalCost, 4.25);
   assert.equal(tree.own.cost, 1.5);
   assert.deepEqual(tree.descendants.map((d) => d.kind).sort(), ["advisor", "tasks"]);
+});
+
+test("a session tree on disk can be analyzed from a fresh process, long after the session ended", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1", entries: [assistant(1)] });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2.5)] });
+
+  const moduleUrl = pathToFileURL(join(import.meta.dirname, "cost-report.ts")).href;
+  const script = `
+    const { analyzeSessionTree, renderCostReport } = await import(${JSON.stringify(moduleUrl)});
+    const tree = analyzeSessionTree(${JSON.stringify(parent)});
+    process.stdout.write(JSON.stringify({ total: tree.totalCost, children: tree.descendants.length, report: renderCostReport(tree) }));
+  `;
+  const scriptPath = join(root, "analyze.mts");
+  writeFileSync(scriptPath, script);
+  const local = join(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
+  const bin = existsSync(local) ? local : join(import.meta.dirname, "..", "..", "..", "..", "..", "node_modules", ".bin", "tsx");
+  const out = execFileSync(bin, [scriptPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.total, 3.5, "a fresh process reproduces the whole-tree total");
+  assert.equal(parsed.children, 1);
+  assert.match(parsed.report, /Session tree lifetime cost/);
+  assert.match(parsed.report, /Not included/);
 });
