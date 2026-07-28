@@ -164,7 +164,11 @@ export async function applyTriageOutcome(
       // Exact citation only. A substring match would let a bare section name —
       // which the model is handed in the rendered doctrine — stand in for a rule,
       // making the code-side coverage check model-asserted.
-      const cited = doctrine.rules.find((rule) => rule.citation === outcome.citation);
+      // Only a line that can decide a case counts as coverage: a taste or an
+      // escalation rule shapes the decision but does not make it.
+      const cited = doctrine.rules.find(
+        (rule) => rule.citation === outcome.citation && rule.decides,
+      );
       const graduated = await deps.store.isGraduated(outcome.domain);
       const decision = ceilingDecision({
         graduated,
@@ -233,7 +237,7 @@ export async function applyTriageOutcome(
       const doctrine = await loadDoctrine(deps.store.root, stop.project, deps.onError);
       const graduated = await deps.store.isGraduated(outcome.domain);
       const cited = outcome.citation
-        ? doctrine.rules.find((rule) => rule.citation === outcome.citation)
+        ? doctrine.rules.find((rule) => rule.citation === outcome.citation && rule.decides)
         : undefined;
       const decision = ceilingDecision({
         graduated,

@@ -775,7 +775,7 @@ async function runGraduation(world: World): Promise<void> {
   const { spawner } = recordingSpawner();
   const deps = { store: world.store, spawner, random: () => 0.01 };
   const doctrine = await loadDoctrine(world.root, world.workspace);
-  const citation = doctrine.rules[0]?.citation ?? "";
+  const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
 
   const before = await seedStop(world, "grad-1", `${world.root}/grad-1.jsonl`);
   const escalated = await applyTriageOutcome(deps, before.stopId, {

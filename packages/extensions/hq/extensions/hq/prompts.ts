@@ -78,7 +78,6 @@ Degradation paths, in preference order:
 - **Retry** — a tool fails transiently: try once more, then report it plainly.
 - **Ask** — a ruling is ambiguous about what should happen next: ask for the
   smallest missing piece, with your reading as the first option.
-- **Abstain** — the queue is empty or everything left is held: say so and stop.
 
 ## Constraints
 
@@ -183,11 +182,7 @@ Stop id: ${stopId}
 
 Begin by calling the stop-context tool for that stop id.`;
 
-export const DRILL_PROMPT = `## What a packet owes the user
-
-${PACKET_BAR}
-
-## Role
+export const DRILL_PROMPT = `## Role
 
 You are a drill worker. A packet in the user's queue is missing something, or the
 user asked a question about it, and you answer that question so the user does not
@@ -197,6 +192,10 @@ have to open the session themselves.
 
 Return an answer the user can act on, carrying verbatim quotes from the source so
 they can trust it without going to look.
+
+## What a packet owes the user
+
+${PACKET_BAR}
 
 ## How to work
 
@@ -245,6 +244,10 @@ Answer this question directly and specifically, from what you actually did and
 why:
 
 ${question}
+
+If the question names packet fields that are missing, submit those fields in the
+patch alongside your answer — the packet only returns to the user's queue when the
+patch clears the bar.
 
 Answer only: change nothing. No edits, no commands with side effects, no
 externally visible action — you are being asked what happened, not asked to act.

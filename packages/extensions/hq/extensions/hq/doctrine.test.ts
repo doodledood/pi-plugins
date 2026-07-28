@@ -25,21 +25,45 @@ test("rules parse with a citable location, and Meta is not a rule", () => {
   assert.equal(rules.length, 2);
   assert.equal(rules[0]?.section, "Doors");
   assert.match(rules[0]?.text ?? "", /one-way doors unless authorized/);
-  assert.match(rules[0]?.citation ?? "", /^global\.md § Doors L\d+$/);
+  assert.match(rules[0]?.citation ?? "", /^global\.md § Doors #[0-9a-f]{8}$/);
   assert.equal(rules.some((rule) => rule.section === "Meta"), false);
 });
 
-test("a wrapped rule is cited at the line its bullet is on", () => {
-  const rules = parseRules(
+test("a citation names the rule's content, so it survives the lines around it moving", () => {
+  const before = parseRules(
     `## Doors\n\n- first rule\n- a rule that wraps\n  onto a second line\n- third rule\n`,
     "global.md",
     "global",
   );
-  assert.deepEqual(rules.map((rule) => rule.citation), [
-    "global.md § Doors L3",
-    "global.md § Doors L4",
-    "global.md § Doors L6",
-  ]);
+  assert.deepEqual(before.map((rule) => rule.line), [3, 4, 6]);
+
+  // HQ's own ratifications insert and splice lines. A position-addressed citation
+  // stored on a queued packet would then point at a different rule.
+  const after = parseRules(
+    `## Doors\n\n- inserted rule\n- first rule\n- a rule that wraps\n  onto a second line\n- third rule\n`,
+    "global.md",
+    "global",
+  );
+  const byText = new Map(after.map((rule) => [rule.text, rule.citation]));
+  for (const rule of before) {
+    assert.equal(byText.get(rule.text), rule.citation, `citation moved for: ${rule.text}`);
+  }
+  assert.notEqual(before[0]?.line, after.find((r) => r.text === "first rule")?.line);
+});
+
+test("only sections that can decide a case are marked as deciding", () => {
+  const rules = parseRules(
+    `## Tastes\n\n- prefer the simple thing\n\n## Doors\n\n- treat deploys as one-way\n\n## Escalation rules\n\n- ask when unsure\n\n## Precedents\n\n- retry once\n`,
+    "global.md",
+    "global",
+  );
+  const decides = Object.fromEntries(rules.map((rule) => [rule.section, rule.decides]));
+  assert.deepEqual(decides, {
+    Tastes: false,
+    Doors: true,
+    "Escalation rules": false,
+    Precedents: true,
+  });
 });
 
 test("the seed's own placeholder bullets are never citable rules", async () => {

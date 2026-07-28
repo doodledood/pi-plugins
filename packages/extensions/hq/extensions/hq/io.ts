@@ -8,6 +8,7 @@
 
 import {
   access,
+  stat,
   appendFile,
   constants,
   link,
@@ -260,4 +261,42 @@ export function newId(prefix: string, now: Date = new Date()): string {
   const stamp = now.toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
   const tail = Math.random().toString(36).slice(2, 8);
   return `${prefix}-${stamp}-${tail}`;
+}
+
+/**
+ * Runs `work` while holding an exclusive lock file next to `path`.
+ *
+ * The in-process write queue cannot serialize writers that live in different
+ * processes — a session row is written by its own session, by the titler, and by
+ * drills — so a read-modify-write needs a lock the filesystem enforces. A lock
+ * older than `staleMs` is broken: its holder died.
+ */
+export async function withFileLock<T>(
+  path: string,
+  work: () => Promise<T>,
+  options: { staleMs?: number; attempts?: number; onError?: ErrorReporter } = {},
+): Promise<T> {
+  const lock = `${path}.lock`;
+  const staleMs = options.staleMs ?? 5_000;
+  const attempts = options.attempts ?? 50;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await materializeIfAbsent(lock, `${process.pid}\n`)) {
+      try {
+        return await work();
+      } finally {
+        await rm(lock, { force: true }).catch(() => undefined);
+      }
+    }
+    const held = await stat(lock).catch(() => undefined);
+    if (held && Date.now() - held.mtimeMs > staleMs) {
+      await rm(lock, { force: true }).catch(() => undefined);
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  // Never hang on a lock: proceed and say so, since a stale row beats a stuck seat.
+  options.onError?.(`Could not take the lock on ${path}; proceeding unlocked`, new Error("lock timeout"));
+  return work();
 }

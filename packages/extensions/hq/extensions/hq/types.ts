@@ -730,11 +730,22 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
   // ladder: there is nothing for the user's ruling to be graded against. HQ's own
   // doctrine and graduation packets are exempt — they are not the machinery
   // predicting a decision, they are the machinery asking about itself.
-  if (!packet.proposal && !packet.shadowRuling) {
-    violations.push({
-      field: "shadowRuling",
-      reason: "no shadow ruling to grade the user's decision against",
-    });
+  if (!packet.proposal) {
+    if (!packet.shadowRuling) {
+      violations.push({
+        field: "shadowRuling",
+        reason: "no shadow ruling to grade the user's decision against",
+      });
+    } else if (
+      !substantive(packet.shadowRuling.text, 1) ||
+      !substantive(packet.shadowRuling.rationale, 3)
+    ) {
+      // An empty shadow ruling grades as nothing, so presence alone is not enough.
+      violations.push({
+        field: "shadowRuling",
+        reason: "the shadow ruling has no ruling or no reasoning",
+      });
+    }
   }
   return violations;
 }

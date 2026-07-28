@@ -144,7 +144,7 @@ test("a covered, agreed ruling is recorded as evidence and advances the streak",
   const h = await harness("hq-rule-evidence");
   try {
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
     const packet = await queuePacket(h, { doctrineCitations: [citation] });
     const result = await applyRuling(
       { store: h.store, spawner: h.spawner, now: h.now },
@@ -242,6 +242,21 @@ test("the ruling is in the log before the work is allowed to continue", async ()
   }
 });
 
+test("a shadow ruling with no ruling or no reasoning is as good as none", async () => {
+  const h = await harness("hq-rule-hollow-shadow");
+  try {
+    const { violations, packet } = await h.store.createPacket({
+      ...packetDraftFixture(),
+      shadowRuling: { optionId: "retry", text: "", rationale: "", doctrineCitations: [] },
+    } as never);
+    // Presence alone grades as nothing, so the bar reads substance.
+    assert.equal(packet.status, "held");
+    assert.deepEqual(violations.map((violation) => violation.field), ["shadowRuling"]);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
 test("a decision packet with no shadow ruling is held rather than shown", async () => {
   const h = await harness("hq-rule-shadowless");
   try {
@@ -261,7 +276,7 @@ test("overruling a cited rule proposes an amendment and leaves the rule alone un
   const h = await harness("hq-rule-contradicts");
   try {
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
     const before = await readFile(hqPaths(h.root).doctrineGlobal, "utf8");
 
     const packet = await queuePacket(h, { doctrineCitations: [citation] });

@@ -229,6 +229,60 @@ test("HQ prunes its own bookkeeping and never the user's records", async () => {
   }
 });
 
+test("an unreadable authority file is kept aside, never overwritten as empty", async () => {
+  const root = await makeRoot("hq-grad-corrupt");
+  try {
+    const store = makeStore(root, () => new Date("2026-07-28T12:00:00.000Z"));
+    await store.ensure();
+    // A file from a newer HQ, or a hand edit: valid JSON, unparsable as state.
+    await writeFile(
+      hqPaths(root).graduation,
+      JSON.stringify({ version: 2, domains: { "ci-flake": { graduated: true } } }),
+      "utf8",
+    );
+
+    await store.updateDomain("perf", (stats) => ({ ...stats, agreements: 1 }));
+
+    const kept = (await readdir(root)).filter((name) => name.includes("unreadable"));
+    assert.equal(kept.length, 1, "the file HQ could not read is preserved, not destroyed");
+    assert.match(
+      await readFile(join(root, kept[0] ?? ""), "utf8"),
+      /ci-flake/,
+      "and it still holds the grants that were in it",
+    );
+    assert.equal((await store.readGraduation()).domains.perf?.agreements, 1);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a session row survives two processes patching different fields at once", async () => {
+  const root = await makeRoot("hq-row-lock");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    await store.publishSessionState(sessionStateFixture({ sessionId: "sess-a", title: null }));
+
+    // The titler and the session's own reporter, interleaved: each owns its field,
+    // and neither may revert the other's.
+    await Promise.all([
+      store.patchSessionState("sess-a", { title: "migrate the eval runner" }),
+      store.patchSessionState("sess-a", { state: "running", stopState: "working" }),
+      store.mutateSessionState("sess-a", (current) => ({
+        ...current,
+        drillingPacketIds: [...current.drillingPacketIds, "pkt-1"],
+      })),
+    ]);
+
+    const row = await store.readSessionState("sess-a");
+    assert.equal(row?.title, "migrate the eval runner");
+    assert.equal(row?.state, "running");
+    assert.deepEqual(row?.drillingPacketIds, ["pkt-1"]);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("a drill that never reports gives its packet back to the queue", async () => {
   const root = await makeRoot("hq-stalled-drill");
   try {

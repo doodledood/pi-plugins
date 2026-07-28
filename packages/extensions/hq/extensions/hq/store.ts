@@ -18,10 +18,12 @@ import {
   type ErrorReporter,
   moveFile,
   newId,
+  pathExists,
   readJsonFile,
   readJsonl,
   scanJsonDir,
   silentReporter,
+  withFileLock,
 } from "./io.ts";
 import {
   archivedPacketPath,
@@ -97,13 +99,17 @@ export class HqStore {
     mutate: (current: SessionState) => SessionState,
   ): Promise<SessionState | undefined> {
     const path = sessionStatePath(this.root, sessionId);
-    return this.queue(path, async () => {
-      const current = await readJsonFile(path, parseSessionState, this.onError);
-      if (!current) return undefined;
-      const next: SessionState = { ...mutate(current), sessionId: current.sessionId };
-      await atomicWriteJson(path, next);
-      return next;
-    });
+    // Queued in-process and locked across processes: the row has three writers in
+    // three processes (the session, the titler, a drill), and each owns different
+    // fields, so an interleaved read-modify-write would revert someone's work.
+    return this.queue(path, () =>
+      withFileLock(path, async () => {
+        const current = await readJsonFile(path, parseSessionState, this.onError);
+        if (!current) return undefined;
+        const next: SessionState = { ...mutate(current), sessionId: current.sessionId };
+        await atomicWriteJson(path, next);
+        return next;
+      }, { onError: this.onError }));
   }
 
   /** Patches named fields. `undefined` values are ignored rather than written. */
@@ -318,12 +324,18 @@ export class HqStore {
   // ---- graduation state -------------------------------------------------
 
   async readGraduation(): Promise<GraduationState> {
+    return (await this.readGraduationStrict()) ?? { version: 1, domains: {} };
+  }
+
+  /** Absent and unreadable are different: undefined means "exists but untrusted". */
+  private async readGraduationStrict(): Promise<GraduationState | undefined> {
     const state = await readJsonFile(
       this.paths.graduation,
       parseGraduationState,
       this.onError,
     );
-    return state ?? { version: 1, domains: {} };
+    if (state) return state;
+    return (await pathExists(this.paths.graduation)) ? undefined : { version: 1, domains: {} };
   }
 
   async updateDomain(
@@ -331,7 +343,18 @@ export class HqStore {
     mutate: (stats: DomainStats) => DomainStats,
   ): Promise<DomainStats> {
     return this.queue(this.paths.graduation, async () => {
-      const state = await this.readGraduation();
+      let state = await this.readGraduationStrict();
+      if (!state) {
+        // Overwriting a file we could not parse would destroy every grant it holds.
+        // Keep it, name it, and start fresh beside it.
+        const aside = `${this.paths.graduation}.unreadable-${this.now().toISOString().replace(/[:.]/g, "-")}`;
+        await moveFile(this.paths.graduation, aside);
+        this.onError(
+          `Could not read ${this.paths.graduation}; kept it at ${aside} and started fresh`,
+          new Error("graduation state unreadable"),
+        );
+        state = { version: 1, domains: {} };
+      }
       const current = state.domains[domain] ?? emptyDomainStats(domain);
       const next = { ...mutate(current), domain };
       const updated: GraduationState = {

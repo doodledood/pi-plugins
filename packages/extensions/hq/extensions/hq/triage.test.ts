@@ -139,7 +139,7 @@ test("a continue in an ungraduated domain becomes a packet, and says why", async
   const h = await harness("hq-triage-ungraduated");
   try {
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
     const result = await applyTriageOutcome(
       { store: h.store, spawner: h.spawner, now: h.now },
       h.stop.stopId,
@@ -173,7 +173,7 @@ test("a graduated, covered, reversible continue is answered from doctrine and au
   try {
     await graduateDomain(h.store, "ci-flake", "2026-07-20T00:00:00.000Z");
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
 
     const result = await applyTriageOutcome(
       { store: h.store, spawner: h.spawner, now: h.now, random: () => 0.01 },
@@ -214,7 +214,7 @@ test("a one-way decision still reaches the user inside a graduated domain", asyn
   try {
     await graduateDomain(h.store, "release", "2026-07-20T00:00:00.000Z");
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
 
     const result = await applyTriageOutcome(
       { store: h.store, spawner: h.spawner, now: h.now },
@@ -238,6 +238,38 @@ test("a one-way decision still reaches the user inside a graduated domain", asyn
       "the recorded reason is the ceiling, not missing coverage",
     );
     assert.equal(h.calls.filter((call) => call.kind === "continuation").length, 0);
+    assert.deepEqual(await h.store.readAuditLines(), []);
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("citing a line that only shapes a decision is citing nothing", async () => {
+  const h = await harness("hq-triage-shaping");
+  try {
+    await graduateDomain(h.store, "ci-flake", "2026-07-20T00:00:00.000Z");
+    const doctrine = await loadDoctrine(h.root, "/work/alpha");
+    // A taste, or an escalation rule: parsed, citable, and unable to decide a case.
+    const shaping = doctrine.rules.find((rule) => !rule.decides);
+    assert.ok(shaping, "the seed carries shaping lines");
+
+    const result = await applyTriageOutcome(
+      { store: h.store, spawner: h.spawner, now: h.now },
+      h.stop.stopId,
+      {
+        kind: "continue",
+        domain: "ci-flake",
+        citation: shaping.citation,
+        instruction: "retry the suite once",
+        summary: "retry a flaky suite",
+        blastRadius: "low",
+        reversibility: "reversible",
+      },
+    );
+    assert.equal("error" in result, false);
+    if ("error" in result) return;
+    assert.equal(result.applied, "packet");
+    assert.equal(result.escalationReason, "not-covered-by-doctrine");
     assert.deepEqual(await h.store.readAuditLines(), []);
   } finally {
     await dropRoot(h.root);
@@ -336,7 +368,7 @@ test("a doctrine answer with nowhere to carry it reaches the user instead", asyn
   try {
     await graduateDomain(h.store, "ci-flake", "2026-07-20T00:00:00.000Z");
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
-    const citation = doctrine.rules[0]?.citation ?? "";
+    const citation = doctrine.rules.find((rule) => rule.decides)?.citation ?? "";
 
     const result = await applyTriageOutcome(
       { store: h.store, spawner: h.spawner, now: h.now },
@@ -428,7 +460,8 @@ test("no triage outcome can act on the world itself: every effect is a pi sessio
     });
 
     await graduateDomain(h.store, "release-chores", "2026-07-20T00:00:00.000Z");
-    const citation = (await loadDoctrine(h.root, workspace)).rules[0]?.citation ?? "";
+    const citation = (await loadDoctrine(h.root, workspace)).rules.find((rule) => rule.decides)
+      ?.citation ?? "";
     const deps = { store: h.store, spawner, now: h.now };
 
     // One stop per outcome kind, all rooted in the real project directory.

@@ -11,10 +11,27 @@
  * reviewable as the rules that govern the work.
  */
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { atomicWriteText, materializeIfAbsent, type ErrorReporter, silentReporter } from "./io.ts";
 import { hqPaths, projectDoctrinePath, projectSlug } from "./paths.ts";
 import { DOCTRINE_GLOBAL_SEED, DOCTRINE_PROJECT_SEED } from "./templates.ts";
+
+/**
+ * Sections whose lines can decide a case, and therefore satisfy the coverage gate
+ * that lets HQ answer a stop without the user.
+ *
+ * Tastes shape how a decision is made; escalation rules say when to ask. Neither
+ * decides anything, but both parse as bullets with real citations, so prose alone
+ * could not keep them out of the coverage check — a caveat in section text is
+ * never rendered to the worker, and three review rounds found a way past each
+ * prose attempt. This list is the gate instead.
+ */
+export const DECIDING_SECTIONS: ReadonlySet<string> = new Set([
+  "Doors",
+  "Directives",
+  "Precedents",
+]);
 
 export interface DoctrineRule {
   /** Citable location, e.g. "global.md § Doors L14". */
@@ -26,6 +43,8 @@ export interface DoctrineRule {
   /** 1-based line the bullet starts on, and the last line it occupies. */
   line: number;
   endLine: number;
+  /** Whether a line in this section can decide a case, or only shape one. */
+  decides: boolean;
 }
 
 export interface MetaDoctrine {
@@ -124,12 +143,16 @@ export function parseRules(
     }
 
     rules.push({
-      citation: `${fileLabel} § ${section} L${bulletLine}`,
+      // The citation is content-addressed, not position-addressed: HQ's own
+      // ratifications insert and splice lines, and a line-numbered citation stored
+      // on a queued packet would silently re-bind to a different rule.
+      citation: `${fileLabel} § ${section} #${fingerprint(body)}`,
       section,
       text: body,
       scope,
       line: bulletLine,
       endLine,
+      decides: DECIDING_SECTIONS.has(section),
     });
   }
   return rules;
@@ -214,12 +237,23 @@ export async function loadDoctrine(
   return { globalText, projectText, rules, meta: parseMeta(globalText) };
 }
 
-/** Renders doctrine for a prompt: citable, compact, in precedence order. */
+/**
+ * Renders doctrine for a prompt: citable, compact, in precedence order. Lines that
+ * only shape a decision are marked, so a worker reading the list can see that
+ * citing one is citing nothing.
+ */
 export function renderDoctrine(doctrine: Doctrine): string {
   if (doctrine.rules.length === 0) return "(no doctrine yet)";
   return doctrine.rules
-    .map((rule) => `- [${rule.citation}] ${rule.text}`)
+    .map((rule) =>
+      `- [${rule.citation}]${rule.decides ? "" : " (shapes a decision; cannot decide one)"} ${rule.text}`
+    )
     .join("\n");
+}
+
+/** Short content fingerprint, stable across line moves and reformatting. */
+function fingerprint(text: string): string {
+  return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 8);
 }
 
 export type ProposalKind = "new-rule" | "amendment";
