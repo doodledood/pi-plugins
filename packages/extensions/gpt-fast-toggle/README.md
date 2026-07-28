@@ -43,9 +43,12 @@ OpenAI bills the priority service tier **above** the standard per-token rate, an
 pi prices every turn from its static model rates, so a session that ran in fast
 mode cost more than the usage alone can show.
 
-To keep that visible, this extension appends a `pi-price-tier` entry to the
-session whenever the effective tier changes — at session start, when you toggle,
-and when you switch to or from an OpenAI GPT model. A later scan can then tell
+To keep that visible, this extension appends a `pi-price-tier` entry to the session
+whenever the effective tier changes, recorded from the same read of the state file
+that decides the outgoing request. That matters because the file is shared across
+pi processes: toggling fast mode in one session changes what every other session is
+billed, and a record derived only from session or model events would go stale —
+turns billed at the premium while the session's own records still said standard. A later scan can then tell
 which turns paid the premium. These are custom entries: durable, but excluded
 from LLM context, and they carry nothing but the tier name.
 

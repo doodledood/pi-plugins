@@ -10,7 +10,7 @@ const home = mkdtempSync(join(tmpdir(), "gpt-fast-"));
 process.env.HOME = home;
 mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 const statePath = join(home, ".pi", "agent", "gpt-fast-toggle.json");
-const { default: gptFastToggle, PRICE_TIER_RECORD_TYPE, effectiveTier, readPriorityMultiplier } = await import("./gpt-fast-toggle.ts");
+const { default: gptFastToggle, PRICE_TIER_RECORD_TYPE, effectiveTier, readState } = await import("./gpt-fast-toggle.ts");
 
 test.after(() => {
   try {
@@ -83,7 +83,7 @@ test("the record carries the configured premium, so readers need no knowledge of
   writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
   harness.handlers.get("session_start")!({}, harness.ctx);
   assert.deepEqual(harness.entries, [{ customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority", multiplier: 2 } }]);
-  assert.equal(readPriorityMultiplier(), 2);
+  assert.equal(readState().priorityMultiplier, 2);
 });
 
 test("changing the premium mid-session is recorded, so later turns are priced correctly", () => {
@@ -103,7 +103,7 @@ test("an absent or nonsense premium is simply omitted from the record", () => {
   writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: "two" })}\n`);
   harness.handlers.get("session_start")!({}, harness.ctx);
   assert.deepEqual(harness.entries[0]?.data, { tier: "priority" });
-  assert.equal(readPriorityMultiplier(), undefined);
+  assert.equal(readState().priorityMultiplier, undefined);
 });
 
 test("a repeated tier is not appended again", () => {
@@ -214,4 +214,44 @@ test("a configured premium survives a toggle and is still put into the record", 
 
   assert.equal(JSON.parse(readFileSync(statePath, "utf8")).priorityMultiplier, 2);
   assert.deepEqual(harness.entries.at(-1)?.data, { tier: "priority", multiplier: 2 });
+});
+
+test("a tier change made by another pi process is recorded on the next request", () => {
+  // The state file is process-global: another session's /gpt-fast on changes what this
+  // session is billed. The record must follow the payload, or the total reads exact
+  // while being priced at standard rates.
+  const harness = createHarness(gpt);
+  setMode("deep");
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  assert.deepEqual(harness.entries.map((e) => e.data), [{ tier: "standard" }]);
+
+  // Another process flips the shared file. No event fires in this session.
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
+
+  const patched = harness.handlers.get("before_provider_request")!({ payload: { model: "gpt-5.6-sol" } }, harness.ctx);
+  assert.deepEqual(patched, { model: "gpt-5.6-sol", service_tier: "priority" }, "the request is billed at priority");
+  assert.deepEqual(
+    harness.entries.map((e) => e.data),
+    [{ tier: "standard" }, { tier: "priority", multiplier: 2 }],
+    "and the record says so, from the same read that decided the payload",
+  );
+});
+
+test("the tier is recorded once per change, not once per request", () => {
+  const harness = createHarness(gpt);
+  setMode("fast");
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  for (let i = 0; i < 5; i += 1) {
+    harness.handlers.get("before_provider_request")!({ payload: { model: "gpt-5.6-sol" } }, harness.ctx);
+  }
+  assert.equal(harness.entries.length, 1, "five requests, one record");
+});
+
+test("a tier drop made elsewhere is recorded too, so later turns are not over-priced", () => {
+  const harness = createHarness(gpt);
+  setMode("fast");
+  harness.handlers.get("session_start")!({}, harness.ctx);
+  setMode("deep");
+  assert.equal(harness.handlers.get("before_provider_request")!({ payload: { model: "gpt-5.6-sol" } }, harness.ctx), undefined);
+  assert.deepEqual(harness.entries.map((e) => e.data), [{ tier: "priority" }, { tier: "standard" }]);
 });

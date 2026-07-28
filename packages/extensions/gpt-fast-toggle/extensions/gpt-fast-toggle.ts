@@ -29,8 +29,7 @@ export default function gptFastToggle(pi: any) {
   let recordedTier: BillingTier | undefined;
   let recordedMultiplier: number | undefined;
 
-  const recordTier = (ctx: any, tier: BillingTier) => {
-    const multiplier = readPriorityMultiplier();
+  const recordTier = (ctx: any, tier: BillingTier, multiplier: number | undefined) => {
     if (tier === recordedTier && multiplier === recordedMultiplier) return;
     recordedTier = tier;
     recordedMultiplier = multiplier;
@@ -47,17 +46,26 @@ export default function gptFastToggle(pi: any) {
     updateStatus(ctx);
     recordedTier = undefined;
     recordedMultiplier = undefined;
-    recordTier(ctx, effectiveTier(ctx.model));
+    const state = readState();
+    recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
   });
   pi.on("model_select", (_event: any, ctx: any) => {
     updateStatus(ctx);
     // Switching off an OpenAI GPT model ends priority billing even with fast mode on.
-    recordTier(ctx, effectiveTier(ctx.model));
+    const state = readState();
+    recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
   });
 
+  // The tier is recorded here, from the same read that decides the payload, so the
+  // record can never disagree with what was actually requested. Deriving it only from
+  // session/model events would go stale the moment another pi process toggled the
+  // shared state file: turns would be billed at the premium while the session's own
+  // records still said standard, and a cost surface would report that as exact.
   pi.on("before_provider_request", (event: any, ctx: any) => {
-    if (readSavedMode() !== "fast") return undefined;
-    if (!supportsPriorityServiceTier(ctx.model)) return undefined;
+    const state = readState();
+    const tier = effectiveTier(ctx.model, state.mode);
+    recordTier(ctx, tier, state.priorityMultiplier);
+    if (tier !== "priority") return undefined;
     if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return undefined;
 
     return {
@@ -81,7 +89,8 @@ export default function gptFastToggle(pi: any) {
         return;
       }
       await applyGptMode(ctx, target);
-      recordTier(ctx, effectiveTier(ctx.model));
+      const state = readState();
+      recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
     },
   });
 }
@@ -126,23 +135,26 @@ function updateStatus(ctx: any): void {
   ctx.ui.setStatus(STATUS_KEY, readSavedMode() === "fast" ? "GPT priority" : undefined);
 }
 
-/** Configured priority premium, as a multiple of the standard rate. */
-export function readPriorityMultiplier(): number | undefined {
+/**
+ * Mode and configured premium from one read, so the tier that gets recorded and the
+ * tier that gets requested cannot come from two different views of the file.
+ */
+export function readState(): { mode?: TargetMode; priorityMultiplier?: number } {
   try {
-    const value = JSON.parse(readFileSync(STATE_PATH, "utf8"))?.priorityMultiplier;
-    return typeof value === "number" && value > 0 ? value : undefined;
+    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    const mode = parsed?.mode === "fast" || parsed?.mode === "deep" ? (parsed.mode as TargetMode) : undefined;
+    const multiplier = parsed?.priorityMultiplier;
+    return {
+      ...(mode ? { mode } : {}),
+      ...(typeof multiplier === "number" && multiplier > 0 ? { priorityMultiplier: multiplier } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
 function readSavedMode(): TargetMode | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8"));
-    return parsed?.mode === "fast" || parsed?.mode === "deep" ? parsed.mode : undefined;
-  } catch {
-    return undefined;
-  }
+  return readState().mode;
 }
 
 /**
