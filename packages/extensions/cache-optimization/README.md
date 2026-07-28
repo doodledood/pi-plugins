@@ -180,7 +180,8 @@ No config file. Runtime behavior:
   ping is a real Anthropic request that no session records, so without this its
   spend is invisible; the `simple-statusline` cost surfaces read these records
   into the session-tree total and `/cost` shows them as a keepalive bucket.
-  These are custom entries, which are durable but excluded from LLM context, and
-  they carry only model, token counts, cost, and an id — never request content.
+  These are custom entries: they live in the session file, so they last exactly as
+  long as that session does, and they are excluded from LLM context. Each carries
+  only model, token counts, cost, and an id — never request content.
   A ping that failed, was skipped, or reported no usage records nothing rather
   than an estimate.

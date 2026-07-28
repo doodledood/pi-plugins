@@ -35,7 +35,7 @@ See `config/` for safe example config and `setup/configs/` for Aviram's current 
 | Key | Meaning |
 | --- | --- |
 | `mode` | `"fast"` or `"deep"` — the toggle's own state. |
-| `priorityMultiplier` | Optional. How much more the priority tier costs than the standard rate for your model, e.g. `2`. |
+| `priorityMultiplier` | Optional. The priority tier's price as a multiple of the standard rate for your model — `2` means priority turns cost twice the standard rate, not twice plus the standard rate. |
 
 ## Cost accounting
 

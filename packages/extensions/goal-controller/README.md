@@ -235,7 +235,7 @@ Missing config uses defaults. Invalid JSON or non-object config surfaces a warni
 ## Checker sessions and cost accounting
 
 Each checker run is a real `pi` subprocess that costs money on every audit. Its
-session is written to `<parent-session-dir>/<parent-session-id>/goal-checker/`, a
+session is written to `<parent-session-file-without-.jsonl>/goal-checker/`, a
 directory alongside the parent session file, instead of running with no session
 and discarding the record.
 

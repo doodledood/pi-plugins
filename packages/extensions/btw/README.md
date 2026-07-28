@@ -78,7 +78,7 @@ The repository's root Git package already includes BTW alongside all other root 
 
 BTW has no package-specific config file, environment variables, or credentials.
 
-Each aside is a mode-`0600` JSONL session clone. When the parent session is persisted, the clone is written to `<parent-session-dir>/<parent-session-id>/btw/` — nested beneath Pi's `sessions/` directory, alongside the parent session file — and **kept when the pane closes**. An aside is a real model conversation that costs real money; deleting it on close destroyed the only record of that spend. Keeping it lets the `simple-statusline` cost surfaces count it in the session-tree total and `/cost` attribute it, and leaves the aside readable afterwards. Its header records the parent session file as `parentSession`.
+Each aside is a mode-`0600` JSONL session clone. When the parent session is persisted, the clone is written to `<parent-session-file-without-.jsonl>/btw/` — nested beneath Pi's `sessions/` directory, alongside the parent session file — and **kept when the pane closes**. An aside is a real model conversation that costs real money; deleting it on close destroyed the only record of that spend. Keeping it lets the `simple-statusline` cost surfaces count it in the session-tree total and `/cost` attribute it, and leaves the aside readable afterwards. Its header records the parent session file as `parentSession`.
 
 Because Pi lists sessions from one directory non-recursively, these nested files never appear in the session list or the `/resume` picker. They are retained for the life of the parent session; deleting the parent's `.jsonl` file and the sibling directory of the same name removes every aside with it.
 

@@ -65,7 +65,8 @@ figure only appears once you set `OPENAI_TTS_PRICE_PER_MCHAR` to the rate for
 your model. Until then the record carries characters with no invented price. A
 failed call records nothing, and the record never contains the spoken text.
 
-These are custom entries: durable, but excluded from LLM context.
+These are custom entries: they live in the session file, so they last exactly as
+long as that session does, and they are excluded from LLM context.
 
 Example:
 

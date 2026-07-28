@@ -80,7 +80,7 @@ every dollar spent.
 ### Retention
 
 Child sessions live under the parent session's directory
-(`<sessions>/<parent-session-id>/<kind>/`) and are kept for the life of the
+(`<parent-session-file-without-.jsonl>/<kind>/`, i.e. a directory named exactly like the parent session file minus its extension) and are kept for the life of the
 parent session: they are the evidence behind the number, and deleting them
 lowers it. Removing a parent session's `.jsonl` file and its sibling directory
 of the same name removes the whole tree. Pi lists sessions from one directory
