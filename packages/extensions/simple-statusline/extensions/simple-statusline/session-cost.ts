@@ -141,7 +141,7 @@ export interface TreeCost {
    * real charge is a multiple of this figure.
    */
   uncorrectedPriorityCost: number;
-  /** Session files whose spend could not be read, so it is missing from the total. */
+  /** Parts of the tree whose spend could not be read, so it is missing from the total. */
   unreadableSessions: number;
 }
 
@@ -498,7 +498,10 @@ export interface ScanStats {
   /** Files whose bytes were read this scan (a cache hit reads nothing). */
   filesRead: number;
   filesDiscovered: number;
-  /** Files whose bytes could not be read this scan, so their spend is missing. */
+  /**
+   * Parts of the tree this scan could not read — an unreadable file, or a walk that hit
+   * its depth bound. Either way spend is missing, which is what makes a total a floor.
+   */
   filesUnreadable: number;
 }
 

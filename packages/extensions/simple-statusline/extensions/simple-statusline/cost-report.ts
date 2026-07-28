@@ -104,7 +104,7 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
     lines.push("");
     lines.push(
       `Scan: ${options.scan.filesDiscovered} spawned session file(s) found, ${options.scan.filesRead} read on the last refresh` +
-        `${options.scan.filesUnreadable > 0 ? `, ${options.scan.filesUnreadable} unreadable` : ""}.`,
+        `${options.scan.filesUnreadable > 0 ? `, ${options.scan.filesUnreadable} part(s) unreachable` : ""}.`,
     );
     lines.push("  Session files are append-only, so an unchanged file is never re-read.");
   }
