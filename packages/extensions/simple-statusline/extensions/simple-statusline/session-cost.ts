@@ -21,10 +21,12 @@
 // being appended to as far as any single read can tell, so the partial line is held for
 // the rest to arrive rather than counted as a gap; if the process writing it died there,
 // that entry's spend is missing and the total will not say so, and the alternative marks
-// every session that is mid-turn. And a file that vanishes between this scan's discovery
+// every session that is mid-turn. And a child that vanishes between this scan's discovery
 // of it and its own read reports nothing, because absence is read the same way wherever it
-// appears — a narrow race whose cost is one scan of one session, against a rule that would
-// otherwise need a second notion of what absence means.
+// appears: its spend is missing, and the parent's tool result restating that spend was
+// already dropped as a duplicate of the file that then disappeared, so both copies go for
+// that one scan. The alternative is a second notion of what absence means, carried through
+// this class on a flag; the race is one scan of one session, and it is not worth that.
 //
 // Two additions Pi has no equivalent for:
 //   - `pi-cost-record` custom entries, for billed calls that produce no session.
