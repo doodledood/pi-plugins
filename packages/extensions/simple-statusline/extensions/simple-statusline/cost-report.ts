@@ -15,6 +15,7 @@ import {
   readSessionHeader,
   SessionTreeScanner,
   type PriceOptions,
+  type ScanStats,
   type SessionCost,
   type TreeCost,
 } from "./session-cost.ts";
@@ -32,6 +33,8 @@ export const UNREPORTED_SPENDERS = [
 export interface ReportOptions {
   /** Spend on the active branch only, for the lifetime-vs-branch distinction. */
   activeBranchCost?: number;
+  /** Scan diagnostics from the last refresh: how much work the figure cost to produce. */
+  scan?: ScanStats;
 }
 
 function shortId(id: string | undefined): string {
@@ -101,6 +104,15 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
     if (cost.uncorrectedPriorityCost > 0) {
       lines.push(`  · priority-tier turns billed above the ${formatCost(cost.uncorrectedPriorityCost)} counted here`);
     }
+  }
+
+  if (options.scan) {
+    lines.push("");
+    lines.push(
+      `Scan: ${options.scan.filesDiscovered} spawned session file(s) found, ${options.scan.filesRead} read on the last refresh` +
+        `${options.scan.filesUnreadable > 0 ? `, ${options.scan.filesUnreadable} unreadable` : ""}.`,
+    );
+    lines.push("  Session files are append-only, so an unchanged file is never re-read.");
   }
 
   lines.push("");

@@ -143,7 +143,7 @@ export default function simpleStatusline(pi: any) {
       // The branch subtotal uses the same accounting rules as the lifetime figure, so
       // the two numbers in one report can be reasoned about against each other.
       const activeBranchCost = branchCost(ctx.sessionManager.getBranch(), readPriceOptions());
-      ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost }), "info");
+      ctx.ui.notify(renderCostReport(runtime.cost, { activeBranchCost, scan: runtime.scanner.stats }), "info");
     },
   });
 }

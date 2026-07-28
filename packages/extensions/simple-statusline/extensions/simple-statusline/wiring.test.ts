@@ -268,9 +268,10 @@ test("footer prices priority-tier turns as approximate until a multiplier is con
   assert.match(renderFooter(harness), /~\$0\.400/);
 });
 
-test("repeated renders do not rescan the tree", () => {
+test("a large tree renders within a bounded time and is never re-read while rendering", async () => {
   const { parent } = tempSessionTree();
-  writeChildSession(parent, "tasks", "a", [0.5]);
+  // 60 spawned sessions: past the point where re-reading them per paint would show.
+  for (let i = 0; i < 60; i += 1) writeChildSession(parent, "tasks", `child-${i}`, [0.01, 0.01]);
   const own = [ownAssistant(0.5, "own-1")];
   const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
 
@@ -279,8 +280,15 @@ test("repeated renders do not rescan the tree", () => {
   const start = process.hrtime.bigint();
   for (let i = 0; i < 200; i += 1) component.render(400);
   const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-  assert.ok(elapsedMs < 200, `200 renders took ${elapsedMs.toFixed(0)}ms — render must not scan session files`);
-  assert.match(component.render(400).join("\n"), /\$1\.00/);
+  assert.ok(elapsedMs < 400, `200 renders of a 60-child tree took ${elapsedMs.toFixed(0)}ms`);
+  // own 0.5 + 60 children × 0.02 = 1.70
+  assert.match(component.render(400).join("\n"), /\$1\.70/);
+
+  // The scan report is the freshness evidence: a refresh after all those renders finds
+  // every child already folded and reads no file bytes again.
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  assert.match(report, /Scan: 60 spawned session file\(s\) found, 0 read on the last refresh/);
 });
 
 test("/cost reports the tree breakdown, the branch subtotal, and what it cannot see", async () => {
