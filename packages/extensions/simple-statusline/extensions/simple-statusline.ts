@@ -262,11 +262,16 @@ function formatExtensionStatus(key: string, value: string, theme: any): string {
 
 /**
  * Lifetime spend for the whole session tree. A leading "~" says the figure is a
- * floor rather than an exact number — unpriced models or an uncorrected priority
- * premium — with the reasons available in /cost.
+ * floor rather than an exact number — unpriced models, an uncorrected priority
+ * premium, or spend the scan could not read — with the reasons available in /cost.
+ *
+ * A tree that priced to nothing is hidden rather than shown as $0.00, since an
+ * ambient footer has no room for a figure that says nothing. But a $0 total that is
+ * only a floor does say something: real spend went uncounted. Hiding that would be
+ * the silent-omission failure the accounting exists to prevent, so it renders.
  */
 function formatTreeCost(cost: TreeCost | undefined): string {
-  if (!cost || cost.totalCost <= 0) return "";
+  if (!cost || (cost.totalCost <= 0 && !cost.approximate)) return "";
   return `${cost.approximate ? "~" : ""}${formatCost(cost.totalCost)}`;
 }
 

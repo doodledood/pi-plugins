@@ -285,6 +285,21 @@ test("a corrupt entry in a child session reaches both the footer marker and /cos
   assert.match(report, /1 session entry could not be parsed/, "and /cost says which gap caused it");
 });
 
+test("a tree that priced to nothing still shows the marker when spend went uncounted", () => {
+  // $0.00 with no marker reads as "this session cost nothing"; $0 that is only a floor
+  // means the opposite — something was billed and could not be counted. The footer hides
+  // a zero total to stay ambient, which must not extend to hiding a disclosed gap.
+  const { parent } = tempSessionTree();
+  const dir = deriveChildSessionDir(parent, "tasks");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "torn.jsonl"),
+    `${JSON.stringify({ type: "session", version: 3, id: "tasks-torn", timestamp: new Date().toISOString(), cwd: "/tmp/project", parentSession: "parent-1" })}\n{"type":"mess\n`,
+  );
+  const harness = createHarness([], { file: parent, id: "parent-1", entries: [] });
+  assert.match(renderFooter(harness), /~\$0\.000/, "a zero-priced floor is still worth saying");
+});
+
 test("a premium declared by the tier record prices those turns exactly, with no marker", async () => {
   // The record is self-describing: whichever extension knows about the tier states what
   // it costs, so the footer prices it without knowing that extension exists.

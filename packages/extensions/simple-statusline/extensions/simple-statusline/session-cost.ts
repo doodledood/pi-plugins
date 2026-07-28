@@ -422,7 +422,7 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
   }
   if (corruptEntries > 0) {
     reasons.push(
-      `${corruptEntries} session entr${corruptEntries === 1 ? "y" : "ies"} could not be parsed, so whatever they were billed is missing`,
+      `${corruptEntries} session entr${corruptEntries === 1 ? "y" : "ies"} could not be parsed, so that spend is missing`,
     );
   }
   return {
