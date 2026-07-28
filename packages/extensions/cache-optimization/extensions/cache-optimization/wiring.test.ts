@@ -740,10 +740,11 @@ test("keepalive spend is persisted as a durable, context-excluded cost record", 
     },
   };
 
-  // The keepalive is injected so the fetch can be faked, but the pricing this asserts
-  // comes from the extension's own before_provider_request plumb-through of
-  // ctx.model.cost, which is the part under test here.
+  // The keepalive is injected only to fake the network. Its onSpend deliberately does
+  // NOT write the record — the extension's own callback must, or this test would be
+  // verifying its own wiring instead of the production path.
   const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const spendSeenByTest: unknown[] = [];
   const keepalive = new CacheKeepalive({
     now: () => clock.now,
     fetch: async () => ({
@@ -751,9 +752,8 @@ test("keepalive spend is persisted as a durable, context-excluded cost record", 
       text: async () => JSON.stringify({ usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 } }),
     }),
     env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
-    onSpend: (record) => pi.appendEntry(COST_RECORD_TYPE, record),
   });
-  activate(pi, keepalive);
+  activate(pi, keepalive, { onSpend: (record) => spendSeenByTest.push(record) });
   harness.handlers.get("session_start")!({ reason: "startup" }, ctx);
 
   const CC = { type: "ephemeral" };
@@ -771,7 +771,8 @@ test("keepalive spend is persisted as a durable, context-excluded cost record", 
   assert.equal(await keepalive.tick(), "pinged");
 
   const costRecords = entries.filter((entry) => entry.customType === COST_RECORD_TYPE);
-  assert.equal(costRecords.length, 1, "one durable cost record per billed ping");
+  assert.equal(costRecords.length, 1, "one durable cost record per billed ping, written by the extension itself");
+  assert.equal(spendSeenByTest.length, 1, "and the extension's callback is what received it");
   const record = costRecords[0]!.data;
   assert.equal(record.usage.cacheRead, 1_000_000);
   // Priced from the registry rates the wiring plumbed through: $0.60 for 1M cache reads.

@@ -124,11 +124,16 @@ export default function cacheOptimization(pi: any) {
 }
 
 /** Testable entry: inject a CacheKeepalive with fake deps to observe the wiring. */
-export function activate(pi: any, injectedKeepalive?: CacheKeepalive) {
+export function activate(
+  pi: any,
+  injectedKeepalive?: CacheKeepalive,
+  observers?: { onSpend?(record: KeepaliveSpendRecord): void },
+) {
   // A keepalive ping is a real, billed Anthropic request that no session records.
   // Persist its provider-reported usage as a durable, context-excluded cost record so
   // the spend is countable; a failed ping records nothing.
   const recordSpend = (record: KeepaliveSpendRecord): void => {
+    observers?.onSpend?.(record);
     try {
       pi.appendEntry(COST_RECORD_TYPE, record);
     } catch {
@@ -143,6 +148,9 @@ export function activate(pi: any, injectedKeepalive?: CacheKeepalive) {
       env: process.env,
       onSpend: recordSpend,
     });
+  // An injected keepalive (tests) still gets the production spend callback, so the
+  // record-writing path is exercised rather than substituted.
+  keepalive.setSpendReporter?.(recordSpend);
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
   let keeperState: KeeperState = {};
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;

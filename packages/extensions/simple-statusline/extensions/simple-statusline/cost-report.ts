@@ -4,15 +4,11 @@
 // per spawned session, per model, lifetime vs active branch, and what the total
 // cannot see. It reads session files only, so it works long after the session ended.
 
-import { readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { formatCost, formatTokens } from "./cache.ts";
 import {
-  createAccumulator,
   accumulateEntry,
-  combine,
-  summarize,
-  readSessionHeader,
+  createAccumulator,
   SessionTreeScanner,
   type PriceOptions,
   type ScanStats,
@@ -127,33 +123,10 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
  * current session and available for post-hoc analysis of any session file.
  */
 export function analyzeSessionTree(sessionFile: string, price: PriceOptions = {}): TreeCost {
-  const scanner = new SessionTreeScanner(price);
-  const rootId = readSessionHeader(sessionFile)?.id;
-
-  // Descendants first, so the parent's own tool results can be recognized as
-  // restatements of a child session's spend rather than extra spend.
-  const found = scanner.discover(sessionFile, rootId);
-  const countedSessions = new Set<string>();
-  for (const child of found) {
-    if (child.header?.id) countedSessions.add(child.header.id);
-    countedSessions.add(child.path);
-  }
-
-  const own = scanner.scanFile(sessionFile, "own", { countedSessions });
-  const excludeKeys = new Set(own?.countedKeys ?? []);
-  const descendants: SessionCost[] = [];
-  for (const child of found) {
-    const cost = scanner.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
-    if (!cost) continue;
-    descendants.push(cost);
-    for (const key of cost.countedKeys) excludeKeys.add(key);
-  }
-  descendants.sort((a, b) => b.cost - a.cost);
-  return combine(
-    own ?? summarize(createAccumulator(), { id: rootId, path: sessionFile, kind: "own" }),
-    descendants,
-    scanner.stats.filesUnreadable,
-  );
+  // The same single tree walk the footer uses, with the parent read from disk instead
+  // of from a live session manager. One implementation is what stops a dedupe fix from
+  // landing in the footer and quietly missing /cost.
+  return new SessionTreeScanner(price).scanTree({ sessionFile });
 }
 
 /**
@@ -166,17 +139,3 @@ export function branchCost(branch: Iterable<unknown>, price: PriceOptions = {}):
   return acc.cost;
 }
 
-/** Every session file directly in a session directory (Pi's own non-recursive view). */
-export function listSessionFiles(dir: string): string[] {
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.endsWith(".jsonl"))
-      .map((name) => join(dir, name))
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-/** Re-exported so a post-hoc caller can fold extra entries without importing two modules. */
-export { accumulateEntry, createAccumulator, summarize };

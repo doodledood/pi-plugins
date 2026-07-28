@@ -112,18 +112,40 @@ test("switching to a model without priority billing records the tier dropping ba
 });
 
 test("an unavailable session does not break the toggle", async () => {
-  const harness = createHarness(gpt);
+  // The throwing pi must be the one whose handler runs, or this proves nothing: with a
+  // no-op `on`, the assertion would silently exercise a different, working instance.
   setMode("fast");
+  const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+  const commands = new Map<string, { handler: (args: string, ctx: any) => Promise<void> | void }>();
+  let appendAttempts = 0;
   const pi = {
-    on() {},
-    registerCommand() {},
+    on(event: string, handler: (event: any, ctx: any) => unknown) {
+      handlers.set(event, handler);
+    },
+    registerCommand(name: string, options: { handler: (args: string, ctx: any) => Promise<void> | void }) {
+      commands.set(name, options);
+    },
     appendEntry() {
+      appendAttempts += 1;
       throw new Error("session is ephemeral");
     },
   };
   gptFastToggle(pi as any);
-  assert.doesNotThrow(() => harness.handlers.get("session_start")!({}, harness.ctx));
+
+  const notices: string[] = [];
+  const ctx = { model: gpt, ui: { setStatus() {}, notify: (m: string) => notices.push(m) } };
+  assert.doesNotThrow(() => handlers.get("session_start")!({}, ctx));
+  assert.equal(appendAttempts, 1, "it really did try to record the tier on this instance");
+
+  // The toggle itself still works when the session cannot take the record.
+  await assert.doesNotReject(() => Promise.resolve(commands.get("gpt-fast")!.handler("off", ctx)));
+  assert.equal(readSavedModeFromDisk(), "deep");
+  assert.ok(notices.some((n) => /fast mode disabled/i.test(n)));
 });
+
+function readSavedModeFromDisk(): string | undefined {
+  return JSON.parse(readFileSync(statePath, "utf8")).mode;
+}
 
 test("priority payload injection is unchanged and still model-gated", () => {
   const harness = createHarness(gpt);
@@ -154,4 +176,13 @@ test("a corrupt state file does not block the toggle", async () => {
   writeFileSync(statePath, "not json\n");
   await harness.commands.get("gpt-fast")!.handler("on", harness.ctx);
   assert.equal(JSON.parse(readFileSync(statePath, "utf8")).mode, "fast");
+});
+
+test("a configured premium survives and is what the cost surfaces read", () => {
+  // The end-to-end contract of the two-key file: the toggle writes `mode`, the cost
+  // surfaces read `priorityMultiplier`, and neither disturbs the other.
+  writeFileSync(statePath, `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  assert.equal(effectiveTier(gpt, state.mode), "priority");
+  assert.equal(state.priorityMultiplier, 2, "the premium is present for a reader to find");
 });

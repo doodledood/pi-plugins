@@ -119,6 +119,6 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 `simple-statusline` does not require its own config file.
 
-It reads `~/.pi/agent/gpt-fast-toggle.json` when present so the footer can show whether the separately installed `gpt-fast-toggle` extension is in priority mode. If that file is absent or invalid, the statusline simply omits the GPT priority indicator.
+It reads `~/.pi/agent/gpt-fast-toggle.json` when present, for two things: whether the separately installed `gpt-fast-toggle` extension is in priority mode (shown as `FAST`), and the optional `priorityMultiplier` used to price priority-tier turns. If that file is absent or invalid, the priority indicator is omitted and priority turns are counted at standard rates with the total marked `~`.
 
 This is a read-only dependency on local Pi state. Do not commit a live `gpt-fast-toggle.json`; use `packages/extensions/gpt-fast-toggle/config/gpt-fast-toggle.example.json` or `setup/configs/gpt-fast-toggle.json` as a safe example.

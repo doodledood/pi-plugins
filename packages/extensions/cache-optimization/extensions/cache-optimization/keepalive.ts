@@ -106,7 +106,7 @@ export interface KeepaliveDeps {
    * without this its spend is invisible to every cost surface. Failed and skipped
    * pings report nothing.
    */
-  onSpend?(record: KeepaliveSpendRecord): void;
+  onSpend?: ((record: KeepaliveSpendRecord) => void) | undefined;
 }
 
 /** One billed keepalive ping, ready to persist as a durable cost record. */
@@ -342,6 +342,15 @@ export class CacheKeepalive {
   private pingInFlight = false;
 
   constructor(private readonly deps: KeepaliveDeps) {}
+
+  /**
+   * Install the spend reporter after construction. Lets the wiring layer attach its
+   * record-writing callback to a keepalive it did not build — so a test can fake the
+   * network while the production reporting path still runs.
+   */
+  setSpendReporter(onSpend: (record: KeepaliveSpendRecord) => void): void {
+    this.deps.onSpend = onSpend;
+  }
 
   private lastReadPricePerMTok: number | undefined;
   private lastPrices: { input?: number; output?: number; cacheWrite?: number } | undefined;

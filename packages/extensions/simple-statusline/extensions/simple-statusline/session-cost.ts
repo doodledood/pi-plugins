@@ -649,29 +649,41 @@ export class SessionTreeScanner {
   }
 
   /**
-   * Whole-tree cost: the live parent's own entries plus every descendant on disk.
-   * `ownEntries` comes from the live session manager so the parent's own file —
-   * the largest and most frequently appended — is never re-read.
+   * Whole-tree cost: the parent plus every descendant on disk. This is the single
+   * tree walk — the live footer and post-hoc analysis differ only in where the
+   * parent's own entries come from.
+   *
+   * Pass `ownEntries` from a live session manager so the parent's own file — the
+   * largest and most frequently appended — is never re-read; omit it to read the
+   * parent from disk, which is what analysis of a finished session does.
+   *
+   * Order is load-bearing twice over: descendants are discovered before the parent
+   * is folded so its tool results can be recognized as restatements, and the parent
+   * is folded before its descendants so its turns own their identity and a fork that
+   * copied them contributes only what it added.
    */
-  scanTree(args: { ownEntries: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
+  scanTree(args: { ownEntries?: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
     this.lastStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
-    // Discovery first, so the parent's fold knows which tool results merely restate a
-    // child session's spend.
-    const found = this.discover(args.sessionFile, args.sessionId);
+    const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile)?.id : undefined);
+    const found = this.discover(args.sessionFile, rootId);
     const countedSessions = new Set<string>();
     for (const child of found) {
       if (child.header?.id) countedSessions.add(child.header.id);
       countedSessions.add(child.path);
     }
 
-    // The parent is folded before its descendants so its own turns own their identity:
-    // a fork that copied them contributes only what it added afterwards.
-    const ownAcc = createAccumulator();
-    for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { ...this.price, countedSessions });
-    const own = summarize(ownAcc, { id: args.sessionId, path: args.sessionFile, kind: "own" });
+    let own: SessionCost | undefined;
+    if (args.ownEntries) {
+      const ownAcc = createAccumulator();
+      for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { ...this.price, countedSessions });
+      own = summarize(ownAcc, { id: rootId, path: args.sessionFile, kind: "own" });
+    } else if (args.sessionFile) {
+      own = this.scanFile(args.sessionFile, "own", { countedSessions });
+    }
+    own ??= summarize(createAccumulator(), { id: rootId, path: args.sessionFile, kind: "own" });
 
-    const excludeKeys = new Set(ownAcc.countedKeys);
+    const excludeKeys = new Set<string>(own.countedKeys);
     const descendants: SessionCost[] = [];
     for (const child of found) {
       const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });

@@ -258,6 +258,68 @@ test("footer marks the total approximate when some spend cannot be priced exactl
   assert.match(renderFooter(harness), /~\$0\.500/, "an unpriceable model shows the total as a floor");
 });
 
+test("a configured premium prices priority turns exactly, and the floor marker clears", async () => {
+  // The whole two-key contract end to end: gpt-fast-toggle writes the tier record and
+  // holds the multiplier; the footer reads both and stops approximating.
+  const home = mkdtempSync(join(tmpdir(), "statusline-home-"));
+  costRoots.push(home);
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  writeFileSync(join(home, ".pi", "agent", "gpt-fast-toggle.json"), `${JSON.stringify({ mode: "fast", priorityMultiplier: 2 })}\n`);
+  const savedHome = process.env.HOME;
+  process.env.HOME = home;
+
+  try {
+    // Re-imported so the module picks up the redirected HOME for its state path.
+    const { default: statuslineWithHome } = await import(`../simple-statusline.ts?home=${encodeURIComponent(home)}`);
+    const { parent } = tempSessionTree();
+    const own = [
+      { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
+      ownAssistant(0.4, "own-1"),
+    ];
+    const harness: Harness = { handlers: new Map(), commands: new Map(), ctx: undefined, themeCalls: [], notices: [] };
+    const ctx = {
+      cwd: "/tmp/project",
+      model: { id: "gpt-5.6-sol", provider: "openai" },
+      getContextUsage: () => undefined,
+      sessionManager: {
+        getBranch: () => own,
+        getEntries: () => own,
+        getSessionFile: () => parent,
+        getSessionId: () => "parent-1",
+      },
+      ui: {
+        setStatus() {},
+        setFooter(factory: any) {
+          harness.footerFactory = factory;
+        },
+        notify: (message: string) => harness.notices.push(message),
+      },
+    };
+    harness.ctx = ctx;
+    statuslineWithHome({
+      on(event: string, handler: Handler) {
+        harness.handlers.set(event, handler);
+      },
+      getThinkingLevel: () => "off" as const,
+      registerCommand(name: string, options: any) {
+        harness.commands.set(name, options);
+      },
+    });
+    harness.handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    // 0.4 at twice the standard rate, stated exactly rather than as a floor.
+    const line = renderFooter(harness);
+    assert.match(line, /\$0\.800/);
+    assert.doesNotMatch(line, /~\$/, "a configured premium means the total is exact");
+
+    await harness.commands.get("cost")!.handler("", ctx);
+    assert.doesNotMatch(harness.notices.join("\n"), /Approximate, because/);
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  }
+});
+
 test("footer prices priority-tier turns as approximate until a multiplier is configured", () => {
   const { parent } = tempSessionTree();
   const own = [
