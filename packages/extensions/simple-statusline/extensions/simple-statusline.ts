@@ -27,9 +27,9 @@ const GPT_FAST_STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? 
 const COMPACT_HINT_THRESHOLD_PERCENT = 50;
 
 /**
- * Cost is a whole-session-tree figure read off session files, so it is refreshed on
- * session events rather than inside render(): the footer paints from the last
- * computed value and never does I/O while painting.
+ * Cost is a whole-session-tree figure read off session files, so everything the footer
+ * needs from disk — the tree scan and the gpt-fast state — is refreshed on session
+ * events. render() paints from those cached values and does no I/O at all.
  */
 const COST_REFRESH_INTERVAL_MS = 1_500;
 
@@ -42,6 +42,8 @@ type RuntimeState = {
   scanner: SessionTreeScanner;
   cost?: TreeCost;
   costComputedAt: number;
+  /** Latest gpt-fast state, refreshed with cost so painting reads no files. */
+  gptFast?: { mode?: string; priorityMultiplier?: number };
 };
 type ModelSignal = { plain: string; colored: string };
 type ContextSignal = { plain: string; percent: number | undefined };
@@ -53,6 +55,7 @@ export default function simpleStatusline(pi: any) {
     active: false,
     scanner: new SessionTreeScanner(readPriceOptions()),
     costComputedAt: 0,
+    gptFast: readGptFastState(),
   };
   const refresh = () => runtime.requestRender?.();
   const refreshCost = (ctx: any, force = false) => {
@@ -60,7 +63,8 @@ export default function simpleStatusline(pi: any) {
     if (!force && runtime.cost && now - runtime.costComputedAt < COST_REFRESH_INTERVAL_MS) return;
     runtime.costComputedAt = now;
     try {
-      runtime.scanner.setPrice(readPriceOptions());
+      runtime.gptFast = readGptFastState();
+      runtime.scanner.setPrice(priceOptionsFrom(runtime.gptFast));
       runtime.cost = runtime.scanner.scanTree({
         ownEntries: ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(),
         sessionFile: ctx.sessionManager.getSessionFile?.(),
@@ -158,7 +162,7 @@ function renderMainLine(width: number, ctx: any, theme: any, footerData: any, ru
   const level = runtime.thinkingLevel;
   const contextSignal = formatContextUsage(usage, ctx.model?.contextWindow);
   const costStr = formatTreeCost(runtime.cost);
-  const modelSignal = formatModelSignal(ctx.model, model, level, isGptPriorityEnabled(), theme);
+  const modelSignal = formatModelSignal(ctx.model, model, level, runtime.gptFast?.mode === "fast", theme);
   const cacheSignal = cacheStats.visible ? formatCacheSignal(cacheStats, theme) : undefined;
 
   const sep = "  ·  ";
@@ -270,10 +274,6 @@ function formatModelSignal(rawModel: any, model: string, level: ThinkingLevel, p
   };
 }
 
-function isGptPriorityEnabled(): boolean {
-  return readGptFastState()?.mode === "fast";
-}
-
 function readGptFastState(): { mode?: string; priorityMultiplier?: number } | undefined {
   try {
     return JSON.parse(readFileSync(GPT_FAST_STATE_PATH, "utf8"));
@@ -284,7 +284,11 @@ function readGptFastState(): { mode?: string; priorityMultiplier?: number } | un
 
 /** Priority-tier premium, when the user has configured one. */
 function readPriceOptions(): { priorityMultiplier?: number } {
-  const multiplier = readGptFastState()?.priorityMultiplier;
+  return priceOptionsFrom(readGptFastState());
+}
+
+function priceOptionsFrom(state: { priorityMultiplier?: number } | undefined): { priorityMultiplier?: number } {
+  const multiplier = state?.priorityMultiplier;
   return typeof multiplier === "number" && multiplier > 0 ? { priorityMultiplier: multiplier } : {};
 }
 

@@ -452,3 +452,37 @@ test("/cost drops the approximation section once everything is priced", async ()
   assert.doesNotMatch(report, /Approximate, because/);
   assert.doesNotMatch(report, /~\$/);
 });
+
+test("the footer counts the whole session, not only the active branch", async () => {
+  // getEntries() includes history compacted away and other branches; getBranch() does
+  // not. Reading the branch instead would silently drop spend that was still billed.
+  const { parent } = tempSessionTree();
+  const branchOnly = [ownAssistant(0.25, "own-1")];
+  const allEntries = [ownAssistant(0.25, "own-1"), ownAssistant(1, "compacted-away"), ownAssistant(0.5, "other-branch")];
+  const harness = createHarness(branchOnly as SessionEntryLike[], { file: parent, id: "parent-1", entries: allEntries });
+
+  assert.match(renderFooter(harness), /\$1\.75/, "all entries counted");
+  assert.doesNotMatch(renderFooter(harness), /\$0\.250/, "not just the active branch");
+});
+
+test("the footer does no file I/O while painting", () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "a", [0.5]);
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  const recording = createRecordingTheme();
+  const component = harness.footerFactory!(fakeTui, recording.theme, fakeFooterData);
+  const realParse = JSON.parse;
+  let parses = 0;
+  JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+    parses += 1;
+    return realParse(...args);
+  }) as typeof JSON.parse;
+  try {
+    for (let i = 0; i < 50; i += 1) component.render(400);
+  } finally {
+    JSON.parse = realParse;
+  }
+  assert.equal(parses, 0, "painting reads and parses nothing — every disk read happens on session events");
+});
