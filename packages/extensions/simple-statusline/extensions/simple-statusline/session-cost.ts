@@ -390,6 +390,9 @@ export function summarize(acc: CostAccumulator, meta: { id?: string; path?: stri
  * `unreadableSessions` counts spend the scan knows it could not read. A total that
  * silently omits a child's cost while reading as exact is the failure this whole
  * mechanism exists to prevent, so it marks the figure approximate too.
+ *
+ * Corrupt entries arrive on the sessions themselves rather than as an argument, because
+ * those bytes are read once and the count has to outlive the read that found them.
  */
 export function combine(own: SessionCost, descendants: SessionCost[], unreadableSessions = 0): TreeCost {
   const all = [own, ...descendants];
@@ -465,13 +468,13 @@ export interface SessionHeader {
 
 /**
  * Outcome of a header read. The two ways to have no header are worth keeping apart: a
- * file that read fine and simply is not a session file belongs to nobody, while a file
- * that could not be read at all might be a session of this tree — an unanswerable
- * question rather than a negative answer.
+ * file whose first line read and parsed and simply is not a session header belongs to
+ * nobody, while a file whose first line could not be read or could not be parsed might
+ * be a session of this tree — an unanswerable question rather than a negative answer.
  */
 export interface SessionHeaderRead {
   header?: SessionHeader;
-  /** True when the file exists but could not be read, leaving its membership unknown. */
+  /** True when something is there but could not be read, leaving its membership unknown. */
   unreadable?: boolean;
 }
 
@@ -488,12 +491,16 @@ export function readSessionHeader(path: string): SessionHeaderRead {
     const newline = text.indexOf("\n");
     const line = newline >= 0 ? text.slice(0, newline) : text;
     const parsed = JSON.parse(line);
+    // Parsed, and says what it is: whatever it is, it is not a session of this tree.
     if (parsed?.type !== "session") return {};
     return { header: { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd } };
   } catch (error) {
-    // A malformed first line is a definite "not a session file"; a failed open or read is
-    // not an answer at all, so callers that need one can tell the two apart.
-    return errorCode(error) === undefined || isAbsence(error) ? {} : { unreadable: true };
+    // Absence answers the question — nothing is there to belong to this tree. Nothing else
+    // does. A first line that will not parse is the shape a torn write leaves behind, and a
+    // header longer than the bytes read above is truncated rather than absent, so neither
+    // says the file is unrelated; treating them as an answer would drop a fork of this
+    // session on a bad byte.
+    return isAbsence(error) ? {} : { unreadable: true };
   } finally {
     if (fd != null) {
       try {
@@ -586,8 +593,13 @@ export interface ScanStats {
  * Caching, incremental scanner over a session tree.
  *
  * Session files are append-only, so an unchanged file is never re-read and a grown
- * file is read only from its previous end. Unreadable, missing, and half-written
- * files degrade to the best available total instead of throwing.
+ * file is read only from its previous end.
+ *
+ * Nothing here throws on a bad read; what it does instead is the point. A path that does
+ * not exist holds nothing, so it costs the total nothing. Anything else that cannot be
+ * read — a failed open or stat, a directory that will not list, a line that will not
+ * parse — keeps whatever was already folded and is counted as a gap, so the total reads
+ * as a floor with a reason rather than as an exact smaller number.
  */
 export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
@@ -630,15 +642,15 @@ export class SessionTreeScanner {
       stat = statSync(path);
     } catch (error) {
       // Classified before anything else, because the gap is the same whether or not this
-      // file had been read before: a file that is gone hides nothing further, while any
+      // file had been read before: a path that is gone hides nothing further, while any
       // other failure means a discovered session may be holding spend out of sight.
       if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
       const counted = this.files.get(path);
-      // Never read, so there is no folded total to keep.
-      if (!counted) return undefined;
+      if (!counted) return undefined; // never read, so there is no folded total to keep
       // Spend already folded here has been counted and shown, so it stands rather than
-      // quietly lowering a total the user has seen — the same choice the failed read
-      // below makes.
+      // quietly lowering a total the user has seen — the same choice the failed read below
+      // makes. Reached when a discovered file stops being readable; a file deleted outright
+      // stops being discovered too, and then it is no longer part of the tree at all.
       return summarize(counted.acc, { id: counted.header?.id, path, kind });
     }
     const cached = this.files.get(path);

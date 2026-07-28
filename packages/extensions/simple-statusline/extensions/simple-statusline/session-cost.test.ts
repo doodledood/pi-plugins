@@ -308,7 +308,7 @@ test("a sidecar directory that exists but cannot be listed discloses the session
     // failure the disclosure exists to prevent.
     assert.equal(tree.totalCost, 1, "what is readable still totals");
     assert.ok(tree.approximate, "a directory that hides sessions makes the total a floor");
-    assert.ok(tree.unreadableSessions >= 1);
+    assert.equal(tree.unreadableSessions, 1, "one hidden part, counted once");
     assert.match(tree.approximateReasons.join(" "), /could not be read/);
   } finally {
     chmodSync(dir, 0o700);
@@ -403,11 +403,31 @@ test("a child that cannot be stat-ed on the very first scan discloses the spend 
     const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
     assert.equal(tree.totalCost, 1);
     assert.ok(tree.approximate, "a child that could not be read at all is still a gap");
-    assert.ok(tree.unreadableSessions >= 1);
+    assert.equal(tree.unreadableSessions, 1, "one unreadable child, counted once");
     assert.match(tree.approximateReasons.join(" "), /could not be read/);
   } finally {
     chmodSync(dir, 0o700);
   }
+});
+
+test("a deleted child leaves the tree, rather than lingering as spend nothing can confirm", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(9)] });
+
+  const scanner = new SessionTreeScanner();
+  assert.equal(scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" }).totalCost, 10);
+
+  // Deleting the file removes it from the tree the scan describes, which is what the
+  // README's retention section has always said. Nothing is hidden — the path is gone, not
+  // unreadable — so the smaller figure is exact rather than a floor.
+  rmSync(child);
+  const after = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(after.totalCost, 1);
+  assert.equal(after.descendants.length, 0);
+  assert.equal(after.approximate, false);
+  assert.equal(after.unreadableSessions, 0);
 });
 
 test("absence and unreadability are told apart by error code, not by guesswork", () => {
@@ -529,15 +549,23 @@ test("blank lines and header lines are not mistaken for corruption", () => {
 
 test("a header-less or unreadable file yields no header rather than throwing", () => {
   const root = tempRoot();
-  const path = join(root, "bad.jsonl");
-  writeFileSync(path, "not a session\n");
-  assert.equal(readSessionHeader(path).header, undefined);
+  const notASession = join(root, "other.jsonl");
+  writeFileSync(notASession, `${JSON.stringify({ type: "message", id: "x" })}\n`);
+  assert.equal(readSessionHeader(notASession).header, undefined);
   assert.equal(readSessionHeader(join(root, "missing.jsonl")).header, undefined);
 
-  // Read fine, just not a session file, versus could not be read at all: the first is an
-  // answer, the second is not, and only the second can be hiding spend.
-  assert.equal(readSessionHeader(path).unreadable, undefined, "a readable non-session file is answered, not unknown");
+  // An answer, versus no answer at all. Only the second can be hiding spend, and the line
+  // between them is whether the first line could be read and parsed — not whether it
+  // happened to be a header.
+  assert.equal(readSessionHeader(notASession).unreadable, undefined, "parsed, and says it is not a session");
   assert.equal(readSessionHeader(join(root, "missing.jsonl")).unreadable, undefined, "an absent file holds nothing");
+
+  // A line that will not parse is what a torn write leaves behind, so it says nothing
+  // about whether this file belongs to the tree.
+  const torn = join(root, "torn.jsonl");
+  writeFileSync(torn, '{"type":"sess\n');
+  assert.equal(readSessionHeader(torn).unreadable, true, "an unparseable first line is unknown, not unrelated");
+
   const locked = join(root, "locked.jsonl");
   writeFileSync(locked, "{}\n");
   chmodSync(locked, 0o000);
@@ -547,6 +575,18 @@ test("a header-less or unreadable file yields no header rather than throwing", (
   } finally {
     chmodSync(locked, 0o600);
   }
+});
+
+test("a sibling whose header was torn mid-write is disclosed rather than read as unrelated", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // A fork of this session whose first line was cut short. Nothing here can say whether it
+  // belongs to the tree, and reading it as "not ours" would drop every turn it holds.
+  writeFileSync(join(root, "torn.jsonl"), `{"type":"sess\n${JSON.stringify(assistant(6))}\n`);
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 1);
+  assert.ok(tree.approximate, "an unanswerable sibling leaves the total a floor");
+  assert.equal(tree.unreadableSessions, 1);
 });
 
 // ── price fidelity (D2) ─────────────────────────────────────────────────────

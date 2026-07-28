@@ -87,6 +87,10 @@ kinds of thing cause it — a price it cannot pin down, and spend it cannot read
 
 `/cost` names whichever of these applies.
 
+A tree that cost nothing shows no figure at all — an unpriced model may simply be
+free, and a permanent `~$0.000` would say nothing. A `$0` total that is a floor
+because something billed could not be counted is still shown, marked.
+
 ### `/cost`
 
 `/cost` takes the figure apart: this session's own turns versus the runs it
