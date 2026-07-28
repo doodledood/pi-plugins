@@ -444,17 +444,27 @@ test("a deleted child leaves the tree, rather than lingering as spend nothing ca
 });
 
 test("an unreadable parent header costs the tree its id-linked forks, and says so", () => {
-  // The parent's own turns come from memory here, so nothing else reads this file: without
-  // this disclosure the scan would quietly lose every fork that links back by session id.
+  // The header is read here for one thing only: the session id that id-linked forks are
+  // matched against. With the id handed in there is nothing to lose, so the gap has to be
+  // staged without it — and the parent's own turns come from memory, so no other read of
+  // this file will report the failure instead.
   if (typeof process.getuid === "function" && process.getuid() === 0) return;
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(root, "fork.jsonl"), { id: "f1", parentSession: "p1", entries: [assistant(4)] });
   chmodSync(parent, 0o000);
   try {
-    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
-    assert.equal(tree.totalCost, 1, "the in-memory turns still total");
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent });
+    assert.equal(tree.totalCost, 1, "the in-memory turns still total, the unmatched fork does not");
     assert.ok(tree.approximate);
     assert.equal(tree.unreadableSessions, 1, "the unreadable header is one gap");
+
+    // Same unreadable header, id supplied: the forks are found anyway, so marking the total
+    // would claim spend was missing when none is — the disclosure failing the other way.
+    const told = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    assert.equal(told.totalCost, 5, "the fork is matched by the id that was handed in");
+    assert.equal(told.unreadableSessions, 0);
+    assert.equal(told.approximate, false, "nothing was lost, so nothing is marked");
   } finally {
     chmodSync(parent, 0o600);
   }
@@ -495,6 +505,44 @@ test("a session that was discovered and then vanished is a gap, not an absence",
   const never = new SessionTreeScanner();
   assert.equal(never.scanFile(missing, "tasks"), undefined);
   assert.equal(never.stats.filesUnreadable, 0, "a path nothing ever saw hides nothing");
+});
+
+test("the scan marks the children it discovered, which is what makes the rule above bite", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2)] });
+
+  // The rule is pinned at the decision point above, because the race it guards cannot be
+  // staged. That leaves one thing a test still has to hold: that the scan actually says so
+  // where it matters. Without this, dropping the flag at the call site changes nothing that
+  // any assertion can see.
+  type ScanFile = SessionTreeScanner["scanFile"];
+  const marks: Array<{ kind: string; knownToExist?: boolean }> = [];
+  const watch = (scanner: SessionTreeScanner) => {
+    const original: ScanFile = scanner.scanFile.bind(scanner);
+    (scanner as { scanFile: ScanFile }).scanFile = (path, kind, fold) => {
+      marks.push({ kind, knownToExist: fold?.knownToExist });
+      return original(path, kind, fold);
+    };
+    return scanner;
+  };
+
+  watch(new SessionTreeScanner()).scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  const children = marks.filter((mark) => mark.kind !== "own");
+  assert.ok(children.length > 0, "a discovered child was scanned");
+  assert.ok(
+    children.every((mark) => mark.knownToExist === true),
+    "every child came from a listing that just proved it exists",
+  );
+
+  // The parent's own file is named by the caller rather than discovered, so it is not
+  // marked: a session file that was never written is an absence like any other.
+  marks.length = 0;
+  watch(new SessionTreeScanner()).scanTree({ sessionFile: parent, sessionId: "p1" });
+  assert.deepEqual(
+    marks.filter((mark) => mark.kind === "own").map((mark) => mark.knownToExist),
+    [undefined],
+  );
 });
 
 test("corrupt entries in different sessions add up across the tree", () => {
