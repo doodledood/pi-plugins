@@ -54,16 +54,22 @@ The extension reads configuration from environment variables in the process that
 
 ## Cost accounting
 
-Each successful call appends one `pi-cost-record` entry to the session, recording
-the characters spoken plus the model and voice. Speech is a paid call with no pi
+Each billed call appends one `pi-cost-record` entry to the session, recording the
+characters spoken plus the model and voice. Speech is a paid call with no pi
 session of its own, so without this record its spend is invisible to every cost
 surface; the `simple-statusline` footer and `/cost` read these records into the
 session-tree total.
 
 OpenAI bills speech **per character** while pi prices tokens, so the dollar
 figure only appears once you set `OPENAI_TTS_PRICE_PER_MCHAR` to the rate for
-your model. Until then the record carries characters with no invented price. A
-failed call records nothing, and the record never contains the spoken text.
+your model. Until then the record carries characters with no invented price, and
+the total is marked as a floor rather than reported low.
+
+The record is written the moment OpenAI returns audio, because that is when the
+charge exists. A call that fails after that point — player error, playback
+timeout, abort — is still recorded, since it was still billed. Only a call that
+never got audio back records nothing: a missing key, an HTTP error, or text over
+the character limit. The record never contains the spoken text.
 
 These are custom entries: they live in the session file, so they last exactly as
 long as that session does, and they are excluded from LLM context.

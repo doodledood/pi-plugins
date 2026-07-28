@@ -79,7 +79,11 @@ export interface ModelTotals extends TokenTotals {
   unpricedTokens: number;
   /** Tokens billed at a premium service tier whose surcharge Pi's rates do not model. */
   priorityTokens: number;
-  /** Premium not included in `cost` because no multiplier is configured. */
+  /**
+   * Standard-rate cost of priority-tier turns left uncorrected because no multiplier is
+   * configured. The real charge is some multiple of this, so it is the size of the
+   * spend the total is approximating rather than the size of the missing premium.
+   */
   uncorrectedPriorityCost: number;
 }
 
@@ -122,7 +126,10 @@ export interface TreeCost {
   approximateReasons: string[];
   /** Models whose usage was real but priced at $0. */
   unpricedModels: string[];
-  /** Premium for priority-tier turns that is missing from `totalCost`. */
+  /**
+   * Standard-rate cost of the priority-tier turns whose premium is uncorrected. The
+   * real charge is a multiple of this figure.
+   */
   uncorrectedPriorityCost: number;
   /** Session files whose spend could not be read, so it is missing from the total. */
   unreadableSessions: number;
