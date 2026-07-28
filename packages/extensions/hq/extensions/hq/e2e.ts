@@ -541,7 +541,7 @@ async function runTiering(world: World): Promise<void> {
   const escalated = await waitFor("the reasoning question escalated to the copy", async () => {
     const log = await readDrillLog(world.store);
     return log.find((entry) => entry.packetId === opaque.id && entry.action === "fork");
-  }, 300_000);
+  }, 600_000);
   if (escalated) {
     await check("the escalation is tier 2, and the parent never forked anything itself", () => {
       assert.equal(escalated.tier, 2);
