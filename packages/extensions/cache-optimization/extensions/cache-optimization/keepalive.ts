@@ -471,13 +471,16 @@ export class CacheKeepalive {
     // is in flight and re-arm lastCapture for a NEW gap — a stale failure must
     // abandon only the gap it belongs to, never the freshly captured one.
     const pinged = this.lastCapture;
+    // Snapshot the prices for the same reason: a request landing mid-flight would
+    // otherwise bill this ping at the newly-active model's rates.
+    const pricing = { read: this.lastReadPricePerMTok, prices: this.lastPrices, modelKey: this.lastModelKey };
     try {
       const outcome = await this.pingCapturedPayload(pinged, apiKey);
       const success = outcome.ok;
       this.lastPingOk = success;
       // A ping that reached the provider was billed whether or not it proved a cache
       // read, so it is recorded either way; only a throw or a non-OK response is free.
-      this.reportSpend(outcome.usage);
+      this.reportSpend(outcome.usage, pricing);
       if (success) {
         // Only a confirmed cache read refreshes the TTL clock.
         this.lastActivityAt = this.deps.now();
@@ -578,7 +581,10 @@ export class CacheKeepalive {
    * Price provider-reported ping usage with pi's model rates and hand it to the
    * wiring layer as a durable cost record. Silent when the ping reported no usage.
    */
-  private reportSpend(usage: PingUsage | undefined): void {
+  private reportSpend(
+    usage: PingUsage | undefined,
+    pricing: { read?: number; prices?: { input?: number; output?: number; cacheWrite?: number }; modelKey?: string },
+  ): void {
     if (!this.deps.onSpend || !usage) return;
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
@@ -587,15 +593,15 @@ export class CacheKeepalive {
     if (input + output + cacheRead + cacheWrite === 0) return;
     const perMTok = (tokens: number, price: number | undefined) => (price && price > 0 ? (tokens / 1_000_000) * price : 0);
     const cost = {
-      input: perMTok(input, this.lastPrices?.input),
-      output: perMTok(output, this.lastPrices?.output),
-      cacheRead: perMTok(cacheRead, this.lastReadPricePerMTok),
-      cacheWrite: perMTok(cacheWrite, this.lastPrices?.cacheWrite),
+      input: perMTok(input, pricing.prices?.input),
+      output: perMTok(output, pricing.prices?.output),
+      cacheRead: perMTok(cacheRead, pricing.read),
+      cacheWrite: perMTok(cacheWrite, pricing.prices?.cacheWrite),
     };
     this.pingSequence += 1;
     this.deps.onSpend({
       recordId: `keepalive-${this.dayKey}-${this.pingSequence}-${Math.round(this.deps.now())}`,
-      key: this.lastModelKey ? `${this.lastModelKey} (cache keepalive)` : "cache keepalive",
+      key: pricing.modelKey ? `${pricing.modelKey} (cache keepalive)` : "cache keepalive",
       usage: {
         input,
         output,

@@ -747,3 +747,59 @@ test("a persisted aside is kept under the parent session so its spend stays coun
     await rm(sessionRoot, { recursive: true, force: true });
   }
 });
+
+test("construction failure removes only its own aside, never the shared sidecar directory", async () => {
+  // The riskiest line in the persisted branch: a wrong cleanup here would delete every
+  // other aside of the session along with the failed one.
+  const agentDir = await mkdtemp(join(tmpdir(), "btw-failure-persisted-agent-"));
+  const sessionRoot = await mkdtemp(join(tmpdir(), "btw-failure-persisted-sessions-"));
+  const parentSessionFile = join(sessionRoot, "2026-07-28T08-04-15-096Z_parent-1.jsonl");
+  await writeFile(
+    parentSessionFile,
+    `${JSON.stringify({ type: "session", version: 3, id: "parent-1", timestamp: "2026-07-28T08:04:15.096Z", cwd: "/tmp/btw-runtime-failure-test" })}\n`,
+    "utf8",
+  );
+
+  // An existing, healthy aside from earlier in the same session.
+  const sidecarDir = join(sessionRoot, "2026-07-28T08-04-15-096Z_parent-1", "btw");
+  await mkdir(sidecarDir, { recursive: true });
+  const survivor = join(sidecarDir, "2026-07-28T09-00-00-000Z_existing-aside.jsonl");
+  await writeFile(survivor, `${JSON.stringify({ type: "session", version: 3, id: "existing-aside", timestamp: "2026-07-28T09:00:00.000Z", cwd: "/tmp/btw-runtime-failure-test" })}\n`, "utf8");
+
+  const parent = SessionManager.inMemory("/tmp/btw-runtime-failure-test");
+  const entries = parent.getBranch();
+
+  try {
+    await assert.rejects(
+      createChildRuntime({
+        snapshot: {
+          cwd: "/tmp/btw-runtime-failure-test",
+          entries,
+          entryIds: [],
+          forkLeafId: null,
+          model,
+          thinkingLevel: "off",
+          activeToolNames: ["definitely_missing_inherited_tool"],
+          projectTrusted: true,
+          systemPromptOptions: { cwd: "/tmp/btw-runtime-failure-test" },
+          parentSessionFile,
+        },
+        parentSessionManager: parent,
+        parentIsIdle: () => true,
+        parentUI: { theme: {} } as ExtensionUIContext,
+        parentModelRegistry: inMemoryRegistry(),
+        modelRuntime: testModelRuntime,
+        agentDir,
+        callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+      }),
+      /could not inherit active tool.*definitely_missing_inherited_tool/,
+    );
+
+    assert.equal(await pathExists(sidecarDir), true, "the shared sidecar directory survives a failed construction");
+    assert.equal(await pathExists(survivor), true, "an unrelated aside is not collateral damage");
+    assert.deepEqual(await readdir(sidecarDir), ["2026-07-28T09-00-00-000Z_existing-aside.jsonl"], "the failed aside's own file is cleaned up");
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+    await rm(sessionRoot, { recursive: true, force: true });
+  }
+});

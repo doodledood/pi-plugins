@@ -740,8 +740,9 @@ test("keepalive spend is persisted as a durable, context-excluded cost record", 
     },
   };
 
-  // No injected keepalive: this exercises the production wiring, including the
-  // spend callback the extension installs.
+  // The keepalive is injected so the fetch can be faked, but the pricing this asserts
+  // comes from the extension's own before_provider_request plumb-through of
+  // ctx.model.cost, which is the part under test here.
   const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
   const keepalive = new CacheKeepalive({
     now: () => clock.now,

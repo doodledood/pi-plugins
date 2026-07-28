@@ -782,3 +782,67 @@ test("a ping whose response reveals no usage records nothing rather than a guess
   assert.equal(await keepalive.tick(), "pinged");
   assert.equal(records.length, 0);
 });
+
+test("a ping billed without proving a cache read is still recorded, and abandons the gap", async () => {
+  // HTTP 200 that wrote a new cache entry rather than reading the old one: not a
+  // successful keepalive, but Anthropic charged for it either way.
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const records: KeepaliveSpendRecord[] = [];
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => sseResponse({ cache_read_input_tokens: 0, cache_creation_input_tokens: 400_000, input_tokens: 8, output_tokens: 1 }),
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => records.push(record),
+  });
+
+  keepalive.noteProviderRequest(adaptivePayload(), {
+    provider: "anthropic",
+    api: "anthropic-messages",
+    cacheReadPricePerMTok: 0.6,
+    pricePerMTok: { input: 6, output: 30, cacheWrite: 7.5 },
+    modelKey: "anthropic/claude-fable-5",
+  });
+  keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  keepalive.toolStart("t1");
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  assert.equal(await keepalive.tick(), "pinged");
+
+  assert.equal(keepalive.state.lastPingOk, false, "a cache write is not a successful keepalive");
+  assert.equal(records.length, 1, "but it was billed, so it is recorded");
+  assert.equal(records[0]?.usage.cacheWrite, 400_000);
+  // 400k writes at $7.50/MTok = $3.00.
+  assert.ok(Math.abs((records[0]?.usage.cost.cacheWrite ?? 0) - 3) < 1e-9);
+});
+
+test("a ping in flight is billed at the model it pinged, not one that landed meanwhile", async () => {
+  const clock = { now: Date.parse("2026-07-28T09:00:00.000Z") };
+  const records: KeepaliveSpendRecord[] = [];
+  let release: (() => void) | undefined;
+  const inFlight = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const keepalive = new CacheKeepalive({
+    now: () => clock.now,
+    fetch: async () => {
+      await inFlight;
+      return { ok: true, text: async () => JSON.stringify({ usage: { cache_read_input_tokens: 1_000_000, input_tokens: 0, output_tokens: 0 } }) };
+    },
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
+    onSpend: (record) => records.push(record),
+  });
+
+  keepalive.noteProviderRequest(anthropicPayload(), { provider: "anthropic", api: "anthropic-messages", cacheReadPricePerMTok: 0.6, modelKey: "anthropic/expensive" });
+  keepalive.noteTurnUsage(MIN_PROMPT_TOKENS);
+  keepalive.toolStart("t1");
+  clock.now += PING_AFTER_IDLE_MS + 1;
+  const ticking = keepalive.tick();
+
+  // A real request for a different, cheaper model lands while the ping is in flight.
+  keepalive.noteProviderRequest(anthropicPayload(), { provider: "anthropic", api: "anthropic-messages", cacheReadPricePerMTok: 0.03, modelKey: "anthropic/cheap" });
+  release!();
+  await ticking;
+
+  assert.equal(records.length, 1);
+  assert.match(records[0]!.key, /anthropic\/expensive/, "attributed to the model actually pinged");
+  assert.ok(Math.abs(records[0]!.usage.cost.cacheRead - 0.6) < 1e-9, "and priced at that model's rate");
+});

@@ -301,12 +301,23 @@ test("/cost reports the tree breakdown, the branch subtotal, and what it cannot 
   assert.ok(command, "/cost registered");
   await command!.handler("", harness.ctx);
   const report = harness.notices.join("\n");
+
+  // Amounts, not just the presence of lines: own 0.25 + one child 0.75.
   assert.match(report, /Session tree lifetime cost: \$1\.00/);
-  assert.match(report, /active branch/);
-  assert.match(report, /tasks\//);
-  assert.match(report, /openai\/child-model/);
+  assert.match(report, /active branch \(this session only\): \$0\.250/);
+  assert.match(report, /this session: \$0\.250 · spawned runs: \$0\.750/);
+  assert.match(report, /tasks\/\S+ — \$0\.750/, "the child is attributed its own amount");
+  assert.match(report, /openai\/child-model — \$0\.750/);
+  assert.match(report, /openai\/parent-model — \$0\.250/);
+
+  // The report headline must equal what the footer shows for the same tree.
+  const footerLine = renderFooter(harness);
+  assert.match(footerLine, /\$1\.00/);
+
+  // Both blind spots named, so deleting either line breaks the test.
   assert.match(report, /Not included/);
-  assert.match(report, /pi-web-access|web search/);
+  assert.match(report, /web search \/ source check \(pi-web-access\).*synthesis/);
+  assert.match(report, /image generation \(pi-image-gen\)/);
 });
 
 test("a scan failure leaves the previous total rather than blanking the footer", () => {
