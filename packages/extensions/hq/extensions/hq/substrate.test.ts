@@ -369,6 +369,29 @@ test("the packet bar rejects placeholders as firmly as blanks", () => {
   ]);
 });
 
+test("a half-written packet file in the queue is never presented as complete", async () => {
+  const root = await makeRoot("hq-torn-packet");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const { packet } = await store.createPacket(packetDraftFixture());
+
+    // A packet file caught mid-write, and one whose id no longer matches its name:
+    // both must drop out of the queue rather than be shown as a decision.
+    const torn = join(hqPaths(root).queue, "pkt-torn.json");
+    await writeFile(torn, '{"version":1,"id":"pkt-torn","question":"Should we', "utf8");
+    const impostor = join(hqPaths(root).queue, "pkt-impostor.json");
+    await atomicWriteJson(impostor, { ...packet, id: "pkt-somethingelse" });
+
+    const presentable = (await store.listPresentable()).map((entry) => entry.id);
+    assert.deepEqual(presentable, [packet.id], "only the whole, self-consistent packet is offered");
+    const queued = (await store.listQueue()).map((entry) => entry.id);
+    assert.deepEqual(queued, [packet.id]);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("two options sharing an id keep the packet off the desk", async () => {
   const root = await makeRoot("hq-dup-option");
   try {

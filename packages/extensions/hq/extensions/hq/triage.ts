@@ -22,6 +22,7 @@ import {
   parseStopRecord,
   readStopRecord,
   reopenStop,
+  takeOverClaim,
   type StopRecord,
 } from "./stops.ts";
 import { readTranscriptTail, renderTranscript } from "./transcript.ts";
@@ -56,6 +57,15 @@ export async function triageContext(
 ): Promise<TriageContext | { error: string }> {
   const stop = await readStopRecord(deps.store.root, stopId, deps.onError);
   if (!stop) return { error: `no such stop: ${stopId}` };
+
+  // This process is the one that now owes an outcome, so the claim moves here
+  // from the session that merely observed the stop and has since exited.
+  await takeOverClaim(
+    deps.store.root,
+    stopId,
+    process.pid,
+    (deps.now ?? (() => new Date()))().toISOString(),
+  );
 
   await seedDoctrine(deps.store.root);
   await seedProjectDoctrine(deps.store.root, stop.project);
@@ -457,7 +467,7 @@ export async function countRespawns(deps: TriageDeps, sessionId: string): Promis
 /** The queue sweep: re-runs triage for stops that still owe an outcome. */
 export async function sweepStops(deps: TriageDeps): Promise<{ retried: string[] }> {
   const now = deps.now ?? (() => new Date());
-  const stale = await findStopsNeedingTriage(deps.store.root, deps.onError);
+  const stale = await findStopsNeedingTriage(deps.store.root, deps.onError, undefined, now());
   const retried: string[] = [];
 
   for (const { record, reason } of stale) {

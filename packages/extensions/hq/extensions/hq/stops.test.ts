@@ -3,6 +3,7 @@ import test from "node:test";
 import { hqPaths } from "./paths.ts";
 import { pathExists } from "./io.ts";
 import { dropRoot, makeRoot } from "./testing.ts";
+import { isPidAlive } from "./io.ts";
 import {
   claimStop,
   findStopsNeedingTriage,
@@ -10,6 +11,7 @@ import {
   readStopRecord,
   reopenStop,
   stopIdFor,
+  takeOverClaim,
   writeStopRecord,
   type StopRecord,
 } from "./stops.ts";
@@ -86,6 +88,47 @@ test("a stop whose triage never finished is found again; a finished one is not",
     await reopenStop(root, dead.stopId);
     assert.equal(await pathExists(`${hqPaths(root).stops}/${dead.stopId}.claim`), false);
     assert.equal(await claimStop(root, dead.stopId, 222, "2026-07-28T12:05:00.000Z"), true);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a claim being handed over is not mistaken for an abandoned one", async () => {
+  const root = await makeRoot("hq-claim-handover");
+  try {
+    const stop = stopFixture({ stopId: "sess-a--handover" });
+    await writeStopRecord(root, stop);
+    // The session that observed the stop claims it, then exits — which is the
+    // normal path, since the triage worker it spawned is a different process.
+    await claimStop(root, stop.stopId, 999_999_999, "2026-07-28T12:00:01.000Z");
+    const dead = () => false;
+
+    const duringHandover = await findStopsNeedingTriage(
+      root,
+      undefined,
+      dead,
+      new Date("2026-07-28T12:01:00.000Z"),
+    );
+    assert.deepEqual(duringHandover, [], "a dead claimant inside the window is handing over");
+
+    // The triage worker takes the claim, and its own liveness now decides.
+    await takeOverClaim(root, stop.stopId, process.pid, "2026-07-28T12:01:05.000Z");
+    const claimed = await readStopRecord(root, stop.stopId);
+    assert.equal(claimed?.claimedByPid, process.pid);
+    assert.deepEqual(
+      await findStopsNeedingTriage(root, undefined, isPidAlive, new Date("2026-07-28T13:00:00.000Z")),
+      [],
+      "a live triage is never re-run",
+    );
+
+    // Only a dead claimant past the window is abandoned work.
+    const abandoned = await findStopsNeedingTriage(
+      root,
+      undefined,
+      dead,
+      new Date("2026-07-28T12:30:00.000Z"),
+    );
+    assert.deepEqual(abandoned.map((entry) => entry.reason), ["claimant-dead"]);
   } finally {
     await dropRoot(root);
   }

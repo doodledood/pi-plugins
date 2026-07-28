@@ -174,14 +174,26 @@ export interface StaleStop {
 }
 
 /**
- * Stops that still owe an outcome: never claimed, or claimed by a process that
- * is gone. This is the backstop that makes a missed hook or a crashed triage
- * recoverable rather than lost.
+ * How long a claim is trusted before its claimant's liveness decides.
+ *
+ * A stop is claimed by the session that observed it, but the process that owes
+ * the outcome is the triage worker it spawns — and the observing session exits
+ * within seconds. Without a grace window every in-flight triage would read as
+ * abandoned and be duplicated.
+ */
+export const CLAIM_GRACE_MS = 10 * 60_000;
+
+/**
+ * Stops that still owe an outcome: never claimed, or claimed by a process that is
+ * gone and past the grace window. The window matters because the claimant hands
+ * off — the observing session claims, the triage worker it spawns takes over —
+ * so a dead claimant inside the window means "handing over", not "abandoned".
  */
 export async function findStopsNeedingTriage(
   root: string,
   onError: ErrorReporter = silentReporter,
   alive: (pid: number) => boolean = isPidAlive,
+  now: Date = new Date(),
 ): Promise<StaleStop[]> {
   const scan = await scanJsonDir(
     hqPaths(root).stops,
@@ -198,6 +210,8 @@ export async function findStopsNeedingTriage(
       continue;
     }
     if (record.claimedByPid !== null && !alive(record.claimedByPid)) {
+      const claimedAt = record.claimedAt ? Date.parse(record.claimedAt) : 0;
+      if (now.getTime() - claimedAt < CLAIM_GRACE_MS) continue;
       stale.push({ record, reason: "claimant-dead" });
     }
   }
@@ -205,6 +219,18 @@ export async function findStopsNeedingTriage(
 }
 
 /** Clears a dead claim so the stop can be retried. */
+/** Moves the claim to the process that will actually produce the outcome. */
+export async function takeOverClaim(
+  root: string,
+  stopId: string,
+  pid: number,
+  at: string,
+): Promise<void> {
+  const record = await readStopRecord(root, stopId);
+  if (!record || record.status === "done") return;
+  await writeStopRecord(root, { ...record, status: "claimed", claimedByPid: pid, claimedAt: at });
+}
+
 export async function reopenStop(root: string, stopId: string): Promise<void> {
   await releaseClaim(root, stopId);
   const record = await readStopRecord(root, stopId);
