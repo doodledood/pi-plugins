@@ -54,8 +54,12 @@ matter how many ways it is reachable. Scanning is incremental: session files are
 append-only, so an unchanged file is never re-read, and the figure refreshes on
 session events rather than while the footer paints.
 
-A leading `~` means the total is a **floor rather than an exact number**. Three
-things cause it:
+Spend that has been counted once stays counted. A child session file that is
+deleted or becomes unreadable was still billed, so the figure never quietly
+shrinks below a number already shown.
+
+A leading `~` means the total is a **floor rather than an exact number**. Two
+kinds of thing cause it — a price it cannot pin down, and spend it cannot read:
 
 - **Premium billing tiers.** A turn billed above the standard rate — OpenAI's
   priority service tier, for instance — costs more than Pi's per-model rates say.
@@ -67,9 +71,20 @@ things cause it:
   a `model-aliases` entry whose target Pi does not price — reports real tokens
   at $0. A paid call that says outright it could not be priced counts the same
   way, such as speech with no configured per-character rate.
-- **Unreadable session files.** A child session the scan could not read is spend
-  missing from the total entirely, so the figure is marked rather than presented
-  as exact.
+- **Parts of the tree it could not read.** A child session file it could not
+  open; a directory that exists but cannot be listed, which hides every session
+  beneath it; a session file whose header cannot be read, leaving it unknown
+  whether it belongs to this tree; or a walk that hit its depth bound. Each is
+  spend missing from the total, so the figure is marked rather than presented as
+  exact. A directory that simply is not there is not a gap — most sessions spawn
+  nothing, and nothing is missing from a total with no children in it.
+- **Entries it could not parse.** A session file is written one entry per append,
+  so a torn write merges with the following entry into a single unreadable line
+  and takes that entry's cost with it. Those bytes are never read again, so the
+  mark stays for the rest of the session — the spend is gone for good, not
+  pending.
+
+`/cost` names whichever of these applies.
 
 ### `/cost`
 

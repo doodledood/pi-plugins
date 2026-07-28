@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -268,6 +268,21 @@ test("footer marks the total approximate when some spend cannot be priced exactl
   const own = [ownAssistant(0.5, "own-1")];
   const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
   assert.match(renderFooter(harness), /~\$0\.500/, "an unpriceable model shows the total as a floor");
+});
+
+test("a corrupt entry in a child session reaches both the footer marker and /cost", async () => {
+  const { parent } = tempSessionTree();
+  writeChildSession(parent, "tasks", "torn", [0.5]);
+  appendFileSync(join(deriveChildSessionDir(parent, "tasks"), "torn.jsonl"), "{\"type\":\"mess\n");
+  const own = [ownAssistant(0.5, "own-1")];
+  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
+
+  assert.match(renderFooter(harness), /~\$1\.00/, "a line that could not be parsed makes the footer figure a floor");
+
+  await harness.commands.get("cost")!.handler("", harness.ctx);
+  const report = harness.notices.join("\n");
+  assert.match(report, /Approximate, because:/);
+  assert.match(report, /1 session entry could not be parsed/, "and /cost says which gap caused it");
 });
 
 test("a premium declared by the tier record prices those turns exactly, with no marker", async () => {

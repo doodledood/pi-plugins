@@ -10,6 +10,13 @@
 // getUsageCostBreakdown()): assistant `usage`, `toolResult.usage`, and
 // `branch_summary`/`compaction` `usage`, over ALL entries rather than one branch.
 //
+// Every read that fails is disclosed rather than absorbed: a directory that cannot be
+// listed, a file that cannot be opened or stat-ed, an entry that cannot be parsed. Each
+// leaves the total a floor with a stated reason, because a figure that silently omits
+// spend while reading as exact is the one failure this module exists to prevent. Absence
+// is not failure — most sessions spawn nothing, and a sidecar directory that was never
+// created hides nothing.
+//
 // Two additions Pi has no equivalent for:
 //   - `pi-cost-record` custom entries, for billed calls that produce no session.
 //   - price fidelity: turns issued at OpenAI's priority tier cost more than Pi's
@@ -20,6 +27,28 @@
 import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+
+/**
+ * Does this filesystem error mean nothing is there, as opposed to something being there
+ * that could not be read?
+ *
+ * The distinction decides whether a failed read is a gap in the total. `ENOENT` is the
+ * ordinary case — most sessions spawn nothing, so their sidecar directory never exists.
+ * `ENOTDIR` says a path component is a regular file, and nothing can live beneath a file,
+ * so again nothing is missing. Every other code — `EACCES`, `EPERM`, `EIO`, `ELOOP` —
+ * means sessions or entries may exist that this scan could not see, and a total that
+ * omits them must not read as exact.
+ */
+function isAbsence(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const code = (error as { code: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
 
 /**
  * Custom-entry type carrying usage for a billed call with no Pi session of its own.
@@ -99,6 +128,15 @@ export interface CostAccumulator {
   cost: number;
   tokens: TokenTotals;
   byModel: Map<string, ModelTotals>;
+  /**
+   * Session lines that could not be parsed, so whatever they were billed is missing.
+   *
+   * Latched here rather than counted per scan because the bytes are consumed once: the
+   * scanner advances past a bad line and never reads it again, while `ScanStats` resets
+   * on every scan. The accumulator lives as long as the file's folded total does, which
+   * is exactly as long as the gap does.
+   */
+  corruptEntries: number;
   /** Dedupe keys already counted, so a re-read or a duplicated record cannot inflate. */
   countedKeys: Set<string>;
   /** Billing tier in force for subsequent entries, per the latest tier record. */
@@ -120,6 +158,8 @@ export interface SessionCost {
   unpricedModels: string[];
   priorityTokens: number;
   uncorrectedPriorityCost: number;
+  /** Entries in this session that could not be parsed, so their spend is missing. */
+  corruptEntries: number;
   /** Dedupe keys this session contributed, so a fork of it cannot re-count them. */
   countedKeys: ReadonlySet<string>;
 }
@@ -143,6 +183,8 @@ export interface TreeCost {
   uncorrectedPriorityCost: number;
   /** Parts of the tree whose spend could not be read, so it is missing from the total. */
   unreadableSessions: number;
+  /** Session entries across the tree that could not be parsed, so their spend is missing. */
+  corruptEntries: number;
 }
 
 /** Folding options: price adjustments plus double-count suppression. */
@@ -185,6 +227,7 @@ export function createAccumulator(): CostAccumulator {
     cost: 0,
     tokens: createTokenTotals(),
     byModel: new Map(),
+    corruptEntries: 0,
     countedKeys: new Set(),
     currentTier: "standard",
   };
@@ -332,6 +375,7 @@ export function summarize(acc: CostAccumulator, meta: { id?: string; path?: stri
     ...meta,
     cost: acc.cost,
     tokens: acc.tokens,
+    corruptEntries: acc.corruptEntries,
     countedKeys: acc.countedKeys,
     models,
     unpricedModels: models.filter((m) => m.unpriced).map((m) => m.key),
@@ -352,10 +396,12 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
   const totalTokens = createTokenTotals();
   let totalCost = 0;
   let uncorrectedPriorityCost = 0;
+  let corruptEntries = 0;
   const unpriced = new Set<string>();
   for (const session of all) {
     totalCost += session.cost;
     uncorrectedPriorityCost += session.uncorrectedPriorityCost;
+    corruptEntries += session.corruptEntries;
     totalTokens.input += session.tokens.input;
     totalTokens.output += session.tokens.output;
     totalTokens.cacheRead += session.tokens.cacheRead;
@@ -374,6 +420,11 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
       `${unreadableSessions} part${unreadableSessions === 1 ? "" : "s"} of the tree could not be read, so that spend is missing`,
     );
   }
+  if (corruptEntries > 0) {
+    reasons.push(
+      `${corruptEntries} session entr${corruptEntries === 1 ? "y" : "ies"} could not be parsed, so whatever they were billed is missing`,
+    );
+  }
   return {
     own,
     descendants,
@@ -384,6 +435,7 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     unpricedModels: [...unpriced],
     uncorrectedPriorityCost,
     unreadableSessions,
+    corruptEntries,
   };
 }
 
@@ -411,10 +463,22 @@ export interface SessionHeader {
   cwd?: string;
 }
 
+/**
+ * Outcome of a header read. The two ways to have no header are worth keeping apart: a
+ * file that read fine and simply is not a session file belongs to nobody, while a file
+ * that could not be read at all might be a session of this tree — an unanswerable
+ * question rather than a negative answer.
+ */
+export interface SessionHeaderRead {
+  header?: SessionHeader;
+  /** True when the file exists but could not be read, leaving its membership unknown. */
+  unreadable?: boolean;
+}
+
 const HEADER_READ_BYTES = 16 * 1024;
 
 /** Read a session file's first line without loading the whole file. */
-export function readSessionHeader(path: string): SessionHeader | undefined {
+export function readSessionHeader(path: string): SessionHeaderRead {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
@@ -424,10 +488,12 @@ export function readSessionHeader(path: string): SessionHeader | undefined {
     const newline = text.indexOf("\n");
     const line = newline >= 0 ? text.slice(0, newline) : text;
     const parsed = JSON.parse(line);
-    if (parsed?.type !== "session") return undefined;
-    return { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd };
-  } catch {
-    return undefined;
+    if (parsed?.type !== "session") return {};
+    return { header: { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd } };
+  } catch (error) {
+    // A malformed first line is a definite "not a session file"; a failed open or read is
+    // not an answer at all, so callers that need one can tell the two apart.
+    return errorCode(error) === undefined || isAbsence(error) ? {} : { unreadable: true };
   } finally {
     if (fd != null) {
       try {
@@ -447,13 +513,20 @@ export function readSessionHeader(path: string): SessionHeader | undefined {
  */
 export const MAX_SIDECAR_DEPTH = 32;
 
-/** Every `.jsonl` file under `root`, at any depth, with the top-level folder as its kind. */
+/**
+ * Every `.jsonl` file under `root`, at any depth, with the top-level folder as its kind.
+ *
+ * `unreadableDirs` counts directories that exist but could not be read. Every session
+ * beneath one of those is invisible to this walk, so it is reported for the same reason
+ * `truncated` is: a total silently missing those sessions would still read as exact.
+ */
 export function listSidecarSessionFiles(
   root: string,
   maxDepth = MAX_SIDECAR_DEPTH,
-): { files: Array<{ path: string; kind: string }>; truncated: boolean } {
+): { files: Array<{ path: string; kind: string }>; truncated: boolean; unreadableDirs: number } {
   const found: Array<{ path: string; kind: string }> = [];
   let truncated = false;
+  let unreadableDirs = 0;
   const walk = (dir: string, kind: string, depth: number) => {
     if (depth > maxDepth) {
       truncated = true;
@@ -462,8 +535,11 @@ export function listSidecarSessionFiles(
     let entries: import("node:fs").Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return; // missing or unreadable sidecar directory: nothing to add
+    } catch (error) {
+      // No sidecar directory is the ordinary case — most sessions spawn nothing — and
+      // holds no spend. One that exists and cannot be read hides every session below it.
+      if (!isAbsence(error)) unreadableDirs += 1;
+      return;
     }
     for (const entry of entries) {
       const full = join(dir, entry.name);
@@ -475,7 +551,7 @@ export function listSidecarSessionFiles(
     }
   };
   walk(root, "", 0);
-  return { files: found, truncated };
+  return { files: found, truncated, unreadableDirs };
 }
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
@@ -499,8 +575,10 @@ export interface ScanStats {
   filesRead: number;
   filesDiscovered: number;
   /**
-   * Parts of the tree this scan could not read — an unreadable file, or a walk that hit
-   * its depth bound. Either way spend is missing, which is what makes a total a floor.
+   * Parts of the tree this scan could not read: a file it could not open or stat, a
+   * directory it could not list, a sibling it could not classify, or a walk that hit its
+   * depth bound. Either way spend may be missing, which is what makes a total a floor.
+   * A path that does not exist is not counted here — nothing is missing from nothing.
    */
   filesUnreadable: number;
 }
@@ -514,6 +592,15 @@ export interface ScanStats {
  */
 export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
+  /**
+   * Descendants counted by an earlier scan, as path → kind.
+   *
+   * Discovery runs before any file is read, so a child that disappears — deleted, or
+   * behind a directory that stopped being listable — would never reach the scan at all,
+   * and its spend would drop out of a total the user has already seen. It was still
+   * billed, so it stays counted.
+   */
+  private readonly knownDescendants = new Map<string, string>();
   private lastStats: ScanStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
   /**
@@ -551,8 +638,16 @@ export class SessionTreeScanner {
     let stat: import("node:fs").Stats;
     try {
       stat = statSync(path);
-    } catch {
-      return undefined; // deleted between discovery and scan
+    } catch (error) {
+      const counted = this.files.get(path);
+      // Nothing folded yet — discovered, then gone before its first read. No spend is lost.
+      if (!counted) return undefined;
+      // Spend already folded from this file has been counted and shown. Dropping it now
+      // would quietly lower a total the user has already seen, so it stands, exactly as it
+      // does when a read fails below. A file that is gone will not grow again, so nothing
+      // further is missing; any other failure means it may have grown out of sight.
+      if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
+      return summarize(counted.acc, { id: counted.header?.id, path, kind });
     }
     const cached = this.files.get(path);
     const grewInPlace = cached != null && stat.size >= cached.size && stat.mtimeMs >= cached.mtimeMs;
@@ -583,7 +678,12 @@ export class SessionTreeScanner {
       try {
         parsed = JSON.parse(line);
       } catch {
-        continue; // torn or corrupt line: skip it rather than failing the scan
+        // A corrupt line is skipped rather than failing the whole scan, but it is spend
+        // this total will never include: pi appends each entry as one write, so a torn
+        // write merges with the next entry into a single unparseable line and takes that
+        // entry's cost down with it. Counted on the accumulator, which outlives the read.
+        entry.acc.corruptEntries += 1;
+        continue;
       }
       if (parsed?.type === "session") {
         entry.header = { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd };
@@ -674,34 +774,48 @@ export class SessionTreeScanner {
   ): Array<{ path: string; real: string; kind: string; header?: SessionHeader }> {
     if (!rootFile) return [];
     const byPath = new Map<string, { path: string; real: string; kind: string; header?: SessionHeader }>();
-    const add = (path: string, kind: string) => {
+    const add = (path: string, kind: string): SessionHeaderRead => {
       const real = resolveRealPath(path);
-      if (skip.has(real) || byPath.has(real)) return;
-      byPath.set(real, { path, real, kind, header: this.cachedHeader(path) });
+      if (skip.has(real)) return {};
+      const existing = byPath.get(real);
+      if (existing) return { header: existing.header };
+      const read = this.cachedHeader(path);
+      byPath.set(real, { path, real, kind, header: read.header });
+      return read;
     };
     const sidecar = listSidecarSessionFiles(deriveSidecarRoot(rootFile), this.maxSidecarDepth);
     if (sidecar.truncated) this.lastStats.filesUnreadable += 1;
+    this.lastStats.filesUnreadable += sidecar.unreadableDirs;
     for (const file of sidecar.files) add(file.path, file.kind);
     try {
       for (const name of readdirSync(dirname(rootFile))) {
-        if (name.endsWith(".jsonl")) add(join(dirname(rootFile), name), "forks");
+        if (!name.endsWith(".jsonl")) continue;
+        // A sibling belongs to this tree only if its header says so. When the file cannot
+        // be read at all, that question has no answer, and a fork of this session would
+        // drop out of the total unnoticed — so the ambiguity is disclosed rather than
+        // resolved as "unrelated". A sidecar file needs no such care: it is admitted by
+        // where it sits, and its own read failure is reported when it is scanned.
+        if (add(join(dirname(rootFile), name), "forks").unreadable) this.lastStats.filesUnreadable += 1;
       }
-    } catch {
-      // Session directory unreadable: sidecar candidates still stand.
+    } catch (error) {
+      // This directory holds the parent session file itself, so it exists; a failure here
+      // is a real one, and every fork of this session is a sibling in it. Sidecar
+      // candidates still stand, but the forks are now unaccounted for.
+      if (!isAbsence(error)) this.lastStats.filesUnreadable += 1;
     }
     return [...byPath.values()];
   }
 
-  private cachedHeader(path: string): SessionHeader | undefined {
+  private cachedHeader(path: string): SessionHeaderRead {
     const cached = this.files.get(path);
-    if (cached?.header) return cached.header;
-    const header = readSessionHeader(path);
-    if (header) {
+    if (cached?.header) return { header: cached.header };
+    const read = readSessionHeader(path);
+    if (read.header) {
       const entry = cached ?? this.freshFileCache();
-      entry.header = header;
+      entry.header = read.header;
       this.files.set(path, entry);
     }
-    return header;
+    return read;
   }
 
   /**
@@ -721,10 +835,20 @@ export class SessionTreeScanner {
   scanTree(args: { ownEntries?: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
     this.lastStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
-    const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile)?.id : undefined);
+    const rootId = args.sessionId ?? (args.sessionFile ? this.cachedHeader(args.sessionFile).header?.id : undefined);
     const found = this.discover(args.sessionFile, rootId);
+    for (const child of found) this.knownDescendants.set(child.path, child.kind);
+    // Everything discovered now, plus everything counted before that discovery can no
+    // longer see. Their folded spend still stands; `scanFile` reports the gap when the
+    // file is unreachable for a reason that could be hiding more.
+    const children = [
+      ...found,
+      ...[...this.knownDescendants]
+        .filter(([path]) => !found.some((child) => child.path === path))
+        .map(([path, kind]) => ({ path, kind, header: this.files.get(path)?.header })),
+    ];
     const countedSessions = new Set<string>();
-    for (const child of found) {
+    for (const child of children) {
       if (child.header?.id) countedSessions.add(child.header.id);
       countedSessions.add(child.path);
     }
@@ -741,7 +865,7 @@ export class SessionTreeScanner {
 
     const excludeKeys = new Set<string>(own.countedKeys);
     const descendants: SessionCost[] = [];
-    for (const child of found) {
+    for (const child of children) {
       const cost = this.scanFile(child.path, child.kind, { countedSessions, excludeKeys });
       if (!cost) continue;
       descendants.push(cost);

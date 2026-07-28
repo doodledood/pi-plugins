@@ -288,6 +288,119 @@ test("a missing sidecar directory yields the parent's own cost, not an error", (
   const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(2)], sessionFile: parent, sessionId: "p1" });
   assert.equal(tree.totalCost, 2);
   assert.equal(tree.descendants.length, 0);
+  // The common case by far: most sessions spawn nothing, so an absent sidecar directory
+  // must stay exact. A `~` here would follow nearly every session that never spawned.
+  assert.equal(tree.approximate, false, "nothing is missing when there was never anything there");
+  assert.equal(tree.unreadableSessions, 0);
+});
+
+test("a sidecar directory that exists but cannot be listed discloses the sessions it hides", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const dir = deriveChildSessionDir(parent, "tasks");
+  writeSession(join(dir, "child.jsonl"), { id: "c1", entries: [assistant(9)] });
+  chmodSync(dir, 0o000);
+  try {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    // The $9 below this directory is invisible to the walk. Reporting $1 as exact is the
+    // failure the disclosure exists to prevent.
+    assert.equal(tree.totalCost, 1, "what is readable still totals");
+    assert.ok(tree.approximate, "a directory that hides sessions makes the total a floor");
+    assert.ok(tree.unreadableSessions >= 1);
+    assert.match(tree.approximateReasons.join(" "), /could not be read/);
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+});
+
+test("a session directory that cannot be listed discloses the forks it could not look for", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [assistant(2)] });
+  // Execute but not read: a known path inside still opens, while listing fails. That is
+  // the fork search alone failing — forks are siblings of the parent file, found only by
+  // enumerating this directory — with the sidecar walk below it untouched.
+  chmodSync(root, 0o111);
+  try {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    assert.equal(tree.totalCost, 3, "the sidecar child is still found and counted");
+    assert.ok(tree.approximate, "but any fork of this session went unlooked-for");
+    assert.equal(tree.unreadableSessions, 1);
+    assert.match(tree.approximateReasons.join(" "), /could not be read/);
+  } finally {
+    chmodSync(root, 0o700);
+  }
+});
+
+test("a sibling whose header cannot be read is disclosed, not assumed unrelated", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  // A sibling is part of this tree only if its header links back. Unreadable, that is
+  // unknowable — it could be a fork of this session, whose own turns would go uncounted.
+  const sibling = writeSession(join(root, "sibling.jsonl"), { id: "s1", parentSession: "p1", entries: [assistant(4)] });
+  chmodSync(sibling, 0o000);
+  try {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const tree = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    assert.ok(tree.approximate, "an unclassifiable sibling leaves the total a floor");
+    assert.match(tree.approximateReasons.join(" "), /could not be read/);
+  } finally {
+    chmodSync(sibling, 0o600);
+  }
+
+  // Readable and simply not ours: an answer, so nothing is marked.
+  const unrelated = writeSession(join(root, "unrelated.jsonl"), { id: "u1", entries: [assistant(7)] });
+  assert.ok(existsSync(unrelated));
+  const clean = new SessionTreeScanner().scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(clean.totalCost, 5, "the readable sibling links to p1, so it counts; the unrelated one does not");
+  assert.equal(clean.approximate, false);
+});
+
+test("spend already counted for a child does not vanish when its file stops being readable", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const dir = deriveChildSessionDir(parent, "tasks");
+  writeSession(join(dir, "child.jsonl"), { id: "c1", entries: [assistant(9)] });
+
+  const scanner = new SessionTreeScanner();
+  const first = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(first.totalCost, 10);
+
+  // Readable but not traversable: the file is still listed, so it is still discovered,
+  // and stat-ing it fails. Its $9 was billed and already shown to the user.
+  chmodSync(dir, 0o444);
+  try {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const second = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+    assert.equal(second.totalCost, 10, "a total the user has seen does not quietly shrink");
+    assert.ok(second.approximate, "and the file may have grown out of sight, so it is a floor");
+    assert.match(second.approximateReasons.join(" "), /could not be read/);
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+
+  // Restored: same total, counted once, and exact again.
+  const third = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(third.totalCost, 10, "no double counting after the file comes back");
+  assert.equal(third.approximate, false);
+});
+
+test("a deleted child keeps the spend it was billed, without claiming a gap", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(9)] });
+
+  const scanner = new SessionTreeScanner();
+  assert.equal(scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" }).totalCost, 10);
+
+  rmSync(child);
+  const after = scanner.scanTree({ ownEntries: [assistant(1)], sessionFile: parent, sessionId: "p1" });
+  assert.equal(after.totalCost, 10, "deleting the record does not un-bill the spend");
+  // Nothing is hidden: the file is gone and will not grow, so the figure is still exact.
+  assert.equal(after.approximate, false);
 });
 
 test("an in-memory parent with no session file still reports its own cost", () => {
@@ -316,7 +429,7 @@ test("an unreadable child is skipped, the rest still totals, and the gap is disc
   }
 });
 
-test("a corrupt line is skipped without losing the rest of the file", () => {
+test("a corrupt line is skipped without losing the rest of the file, and the skip is disclosed", () => {
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
   const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
@@ -324,15 +437,74 @@ test("a corrupt line is skipped without losing the rest of the file", () => {
   appendFileSync(child, "{not json\n");
   appendFileSync(child, `${JSON.stringify(assistant(2))}\n`);
   const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(tree.totalCost, 3, "entries on both sides of the bad line still fold");
+  // Whatever that line was billed is gone from the total: pi writes one entry per append,
+  // so a torn write merges with the next entry and takes its cost down too.
+  assert.ok(tree.approximate, "a line that could not be parsed makes the total a floor");
+  assert.equal(tree.corruptEntries, 1);
+  assert.match(tree.approximateReasons.join(" "), /could not be parsed/);
+  // Distinct from an unreadable file: nothing here was unreachable, one entry was unreadable.
+  assert.equal(tree.unreadableSessions, 0);
+});
+
+test("a corrupt line keeps the total marked on every later scan, since its spend never returns", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(1)] });
+  appendFileSync(child, "{not json\n");
+
+  const scanner = new SessionTreeScanner();
+  const first = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(first.corruptEntries, 1);
+
+  // The bad line's bytes are behind the cached offset now, so nothing re-reads them. A
+  // per-scan counter would have forgotten the gap here and gone back to reading exact.
+  const second = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(scanner.stats.filesRead, 0, "the unchanged file is not re-read");
+  assert.ok(second.approximate, "the gap outlives the read that found it");
+  assert.equal(second.corruptEntries, 1, "and is not counted again per scan");
+
+  // A later good append still folds, and does not disturb the latched count.
+  appendFileSync(child, `${JSON.stringify(assistant(2))}\n`);
+  const third = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  assert.equal(third.totalCost, 3);
+  assert.equal(third.corruptEntries, 1);
+});
+
+test("blank lines and header lines are not mistaken for corruption", () => {
+  const root = tempRoot();
+  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
+  const child = join(deriveChildSessionDir(parent, "tasks"), "child.jsonl");
+  writeSession(child, { id: "c1", entries: [assistant(1)] });
+  appendFileSync(child, "\n   \n");
+  appendFileSync(child, `${JSON.stringify(assistant(2))}\n`);
+  const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
   assert.equal(tree.totalCost, 3);
+  assert.equal(tree.corruptEntries, 0);
+  assert.equal(tree.approximate, false, "ordinary whitespace is not a missing entry");
 });
 
 test("a header-less or unreadable file yields no header rather than throwing", () => {
   const root = tempRoot();
   const path = join(root, "bad.jsonl");
   writeFileSync(path, "not a session\n");
-  assert.equal(readSessionHeader(path), undefined);
-  assert.equal(readSessionHeader(join(root, "missing.jsonl")), undefined);
+  assert.equal(readSessionHeader(path).header, undefined);
+  assert.equal(readSessionHeader(join(root, "missing.jsonl")).header, undefined);
+
+  // Read fine, just not a session file, versus could not be read at all: the first is an
+  // answer, the second is not, and only the second can be hiding spend.
+  assert.equal(readSessionHeader(path).unreadable, undefined, "a readable non-session file is answered, not unknown");
+  assert.equal(readSessionHeader(join(root, "missing.jsonl")).unreadable, undefined, "an absent file holds nothing");
+  const locked = join(root, "locked.jsonl");
+  writeFileSync(locked, "{}\n");
+  chmodSync(locked, 0o000);
+  try {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    assert.equal(readSessionHeader(locked).unreadable, true, "a file that exists but cannot be read is unknown");
+  } finally {
+    chmodSync(locked, 0o600);
+  }
 });
 
 // ── price fidelity (D2) ─────────────────────────────────────────────────────
@@ -558,7 +730,7 @@ test("a child both routes reach is admitted exactly once", () => {
   // sidecar route (its location) and by the header route (its parent link).
   for (const [path, link] of [[byId, "p1"], [byPath, parent]] as const) {
     assert.ok(path.startsWith(deriveSidecarRoot(parent)), `${path} is under the sidecar root`);
-    assert.equal(readSessionHeader(path)?.parentSession, link, `${path} also links to the parent by header`);
+    assert.equal(readSessionHeader(path).header?.parentSession, link, `${path} also links to the parent by header`);
   }
 
   const scanner = new SessionTreeScanner();
