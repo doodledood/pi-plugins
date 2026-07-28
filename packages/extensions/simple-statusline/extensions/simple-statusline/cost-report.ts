@@ -95,6 +95,9 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
     lines.push("");
     lines.push("Approximate, because:");
     for (const reason of cost.approximateReasons) lines.push(`  · ${reason}`);
+    if (cost.unreadableSessions > 0) {
+      lines.push(`  · ${cost.unreadableSessions} session file(s) unreadable — that spend is missing entirely`);
+    }
     if (cost.uncorrectedPriorityCost > 0) {
       lines.push(`  · priority-tier turns billed above the ${formatCost(cost.uncorrectedPriorityCost)} counted here`);
     }
@@ -134,7 +137,11 @@ export function analyzeSessionTree(sessionFile: string, price: PriceOptions = {}
     for (const key of cost.countedKeys) excludeKeys.add(key);
   }
   descendants.sort((a, b) => b.cost - a.cost);
-  return combine(own ?? summarize(createAccumulator(), { id: rootId, path: sessionFile, kind: "own" }), descendants);
+  return combine(
+    own ?? summarize(createAccumulator(), { id: rootId, path: sessionFile, kind: "own" }),
+    descendants,
+    scanner.stats.filesUnreadable,
+  );
 }
 
 /** Every session file directly in a session directory (Pi's own non-recursive view). */

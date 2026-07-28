@@ -8,6 +8,8 @@ type PiApi = {
   registerTool(tool: Record<string, unknown>): void;
   registerCommand(name: string, command: { description?: string; handler: (args: string, ctx: any) => Promise<void> | void }): void;
   exec(command: string, args: string[], options?: { timeout?: number; signal?: AbortSignal }): Promise<PiExecResult>;
+  /** Durable, context-excluded session entry; used for the cost record. */
+  appendEntry?(customType: string, data?: unknown): unknown;
 };
 
 type AudioFormat = "mp3" | "wav" | "aac" | "opus" | "flac";
@@ -102,7 +104,6 @@ export default function openaiTtsExtension(pi: PiApi): void {
       const result = await speakWithOpenAI(pi, params, signal, (message, details) => {
         onUpdate?.({ content: [{ type: "text", text: message }], details });
       });
-      recordSpeechSpend(pi, result);
       return {
         content: [{ type: "text", text: `Spoke ${result.chars} character(s) using OpenAI ${result.model}/${result.voice} (${result.format}) via ${result.player}.` }],
         details: result,
@@ -126,7 +127,6 @@ export default function openaiTtsExtension(pi: PiApi): void {
       try {
         ctx.ui.notify("OpenAI TTS: requesting speech…", "info");
         const result = await speakWithOpenAI(pi, { text }, ctx.signal, (message) => ctx.ui.notify(message, "info"));
-        recordSpeechSpend(pi, result);
         ctx.ui.notify(`OpenAI TTS: spoke ${result.chars} character(s).`, "info");
       } catch (error) {
         ctx.ui.notify(`OpenAI TTS failed: ${errorMessage(error)}`, "error");
@@ -136,21 +136,23 @@ export default function openaiTtsExtension(pi: PiApi): void {
 }
 
 /**
- * Record one successful speech call durably, so its spend is countable: characters,
+ * Record one billed speech call durably, so its spend is countable: characters,
  * model, and voice always, plus a dollar figure when a per-character rate is
- * configured. Only called after audio was produced — a failed call records nothing.
+ * configured. Called as soon as OpenAI returns audio — that is the moment the charge
+ * exists — so a later local playback failure cannot lose it. A call that never
+ * reached that point (bad key, HTTP error, over the character limit) records nothing.
  */
-export function recordSpeechSpend(pi: unknown, result: SpeakResult): void {
+export function recordSpeechSpend(pi: unknown, billed: { model: string; voice: string; chars: number }): void {
   const api = pi as { appendEntry?: (customType: string, data: unknown) => unknown };
   if (typeof api?.appendEntry !== "function") return;
   const pricePerMChar = normalizeOptionalNumber(process.env[PRICE_ENV], 0, 1_000_000);
-  const total = typeof pricePerMChar === "number" ? (result.chars / 1_000_000) * pricePerMChar : 0;
+  const total = typeof pricePerMChar === "number" ? (billed.chars / 1_000_000) * pricePerMChar : 0;
   try {
     api.appendEntry(COST_RECORD_TYPE, {
       recordId: `tts-${Date.now()}-${randomUUID()}`,
-      key: `openai/${result.model} (speech)`,
-      characters: result.chars,
-      voice: result.voice,
+      key: `openai/${billed.model} (speech)`,
+      characters: billed.chars,
+      voice: billed.voice,
       priced: typeof pricePerMChar === "number",
       usage: {
         input: 0,
@@ -209,6 +211,10 @@ async function speakWithOpenAI(
     }
 
     const audio = await readAudioResponse(response, config.maxAudioBytes, timeout.signal);
+    // OpenAI billed the synthesis the moment it returned audio. Record the spend here,
+    // before local playback, so a failure at the speaker does not lose the charge.
+    recordSpeechSpend(pi, { model: config.model, voice: config.voice, chars: text.length });
+
     await writeFile(tempFile, audio);
     onProgress?.("Playing speech audio locally…", { stage: "playing", audioBytes: audio.byteLength });
     const player = await playAudioFile(pi, tempFile, config.playbackTimeoutMs, signal);

@@ -40,6 +40,12 @@ export interface CostRecordData {
   usage: UsageLike;
   /** Billing tier this call actually paid, when it differs from the ambient tier. */
   tier?: "standard" | "priority";
+  /**
+   * False when the call was billed but no rate was available to value it — speech
+   * charged per character with no configured rate, for instance. The cost then reads
+   * $0 and the surfaces mark the total approximate rather than reporting it low.
+   */
+  priced?: boolean;
 }
 
 /** Payload of a `pi-price-tier` custom entry. */
@@ -67,6 +73,8 @@ export interface TokenTotals {
 export interface ModelTotals extends TokenTotals {
   key: string;
   cost: number;
+  /** True when real usage here was counted at $0 because no rate could be resolved. */
+  unpriced: boolean;
   /** Tokens that were billed but priced at $0 because no rate could be resolved. */
   unpricedTokens: number;
   /** Tokens billed at a premium service tier whose surcharge Pi's rates do not model. */
@@ -116,6 +124,8 @@ export interface TreeCost {
   unpricedModels: string[];
   /** Premium for priority-tier turns that is missing from `totalCost`. */
   uncorrectedPriorityCost: number;
+  /** Session files whose spend could not be read, so it is missing from the total. */
+  unreadableSessions: number;
 }
 
 /** Folding options: price adjustments plus double-count suppression. */
@@ -172,7 +182,7 @@ function addTokens(target: TokenTotals, usage: UsageLike): number {
 function modelTotals(acc: CostAccumulator, key: string): ModelTotals {
   let totals = acc.byModel.get(key);
   if (!totals) {
-    totals = { key, cost: 0, ...createTokenTotals(), unpricedTokens: 0, priorityTokens: 0, uncorrectedPriorityCost: 0 };
+    totals = { key, cost: 0, ...createTokenTotals(), unpriced: false, unpricedTokens: 0, priorityTokens: 0, uncorrectedPriorityCost: 0 };
     acc.byModel.set(key, totals);
   }
   return totals;
@@ -280,7 +290,14 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
     totals.priorityTokens += tokens;
     if (multiplier == null) totals.uncorrectedPriorityCost += baseCost;
   }
-  if (tokens > 0 && baseCost === 0) totals.unpricedTokens += tokens;
+  // Unpriced spend, from either direction: real usage that priced to nothing, or a
+  // record that says outright it could not be priced (speech with no configured rate,
+  // whose usage is characters rather than tokens).
+  const declaredUnpriced = entry?.type === "custom" && entry.data?.priced === false;
+  if ((tokens > 0 && baseCost === 0) || declaredUnpriced) {
+    totals.unpriced = true;
+    totals.unpricedTokens += tokens;
+  }
 }
 
 /** Collapse an accumulator into a comparable per-session summary. */
@@ -292,14 +309,20 @@ export function summarize(acc: CostAccumulator, meta: { id?: string; path?: stri
     tokens: acc.tokens,
     countedKeys: acc.countedKeys,
     models,
-    unpricedModels: models.filter((m) => m.unpricedTokens > 0).map((m) => m.key),
+    unpricedModels: models.filter((m) => m.unpriced).map((m) => m.key),
     priorityTokens: models.reduce((sum, m) => sum + m.priorityTokens, 0),
     uncorrectedPriorityCost: models.reduce((sum, m) => sum + m.uncorrectedPriorityCost, 0),
   };
 }
 
-/** Sum a session collection into the footer's headline figure. */
-export function combine(own: SessionCost, descendants: SessionCost[]): TreeCost {
+/**
+ * Sum a session collection into the footer's headline figure.
+ *
+ * `unreadableSessions` counts spend the scan knows it could not read. A total that
+ * silently omits a child's cost while reading as exact is the failure this whole
+ * mechanism exists to prevent, so it marks the figure approximate too.
+ */
+export function combine(own: SessionCost, descendants: SessionCost[], unreadableSessions = 0): TreeCost {
   const all = [own, ...descendants];
   const totalTokens = createTokenTotals();
   let totalCost = 0;
@@ -321,6 +344,9 @@ export function combine(own: SessionCost, descendants: SessionCost[]): TreeCost 
   if (unpriced.size > 0) {
     reasons.push(`no price resolved for ${[...unpriced].join(", ")}`);
   }
+  if (unreadableSessions > 0) {
+    reasons.push(`${unreadableSessions} session file${unreadableSessions === 1 ? "" : "s"} could not be read, so their spend is missing`);
+  }
   return {
     own,
     descendants,
@@ -330,6 +356,7 @@ export function combine(own: SessionCost, descendants: SessionCost[]): TreeCost 
     approximateReasons: reasons,
     unpricedModels: [...unpriced],
     uncorrectedPriorityCost,
+    unreadableSessions,
   };
 }
 
@@ -429,6 +456,8 @@ export interface ScanStats {
   /** Files whose bytes were read this scan (a cache hit reads nothing). */
   filesRead: number;
   filesDiscovered: number;
+  /** Files whose bytes could not be read this scan, so their spend is missing. */
+  filesUnreadable: number;
 }
 
 /**
@@ -440,7 +469,7 @@ export interface ScanStats {
  */
 export class SessionTreeScanner {
   private readonly files = new Map<string, FileCacheEntry>();
-  private lastStats: ScanStats = { filesRead: 0, filesDiscovered: 0 };
+  private lastStats: ScanStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
   constructor(private readonly price: PriceOptions = {}) {}
 
@@ -484,13 +513,15 @@ export class SessionTreeScanner {
 
     const chunk = this.readRange(path, entry.offset, stat.size, entry.decoder);
     if (chunk == null) {
-      // Unreadable now; keep whatever was already folded.
+      // Unreadable now; keep whatever was already folded and report the gap, so a
+      // total missing this file's spend is not presented as exact.
+      this.lastStats.filesUnreadable += 1;
       return summarize(entry.acc, { id: entry.header?.id, path, kind });
     }
     entry.reads += 1;
     this.lastStats.filesRead += 1;
 
-    const text = entry.remainder + chunk;
+    const text = entry.remainder + chunk.text;
     const lines = text.split("\n");
     // A file being appended to can end mid-line; hold it back until the rest arrives.
     entry.remainder = lines.pop() ?? "";
@@ -508,23 +539,24 @@ export class SessionTreeScanner {
       }
       accumulateEntry(entry.acc, parsed, { ...this.price, ...fold });
     }
-    // Offset tracks bytes consumed; the incomplete tail lives in `remainder`, so the
-    // next read starts after it and no byte is ever folded twice.
-    entry.offset = stat.size;
-    entry.size = stat.size;
+    // Offset tracks bytes actually consumed; the incomplete tail lives in `remainder`,
+    // so the next read resumes after it and no byte is folded twice. A short read
+    // leaves the offset behind rather than skipping the bytes it never saw.
+    entry.offset += chunk.bytesRead;
+    entry.size = entry.offset;
     entry.mtimeMs = stat.mtimeMs;
     return summarize(entry.acc, { id: entry.header?.id, path, kind });
   }
 
-  private readRange(path: string, from: number, to: number, decoder: StringDecoder): string | undefined {
-    if (to <= from) return "";
+  private readRange(path: string, from: number, to: number, decoder: StringDecoder): { text: string; bytesRead: number } | undefined {
+    if (to <= from) return { text: "", bytesRead: 0 };
     let fd: number | undefined;
     try {
       fd = openSync(path, "r");
       const length = to - from;
       const buffer = Buffer.allocUnsafe(length);
       const read = readSync(fd, buffer, 0, length, from);
-      return decoder.write(buffer.subarray(0, read));
+      return { text: decoder.write(buffer.subarray(0, read)), bytesRead: read };
     } catch {
       return undefined;
     } finally {
@@ -624,7 +656,7 @@ export class SessionTreeScanner {
    * the largest and most frequently appended — is never re-read.
    */
   scanTree(args: { ownEntries: Iterable<any>; sessionFile?: string; sessionId?: string }): TreeCost {
-    this.lastStats = { filesRead: 0, filesDiscovered: 0 };
+    this.lastStats = { filesRead: 0, filesDiscovered: 0, filesUnreadable: 0 };
 
     // Discovery first, so the parent's fold knows which tool results merely restate a
     // child session's spend.
@@ -651,7 +683,7 @@ export class SessionTreeScanner {
     }
     descendants.sort((a, b) => b.cost - a.cost);
 
-    return combine(own, descendants);
+    return combine(own, descendants, this.lastStats.filesUnreadable);
   }
 }
 

@@ -32,6 +32,7 @@ const defaultExec: ExecMock = async () => ({ code: 0, stdout: "", stderr: "", ki
 function registerWith(exec: ExecMock = defaultExec) {
   const tools: RegisteredTool[] = [];
   const commands: Array<{ name: string; command: RegisteredCommand }> = [];
+  const entries: Array<{ customType: string; data: any }> = [];
   openaiTtsExtension({
     registerTool(tool: unknown) {
       tools.push(tool as RegisteredTool);
@@ -39,9 +40,12 @@ function registerWith(exec: ExecMock = defaultExec) {
     registerCommand(name: string, command: RegisteredCommand) {
       commands.push({ name, command });
     },
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ customType, data });
+    },
     exec,
   });
-  return { tools, commands };
+  return { tools, commands, entries };
 }
 
 test("registers openai_tts_speak tool and /openai-tts command", () => {
@@ -171,7 +175,7 @@ test("enforces configured max text length before network calls", async () => {
 test("a successful speech call records its usage durably, with a price only when configured", () => {
   const entries: Array<{ customType: string; data: any }> = [];
   const pi = { appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }) };
-  const result = { model: "gpt-4o-mini-tts", voice: "coral", format: "mp3" as const, chars: 500_000, audioBytes: 1024, player: "afplay" };
+  const result = { model: "gpt-4o-mini-tts", voice: "coral", chars: 500_000 };
 
   const savedPrice = process.env.OPENAI_TTS_PRICE_PER_MCHAR;
   try {
@@ -199,7 +203,7 @@ test("a successful speech call records its usage durably, with a price only when
 });
 
 test("recording spend never breaks speech when the session cannot take entries", () => {
-  const result = { model: "gpt-4o-mini-tts", voice: "coral", format: "mp3" as const, chars: 10, audioBytes: 8, player: "afplay" };
+  const result = { model: "gpt-4o-mini-tts", voice: "coral", chars: 10 };
   assert.doesNotThrow(() => recordSpeechSpend({}, result));
   assert.doesNotThrow(() =>
     recordSpeechSpend(
@@ -211,4 +215,40 @@ test("recording spend never breaks speech when the session cannot take entries",
       result,
     ),
   );
+});
+
+test("speech billed by OpenAI is recorded even when local playback fails", async () => {
+  process.env.OPENAI_TTS_API_KEY = "test-key";
+  globalThis.fetch = async () => new Response(Buffer.from("fake audio"), { status: 200 });
+
+  // Audio came back — OpenAI charged for it — and only the local player failed.
+  const { tools, entries } = registerWith(async () => ({ code: 0, stdout: "", stderr: "", killed: true }));
+  await assert.rejects(() => tools[0]!.execute("tool_1", { text: "Hello there." }), /playback was interrupted/);
+
+  const records = entries.filter((entry) => entry.customType === COST_RECORD_TYPE);
+  assert.equal(records.length, 1, "the charge is recorded despite the playback failure");
+  assert.equal(records[0]?.data.characters, "Hello there.".length);
+});
+
+test("a call that never reached synthesis records nothing", async () => {
+  process.env.OPENAI_TTS_API_KEY = "test-key";
+  globalThis.fetch = async () => new Response("nope", { status: 500, statusText: "Server Error" });
+
+  const { tools, entries } = registerWith();
+  await assert.rejects(() => tools[0]!.execute("tool_1", { text: "Hello." }), /OpenAI speech request failed/);
+  assert.equal(entries.filter((entry) => entry.customType === COST_RECORD_TYPE).length, 0);
+
+  process.env.OPENAI_TTS_MAX_CHARS = "2";
+  const overLimit = registerWith();
+  await assert.rejects(() => overLimit.tools[0]!.execute("tool_1", { text: "too long" }), /OPENAI_TTS_MAX_CHARS/);
+  assert.equal(overLimit.entries.length, 0, "rejected before any charge existed");
+  delete process.env.OPENAI_TTS_MAX_CHARS;
+});
+
+test("a successful call records exactly one charge", async () => {
+  process.env.OPENAI_TTS_API_KEY = "test-key";
+  globalThis.fetch = async () => new Response(Buffer.from("fake audio"), { status: 200 });
+  const { tools, entries } = registerWith();
+  await tools[0]!.execute("tool_1", { text: "Hello." });
+  assert.equal(entries.filter((entry) => entry.customType === COST_RECORD_TYPE).length, 1);
 });

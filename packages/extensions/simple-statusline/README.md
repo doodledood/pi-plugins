@@ -63,7 +63,11 @@ things cause it:
   those turns; until then they are counted at standard rates and marked.
 - **Unpriceable models.** A model with no resolvable per-token price — typically
   a `model-aliases` entry whose target Pi does not price — reports real tokens
-  at $0.
+  at $0. A paid call that says outright it could not be priced counts the same
+  way, such as speech with no configured per-character rate.
+- **Unreadable session files.** A child session the scan could not read is spend
+  missing from the total entirely, so the figure is marked rather than presented
+  as exact.
 
 ### `/cost`
 

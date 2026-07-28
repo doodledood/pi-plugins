@@ -288,7 +288,7 @@ test("an in-memory parent with no session file still reports its own cost", () =
   assert.equal(tree.totalCost, 1.25);
 });
 
-test("an unreadable child is skipped and the rest of the tree still totals", () => {
+test("an unreadable child is skipped, the rest still totals, and the gap is disclosed", () => {
   const root = tempRoot();
   const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
   const dir = deriveChildSessionDir(parent, "tasks");
@@ -296,8 +296,14 @@ test("an unreadable child is skipped and the rest of the tree still totals", () 
   const locked = writeSession(join(dir, "locked.jsonl"), { id: "locked", entries: [assistant(9)] });
   chmodSync(locked, 0o000);
   try {
+    // Running as root defeats the permission bit, so the scenario cannot be staged.
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const tree = new SessionTreeScanner().scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
     assert.equal(tree.totalCost, 1, "readable spend still totals");
+    // The missing $9 must not hide behind a confident-looking number.
+    assert.ok(tree.approximate, "an unreadable file makes the total a floor, not an exact figure");
+    assert.equal(tree.unreadableSessions, 1);
+    assert.match(tree.approximateReasons.join(" "), /could not be read/);
   } finally {
     chmodSync(locked, 0o600);
   }
@@ -563,4 +569,32 @@ test("a tool result restating a child session is suppressed at any depth, not ju
   const tree = scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
   assert.equal(tree.totalCost, 4, "child's own 1 + the grandchild's 3 counted once, from its own session");
   assert.equal(analyzeSessionTree(parent).totalCost, 4, "post-hoc analysis agrees");
+});
+
+test("a paid call that could not be priced marks the total approximate, even at zero tokens", () => {
+  // Speech is billed per character with no rate configured: the record is honest that
+  // it carries no price, so the total must read as a floor rather than as exact.
+  const acc = createAccumulator();
+  accumulateEntry(acc, {
+    type: "custom",
+    id: "tts1",
+    customType: COST_RECORD_TYPE,
+    data: { recordId: "tts-1", key: "openai/gpt-4o-mini-tts (speech)", characters: 500_000, priced: false, usage: usage(0, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) },
+  });
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.ok(tree.approximate, "an unpriced paid call is not silently free");
+  assert.deepEqual(tree.unpricedModels, ["openai/gpt-4o-mini-tts (speech)"]);
+});
+
+test("a priced call reports its cost with no approximation marker", () => {
+  const acc = createAccumulator();
+  accumulateEntry(acc, {
+    type: "custom",
+    id: "tts2",
+    customType: COST_RECORD_TYPE,
+    data: { recordId: "tts-2", key: "openai/gpt-4o-mini-tts (speech)", characters: 500_000, priced: true, usage: usage(6, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) },
+  });
+  const tree = combine(summarize(acc, { kind: "own" }), []);
+  assert.equal(tree.totalCost, 6);
+  assert.equal(tree.approximate, false);
 });
