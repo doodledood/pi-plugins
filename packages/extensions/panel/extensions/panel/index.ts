@@ -15,7 +15,11 @@ import { spawnPanelistSession } from "./host.ts";
 import { panelistSystemPrompt } from "./prompts.ts";
 import { buildInjectionPlan, ANSWER_MESSAGE_TYPE, META_ENTRY_TYPE } from "./results.ts";
 import { runPanel } from "./runner.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import type { PanelistResult, PanelistSpec, PanelistState, SpawnPanelist } from "./types.ts";
+
+/** Sidecar folder name for panelist sessions under the parent session. */
+export const PANEL_SESSION_KIND = "panel";
 import {
   estimatePanelCostUsd,
   stripThinkingSuffix,
@@ -127,7 +131,11 @@ export async function runPanelCommand(
     forkMessages,
     systemPrompt: panelistSystemPrompt(),
     cwd,
-    sessionDir: deps.sessionDir,
+    // Panelist sessions live under the parent session rather than beside it: their
+    // spend is then discoverable from the parent, and they stop appearing in the
+    // user's /resume list as loose siblings. See sidecar.ts.
+    sessionDir: deps.sessionDir ?? deriveChildSessionDir(ctx.sessionManager.getSessionFile?.(), PANEL_SESSION_KIND),
+    parentSession: ctx.sessionManager.getSessionId?.(),
     timeoutMs: loaded.config.timeoutMs,
     spawn: deps.spawn,
     signal: controller.signal,

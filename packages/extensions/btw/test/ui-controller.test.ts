@@ -639,8 +639,8 @@ test("controller closes its exact real-TUI overlay below a later overlay and set
       getToolDefinition: () => undefined,
       sessionManager: { getCwd: () => "/tmp/btw-controller" },
     } as unknown as AgentSession,
-    tempDir: "/tmp/fake",
-    tempSessionFile: "/tmp/fake/session.jsonl",
+    childSessionDir: "/tmp/fake",
+    childSessionFile: "/tmp/fake/session.jsonl",
     async prompt() {},
     async announceParentUpdate() { return false; },
     async abort() {},
@@ -686,8 +686,8 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
     await runtimeGate;
     return {
       session: fakeSession,
-      tempDir: "/tmp/fake",
-      tempSessionFile: "/tmp/fake/session.jsonl",
+      childSessionDir: "/tmp/fake",
+      childSessionFile: "/tmp/fake/session.jsonl",
       async prompt(text) { prompts.push(text); },
       async announceParentUpdate() {
         parentUpdateAnnouncements += 1;
@@ -806,8 +806,8 @@ test("controller removes mouse input and discards generation prompts when closin
   } as unknown as AgentSession;
   const runtime: ChildRuntimeHandle = {
     session: fakeSession,
-    tempDir: "/tmp/fake",
-    tempSessionFile: "/tmp/fake/session.jsonl",
+    childSessionDir: "/tmp/fake",
+    childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text) { prompts.push(text); },
     async announceParentUpdate() { return false; },
     async abort() {},
@@ -849,8 +849,8 @@ test("repeated pre-overlay snapshot failures retain no prompt for a later succes
       getToolDefinition: () => undefined,
       sessionManager: { getCwd: () => "/tmp/btw-controller" },
     } as unknown as AgentSession,
-    tempDir: "/tmp/fake",
-    tempSessionFile: "/tmp/fake/session.jsonl",
+    childSessionDir: "/tmp/fake",
+    childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text) { prompts.push(text); },
     async announceParentUpdate() { return false; },
     async abort() {},
@@ -890,8 +890,8 @@ test("controller restores mouse state and never replays prompts from a failed op
       getToolDefinition: () => undefined,
       sessionManager: { getCwd: () => "/tmp/btw-controller" },
     } as unknown as AgentSession,
-    tempDir: "/tmp/fake",
-    tempSessionFile: "/tmp/fake/session.jsonl",
+    childSessionDir: "/tmp/fake",
+    childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text: string) { prompts.push(text); },
     async announceParentUpdate() { return false; },
     async abort() {},

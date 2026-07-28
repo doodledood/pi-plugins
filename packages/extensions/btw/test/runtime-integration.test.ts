@@ -527,7 +527,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       },
     });
 
-    assert.equal(await pathExists(child.tempDir), true);
+    assert.equal(await pathExists(child.childSessionDir), true);
     assert.equal(parent.getActiveToolNames().includes(CHECK_PARENT_UPDATES_TOOL), false);
     assert.equal(child.session.getActiveToolNames().includes(CHECK_PARENT_UPDATES_TOOL), true);
 
@@ -671,10 +671,10 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
 
     unsubscribeParent();
     unsubscribeChild();
-    const childTempDir = child.tempDir;
+    const childSessionDirPath = child.childSessionDir;
     await child.close();
     child = undefined;
-    assert.equal(await pathExists(childTempDir), false);
+    assert.equal(await pathExists(childSessionDirPath), false);
     assert.equal(await readFile(scratchFile, "utf8"), SCRATCH_CONTENT);
   } finally {
     barrier.release();

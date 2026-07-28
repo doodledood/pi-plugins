@@ -98,6 +98,11 @@ export interface SpawnPanelistOptions {
   cwd: string;
   /** Session storage directory; undefined = pi's default location. */
   sessionDir?: string;
+  /**
+   * Parent session id written into the panelist session header, so the panelist's
+   * spend is discoverable from the parent session as well as by location.
+   */
+  parentSession?: string;
 }
 
 export type SpawnPanelist = (options: SpawnPanelistOptions) => Promise<PanelistSession>;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { selectForkBranch, type ForkSnapshot } from "./fork.ts";
+import { deriveChildSessionDir } from "./sidecar.ts";
 import {
   ChildPromptCoordinator,
   type ParentUpdateAnnouncement,
@@ -43,8 +44,12 @@ export interface ChildRuntimeCallbacks {
 
 export interface ChildRuntimeHandle {
   readonly session: AgentSession;
-  readonly tempDir: string;
-  readonly tempSessionFile: string;
+  /** Directory holding the aside's session file (a sidecar dir, or a private temp dir). */
+  readonly childSessionDir: string;
+  /** The aside's own session file. Kept after close when it lives in a sidecar dir. */
+  readonly childSessionFile: string;
+  /** Set only when the directory is this aside's private temp dir, removed on close. */
+  readonly disposableDir?: string;
   prompt(text: string): Promise<void>;
   announceParentUpdate(): Promise<boolean>;
   abort(): Promise<void>;
@@ -94,16 +99,44 @@ export function inheritedRuntimeSpec(snapshot: ForkSnapshot): {
   };
 }
 
-export function serializeFork(snapshot: ForkSnapshot): string {
+/** Sidecar folder name for BTW aside sessions under the parent session. */
+export const BTW_SESSION_KIND = "btw";
+
+export function serializeFork(snapshot: ForkSnapshot, identity?: { id: string; timestamp: string }): string {
   const header = {
     type: "session" as const,
     version: CURRENT_SESSION_VERSION,
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
+    id: identity?.id ?? randomUUID(),
+    timestamp: identity?.timestamp ?? new Date().toISOString(),
     cwd: snapshot.cwd,
     ...(snapshot.parentSessionFile ? { parentSession: snapshot.parentSessionFile } : {}),
   };
   return `${[header, ...snapshot.entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+}
+
+/**
+ * Where the aside's session file lives, and whether its directory is ours to delete.
+ *
+ * An aside is a real model conversation that costs real money, so it is kept rather
+ * than discarded: persisted under the parent session (see sidecar.ts), where its
+ * spend stays discoverable after the pane closes. Only when the parent has no
+ * session file does the aside fall back to a private temp directory, which is then
+ * removed on close as before — a shared sidecar directory must never be removed,
+ * since it holds every other aside of this session.
+ */
+export async function resolveChildSessionLocation(
+  snapshot: ForkSnapshot,
+  tempRoot: string | undefined,
+): Promise<{ sessionFile: string; identity: { id: string; timestamp: string }; disposableDir?: string }> {
+  const identity = { id: randomUUID(), timestamp: new Date().toISOString() };
+  const fileName = `${identity.timestamp.replace(/[:.]/g, "-")}_${identity.id}.jsonl`;
+  const sidecarDir = deriveChildSessionDir(snapshot.parentSessionFile, BTW_SESSION_KIND);
+  if (sidecarDir) {
+    await mkdir(sidecarDir, { recursive: true });
+    return { sessionFile: join(sidecarDir, fileName), identity };
+  }
+  const tempDir = await mkdtemp(join(tempRoot ?? tmpdir(), "pi-btw-"));
+  return { sessionFile: join(tempDir, "session.jsonl"), identity, disposableDir: tempDir };
 }
 
 function createParentUpdateTool(tracker: ParentUpdateTracker, parent: ReadonlyParentSessionManager) {
@@ -131,14 +164,16 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
   const { snapshot, callbacks } = input;
   const extensionRoot = input.extensionRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const agentDir = input.agentDir ?? getAgentDir();
-  const tempDir = await mkdtemp(join(input.tempRoot ?? tmpdir(), "pi-btw-"));
-  const tempSessionFile = join(tempDir, "session.jsonl");
+  const location = await resolveChildSessionLocation(snapshot, input.tempRoot);
+  const childSessionFile = location.sessionFile;
+  const childSessionDir = dirname(childSessionFile);
+  const disposableDir = location.disposableDir;
   let session: AgentSession | undefined;
   let bridge: ChildUIBridge | undefined;
   let unsubscribe: (() => void) | undefined;
 
   try {
-    await writeFile(tempSessionFile, serializeFork(snapshot), { encoding: "utf8", mode: 0o600 });
+    await writeFile(childSessionFile, serializeFork(snapshot, location.identity), { encoding: "utf8", mode: 0o600 });
 
     const settingsManager = SettingsManager.create(snapshot.cwd, agentDir);
     settingsManager.setProjectTrusted(snapshot.projectTrusted);
@@ -180,7 +215,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
     const updateTool = createParentUpdateTool(tracker, input.parentSessionManager);
     const inherited = inheritedRuntimeSpec(snapshot);
     const activeToolNames = inherited.activeToolNames;
-    const sessionManager = SessionManager.open(tempSessionFile, tempDir, inherited.cwd);
+    const sessionManager = SessionManager.open(childSessionFile, childSessionDir, inherited.cwd);
     const created = await createAgentSession({
       cwd: inherited.cwd,
       agentDir,
@@ -289,8 +324,9 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
 
     const runtime: ChildRuntimeHandle = {
       session,
-      tempDir,
-      tempSessionFile,
+      childSessionDir,
+      childSessionFile,
+      ...(disposableDir ? { disposableDir } : {}),
       prompt(text) {
         return coordinator!.prompt(text);
       },
@@ -349,7 +385,9 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
               try {
                 session!.dispose();
               } finally {
-                await rm(tempDir, { recursive: true, force: true });
+                // A persisted aside is kept: its spend and transcript stay countable
+                // after the pane closes. Only a private temp directory is removed.
+                if (disposableDir) await rm(disposableDir, { recursive: true, force: true });
               }
             }
           }
@@ -384,7 +422,13 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
         session.dispose();
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      if (disposableDir) {
+        await rm(disposableDir, { recursive: true, force: true });
+      } else {
+        // Construction failed before the aside was usable; remove just its own file,
+        // never the shared sidecar directory.
+        await rm(childSessionFile, { force: true });
+      }
     }
     throw error;
   }

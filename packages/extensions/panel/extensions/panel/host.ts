@@ -59,9 +59,10 @@ export const spawnPanelistSession: SpawnPanelist = async (
   });
   await loader.reload();
 
-  const sessionManager = options.sessionDir
-    ? SessionManager.create(options.cwd, options.sessionDir)
-    : SessionManager.create(options.cwd);
+  // The parent link makes a panelist's spend discoverable from the parent session
+  // by header as well as by location, which is what cost surfaces scan for.
+  const newSessionOptions = options.parentSession ? { parentSession: options.parentSession } : undefined;
+  const sessionManager = SessionManager.create(options.cwd, options.sessionDir, newSessionOptions);
 
   // Persist the seeded fork (a single transcript user message) into the
   // panelist's own session file so it is self-contained: browsable and

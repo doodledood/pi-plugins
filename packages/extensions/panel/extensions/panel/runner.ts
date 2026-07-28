@@ -18,6 +18,8 @@ export interface RunPanelOptions {
   systemPrompt: string;
   cwd: string;
   sessionDir?: string;
+  /** Parent session id recorded in each panelist's header, linking spend to the parent. */
+  parentSession?: string;
   timeoutMs: number;
   spawn: SpawnPanelist;
   signal?: AbortSignal;
@@ -87,6 +89,7 @@ async function runPanelist(
       forkMessages: options.forkMessages,
       cwd: options.cwd,
       sessionDir: options.sessionDir,
+      ...(options.parentSession ? { parentSession: options.parentSession } : {}),
     });
   } catch (error) {
     state.status = "error";

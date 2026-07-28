@@ -30,7 +30,7 @@ function fakePi() {
   return { pi, sent, entries };
 }
 
-function fakeCtx(options: { signal?: AbortSignal; entries?: unknown[]; hasUI?: boolean; mode?: string }) {
+function fakeCtx(options: { signal?: AbortSignal; entries?: unknown[]; hasUI?: boolean; mode?: string; sessionFile?: string; sessionId?: string }) {
   const notifications: string[] = [];
   const editorTexts: string[] = [];
   let customCalls = 0;
@@ -50,6 +50,8 @@ function fakeCtx(options: { signal?: AbortSignal; entries?: unknown[]; hasUI?: b
     },
     sessionManager: {
       buildContextEntries: () => options.entries ?? [],
+      getSessionFile: () => options.sessionFile,
+      getSessionId: () => options.sessionId,
     },
   } as unknown as ExtensionCommandContext;
   return { ctx, notifications, editorTexts, customCalls: () => customCalls };
@@ -346,4 +348,35 @@ test("empty question notifies usage and runs nothing", async () => {
   assert.match(notifications[0] ?? "", /Usage: \/panel/);
   assert.equal(spawned.length, 0);
   assert.equal(sent.length, 0);
+});
+
+test("panelist sessions are written under the parent session and carry the parent link", async () => {
+  const { pi } = fakePi();
+  const { ctx } = fakeCtx({
+    sessionFile: "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0.jsonl",
+    sessionId: "019fa7c0-c078-76b5-8654-dedd198a6131",
+  });
+  const scripted = scriptedSpawn({ "anthropic/claude-fable-5": "answer one", "openai/gpt-5.6-sol": "answer two" });
+  await runPanelCommand(pi, ctx, "should we ship it?", { spawn: scripted.spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+
+  assert.ok(scripted.spawned.length > 0, "panelists spawned");
+  for (const options of scripted.spawned) {
+    assert.equal(
+      options.sessionDir,
+      "/Users/x/.pi/agent/sessions/--proj--/2026-07-28T08-04-15Z_019fa7c0/panel",
+      "panelist sessions are nested under the parent session, not beside it",
+    );
+    assert.equal(options.parentSession, "019fa7c0-c078-76b5-8654-dedd198a6131");
+  }
+});
+
+test("panelists still run when the parent session is not persisted", async () => {
+  const { pi } = fakePi();
+  const { ctx, notifications } = fakeCtx({});
+  const scripted = scriptedSpawn({ "anthropic/claude-fable-5": "a", "openai/gpt-5.6-sol": "b" });
+  await runPanelCommand(pi, ctx, "question?", { spawn: scripted.spawn, configPath: missingConfig }, { setActiveRun: () => {} });
+
+  assert.ok(scripted.spawned.length > 0, "panelists spawned without a parent session file");
+  assert.equal(scripted.spawned[0]?.sessionDir, undefined, "falls back to pi's default location");
+  assert.equal(notifications.some((n) => /error/i.test(n)), false);
 });

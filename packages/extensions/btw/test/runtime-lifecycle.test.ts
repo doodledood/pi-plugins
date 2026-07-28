@@ -259,8 +259,8 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
       },
     });
 
-    assert.equal(await pathExists(child.tempSessionFile), true);
-    assert.equal(child.session.sessionFile, child.tempSessionFile);
+    assert.equal(await pathExists(child.childSessionFile), true);
+    assert.equal(child.session.sessionFile, child.childSessionFile);
     assert.deepEqual(child.session.getActiveToolNames(), ["read", "write", CHECK_PARENT_UPDATES_TOOL]);
     assert.deepEqual(parent.getEntries(), parentEntriesBefore);
 
@@ -340,7 +340,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
     const secondClose = child.close();
     assert.equal(firstClose, secondClose);
     await firstClose;
-    assert.equal(await pathExists(child.tempDir), false);
+    assert.equal(await pathExists(child.childSessionDir), false);
     assert.deepEqual(parent.getEntries(), parentAfterSecondSettlement, "child close does not mutate parent history");
   } finally {
     await rm(agentDir, { recursive: true, force: true });
@@ -656,8 +656,94 @@ test("deterministic child turn streams without touching parent history", async (
         ? entry.message.content === "stale close queued prompt"
         : entry.message.content.some((block) => block.type === "text" && block.text === "stale close queued prompt"))),
     false, "queued instruction does not execute while closing");
-    assert.equal(await pathExists(child.tempDir), false);
+    assert.equal(await pathExists(child.childSessionDir), false);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("a persisted aside is kept under the parent session so its spend stays countable after close", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "btw-persist-agent-"));
+  const sessionRoot = await mkdtemp(join(tmpdir(), "btw-persist-sessions-"));
+  const parentSessionFile = join(sessionRoot, "2026-07-28T08-04-15-096Z_parent-1.jsonl");
+  await writeFile(
+    parentSessionFile,
+    `${JSON.stringify({ type: "session", version: 3, id: "parent-1", timestamp: "2026-07-28T08:04:15.096Z", cwd: "/tmp/btw-runtime-test" })}\n`,
+    "utf8",
+  );
+
+  const parent = SessionManager.inMemory("/tmp/btw-runtime-test");
+  parent.appendMessage({ role: "user", content: "parent only", timestamp: 1 });
+  const parentEntryId = parent.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "parent answer" }],
+    api: "btw-test-api",
+    provider: "test",
+    model: "deterministic-no-call",
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: 2,
+  });
+  const parentEntriesBefore = parent.getEntries();
+  const entries = parent.getBranch() as SessionEntry[];
+  const snapshot: ForkSnapshot = {
+    cwd: "/tmp/btw-runtime-test",
+    entries,
+    entryIds: entries.map((entry) => entry.id),
+    forkLeafId: parentEntryId,
+    model,
+    thinkingLevel: "off",
+    activeToolNames: ["read"],
+    projectTrusted: true,
+    systemPromptOptions: { cwd: "/tmp/btw-runtime-test" },
+    parentSessionFile,
+  };
+
+  try {
+    const child = await createChildRuntime({
+      snapshot,
+      parentSessionManager: parent,
+      parentIsIdle: () => true,
+      parentUI: { theme: {} } as ExtensionUIContext,
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
+      agentDir,
+      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+    });
+
+    // Lives under the parent session, where a cost scan finds it — not in a temp dir.
+    const expectedDir = join(sessionRoot, "2026-07-28T08-04-15-096Z_parent-1", "btw");
+    assert.equal(child.childSessionDir, expectedDir);
+    assert.equal(child.disposableDir, undefined, "a shared sidecar directory is never this aside's to delete");
+    assert.equal(await pathExists(child.childSessionFile), true);
+
+    // The header carries the parent link, the second discovery signal.
+    const header = JSON.parse((await readFile(child.childSessionFile, "utf8")).split("\n")[0] ?? "{}");
+    assert.equal(header.parentSession, parentSessionFile);
+
+    // A second aside in the same session coexists rather than replacing the first.
+    const sibling = await createChildRuntime({
+      snapshot,
+      parentSessionManager: parent,
+      parentIsIdle: () => true,
+      parentUI: { theme: {} } as ExtensionUIContext,
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
+      agentDir,
+      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+    });
+    assert.notEqual(sibling.childSessionFile, child.childSessionFile);
+
+    await child.close();
+    await sibling.close();
+
+    // Closing the pane keeps both transcripts: this is the evidence of what was spent.
+    assert.equal(await pathExists(child.childSessionFile), true, "aside survives close");
+    assert.equal(await pathExists(sibling.childSessionFile), true, "sibling aside survives close");
+    assert.equal((await readdir(expectedDir)).length, 2);
+    assert.deepEqual(parent.getEntries(), parentEntriesBefore, "parent history untouched by the aside");
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+    await rm(sessionRoot, { recursive: true, force: true });
   }
 });
