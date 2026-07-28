@@ -72,14 +72,16 @@ kinds of thing cause it — a price it cannot pin down, and spend it cannot read
   a `model-aliases` entry whose target Pi does not price — reports real tokens
   at $0. A paid call that says outright it could not be priced counts the same
   way, such as speech with no configured per-character rate.
-- **Parts of the tree it could not read.** A child session file it could not
-  open; a directory that exists but cannot be listed, which hides every session
-  beneath it; a session file whose header cannot be read or cannot be parsed — a
-  torn or truncated first line leaves it unknown whether the file belongs to this
-  tree; or a walk that hit its depth bound. Each is
-  spend missing from the total, so the figure is marked rather than presented as
-  exact. A directory that simply is not there is not a gap — most sessions spawn
-  nothing, and nothing is missing from a total with no children in it.
+- **Parts of the tree it could not read.** A child session file it could not open
+  or stat; a directory that exists but cannot be listed, which hides every session
+  beneath it; or a walk that hit its depth bound. Each is spend missing from the
+  total, so the figure is marked rather than presented as exact. A directory that
+  simply is not there is not a gap — most sessions spawn nothing, and nothing is
+  missing from a total with no children in it. Neither is a file whose first line
+  cannot be read or parsed: a session file's own directory holds every session for
+  the project, so a file that cannot say whether it belongs to this tree is read as
+  not belonging rather than marked. A fork of this session can go uncounted that
+  way without the figure saying so.
 - **Entries it could not parse.** A session file is written one entry per append,
   so a torn write merges with the following entry into a single unreadable line
   and takes that entry's cost with it. Those bytes are never read again, so the

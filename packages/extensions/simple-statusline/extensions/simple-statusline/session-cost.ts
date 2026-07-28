@@ -10,18 +10,26 @@
 // getUsageCostBreakdown()): assistant `usage`, `toolResult.usage`, and
 // `branch_summary`/`compaction` `usage`, over ALL entries rather than one branch.
 //
-// Every read that fails is disclosed rather than absorbed: a directory that cannot be
-// listed, a file that cannot be opened or stat-ed, an entry that cannot be parsed. Each
+// Four reads that fail are disclosed rather than absorbed: a sidecar directory that cannot
+// be listed, the session directory that cannot be listed (which is where forks live), a
+// session file that cannot be stat-ed or opened, and an entry that cannot be parsed. Each
 // leaves the total a floor with a stated reason, because a figure that silently omits
 // spend while reading as exact is the one failure this module exists to prevent. Absence
-// is not failure — most sessions spawn nothing, and a sidecar directory that was never
-// created hides nothing.
+// is not failure at any of them — most sessions spawn nothing, and a sidecar directory that
+// was never created hides nothing.
 //
-// Two cases sit outside that claim on purpose. A file whose last line is incomplete is
-// being appended to as far as any single read can tell, so the partial line is held for
-// the rest to arrive rather than counted as a gap; if the process writing it died there,
-// that entry's spend is missing and the total will not say so, and the alternative marks
-// every session that is mid-turn. And a child that vanishes between this scan's discovery
+// That is the whole of the claim, and three cases sit outside it on purpose. A candidate
+// whose header cannot be read or parsed is treated as not belonging to this tree rather
+// than as a gap: siblings of the session file are admitted only by what their header says,
+// and marking every unreadable `.jsonl` in a shared directory would mark sessions that were
+// never ours. A fork of this session does go uncounted that way, undisclosed.
+//
+// A file whose last line is incomplete is being appended to as far as any single read can
+// tell, so the partial line is held for the rest to arrive rather than counted as a gap; if
+// the process writing it died there, that entry's spend is missing and the total will not
+// say so, and the alternative marks every session that is mid-turn.
+//
+// And a child that vanishes between this scan's discovery
 // of it and its own read reports nothing, because absence is read the same way wherever it
 // appears: its spend is missing, and the parent's tool result restating that spend was
 // already dropped as a duplicate of the file that then disappeared, so both copies go for
@@ -586,9 +594,9 @@ export interface ScanStats {
   filesDiscovered: number;
   /**
    * Parts of the tree this scan could not read: a file it could not open or stat, a
-   * directory it could not list, a sibling it could not classify, or a walk that hit its
-   * depth bound. In every case spend may be missing, which is what makes a total a floor.
-   * A path that is not there is not counted here — nothing is missing from nothing.
+   * directory it could not list, or a walk that hit its depth bound. In every case spend may
+   * be missing, which is what makes a total a floor. A path that is not there is not counted
+   * here — nothing is missing from nothing.
    */
   filesUnreadable: number;
 }
