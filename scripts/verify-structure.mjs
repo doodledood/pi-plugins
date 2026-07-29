@@ -115,11 +115,11 @@ if (setupModels && Object.keys(setupModels.providers ?? {}).length !== 0) {
 const setupGoalController = readJson(join(root, "setup", "configs", "goal-controller.config.json"));
 if (setupGoalController) {
   const checker = setupGoalController.checker;
-  if (checker?.model !== "openai/gpt-5.6-sol") {
-    errors.push("setup/configs/goal-controller.config.json: checker model must be openai/gpt-5.6-sol");
+  if (checker?.model !== "openai/gpt-5.6-luna") {
+    errors.push("setup/configs/goal-controller.config.json: checker model must be openai/gpt-5.6-luna");
   }
-  if (checker?.thinking !== "xhigh") {
-    errors.push("setup/configs/goal-controller.config.json: checker thinking must be xhigh");
+  if (checker?.thinking !== "high") {
+    errors.push("setup/configs/goal-controller.config.json: checker thinking must be high");
   }
   if (JSON.stringify(Object.keys(setupGoalController).sort()) !== JSON.stringify(["checker"])) {
     errors.push("setup/configs/goal-controller.config.json: setup override must contain only checker settings");
