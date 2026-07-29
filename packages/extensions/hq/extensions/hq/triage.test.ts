@@ -21,6 +21,7 @@ import {
   applyTriageOutcome,
   MAX_RESPAWNS,
   sweepStops,
+  takeoverTarget,
   triageContext,
   type TriageOutcome,
 } from "./triage.ts";
@@ -570,4 +571,15 @@ test("no triage outcome can act on the world itself: every effect is a pi sessio
     await dropRoot(workspace);
     await dropRoot(h.root);
   }
+});
+
+test("a handed-over session is taken over by a fork, never by resuming its transcript", () => {
+  // The user's tab may still be open on that session file. Two pi processes
+  // appending to one transcript would corrupt both readings of it, so HQ forks.
+  assert.deepEqual(takeoverTarget({ handedOff: true, sessionFile: "/s.jsonl" }), {
+    forkSessionFile: "/s.jsonl",
+  });
+  assert.deepEqual(takeoverTarget({ handedOff: false, sessionFile: "/s.jsonl" }), {
+    resumeSessionFile: "/s.jsonl",
+  });
 });

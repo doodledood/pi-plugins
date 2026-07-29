@@ -23,7 +23,7 @@ import { startDrill, submitDrillResult, readDrillLog } from "./drills.ts";
 import { graduateDomain, revokeDomain } from "./graduation.ts";
 import { hqPaths } from "./paths.ts";
 import { applyRuling } from "./rulings.ts";
-import { createSpawner, EXTENSION_ENV, type SpawnRequest, type Spawner } from "./spawn.ts";
+import { createSpawner, EXTENSION_ENV, ISOLATE_ENV, type SpawnRequest, type Spawner } from "./spawn.ts";
 import { HqStore } from "./store.ts";
 import { ensureStopRecord, readStopRecord, type StopRecord } from "./stops.ts";
 import { readTranscriptTail, renderTranscript } from "./transcript.ts";
@@ -132,6 +132,9 @@ async function makeWorld(): Promise<World> {
       HQ_HOME: root,
       [EXTENSION_ENV]: EXTENSION_PATH,
       HQ_NO_TITLER: "1",
+      // A run must exercise the working copy alone. Without this, a child also
+      // discovers an installed HQ and dies on the tool-name conflict.
+      [ISOLATE_ENV]: "1",
       // Children write their sessions under the temporary root too, so a run
       // leaves nothing in the user's real session directory.
       PI_CODING_AGENT_SESSION_DIR: join(root, "sessions"),

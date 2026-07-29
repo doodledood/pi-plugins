@@ -48,6 +48,14 @@ export interface StopRecord {
   status: StopStatus;
   claimedByPid: number | null;
   claimedAt: string | null;
+  /**
+   * Set when the user handed a live session over with /hq_send_off. HQ takes such a
+   * session over by forking it, never by resuming it: the tab may still be open, and
+   * two pi processes appending to one session file would corrupt both readings of it.
+   */
+  handedOff?: boolean;
+  /** What the user said to do next when handing over, if they said anything. */
+  mandate?: string | null;
   /** Set when triage produced an outcome. */
   outcome: StopOutcome | null;
   packetId: string | null;
@@ -81,6 +89,8 @@ export function parseStopRecord(value: unknown): StopRecord | undefined {
     status,
     claimedByPid: typeof raw.claimedByPid === "number" ? raw.claimedByPid : null,
     claimedAt: typeof raw.claimedAt === "string" ? raw.claimedAt : null,
+    handedOff: raw.handedOff === true,
+    mandate: typeof raw.mandate === "string" && raw.mandate.trim() ? raw.mandate : null,
     outcome: oneOf(raw.outcome, STOP_OUTCOMES) ?? null,
     packetId: typeof raw.packetId === "string" ? raw.packetId : null,
   };

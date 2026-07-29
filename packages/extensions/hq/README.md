@@ -88,8 +88,17 @@ it gone.
 |---|---|
 | `/hq` | Take the seat: sweep unfinished stops, then work the queue. `/hq off` hands it back. |
 | `/fleet` | Show or hide the fleet card. |
+| `/hq_send_off [what to do next]` | Hand the session you are in to HQ. Run it in any session, in your own words — talk the work through, then send it off and pick it up at the desk. |
 | `/hq_graduate <domain>` | Grant HQ authority to answer that domain from doctrine. Confirms first. |
 | `/hq_revoke <domain>` | Take the domain back. |
+
+`/hq_send_off` is the other way in. Everything HQ manages, it started — a session
+carries `HQ_MANAGED=1` in its environment or it is yours, and HQ never triages or
+writes to one of yours. Sending a session off flips that marker in the live session,
+so its own reporter records the stop and HQ triages it from there. HQ then works on a
+**fork** of the session rather than resuming it: your tab may still be open, and two
+pi processes appending to one transcript would corrupt both readings of it. Leave the
+tab or close it — either way the work carries on and reaches you at the desk.
 
 From the seat, ask for work to be delegated (`hq_delegate`), and rule on what comes
 back. A ruling can be: accept the recommendation, pick an alternative, say it in
@@ -207,6 +216,14 @@ section, so there is exactly one place to look.
   because a distilled answer you cannot check is one you have to go and verify.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
+
+## Developing this while it is installed
+
+Two copies of HQ visible to one session collide: pi refuses the second registration
+of `hq_drill` and the session dies before it runs anything. A child that is handed a
+working copy with `-e` while also discovering an installed HQ hits exactly that. Set
+`HQ_ISOLATE_CHILD_EXTENSIONS=1` and children load only the copy HQ hands them; the
+end-to-end harness sets it for every run.
 
 ## Reading the change
 

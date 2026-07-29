@@ -219,7 +219,7 @@ export async function applyTriageOutcome(
           "Continue on that basis. Stop again if it does not settle what you needed.",
         ].join("\n"),
         cwd: stop.project,
-        resumeSessionFile: stop.sessionFile,
+        ...takeoverTarget(stop),
         originSessionId: stop.sessionId,
       });
 
@@ -292,7 +292,7 @@ export async function applyTriageOutcome(
           "If you cannot make progress without a decision, stop and say exactly what you need.",
         ].join("\n"),
         cwd: stop.project,
-        resumeSessionFile: stop.sessionFile,
+        ...takeoverTarget(stop),
         originSessionId: stop.sessionId,
       });
       await finishStop(deps.store.root, stopId, "respawn", null);
@@ -386,6 +386,18 @@ function continueAsPacketDraft(
     },
     trivial: false,
   };
+}
+
+/**
+ * How HQ picks a handed-over or stopped session back up. A session the user handed
+ * over may still be open in their terminal, so HQ works on a fork of it; resuming
+ * the same file would put two pi processes on one transcript.
+ */
+export function takeoverTarget(
+  stop: Pick<StopRecord, "handedOff" | "sessionFile">,
+): { forkSessionFile: string } | { resumeSessionFile: string } {
+  const file = stop.sessionFile ?? "";
+  return stop.handedOff ? { forkSessionFile: file } : { resumeSessionFile: file };
 }
 
 function closeAsPacketDraft(outcome: Extract<TriageOutcome, { kind: "close" }>): PacketDraft {

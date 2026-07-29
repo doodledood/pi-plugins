@@ -85,7 +85,7 @@ test("the extension registers its commands and its tools", async () => {
     const { host } = await activate(root);
     assert.deepEqual(
       [...host.commands.keys()].sort(),
-      ["fleet", "hq", "hq_graduate", "hq_revoke"],
+      ["fleet", "hq", "hq_graduate", "hq_revoke", "hq_send_off"],
     );
     for (const name of [
       "hq_queue_plan",

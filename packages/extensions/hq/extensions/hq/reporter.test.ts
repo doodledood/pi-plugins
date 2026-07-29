@@ -64,6 +64,44 @@ test("an attended session is published but never triaged and never actuated", as
   }
 });
 
+test("sending a session off hands it to HQ, which takes it over by forking", async () => {
+  const root = await makeRoot("hq-sendoff");
+  try {
+    const store = makeStore(root);
+    const { spawner, calls } = recordingSpawner();
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: fakeCtx(),
+      env: { [TITLER_ENV]: "1" },
+      now: fixedClock(),
+    });
+    await reporter.start();
+    reporter.onAgentEnd([{ role: "assistant", content: "Done with the first pass." }]);
+    await reporter.onAgentSettled();
+    assert.deepEqual(await stopRecords(root), [], "nothing happens while it is the user's own");
+
+    const handed = await reporter.handOff("carry on with the second pass");
+    assert.deepEqual(handed, { ok: true });
+
+    const stops = await stopRecords(root);
+    assert.equal(stops.length, 1, "the handover itself records the stop");
+    assert.equal(stops[0]?.handedOff, true);
+    assert.equal(stops[0]?.mandate, "carry on with the second pass");
+    assert.equal((await store.readSessionState("sess-a"))?.role, "managed");
+    assert.equal(calls.length, 1, "and triage is kicked off for it");
+    assert.equal(calls[0]?.kind, "triage");
+
+    // Handing over twice is the user telling HQ something it already knows.
+    assert.deepEqual(await reporter.handOff(""), {
+      ok: false,
+      reason: "HQ already owns this session",
+    });
+  } finally {
+    await dropRoot(root);
+  }
+});
+
 test("a managed worker's stop is recorded and triaged exactly once per stop", async () => {
   const root = await makeRoot("hq-managed");
   try {

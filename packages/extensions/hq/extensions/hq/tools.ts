@@ -164,6 +164,12 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
           `Stop: ${context.stop.stopId}`,
           `Session: ${context.stop.sessionId} (${context.stop.kind}) in ${context.project}`,
           `Stop state: ${context.stop.stopState}`,
+          ...(context.stop.handedOff
+            ? [
+              "Handed over: the user was working in this session themselves and handed it to HQ.",
+              `What they said to do next: ${context.stop.mandate ?? "(nothing; read the transcript and decide)"}`,
+            ]
+            : []),
           `Known domains: ${context.knownDomains.join(", ") || "(none yet)"}`,
           `Graduated domains: ${context.graduatedDomains.join(", ") || "(none)"}`,
           "",

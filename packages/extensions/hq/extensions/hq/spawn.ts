@@ -19,6 +19,12 @@ import type { SessionKind } from "./types.ts";
 
 /** Marks a session as HQ-managed. Absent means attended: hands off. */
 export const MANAGED_ENV = "HQ_MANAGED";
+/**
+ * Set to "1" to give children only the extension HQ hands them. Two copies of HQ
+ * visible at once — an installed one found by discovery and a working copy passed
+ * with -e — make the child die on a tool-name conflict before it runs anything.
+ */
+export const ISOLATE_ENV = "HQ_ISOLATE_CHILD_EXTENSIONS";
 export const KIND_ENV = "HQ_KIND";
 export const ORIGIN_ENV = "HQ_ORIGIN_SESSION_ID";
 export const PACKET_ENV = "HQ_PACKET_ID";
@@ -80,8 +86,13 @@ export interface SpawnerOptions {
   onError?: (message: string, error: unknown) => void;
 }
 
-export function buildArgv(request: SpawnRequest, extensionPath?: string): string[] {
+export function buildArgv(
+  request: SpawnRequest,
+  extensionPath?: string,
+  isolate = false,
+): string[] {
   const argv: string[] = [];
+  if (isolate) argv.push("-ne");
   if (extensionPath) argv.push("-e", extensionPath);
   if (request.resumeSessionFile) argv.push("--session", request.resumeSessionFile);
   if (request.forkSessionFile) argv.push("--fork", request.forkSessionFile);
@@ -124,7 +135,11 @@ export function createSpawner(options: SpawnerOptions): Spawner {
     await mkdir(logs, { recursive: true });
     const runId = newId(request.kind);
     const logPath = join(logs, `${runId}.log`);
-    const argv = buildArgv(request, baseEnv[EXTENSION_ENV]?.trim() || undefined);
+    const argv = buildArgv(
+      request,
+      baseEnv[EXTENSION_ENV]?.trim() || undefined,
+      baseEnv[ISOLATE_ENV] === "1",
+    );
     const handle = await open(logPath, "a");
 
     try {

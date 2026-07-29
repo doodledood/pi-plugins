@@ -216,6 +216,30 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
       },
     });
 
+    pi.registerCommand("hq_send_off", {
+      description:
+        "Hand this session to HQ: /hq_send_off [what to do next] — HQ picks it up from here",
+      handler: async (args, ctx) => {
+        if (isManagedEnv()) {
+          ctx.ui.notify("HQ already runs this session.", "warning");
+          return;
+        }
+        if (!reporter) {
+          ctx.ui.notify("HQ is not watching this session yet; try again in a moment.", "warning");
+          return;
+        }
+        const result = await reporter.handOff(args);
+        if (!result.ok) {
+          ctx.ui.notify(result.reason, "warning");
+          return;
+        }
+        ctx.ui.notify(
+          "Handed to HQ. It works on a fork of this session, so you can leave this tab open or close it — either way the work carries on and reaches you at the HQ desk.",
+          "info",
+        );
+      },
+    });
+
     pi.registerCommand("hq_graduate", {
       description:
         "Grant HQ authority to answer a domain from doctrine: /hq_graduate <domain> (user only)",

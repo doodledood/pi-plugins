@@ -145,3 +145,15 @@ test("a task that starts like a flag still reaches the worker as its prompt", ()
   const plain = buildArgv({ kind: "worker", prompt: "do the thing", cwd: "/work" });
   assert.deepEqual(plain, ["--print", "do the thing"], "an ordinary task is untouched");
 });
+
+test("a working copy can be the only HQ a child loads", () => {
+  // With an installed HQ also on disk, a child that discovers both dies on a
+  // tool-name conflict before it runs anything.
+  const request = { kind: "worker" as const, prompt: "go", cwd: "/tmp" };
+  assert.deepEqual(buildArgv(request, "/repo/hq/index.ts", true).slice(0, 3), [
+    "-ne",
+    "-e",
+    "/repo/hq/index.ts",
+  ]);
+  assert.equal(buildArgv(request, "/repo/hq/index.ts").includes("-ne"), false);
+});

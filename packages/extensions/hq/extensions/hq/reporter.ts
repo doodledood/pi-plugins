@@ -49,13 +49,16 @@ export class SessionReporter {
   private readonly titleModel: string | undefined;
   private readonly onTriageRequested: ((stopId: string) => void) | undefined;
 
+  private handedOff: boolean;
+  private mandate: string | null;
   private latestAssistant: { text: string; stopReason: string | undefined } | undefined;
   private title: string | null = null;
   private titleRequested = false;
   private settleCount = 0;
   private closed = false;
 
-  readonly role: SessionRole;
+  /** Not readonly: /hq_send_off turns an attended session into a managed one. */
+  role: SessionRole;
   readonly kind: SessionKind | "titler";
 
   constructor(options: ReporterOptions) {
@@ -68,6 +71,8 @@ export class SessionReporter {
     this.titleModel = options.titleModel;
     this.onTriageRequested = options.onTriageRequested;
     this.role = isManagedEnv(this.env) ? "managed" : "attended";
+    this.handedOff = false;
+    this.mandate = null;
     this.kind = isManagedEnv(this.env) ? envKind(this.env) : "worker";
   }
 
@@ -175,6 +180,24 @@ export class SessionReporter {
     await this.recordAndTriageStop(stopState);
   }
 
+  /**
+   * Hands this live session to HQ. The role flip is all it takes: the gate on
+   * recording a stop is the role, so from here this session's own reporter starts
+   * recording stops and HQ triages them. Called from /hq_send_off, which runs
+   * between turns, so the session is settled and the stop can be recorded at once.
+   */
+  async handOff(mandate: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (this.role === "managed") {
+      return { ok: false, reason: "HQ already owns this session" };
+    }
+    this.role = "managed";
+    this.handedOff = true;
+    this.mandate = mandate.trim() || null;
+    await this.publish("done", this.classifyStop());
+    await this.recordAndTriageStop(this.classifyStop());
+    return { ok: true };
+  }
+
   private async recordAndTriageStop(stopState: StopState): Promise<void> {
     this.settleCount += 1;
     const stopId = stopIdFor(
@@ -193,6 +216,7 @@ export class SessionReporter {
       stopState,
       preview: truncatePreview(this.latestAssistant?.text ?? ""),
       createdAt: at,
+      ...(this.handedOff ? { handedOff: true, mandate: this.mandate } : {}),
       status: "open",
       claimedByPid: null,
       claimedAt: null,
