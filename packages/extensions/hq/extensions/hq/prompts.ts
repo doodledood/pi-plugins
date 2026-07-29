@@ -145,7 +145,7 @@ work is finished, or respawned if the session died mid-task.
 2. Read enough of the transcript to know what the session was doing and why it
    stopped. Read more if the stop is unclear; stop reading once you could explain
    the stop to someone who was not there.
-3. Decide the outcome and submit it with the outcome tool. Submit once.
+3. Decide the outcome and submit it with the outcome tool. Submit one outcome. If the tool rejects it, fix what the error names and submit again; once it succeeds, stop.
 
 ## Choosing the outcome
 
@@ -164,7 +164,7 @@ work is finished, or respawned if the session died mid-task.
   a citation to a deciding line — and without both it reaches them as a close
   packet, which is the ordinary outcome.
 - **respawn** — the session died or aborted mid-task with work still to do and no
-  judgment needed to continue. Say what it was doing.
+  judgment needed to continue. Say what it was doing and the next step it should pick up.
 
 ${PACKET_BAR}
 

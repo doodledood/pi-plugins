@@ -69,6 +69,7 @@ export function gradeShadow(packet: Packet, request: RulingRequest): boolean | n
   // Declining to decide yet is not a decision, so it grades nothing — otherwise
   // "hold and tell me more first" would read as the user overruling doctrine and
   // would queue an amendment against a rule they never disagreed with.
+  if (!packet.shadowRuling?.optionId) return null;
   const chosenOption = packet.options.find(
     (option) => option.id === chosenOptionId(packet, request),
   );
@@ -125,6 +126,10 @@ export async function applyRuling(
   const coverage: CoverageBucket = coverageFor({
     citations: packet.doctrineCitations,
     shadowAgreed,
+    // Only a line that can decide counts as coverage; the continue and close paths
+    // already refuse to act on a Taste, so counting one here would advance the
+    // authority ladder on a rule that can never answer a stop.
+    doctrine: await loadDoctrine(deps.store.root, packet.project),
   });
 
   // --- deferral: hand off to a drill and leave the packet in the queue --------

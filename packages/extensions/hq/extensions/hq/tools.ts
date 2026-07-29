@@ -81,9 +81,10 @@ const ReversibilitySchema = StringEnum(["reversible", "one-way"] as const, {
 });
 
 const ShadowSchema = Type.Object({
-  optionId: Type.Optional(Type.String({
-    description: "The option you would have chosen; omit it if none fits",
-  })),
+  optionId: Type.String({
+    description:
+      "The option you recommend, restated as the prediction to be graded — the recommendation and the shadow ruling are one decision in two roles",
+  }),
   text: Type.String({ description: "The ruling you would have made" }),
   rationale: Type.String({ description: "Why — one or two sentences" }),
 });
@@ -795,14 +796,12 @@ export function toTriageOutcome(
   switch (params.outcome) {
     case "packet": {
       if (!params.packet) return { error: "a packet outcome needs the packet" };
-      // The schema lets the model omit the shadow ruling's option (nothing fits);
-      // the stored shape spells that as null.
       const packet: PacketDraft = {
         ...params.packet,
         shadowRuling: {
           text: params.packet.shadowRuling.text,
           rationale: params.packet.shadowRuling.rationale,
-          optionId: params.packet.shadowRuling.optionId ?? null,
+          optionId: params.packet.shadowRuling.optionId,
           // Coverage is decided by the packet's citations; the shadow ruling
           // repeats them so a reader of one record sees what it rested on.
           doctrineCitations: params.packet.doctrineCitations,

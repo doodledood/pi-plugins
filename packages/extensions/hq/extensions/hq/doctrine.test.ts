@@ -239,3 +239,28 @@ test("the seed distinguishes a session proceeding from HQ answering for the user
     await dropRoot(root);
   }
 });
+
+test("a citation to a rule that cannot decide is not coverage", async () => {
+  const root = await makeRoot("hq-coverage-decides");
+  try {
+    await seedDoctrine(root);
+    const doctrine = await loadDoctrine(root, "/work/alpha");
+    const taste = doctrine.rules.find((rule) => !rule.decides);
+    const decider = doctrine.rules.find((rule) => rule.decides);
+    assert.ok(taste && decider, "the seed carries both kinds");
+
+    // The authoring prompt tells workers that citing a shaping line is citing
+    // nothing. Coverage has to agree, or the ladder climbs on rules that can
+    // never answer a stop.
+    assert.equal(
+      coverageFor({ citations: [taste.citation], shadowAgreed: true, doctrine }),
+      "uncovered",
+    );
+    assert.equal(
+      coverageFor({ citations: [decider.citation], shadowAgreed: true, doctrine }),
+      "covered-agreed",
+    );
+  } finally {
+    await dropRoot(root);
+  }
+});

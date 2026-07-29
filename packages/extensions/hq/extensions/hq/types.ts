@@ -768,10 +768,15 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
         field: "shadowRuling",
         reason: "the shadow ruling has no ruling or no reasoning",
       });
-    } else if (
-      packet.shadowRuling.optionId &&
-      packet.shadowRuling.optionId !== packet.recommendationId
-    ) {
+    } else if (!packet.shadowRuling.optionId) {
+      // A shadow ruling with no option grades as a disagreement with whatever the
+      // user picks, so an omission would report "your ruling went against doctrine"
+      // to someone who simply accepted the recommendation.
+      violations.push({
+        field: "shadowRuling",
+        reason: "the shadow ruling names no option to be graded",
+      });
+    } else if (packet.shadowRuling.optionId !== packet.recommendationId) {
       // The recommendation and the shadow ruling are one decision in two roles:
       // the advice the user reads, and the same call recorded as a prediction to be
       // graded. Advising one option while predicting another makes the grade — and

@@ -350,7 +350,17 @@ function escapeRegExp(value: string): string {
 export function coverageFor(input: {
   citations: string[];
   shadowAgreed: boolean | null;
+  /** The merged doctrine, when the caller has it: only deciding lines cover a case. */
+  doctrine?: Doctrine;
 }): "covered-agreed" | "contradicts" | "uncovered" {
-  if (input.citations.length === 0) return "uncovered";
+  // A citation to a Taste or an Escalation rule is not coverage \u2014 the continue and
+  // close paths already refuse to act on one, and counting it here would advance the
+  // authority ladder on rules that cannot decide anything.
+  const deciding = input.doctrine
+    ? input.citations.filter((citation) =>
+      input.doctrine?.rules.some((rule) => rule.citation === citation && rule.decides)
+    )
+    : input.citations;
+  if (deciding.length === 0) return "uncovered";
   return input.shadowAgreed === false ? "contradicts" : "covered-agreed";
 }

@@ -125,7 +125,8 @@ test("an uncovered ruling proposes a rule; a covered, agreed one proposes nothin
 
     const doctrine = await loadDoctrine(h.root, "/work/alpha");
     const covered = await queuePacket(h, {
-      doctrineCitations: [doctrine.rules[0]?.citation ?? ""],
+      // A deciding line, because only those count as coverage.
+      doctrineCitations: [doctrine.rules.find((rule) => rule.decides)?.citation ?? ""],
     });
     const second = await applyRuling(
       { store: h.store, spawner: h.spawner, now: h.now },

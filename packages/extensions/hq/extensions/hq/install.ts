@@ -22,7 +22,7 @@ import { configPath } from "./config.ts";
 export const REFERENCE_MARKER = "<!-- pi-hq:doctrine -->";
 
 export function referenceLine(doctrinePath: string): string {
-  return `${REFERENCE_MARKER}\n- HQ doctrine (the standing rules HQ decides by, and its own settings) lives at \`${doctrinePath}\`. Read it when a decision needs the user's standing preferences; edit it to change them.`;
+  return `${REFERENCE_MARKER}\n- HQ doctrine (the standing rules HQ decides by, and its own settings) lives at \`${doctrinePath}\`. Read it when a decision needs the user's standing preferences. Only the user changes it \u2014 propose a change instead of editing it.`;
 }
 
 export function defaultAgentInstructionsPath(env: NodeJS.ProcessEnv = process.env): string {
