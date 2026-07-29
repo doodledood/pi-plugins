@@ -89,7 +89,13 @@ async function queue(h: Harness, overrides: Partial<Packet> = {}): Promise<Packe
   // Each call is a distinct question; identical ones are deduplicated by the store.
   queued += 1;
   const { packet } = await h.store.createPacket({
-    ...packetDraftFixture({ title: `decide ${queued}`, question: `what about ${queued}?` }),
+    // Distinct sessions: one session has at most one open decision, so packets from
+    // the same session supersede each other.
+    ...packetDraftFixture({
+      title: `decide ${queued}`,
+      question: `what about ${queued}?`,
+      sourceSessionId: `sess-${queued}`,
+    }),
     ...overrides,
   } as never);
   return packet;

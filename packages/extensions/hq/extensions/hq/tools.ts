@@ -717,7 +717,17 @@ async function askBatch(
  */
 async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Promise<string> {
   const rows = buildAskRows(packet);
-  const title = `${packet.title} — ${packet.question}`;
+  const replaced = packet.supersedes ?? [];
+  // What this question took the place of, said out loud: the earlier ask is gone from
+  // the queue, and the user is the one who knows whether it still matters.
+  const title = [
+    `${packet.title} — ${packet.question}`,
+    replaced.length > 0
+      ? `(replaces ${replaced.length} earlier question${
+        replaced.length === 1 ? "" : "s"
+      } from this session: ${replaced.join("; ")})`
+      : "",
+  ].filter((line) => line !== "").join("\n");
 
   const chosen = await ctx.ui.select(title, rows.map((row) => row.label));
   if (chosen === undefined) return `${packet.id}: left pending`;

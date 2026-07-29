@@ -7,6 +7,7 @@
  * killing the seat mid-queue must lose nothing.
  */
 
+import type { PacketStatus } from "./types.ts";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -209,11 +210,56 @@ export class HqStore {
       ...candidate,
       status: violations.length > 0 ? "held" : (draft.status ?? "pending"),
     };
-    const path = packetPath(this.root, packet.id);
+    // Worked out before the write, not patched in afterwards: the caller holds the
+    // packet it is handed, and a second write here would leave that copy stale.
+    const stale = packet.status === "pending" ? await this.staleForSession(packet) : [];
+    const written: Packet = stale.length > 0
+      ? { ...packet, supersedes: stale.map((other) => other.title) }
+      : packet;
+
+    const path = packetPath(this.root, written.id);
     await this.queue(path, async () => {
-      await atomicWriteJson(path, packet);
+      await atomicWriteJson(path, written);
     });
-    return { packet, violations };
+    await this.withdrawSuperseded(stale, written.id);
+    return { packet: written, violations };
+  }
+
+  /**
+   * A session is one line of work, so it has at most one open decision. Once a later
+   * stop in the same session has a presentable packet, the earlier ones are stale: the
+   * session has moved past what they asked — HQ continued it, or the user did — and
+   * ruling on one would resume a session that is no longer where the question left it.
+   *
+   * Rule proposals are exempt on both sides: they act on doctrine, not on the session,
+   * so nothing the session does afterwards makes them stale.
+   */
+  private async staleForSession(packet: Packet): Promise<Packet[]> {
+    if (packet.proposal) return [];
+    return (await this.listQueue()).filter(
+      (other) =>
+        other.id !== packet.id &&
+        !other.proposal &&
+        other.sourceSessionId === packet.sourceSessionId &&
+        (other.status === "pending" || other.status === "held" || other.status === "drilling") &&
+        other.createdAt <= packet.createdAt,
+    );
+  }
+
+  /**
+   * Withdraws what a packet replaced. The superseded packets are kept and archived
+   * rather than deleted, and each names what replaced it, so no question the user was
+   * asked disappears without trace.
+   */
+  private async withdrawSuperseded(stale: readonly Packet[], byId: string): Promise<void> {
+    for (const other of stale) {
+      await this.updatePacket(other.id, (current) => ({
+        ...current,
+        status: "withdrawn",
+        supersededBy: byId,
+      }));
+      await this.archivePacket(other.id);
+    }
   }
 
   async readPacket(packetId: string): Promise<Packet | undefined> {
@@ -240,6 +286,8 @@ export class HqStore {
     mutate: (packet: Packet) => Packet,
   ): Promise<Packet | undefined> {
     const path = packetPath(this.root, packetId);
+    let statusBefore: PacketStatus | undefined;
+    let stale: Packet[] = [];
     // Locked as well as queued: the seat, a drill worker and a triage worker are
     // separate processes and all read-modify-write packets, so the in-process
     // queue alone would let one overwrite another's annotation or patch.
@@ -247,6 +295,7 @@ export class HqStore {
       withFileLock(path, async () => {
       const current = await readJsonFile(path, parsePacket, this.onError);
       if (!current) return undefined;
+      statusBefore = current.status;
       const mutated = mutate(current);
       const next: Packet = {
         ...mutated,
@@ -262,9 +311,22 @@ export class HqStore {
       const guarded: Packet = violations.length > 0
         ? (next.status === "pending" ? { ...next, status: "held" } : next)
         : (next.status === "held" ? { ...next, status: "pending" } : next);
-      await atomicWriteJson(path, guarded);
-      return guarded;
-      }, { onError: this.onError }));
+      // A held packet a drill just filled is the session's live question now, so the
+      // same supersession applies to the edit that presents it, not only to creation.
+      // Withdrawing is not a presentable status, so this cannot cascade.
+      const becamePresentable = guarded.status === "pending" && statusBefore !== "pending";
+      stale = becamePresentable ? await this.staleForSession(guarded) : [];
+      const written: Packet = stale.length > 0
+        ? { ...guarded, supersedes: [...(guarded.supersedes ?? []), ...stale.map((o) => o.title)] }
+        : guarded;
+      await atomicWriteJson(path, written);
+      return written;
+      }, { onError: this.onError })).then(async (result) => {
+      // Outside the lock on this packet, so the packets being withdrawn take their
+      // own locks without one write waiting on another.
+      if (result) await this.withdrawSuperseded(stale, result.id);
+      return result;
+    });
   }
 
   /** Everything still in the queue, in any live status. */

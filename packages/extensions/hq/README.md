@@ -219,13 +219,29 @@ section, so there is exactly one place to look.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
 
+## Asking about the fleet
+
+When the queue is empty the seat is still a conversation, and it is where you ask
+about the work rather than about a decision — what a session is doing, what it
+finished, what it will need next, whether it has gone quiet without finishing. It
+answers from the board and from the sessions' own transcripts, quoting rather than
+characterising, and drills the session itself when reading cannot settle it. Name a
+session by its title; the board gives it the id.
+
 ## One question, one decision
 
-Packets are deduplicated where they are written, so repeated stops in one session
-cannot cost three decisions to settle one thing. A rule proposal is the same decision
-whichever session raised it, and deduplicates across all of them. A question is not:
-ruling on it resumes the session it came from, so the same question about two sessions
-stays two decisions.
+A session is one line of work, so it has at most one open decision. When a later stop
+in the same session produces a presentable packet, the earlier ones are withdrawn: the
+session has moved past what they asked — HQ continued it, or you did — so ruling on one
+would resume a session that is no longer where the question left it. Nothing is lost.
+The withdrawn packet is kept and names what replaced it, and the live packet says which
+questions it took the place of when it is put to you, so a question that still matters
+can be raised again.
+
+Identical packets are also deduplicated where they are written. A rule proposal is the
+same decision whichever session raised it, and deduplicates across all of them. A
+question about two different sessions stays two decisions: ruling on one resumes only
+that session, so collapsing them would strand the other.
 
 ## Developing this while it is installed
 

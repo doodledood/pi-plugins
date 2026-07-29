@@ -152,6 +152,15 @@ export interface Packet {
   doctrineCitations: string[];
   shadowRuling: ShadowRuling | null;
   annotations: PacketAnnotation[];
+  /**
+   * Set when a later stop in the same session took this packet's place. The session
+   * moved past what this asked, so it is no longer answerable — but it is kept, and
+   * the packet that replaced it names it, so nothing the user was asked disappears
+   * without trace.
+   */
+  supersededBy?: string | null;
+  /** Earlier questions from this session that this packet replaced. */
+  supersedes?: string[];
   /** Cheap enough to batch with its neighbours. */
   trivial: boolean;
   /** Set when the packet's subject is HQ's own doctrine or authority. */
@@ -500,6 +509,10 @@ export function parsePacket(value: unknown): Packet | undefined {
     doctrineCitations,
     shadowRuling,
     annotations,
+    supersededBy: str(value.supersededBy) ?? null,
+    supersedes: Array.isArray(value.supersedes)
+      ? value.supersedes.filter((id): id is string => typeof id === "string")
+      : [],
     trivial: bool(value.trivial) ?? false,
     proposal,
   };

@@ -312,7 +312,12 @@ test("a fresh seat over the same state sees exactly the same packets to rule", a
     await store.ensure();
     const first = await store.createPacket(packetDraftFixture());
     const second = await store.createPacket(
-      packetDraftFixture({ title: "raise the CI timeout", domain: "ci-config" }),
+      // A different session: one session has at most one open decision.
+      packetDraftFixture({
+        title: "raise the CI timeout",
+        domain: "ci-config",
+        sourceSessionId: "sess-b",
+      }),
     );
     assert.equal(first.packet.status, "pending");
     assert.equal(second.packet.status, "pending");

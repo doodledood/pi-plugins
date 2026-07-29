@@ -708,3 +708,68 @@ test("the same question is one packet, and the same rule proposal is one packet"
     await dropRoot(root);
   }
 });
+
+test("a session has one open decision: a later stop replaces the earlier question", async () => {
+  const root = await makeRoot("hq-supersede");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+
+    const earlier = await store.createPacket(
+      packetDraftFixture({ title: "which branch", question: "which branch should this land on?" }) as never,
+    );
+    const later = await store.createPacket(
+      packetDraftFixture({ title: "which reviewer", question: "who should review it?" }) as never,
+    );
+
+    // The session stopped again, so it has moved past the first question: ruling on
+    // it would resume a session that is no longer where that question left it.
+    const open = await store.listPresentable();
+    assert.deepEqual(open.map((packet) => packet.id), [later.packet.id]);
+
+    // The packet the caller was handed is the packet on disk: superseding must not
+    // patch it afterwards, or every holder of it is working from a stale copy.
+    assert.deepEqual(later.packet.supersedes, ["which branch"]);
+    assert.equal((await store.readPacket(later.packet.id))?.generation, later.packet.generation);
+
+    // Nothing is lost: the replaced question is kept, and the live packet names it.
+    const dropped = await store.readPacket(earlier.packet.id);
+    assert.equal(dropped?.status, "withdrawn");
+    assert.equal(dropped?.supersededBy, later.packet.id);
+    assert.deepEqual((await store.readPacket(later.packet.id))?.supersedes, ["which branch"]);
+
+    // Another session's question is untouched by any of it.
+    const other = await store.createPacket(
+      packetDraftFixture({ sourceSessionId: "sess-other" }) as never,
+    );
+    assert.equal((await store.readPacket(other.packet.id))?.status, "pending");
+    assert.equal((await store.listPresentable()).length, 2);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a rule proposal is not superseded by the session carrying on", async () => {
+  const root = await makeRoot("hq-supersede-proposal");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const proposal = await store.createPacket(packetDraftFixture({
+      title: "ratify a rule",
+      proposal: {
+        kind: "new-rule",
+        scope: "global",
+        section: "Directives",
+        ruleText: "Prefer the smallest fix that removes the cause.",
+        replaces: null,
+        domain: "ci-flake",
+      },
+    }) as never);
+    await store.createPacket(packetDraftFixture({ title: "which reviewer" }) as never);
+    // It acts on doctrine, not on the session, so nothing the session does next
+    // makes it stale.
+    assert.equal((await store.readPacket(proposal.packet.id))?.status, "pending");
+  } finally {
+    await dropRoot(root);
+  }
+});
