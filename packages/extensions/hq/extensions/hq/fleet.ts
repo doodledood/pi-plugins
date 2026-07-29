@@ -33,7 +33,6 @@ export interface FleetRow {
   age: string;
   stale: boolean;
   note: string;
-  attended: boolean;
 }
 
 export interface FleetCardModel {
@@ -109,7 +108,9 @@ export function buildFleetCard(input: FleetInput): FleetCardModel {
   const pending = input.packets.filter((packet) => packet.status === "pending");
   const pendingBySession = new Set(pending.map((packet) => packet.sourceSessionId));
 
-  const rows: FleetRow[] = input.fleet.map((state) => {
+  // The board is HQ's fleet. Sessions HQ does not manage are the user's own and are
+  // not shown at all; rows left by an older version are dropped here too.
+  const rows: FleetRow[] = input.fleet.filter((state) => state.role === "managed").map((state) => {
     const rowState = rowStateFor(state, pendingBySession.has(state.sessionId));
     const ageMs = nowMs - Date.parse(state.lastEventAt);
     // Staleness is only meaningful for something that claims to be working: an
@@ -124,7 +125,6 @@ export function buildFleetCard(input: FleetInput): FleetCardModel {
       age: formatAge(ageMs),
       stale,
       note: noteFor(rowState, state, stale),
-      attended: state.role === "attended",
     };
   });
 
@@ -171,7 +171,7 @@ function noteFor(rowState: RowState, state: SessionState, stale: boolean): strin
     case "drilling":
       return "drilling";
     case "running":
-      return state.role === "attended" ? "you" : "working";
+      return "working";
     case "done":
       return "done";
     case "idle":

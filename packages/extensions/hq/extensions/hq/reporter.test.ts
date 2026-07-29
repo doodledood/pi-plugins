@@ -36,7 +36,7 @@ async function stopRecords(root: string) {
   return scan.records.map((entry) => entry.record);
 }
 
-test("an attended session is published but never triaged and never actuated", async () => {
+test("a session HQ did not start is left alone entirely", async () => {
   const root = await makeRoot("hq-attended");
   try {
     const store = makeStore(root);
@@ -44,25 +44,27 @@ test("an attended session is published but never triaged and never actuated", as
     const reporter = new SessionReporter({
       store,
       spawner,
-      ctx: fakeCtx(),
-      env: { [TITLER_ENV]: "1" },
+      ctx: fakeCtx({
+        branch: [{ message: { role: "user", content: [{ type: "text", text: "help me think" }] } }],
+      }),
+      env: {},
       now: fixedClock(),
     });
 
     assert.equal(reporter.role, "attended");
     await reporter.start();
+    await reporter.onAgentStart();
     reporter.onAgentEnd([{ role: "assistant", content: "Which of these should I do?" }]);
     await reporter.onAgentSettled();
 
-    const state = await store.readSessionState("sess-a");
-    assert.equal(state?.role, "attended");
-    assert.equal(state?.stopState, "stopped-with-question");
-    assert.deepEqual(await stopRecords(root), [], "no stop record for an attended session");
-    assert.deepEqual(calls, [], "nothing is spawned at an attended session");
+    assert.equal(await store.readSessionState("sess-a"), undefined, "not on the board");
+    assert.deepEqual(await stopRecords(root), [], "no stop record");
+    assert.deepEqual(calls, [], "nothing spawned, not even a titler");
   } finally {
     await dropRoot(root);
   }
 });
+
 
 test("sending a session off hands it to HQ, which takes it over by forking", async () => {
   const root = await makeRoot("hq-sendoff");
@@ -206,7 +208,7 @@ test("a session asks for a title once, from its first user message", async () =>
       ctx: fakeCtx({
         branch: [{ message: { role: "user", content: [{ type: "text", text: "migrate the eval runner" }] } }],
       }),
-      env: {},
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker" },
       now: fixedClock(),
       titleModel: "fast-model",
     });
@@ -234,7 +236,7 @@ test("a drill in flight stays visible on the session it is about", async () => {
       store,
       spawner,
       ctx: fakeCtx(),
-      env: { [TITLER_ENV]: "1" },
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker", [TITLER_ENV]: "1" },
       now: fixedClock(),
     });
     await reporter.start();
@@ -263,7 +265,7 @@ test("a title set by the titler survives the session's next publish", async () =
       store,
       spawner,
       ctx: fakeCtx(),
-      env: { [TITLER_ENV]: "1" },
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker", [TITLER_ENV]: "1" },
       now: fixedClock(),
     });
     await reporter.start();

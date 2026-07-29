@@ -93,8 +93,9 @@ it gone.
 | `/hq_revoke <domain>` | Take the domain back. |
 
 `/hq_send_off` is the other way in. Everything HQ manages, it started — a session
-carries `HQ_MANAGED=1` in its environment or it is yours, and HQ never triages or
-writes to one of yours. Sending a session off flips that marker in the live session,
+carries `HQ_MANAGED=1` in its environment or it is yours. A session HQ did not start
+is left alone entirely: it is not on the board, gets no title worker and is never
+triaged, so the fleet card is only ever HQ's own fleet. Sending a session off flips that marker in the live session,
 so its own reporter records the stop and HQ triages it from there. HQ then works on a
 **fork** of the session rather than resuming it: your tab may still be open, and two
 pi processes appending to one transcript would corrupt both readings of it. Leave the

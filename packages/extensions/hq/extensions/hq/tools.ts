@@ -411,7 +411,7 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
           card.header,
           ...card.rows.map(
             (row) =>
-              `${row.glyph} ${row.label} — ${row.note}, ${row.age} ago${row.attended ? " (attended)" : ""}`,
+              `${row.glyph} ${row.label} — ${row.note}, ${row.age} ago`,
           ),
           card.summary,
         ].join("\n"),

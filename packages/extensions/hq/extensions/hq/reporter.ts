@@ -85,6 +85,15 @@ export class SessionReporter {
     return INTERNAL_KINDS.has(this.kind);
   }
 
+  /**
+   * A session HQ did not start is the user's own. It is not on the board, gets no
+   * title worker and is never triaged: HQ has nothing to say about it until the user
+   * hands it over with /hq_send_off, which is the only thing this reporter then does.
+   */
+  private get mine(): boolean {
+    return this.role !== "managed";
+  }
+
   private state(fleetState: FleetState, stopState: StopState): SessionState {
     const at = this.now().toISOString();
     return {
@@ -123,7 +132,7 @@ export class SessionReporter {
     if (this.closed) return;
     // Internal workers are plumbing, not work: they would fill the board with
     // rows for triage and drill processes that live for seconds.
-    if (this.internal) return;
+    if (this.internal || this.mine) return;
 
     const next = this.state(fleetState, stopState);
     const previous = await this.store.readSessionState(this.sessionId);
@@ -175,8 +184,8 @@ export class SessionReporter {
 
   async onAgentSettled(): Promise<void> {
     const stopState = this.classifyStop();
-    await this.publish(this.role === "managed" ? "done" : "idle", stopState);
-    if (this.role !== "managed" || this.internal) return;
+    await this.publish("done", stopState);
+    if (this.mine || this.internal) return;
     await this.recordAndTriageStop(stopState);
   }
 
@@ -240,7 +249,7 @@ export class SessionReporter {
   }
 
   private async requestTitleIfNeeded(): Promise<void> {
-    if (this.title || this.titleRequested || this.internal) return;
+    if (this.title || this.titleRequested || this.internal || this.mine) return;
     if (this.env[TITLER_ENV] === "1") return;
     const branch = this.ctx.sessionManager.getBranch?.() ?? [];
     const seed = firstUserText(branch);
@@ -257,7 +266,7 @@ export class SessionReporter {
 
   async onShutdown(): Promise<void> {
     const stopState = this.classifyStop();
-    await this.publish(this.role === "managed" ? "done" : "idle", stopState);
+    await this.publish("done", stopState);
     this.closed = true;
   }
 

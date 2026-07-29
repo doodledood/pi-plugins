@@ -142,18 +142,18 @@ test("the card collapses to one line when nothing is running or waiting", () => 
   assert.match(lines[0] ?? "", /◆ HQ/);
 });
 
-test("an attended session is shown as the user's own and never as work", () => {
+test("a session HQ does not manage is not on the board", () => {
   const card = buildFleetCard({
     fleet: [
       sessionStateFixture({ sessionId: "mine", title: "mine", role: "attended", state: "running" }),
+      sessionStateFixture({ sessionId: "hers", title: "delegated", role: "managed", state: "running" }),
     ],
     packets: [],
     doneToday: 0,
     now: NOW,
     meta: META_DEFAULTS,
   });
-  assert.equal(card.rows[0]?.attended, true);
-  assert.equal(card.rows[0]?.note, "you");
+  assert.deepEqual(card.rows.map((row) => row.label), ["delegated"]);
 });
 
 test("rendered lines never exceed the frame, and the frame is the drawn card", () => {
