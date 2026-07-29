@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
+import { readyDomains } from "./graduation.ts";
+import { atomicWriteText } from "./io.ts";
 import { hqPaths, projectDoctrinePath } from "./paths.ts";
 import { applyRuling, chosenOptionId, gradeShadow, recordDive } from "./rulings.ts";
 import { HqStore } from "./store.ts";
@@ -237,7 +239,7 @@ test("the ruling is in the log before the work is allowed to continue", async ()
     // The final record is the one that knows where the ruling was carried.
     const latest = (await h.store.listRulings()).filter((r) => r.id === result.ruling.id);
     assert.equal(latest.length, 1, "readers resolve the two appends to one ruling");
-    assert.equal(latest[0]?.routing.spawnedSessionId, "run-x");
+    assert.equal(latest[0]?.routing.spawnedRunId, "run-x");
   } finally {
     await dropRoot(h.root);
   }
@@ -436,7 +438,7 @@ test("a deferral drills and leaves the packet in the queue", async () => {
         now: h.now,
         startDrill: async (target, question) => {
           drilled.push(`${target.id}:${question}`);
-          return { spawnedSessionId: "drill-1" };
+          return { spawnedRunId: "drill-1" };
         },
       },
       { packetId: packet.id, form: "defer", question: "what did the log actually say?" },
@@ -519,38 +521,36 @@ test("nonsense rulings are refused rather than half-applied", async () => {
   }
 });
 
-test("a graduation proposal is queued at the threshold and ruling on it grants nothing", async () => {
+test("crossing the threshold shows readiness; only the command grants it", async () => {
   const h = await harness("hq-rule-graduation");
   try {
     // Retune the thresholds the way the user would: by editing the file.
     const path = hqPaths(h.root).doctrineGlobal;
-    const text = await readFile(path, "utf8");
-    await writeFile(
+    const doctrineText = await readFile(path, "utf8");
+    await atomicWriteText(
       path,
-      text
-        .replace(/- graduation-consecutive-agreements: \d+.*/, "- graduation-consecutive-agreements: 2")
-        .replace(/- graduation-min-days: \d+.*/, "- graduation-min-days: 0"),
-      "utf8",
+      doctrineText.replace(/graduation-consecutive-agreements: \d+/, "graduation-consecutive-agreements: 1")
+        .replace(/graduation-min-days: \d+/, "graduation-min-days: 0"),
     );
-
     const deps = { store: h.store, spawner: h.spawner, now: h.now };
-    const first = await queuePacket(h);
-    await applyRuling(deps, { packetId: first.id, form: "accept" });
-    const second = await queuePacket(h);
-    const result = await applyRuling(deps, { packetId: second.id, form: "accept" });
+
+    const packet = await queuePacket(h, {});
+    const result = await applyRuling(deps, { packetId: packet.id, form: "accept" });
     assert.equal("error" in result, false);
     if ("error" in result) return;
 
-    const graduation = result.proposals.find((p) => p.proposal?.kind === "graduation");
-    assert.ok(graduation, "the streak earns a proposal");
-    assert.equal(await h.store.isGraduated("ci-flake"), false);
-
-    await applyRuling(deps, { packetId: graduation.id, form: "accept" });
-    assert.equal(
-      await h.store.isGraduated("ci-flake"),
-      false,
-      "acknowledging the proposal is not the command that grants it",
+    // Nothing is queued about graduation itself: such a packet would spend one of
+    // the user's decisions on something that by construction changes nothing. The
+    // doctrine proposal this uncovered ruling earns is a different thing.
+    assert.deepEqual(
+      [...new Set(result.proposals.map((entry) => entry.proposal?.kind))],
+      ["new-rule"],
     );
+
+    const doctrine = await loadDoctrine(h.root, packet.project);
+    const ready = readyDomains(await h.store.readGraduation(), doctrine.meta, new Date(h.now()));
+    assert.deepEqual(ready, [packet.domain], "the card is told the domain is ready");
+    assert.equal(await h.store.isGraduated(packet.domain), false, "and nothing was granted");
   } finally {
     await dropRoot(h.root);
   }

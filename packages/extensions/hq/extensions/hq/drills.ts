@@ -58,7 +58,7 @@ export async function startDrill(
   deps: DrillDeps,
   packet: Packet,
   question: string,
-): Promise<{ spawnedSessionId: string | null }> {
+): Promise<{ spawnedRunId: string | null }> {
   const now = deps.now ?? (() => new Date());
   await markOriginDrilling(deps, packet, true);
   // A packet under a drill is not presentable, whichever path started the drill:
@@ -94,7 +94,7 @@ Call the drill context tool for that packet id, then answer.`,
     runId: spawned.runId,
   });
 
-  return { spawnedSessionId: spawned.runId };
+  return { spawnedRunId: spawned.runId };
 }
 
 /**
@@ -279,7 +279,7 @@ export async function startCompletionDrill(
   deps: DrillDeps,
   packet: Packet,
   violations: readonly { field: string; reason: string }[],
-): Promise<{ spawnedSessionId: string | null }> {
+): Promise<{ spawnedRunId: string | null }> {
   const missing = violations.map((violation) => `${violation.field} (${violation.reason})`).join("; ");
   return startDrill(
     deps,

@@ -104,7 +104,7 @@ export interface PacketAnnotation {
  * a ratification needs nothing but the ruling and the packet.
  */
 export interface PacketProposal {
-  kind: "new-rule" | "amendment" | "graduation";
+  kind: "new-rule" | "amendment";
   scope: "global" | "project";
   section: string;
   /** The rule as proposed; for a graduation proposal, the rationale. */
@@ -164,7 +164,7 @@ export type RulingForm = "accept" | "alternative" | "custom" | "defer";
 export interface RulingRouting {
   action: "resume" | "steer" | "drill" | "none";
   sessionFile: string | null;
-  spawnedSessionId: string | null;
+  spawnedRunId: string | null;
   note: string;
 }
 
@@ -244,12 +244,6 @@ export interface DomainStats {
    * decay has to key off work done rather than agreements recorded.
    */
   autoAnswered: number;
-  /**
-   * Set when the user tells HQ to stop proposing this domain. Distinct from
-   * proposedAt, which is stamped whenever a proposal goes out: without it, the
-   * proposal's "stop asking" and "not yet" options would do exactly the same thing.
-   */
-  proposalsMuted: boolean;
   /** True only after an explicit user command. */
   graduated: boolean;
   graduatedAt: string | null;
@@ -272,7 +266,6 @@ export function emptyDomainStats(domain: string): DomainStats {
     lastRulingAt: null,
     overrides: 0,
     autoAnswered: 0,
-    proposalsMuted: false,
     graduated: false,
     graduatedAt: null,
     proposedAt: null,
@@ -516,7 +509,7 @@ export function parsePacket(value: unknown): Packet | undefined {
 function parseProposal(value: unknown): PacketProposal | null | undefined {
   if (value === undefined || value === null) return null;
   if (!isRecord(value)) return undefined;
-  const kind = oneOf(value.kind, ["new-rule", "amendment", "graduation"] as const);
+  const kind = oneOf(value.kind, ["new-rule", "amendment"] as const);
   const scope = oneOf(value.scope, ["global", "project"] as const);
   const section = str(value.section);
   const ruleText = str(value.ruleText);
@@ -561,8 +554,8 @@ export function parseRuling(value: unknown): Ruling | undefined {
 
   const action = oneOf(routingValue.action, ROUTING_ACTIONS);
   const sessionFile = strOrNull(routingValue.sessionFile);
-  const spawnedSessionId = strOrNull(routingValue.spawnedSessionId);
-  if (action === undefined || sessionFile === undefined || spawnedSessionId === undefined) {
+  const spawnedRunId = strOrNull(routingValue.spawnedRunId);
+  if (action === undefined || sessionFile === undefined || spawnedRunId === undefined) {
     return undefined;
   }
 
@@ -589,7 +582,7 @@ export function parseRuling(value: unknown): Ruling | undefined {
     routing: {
       action,
       sessionFile,
-      spawnedSessionId,
+      spawnedRunId,
       note: str(routingValue.note) ?? "",
     },
   };
@@ -682,7 +675,6 @@ export function parseGraduationState(value: unknown): GraduationState | undefine
       lastRulingAt: strOrNull(raw.lastRulingAt) ?? null,
       overrides: num(raw.overrides) ?? 0,
       autoAnswered: num(raw.autoAnswered) ?? 0,
-      proposalsMuted: bool(raw.proposalsMuted) ?? false,
       graduated: bool(raw.graduated) ?? false,
       graduatedAt: strOrNull(raw.graduatedAt) ?? null,
       proposedAt: strOrNull(raw.proposedAt) ?? null,

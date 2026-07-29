@@ -22,6 +22,7 @@ import {
   startDrill,
   submitDrillResult,
 } from "./drills.ts";
+import { readyDomains } from "./graduation.ts";
 import { buildFleetCard } from "./fleet.ts";
 import { isPidAlive } from "./io.ts";
 import { planPresentation } from "./queue.ts";
@@ -394,6 +395,9 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
         doneToday,
         now: deps.now(),
         meta: doctrine.meta,
+        // The tool and the card read readiness from the same place, so they cannot
+        // disagree about which domains have earned a grant.
+        readyToGraduate: readyDomains(await deps.store.readGraduation(), doctrine.meta, deps.now()),
         maxRows: 20,
       });
       return text(

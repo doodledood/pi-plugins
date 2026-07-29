@@ -40,21 +40,7 @@ export function foldShadowOutcome(stats: DomainStats, outcome: ShadowOutcome): D
   return next;
 }
 
-/** Stops HQ raising this domain again until the user graduates or revokes it. */
-export async function muteProposals(
-  store: Pick<HqStore, "updateDomain">,
-  domain: string,
-): Promise<void> {
-  await store.updateDomain(domain, (stats) => ({ ...stats, proposalsMuted: true }));
-}
 
-/** Clears the last proposal stamp so a longer record can raise the domain again. */
-export async function allowNextProposal(
-  store: Pick<HqStore, "updateDomain">,
-  domain: string,
-): Promise<void> {
-  await store.updateDomain(domain, (stats) => ({ ...stats, proposedAt: null }));
-}
 
 /** Counts one stop this domain answered from doctrine, which ages its audit rate. */
 export async function recordAutoAnswer(
@@ -87,14 +73,12 @@ export interface ProposalCheck {
  * Whether the domain has earned a graduation *proposal*. This function can only
  * ever recommend: nothing in HQ calls a flip on its output.
  */
-export function graduationProposalCheck(
+export function graduationReadiness(
   stats: DomainStats,
   meta: MetaDoctrine,
   now: string,
 ): ProposalCheck {
   if (stats.graduated) return { propose: false, reason: "already graduated" };
-  if (stats.proposalsMuted) return { propose: false, reason: "muted-by-user" };
-  if (stats.proposedAt) return { propose: false, reason: "already proposed" };
   if (stats.consecutiveAgreements < meta.graduationConsecutiveAgreements) {
     return {
       propose: false,
@@ -115,6 +99,18 @@ export function graduationProposalCheck(
 }
 
 /** Flips a domain. Reachable only from the user's explicit command. */
+/** Domains whose record has crossed the thresholds; the card shows these. */
+export function readyDomains(
+  state: { domains: Record<string, DomainStats> },
+  meta: MetaDoctrine,
+  now: Date,
+): string[] {
+  return Object.values(state.domains)
+    .filter((stats) => graduationReadiness(stats, meta, now.toISOString()).propose)
+    .map((stats) => stats.domain)
+    .sort();
+}
+
 export async function graduateDomain(
   store: HqStore,
   domain: string,
@@ -140,13 +136,6 @@ export async function revokeDomain(store: HqStore, domain: string): Promise<Doma
   }));
 }
 
-export async function markProposed(
-  store: HqStore,
-  domain: string,
-  at: string,
-): Promise<DomainStats> {
-  return store.updateDomain(domain, (stats) => ({ ...stats, proposedAt: at }));
-}
 
 export interface CeilingInput {
   graduated: boolean;

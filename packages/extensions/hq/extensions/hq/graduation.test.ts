@@ -6,10 +6,7 @@ import {
   effectiveAuditRate,
   foldShadowOutcome,
   graduateDomain,
-  graduationProposalCheck,
-  allowNextProposal,
-  markProposed,
-  muteProposals,
+  graduationReadiness,
   recordShadowOutcome,
   revokeDomain,
   shouldSampleForAudit,
@@ -44,21 +41,21 @@ test("a disagreement inside a graduated domain is counted as an override", () =>
   assert.equal(after.overrides, 1);
 });
 
-test("a proposal needs both the streak and the time, and only ever proposes", () => {
+test("readiness needs both the streak and the time, and grants nothing", () => {
   const meta = { ...META_DEFAULTS, graduationConsecutiveAgreements: 3, graduationMinDays: 14 };
   const short = {
     ...emptyDomainStats("d"),
     consecutiveAgreements: 2,
     firstConsecutiveAt: "2026-07-01T00:00:00.000Z",
   };
-  assert.equal(graduationProposalCheck(short, meta, "2026-08-01T00:00:00.000Z").propose, false);
+  assert.equal(graduationReadiness(short, meta, "2026-08-01T00:00:00.000Z").propose, false);
 
   const tooRecent = {
     ...emptyDomainStats("d"),
     consecutiveAgreements: 3,
     firstConsecutiveAt: "2026-07-28T00:00:00.000Z",
   };
-  const recentCheck = graduationProposalCheck(tooRecent, meta, "2026-08-01T00:00:00.000Z");
+  const recentCheck = graduationReadiness(tooRecent, meta, "2026-08-01T00:00:00.000Z");
   assert.equal(recentCheck.propose, false);
   assert.match(recentCheck.reason, /days/);
 
@@ -67,14 +64,9 @@ test("a proposal needs both the streak and the time, and only ever proposes", ()
     consecutiveAgreements: 3,
     firstConsecutiveAt: "2026-07-01T00:00:00.000Z",
   };
-  assert.equal(graduationProposalCheck(earned, meta, "2026-08-01T00:00:00.000Z").propose, true);
+  assert.equal(graduationReadiness(earned, meta, "2026-08-01T00:00:00.000Z").propose, true);
   assert.equal(
-    graduationProposalCheck({ ...earned, graduated: true }, meta, "2026-08-01T00:00:00.000Z").propose,
-    false,
-  );
-  assert.equal(
-    graduationProposalCheck({ ...earned, proposedAt: "2026-07-30T00:00:00.000Z" }, meta, "2026-08-01T00:00:00.000Z")
-      .propose,
+    graduationReadiness({ ...earned, graduated: true }, meta, "2026-08-01T00:00:00.000Z").propose,
     false,
   );
 });
@@ -101,7 +93,6 @@ test("sustained agreement alone never graduates a domain", async () => {
     assert.equal(await store.isGraduated("ci-flake"), false);
 
     // Marking a proposal is also not a grant.
-    await markProposed(store, "ci-flake", "2026-07-01T00:00:00.000Z");
     assert.equal(await store.isGraduated("ci-flake"), false);
 
     await graduateDomain(store, "ci-flake", "2026-07-02T00:00:00.000Z");
@@ -171,36 +162,6 @@ test("audit decay keeps ageing after a domain graduates", () => {
   assert.ok(seasoned >= 0.05, "and it never reaches zero");
 });
 
-test("stop proposing means stop; not yet means ask again later", async () => {
-  const root = await makeRoot("hq-proposal-options");
-  try {
-    const store = makeStore(root);
-    await store.ensure();
-    const meta = { ...META_DEFAULTS, graduationConsecutiveAgreements: 1, graduationMinDays: 0 };
-    const earned = {
-      ...emptyDomainStats("ci-flake"),
-      consecutiveAgreements: 5,
-      firstConsecutiveAt: "2026-07-01T00:00:00.000Z",
-      proposedAt: "2026-07-20T00:00:00.000Z",
-    };
-
-    // Both options leave authority alone, so the only thing that can distinguish
-    // them is whether HQ raises the domain again — and the packet prices them as if
-    // it does.
-    await muteProposals(store, "ci-flake");
-    const muted = (await store.readGraduation()).domains["ci-flake"];
-    assert.equal(
-      graduationProposalCheck({ ...earned, ...muted }, meta, "2026-07-28T00:00:00.000Z").propose,
-      false,
-    );
-
-    await allowNextProposal(store, "ci-flake");
-    const cleared = (await store.readGraduation()).domains["ci-flake"];
-    assert.equal(cleared?.proposedAt, null, "the stamp is cleared so it can be raised again");
-  } finally {
-    await dropRoot(root);
-  }
-});
 
 test("writing through a symlinked file keeps the link", async () => {
   const root = await makeRoot("hq-symlink");

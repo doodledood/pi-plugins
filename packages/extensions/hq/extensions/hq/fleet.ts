@@ -53,6 +53,12 @@ export interface FleetInput {
   doneToday: number;
   now: Date;
   meta: MetaDoctrine;
+  /**
+   * Domains whose record has crossed the graduation thresholds. HQ shows readiness
+   * here rather than asking about it: a packet would spend a decision on something
+   * that changes nothing, since only the user's command can grant authority.
+   */
+  readyToGraduate?: readonly string[];
   /** Rows beyond this are summarized rather than listed. */
   maxRows?: number;
   /** Sessions quiet for longer than this are not counted as idle. Default 24h. */
@@ -141,6 +147,8 @@ export function buildFleetCard(input: FleetInput): FleetCardModel {
   const summaryParts: string[] = [];
   if (idleCount > 0) summaryParts.push(`${GLYPHS.idle} ${idleCount} idle`);
 
+  const ready = input.readyToGraduate ?? [];
+  if (ready.length > 0) summaryParts.push(`★ ${ready.join(", ")} ready to graduate`);
   return {
     // Both counts the glance promises, in the card's own vocabulary so they fit.
     header: `◆ HQ · ${GLYPHS["needs-ruling"]} ${pending.length} · ${GLYPHS.done} ${input.doneToday} today`,

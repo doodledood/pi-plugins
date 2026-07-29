@@ -58,7 +58,7 @@ test("a drill starts by reading, and the origin session is the row that shows it
   const h = await harness("hq-drill-start");
   try {
     const started = await startDrill(h.deps, h.packet, "which test failed?");
-    assert.equal(started.spawnedSessionId, "run-1");
+    assert.equal(started.spawnedRunId, "run-1");
 
     const drill = h.calls[0];
     assert.equal(drill?.kind, "drill");

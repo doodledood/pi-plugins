@@ -9,13 +9,7 @@
  */
 
 import { applyRatifiedRule, coverageFor, loadDoctrine } from "./doctrine.ts";
-import {
-  allowNextProposal,
-  graduationProposalCheck,
-  markProposed,
-  muteProposals,
-  recordShadowOutcome,
-} from "./graduation.ts";
+import { recordShadowOutcome } from "./graduation.ts";
 import { newId } from "./io.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
@@ -47,7 +41,7 @@ export interface RulingDeps {
   spawner: Spawner;
   now?: () => Date;
   /** Injected so drilling can be observed in tests without a model. */
-  startDrill?: (packet: Packet, question: string) => Promise<{ spawnedSessionId: string | null }>;
+  startDrill?: (packet: Packet, question: string) => Promise<{ spawnedRunId: string | null }>;
 }
 
 export interface RulingResult {
@@ -143,7 +137,7 @@ export async function applyRuling(
     const question = request.question.trim();
     const drill = deps.startDrill
       ? await deps.startDrill(packet, question)
-      : { spawnedSessionId: null };
+      : { spawnedRunId: null };
     // The drill marks the packet itself; this covers the case where drilling was
     // stubbed or could not start, so a deferred packet is never left presentable.
     const afterDrill = await deps.store.readPacket(packet.id);
@@ -159,7 +153,7 @@ export async function applyRuling(
       routing: {
         action: "drill",
         sessionFile: packet.sourceSessionFile,
-        spawnedSessionId: drill.spawnedSessionId,
+        spawnedRunId: drill.spawnedRunId,
         note: `drilling: ${question}`,
       },
     });
@@ -194,7 +188,7 @@ export async function applyRuling(
     routing: {
       action: packet.proposal ? "none" : packet.sourceSessionFile ? "resume" : "none",
       sessionFile: packet.sourceSessionFile,
-      spawnedSessionId: null,
+      spawnedRunId: null,
       note: "recorded; routing pending",
     },
   });
@@ -213,12 +207,7 @@ export async function applyRuling(
       agreed: shadowAgreed,
       at,
     });
-    const doctrine = await loadDoctrine(deps.store.root, packet.project);
-    const check = graduationProposalCheck(stats, doctrine.meta, at);
-    if (check.propose) {
-      proposals.push(await createGraduationProposal(deps, packet, check.reason));
-      await markProposed(deps.store, packet.domain, at);
-    }
+    void stats;
     const doctrineProposal = await createDoctrineProposal(deps, packet, ruling);
     if (doctrineProposal) proposals.push(doctrineProposal);
   }
@@ -273,7 +262,7 @@ async function routeRuling(
     return {
       action: "none",
       sessionFile: null,
-      spawnedSessionId: null,
+      spawnedRunId: null,
       note: "HQ's own doctrine: nothing to carry",
     };
   }
@@ -281,7 +270,7 @@ async function routeRuling(
     return {
       action: "none",
       sessionFile: null,
-      spawnedSessionId: null,
+      spawnedRunId: null,
       note: "source session was ephemeral; ruling recorded only",
     };
   }
@@ -312,7 +301,7 @@ async function routeRuling(
   return {
     action: "resume",
     sessionFile: packet.sourceSessionFile,
-    spawnedSessionId: spawned.runId,
+    spawnedRunId: spawned.runId,
     note: `resumed ${packet.sourceSessionId} at ${at}`,
   };
 }
@@ -325,27 +314,11 @@ async function applyProposalRuling(
 ): Promise<{ applied: boolean } | { error: string }> {
   // A graduation proposal is informational: only the user's command can flip a
   // domain, so ruling on the packet never changes authority (INV-G8).
-  if (proposal.kind === "graduation") {
-    // Both options leave authority untouched, so what distinguishes them is whether
-    // HQ raises the domain again. The proposal is already stamped as sent, so
-    // stamping it again would have made "stop proposing" and "not yet" identical.
-    if (proposal.domain) {
-      if (chosenOptionId(packet, request) === "reject") {
-        await muteProposals(deps.store, proposal.domain);
-      } else {
-        await allowNextProposal(deps.store, proposal.domain);
-      }
-    }
-    return { applied: false };
-  }
 
-  const chosen = chosenOptionId(packet, request);
-  const ratifying = chosen === "ratify" || (request.form === "custom" && !!request.text.trim());
-  if (!ratifying) return { applied: false };
-
-  const ruleText = request.form === "custom" && request.text.trim()
-    ? request.text.trim()
-    : proposal.ruleText;
+  // Only the ratify option ratifies. Free text used to become the rule verbatim, so
+  // "not sure, let us discuss" would have been written into doctrine as a rule.
+  if (chosenOptionId(packet, request) !== "ratify") return { applied: false };
+  const ruleText = proposal.ruleText;
 
   const result = await applyRatifiedRule({
     root: deps.store.root,
@@ -432,52 +405,6 @@ async function createDoctrineProposal(
   return created;
 }
 
-async function createGraduationProposal(
-  deps: RulingDeps,
-  packet: Packet,
-  reason: string,
-): Promise<Packet> {
-  const { packet: created } = await deps.store.createPacket({
-    sourceSessionId: packet.sourceSessionId,
-    sourceSessionFile: packet.sourceSessionFile,
-    project: packet.project,
-    domain: "hq-doctrine",
-    title: `graduation earned in ${packet.domain}`,
-    question:
-      `HQ has matched your rulings in "${packet.domain}" (${reason}). Do you want to grant it that domain?`,
-    options: [
-      {
-        id: "acknowledge",
-        label: `Noted — I will run /hq_graduate ${packet.domain} when I want it`,
-        price: "nothing changes until you run the command",
-      },
-      {
-        id: "reject",
-        label: "Stop proposing this domain for now",
-        price: "HQ stops raising it; the streak keeps building and you can still run the command",
-      },
-    ],
-    recommendationId: "acknowledge",
-    flipCondition:
-      "if the agreements came from easy cases rather than representative ones, keep deciding these yourself",
-    blastRadius: "low",
-    reversibility: "reversible",
-    dependsOn: [],
-    doctrineCitations: [],
-    shadowRuling: null,
-    annotations: [],
-    trivial: true,
-    proposal: {
-      kind: "graduation",
-      scope: "global",
-      section: "Precedents",
-      ruleText: reason,
-      replaces: null,
-      domain: packet.domain,
-    },
-  });
-  return created;
-}
 
 /**
  * Records that the user had to open a session to decide. This is the telemetry on

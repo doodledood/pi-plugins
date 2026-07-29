@@ -10,7 +10,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { loadConfig, type HqConfig } from "./config.ts";
 import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
 import { buildFleetCard, type FleetCardModel } from "./fleet.ts";
-import { graduateDomain, revokeDomain } from "./graduation.ts";
+import { graduateDomain, revokeDomain, readyDomains } from "./graduation.ts";
 import { resolveStateRoot } from "./paths.ts";
 import { SEAT_PROMPT } from "./prompts.ts";
 import { SessionReporter } from "./reporter.ts";
@@ -86,6 +86,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         doneToday: done,
         now: now(),
         meta: doctrine.meta,
+        readyToGraduate: readyDomains(await store.readGraduation(), doctrine.meta, now()),
       });
     };
 

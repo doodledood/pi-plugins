@@ -228,7 +228,7 @@ async function runSkeleton(world: World): Promise<{ packet?: Packet; stop?: Stop
   });
   await check("the ruling was carried into a continuation", () => {
     assert.equal(ruled.ruling.routing.action, "resume");
-    assert.ok(ruled.ruling.routing.spawnedSessionId, "a continuation was spawned");
+    assert.ok(ruled.ruling.routing.spawnedRunId, "a continuation was spawned");
     return `${ruled.ruling.routing.note}`;
   });
 
