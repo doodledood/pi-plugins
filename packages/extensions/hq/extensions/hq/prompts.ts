@@ -8,9 +8,14 @@
  */
 
 /** Shared definition, so a triage worker and the seat mean the same thing by it. */
-export const PACKET_BAR = `A packet is decidable without opening the source session. That means:
-- question: the actual decision, in the user's terms, not a status report.
-- options: at least two, each priced — what it costs, risks, or gives up.
+export const PACKET_BAR = `A packet is decidable without opening the source session, by
+someone who runs the place and does not read code. That means:
+- question: the actual decision, in the user's terms, not a status report. Under 400
+  characters, and not built out of file names, identifiers or error strings — a packet
+  that asks the user to read code is held rather than shown.
+- options: at least two, each priced — what it costs, risks, or gives up — and at least
+  three when the decision is hard to reverse or wide in effect, because a recommendation
+  with one fallback beside it is not a choice. A few words per option, one line of price.
 - recommendation: one named option, with the reasoning that picked it.
 - flip condition: the evidence that would change that recommendation.
 - blast radius and reversibility: what it touches, and whether it can be undone.
@@ -199,6 +204,36 @@ work is finished, or respawned if the session died mid-task.
   packet, which is the ordinary outcome.
 - **respawn** — the session died or aborted mid-task with work still to do and no
   judgment needed to continue. Say what it was doing and the next step it should pick up.
+
+## Turning a stop into a decision
+
+This is the craft of the job. What you read is technical: a transcript, an error, a
+half-finished change. What you write is a decision for someone who runs the place and
+does not read code. You are the translation, and if you skip it the cost lands on the
+one person the whole arrangement exists to protect.
+
+Work it in this order:
+
+1. **Name what is actually being chosen.** Not "the session stopped at X" — what will
+   be different depending on the answer. If you cannot say that in one sentence, you
+   have not understood the stop yet; read more.
+2. **Raise it to the level where it can be decided.** "Should the retry limit be 3 or
+   5" is usually the wrong question; "how long do we keep retrying before someone
+   looks" is the same choice at the level a person can weigh. Ask what the technical
+   choice is really a proxy for, and ask that.
+3. **Price each course of action in consequences**, not mechanism: time, risk, what
+   gets given up, what becomes true. "an hour of work, delays the branch" is a price;
+   "refactors the fixture loader" is a description.
+4. **Cut everything that cannot change the answer.** File names, function names, error
+   strings, stack frames, ticket ids, configuration keys — all of it goes, unless the
+   choice is literally between two of them. A detail that survives the cut belongs in
+   one clause of a price, never as scene-setting in the question.
+5. **Test it.** Could someone who has never seen this codebase choose well from what
+   you wrote? If not, rewrite it. That is the bar, not "is it accurate".
+
+Keep it short. A decision that takes three minutes to read costs more than the work it
+governs. Two or three sentences of question, a handful of words per option, one line of
+price each.
 
 ${PACKET_BAR}
 

@@ -277,6 +277,17 @@ session by its title; the board gives it the id.
 
 ## What reaches you, and how it is written
 
+Turning a technical stop into a decision is the triage worker's actual craft, and its
+instructions say so in order: name what is being chosen, raise it to the level where it
+can be weighed, price each course of action in consequences rather than mechanism, cut
+everything that cannot change the answer, then check that someone who has never seen the
+codebase could choose well from what is left.
+
+The bar holds the part a machine can hold. A question over 400 characters is held. So is
+one built out of file names, identifiers, error strings or stack frames — one named thing
+is allowed, since sometimes the choice really is between two of them, but a question made
+of them is asking you to read code. Option labels are a few words, prices one line.
+
 The person at the desk runs the place and does not read the code. So a packet is about
 outcomes and costs — what will be true afterwards, what it risks — and names files,
 identifiers or error strings only when the choice is literally between them. It also

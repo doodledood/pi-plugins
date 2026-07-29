@@ -803,3 +803,53 @@ test("a rule that only restates its own case is refused before it reaches the us
     assert.deepEqual(ruleGeneralityViolations(rule), [], `should have passed: ${rule}`);
   }
 });
+
+test("a decision written in implementation detail is held, not shown", async () => {
+  const root = await makeRoot("hq-load");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+
+    // What triage reads is technical; what it writes has to be a decision. A question
+    // built out of code asks the user to read code, which is the cost HQ removes.
+    const technical = await store.createPacket(packetDraftFixture({
+      question:
+        "The `currentStepIndex` in normalizeInput did not advance because ~/src/router.ts threw at handleReply (router.ts:88); should we patch replyAnchor or retry?",
+    }) as never);
+    assert.equal(technical.packet.status, "held");
+    assert.ok(
+      technical.violations.some((violation) =>
+        violation.field === "question" && /implementation detail/.test(violation.reason)
+      ),
+      JSON.stringify(technical.violations),
+    );
+
+    // One named thing is allowed: sometimes the choice really is between two of them.
+    const named = await store.createPacket(packetDraftFixture({
+      sourceSessionId: "sess-named",
+      question: "The retry keeps failing on the same test. Retry once more, or look at it now?",
+    }) as never);
+    assert.equal(named.packet.status, "pending");
+
+    // And a decision nobody could read in a sitting is held on length alone.
+    const wordy = await store.createPacket(packetDraftFixture({
+      sourceSessionId: "sess-wordy",
+      question: "Should we accept this as done? ".repeat(20),
+    }) as never);
+    assert.equal(wordy.packet.status, "held");
+    assert.ok(wordy.violations.some((violation) => /under 400/.test(violation.reason)));
+
+    const paragraph = await store.createPacket(packetDraftFixture({
+      sourceSessionId: "sess-label",
+      options: [
+        { id: "a", label: "Accept it as done ".repeat(6), price: "nothing changes" },
+        { id: "b", label: "Send it back", price: "another pass, half a day" },
+      ],
+      recommendationId: "a",
+    }) as never);
+    assert.equal(paragraph.packet.status, "held");
+    assert.ok(paragraph.violations.some((violation) => /name the course of action/.test(violation.reason)));
+  } finally {
+    await dropRoot(root);
+  }
+});

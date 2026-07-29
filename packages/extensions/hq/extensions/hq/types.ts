@@ -727,6 +727,22 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
   if (!substantive(packet.question, 3)) {
     violations.push({ field: "question", reason: "not a substantive question" });
   }
+  // Reading load is part of the bar. A decision that takes minutes to read costs more
+  // than the work it governs, and length is the one part of that a machine can hold.
+  if (packet.question.trim().length > MAX_QUESTION) {
+    violations.push({
+      field: "question",
+      reason: `question is ${packet.question.trim().length} characters; say it in under ${MAX_QUESTION}`,
+    });
+  }
+  const jargon = implementationDetail(packet.question);
+  if (jargon.length > 1) {
+    violations.push({
+      field: "question",
+      reason:
+        `written in implementation detail (${jargon.slice(0, 3).join(", ")}): ask what is being chosen, not how it is done`,
+    });
+  }
   if (packet.options.length < 2) {
     violations.push({ field: "options", reason: "fewer than two options to choose between" });
   }
@@ -744,6 +760,18 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
     });
   }
   packet.options.forEach((option, index) => {
+    if (option.label.trim().length > MAX_OPTION_LABEL) {
+      violations.push({
+        field: `options[${index}].label`,
+        reason: `label is a paragraph; name the course of action in under ${MAX_OPTION_LABEL} characters`,
+      });
+    }
+    if (option.price.trim().length > MAX_OPTION_PRICE) {
+      violations.push({
+        field: `options[${index}].price`,
+        reason: `price is ${option.price.trim().length} characters; one line, under ${MAX_OPTION_PRICE}`,
+      });
+    }
     if (!substantive(option.label, 1)) {
       violations.push({ field: `options[${index}].label`, reason: "empty or placeholder label" });
     }
@@ -830,6 +858,34 @@ export function meetsPacketBar(packet: Packet): boolean {
  * no rule: it can never decide the next one, and it makes the file longer to read for
  * nothing. These are the overfits a template or a hurried draft actually produces.
  */
+/** How much a decision may ask the user to read before it costs more than it saves. */
+export const MAX_QUESTION = 400;
+export const MAX_OPTION_LABEL = 80;
+export const MAX_OPTION_PRICE = 240;
+
+/**
+ * Implementation detail in a decision: paths, quoted identifiers, camelCase or
+ * snake_case names, stack frames, long hex. One of these can be unavoidable — sometimes
+ * the choice really is between two named things — but a question built out of them is
+ * asking the user to read code, which is the cost this whole arrangement removes.
+ */
+export function implementationDetail(text: string): string[] {
+  const patterns: RegExp[] = [
+    /`[^`]+`/g,
+    /(^|\s)(~\/|\.{0,2}\/)[\w.\-]+/g,
+    /\b[\w.\-]+\/[\w.\-]*\.[a-z]{2,4}\b/g,
+    /\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]+){1,}\b/g,
+    /\b[a-z][a-z0-9]*_[a-z0-9_]{2,}\b/g,
+    /\bat [\w.$]+ \([^)]*:\d+\)/g,
+    /\b[0-9a-f]{8,}\b/g,
+  ];
+  const found = new Set<string>();
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) found.add(match[0].trim());
+  }
+  return [...found];
+}
+
 export function ruleGeneralityViolations(text: string): string[] {
   const rule = text.trim();
   const found: string[] = [];
