@@ -244,6 +244,12 @@ export interface DomainStats {
    * decay has to key off work done rather than agreements recorded.
    */
   autoAnswered: number;
+  /**
+   * Set when the user tells HQ to stop proposing this domain. Distinct from
+   * proposedAt, which is stamped whenever a proposal goes out: without it, the
+   * proposal's "stop asking" and "not yet" options would do exactly the same thing.
+   */
+  proposalsMuted: boolean;
   /** True only after an explicit user command. */
   graduated: boolean;
   graduatedAt: string | null;
@@ -266,6 +272,7 @@ export function emptyDomainStats(domain: string): DomainStats {
     lastRulingAt: null,
     overrides: 0,
     autoAnswered: 0,
+    proposalsMuted: false,
     graduated: false,
     graduatedAt: null,
     proposedAt: null,
@@ -675,6 +682,7 @@ export function parseGraduationState(value: unknown): GraduationState | undefine
       lastRulingAt: strOrNull(raw.lastRulingAt) ?? null,
       overrides: num(raw.overrides) ?? 0,
       autoAnswered: num(raw.autoAnswered) ?? 0,
+      proposalsMuted: bool(raw.proposalsMuted) ?? false,
       graduated: bool(raw.graduated) ?? false,
       graduatedAt: strOrNull(raw.graduatedAt) ?? null,
       proposedAt: strOrNull(raw.proposedAt) ?? null,

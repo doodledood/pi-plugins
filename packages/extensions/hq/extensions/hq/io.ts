@@ -15,6 +15,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   writeFile,
@@ -44,10 +45,14 @@ function temporaryPath(path: string): string {
 /** Whole-file replacement that a reader can never observe half-written. */
 export async function atomicWriteText(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = temporaryPath(path);
+  // rename() replaces a symlink rather than writing through it, which would turn a
+  // user's symlinked doctrine file into an ordinary file in their HQ state and
+  // silently detach it from wherever they actually keep it.
+  const target = await realpath(path).catch(() => path);
+  const temporary = temporaryPath(target);
   try {
     await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, path);
+    await rename(temporary, target);
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
   }

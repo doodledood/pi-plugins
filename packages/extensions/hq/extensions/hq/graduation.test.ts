@@ -7,11 +7,16 @@ import {
   foldShadowOutcome,
   graduateDomain,
   graduationProposalCheck,
+  allowNextProposal,
   markProposed,
+  muteProposals,
   recordShadowOutcome,
   revokeDomain,
   shouldSampleForAudit,
 } from "./graduation.ts";
+import { lstat, readFile, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { atomicWriteText } from "./io.ts";
 import { dropRoot, makeRoot, makeStore } from "./testing.ts";
 import { emptyDomainStats } from "./types.ts";
 
@@ -164,4 +169,53 @@ test("audit decay keeps ageing after a domain graduates", () => {
   const seasoned = effectiveAuditRate(meta, { ...graduated, autoAnswered: 300 });
   assert.ok(seasoned < young, "300 doctrine-answered stops must lower the rate");
   assert.ok(seasoned >= 0.05, "and it never reaches zero");
+});
+
+test("stop proposing means stop; not yet means ask again later", async () => {
+  const root = await makeRoot("hq-proposal-options");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+    const meta = { ...META_DEFAULTS, graduationConsecutiveAgreements: 1, graduationMinDays: 0 };
+    const earned = {
+      ...emptyDomainStats("ci-flake"),
+      consecutiveAgreements: 5,
+      firstConsecutiveAt: "2026-07-01T00:00:00.000Z",
+      proposedAt: "2026-07-20T00:00:00.000Z",
+    };
+
+    // Both options leave authority alone, so the only thing that can distinguish
+    // them is whether HQ raises the domain again — and the packet prices them as if
+    // it does.
+    await muteProposals(store, "ci-flake");
+    const muted = (await store.readGraduation()).domains["ci-flake"];
+    assert.equal(
+      graduationProposalCheck({ ...earned, ...muted }, meta, "2026-07-28T00:00:00.000Z").propose,
+      false,
+    );
+
+    await allowNextProposal(store, "ci-flake");
+    const cleared = (await store.readGraduation()).domains["ci-flake"];
+    assert.equal(cleared?.proposedAt, null, "the stamp is cleared so it can be raised again");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("writing through a symlinked file keeps the link", async () => {
+  const root = await makeRoot("hq-symlink");
+  try {
+    const real = join(root, "real-doctrine.md");
+    const linked = join(root, "linked-doctrine.md");
+    await writeFile(real, "original\n", "utf8");
+    await symlink(real, linked);
+
+    // rename() would replace the link with a plain file, quietly detaching a user
+    // who keeps their doctrine in a dotfiles repo from the file they actually edit.
+    await atomicWriteText(linked, "rewritten\n");
+    assert.equal((await lstat(linked)).isSymbolicLink(), true, "still a link");
+    assert.equal(await readFile(real, "utf8"), "rewritten\n", "and the target got the write");
+  } finally {
+    await dropRoot(root);
+  }
 });

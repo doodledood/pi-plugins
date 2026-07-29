@@ -9,7 +9,13 @@
  */
 
 import { applyRatifiedRule, coverageFor, loadDoctrine } from "./doctrine.ts";
-import { graduationProposalCheck, markProposed, recordShadowOutcome } from "./graduation.ts";
+import {
+  allowNextProposal,
+  graduationProposalCheck,
+  markProposed,
+  muteProposals,
+  recordShadowOutcome,
+} from "./graduation.ts";
 import { newId } from "./io.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
@@ -317,14 +323,18 @@ async function applyProposalRuling(
   proposal: PacketProposal,
   request: RulingRequest,
 ): Promise<{ applied: boolean } | { error: string }> {
-  void deps;
   // A graduation proposal is informational: only the user's command can flip a
   // domain, so ruling on the packet never changes authority (INV-G8).
   if (proposal.kind === "graduation") {
-    // Both options leave authority untouched, so what distinguishes them is
-    // whether HQ raises the domain again. "Stop proposing" has to actually stop it.
-    if (chosenOptionId(packet, request) === "reject" && proposal.domain) {
-      await markProposed(deps.store, proposal.domain, new Date().toISOString());
+    // Both options leave authority untouched, so what distinguishes them is whether
+    // HQ raises the domain again. The proposal is already stamped as sent, so
+    // stamping it again would have made "stop proposing" and "not yet" identical.
+    if (proposal.domain) {
+      if (chosenOptionId(packet, request) === "reject") {
+        await muteProposals(deps.store, proposal.domain);
+      } else {
+        await allowNextProposal(deps.store, proposal.domain);
+      }
     }
     return { applied: false };
   }

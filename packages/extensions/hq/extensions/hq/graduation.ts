@@ -40,6 +40,22 @@ export function foldShadowOutcome(stats: DomainStats, outcome: ShadowOutcome): D
   return next;
 }
 
+/** Stops HQ raising this domain again until the user graduates or revokes it. */
+export async function muteProposals(
+  store: Pick<HqStore, "updateDomain">,
+  domain: string,
+): Promise<void> {
+  await store.updateDomain(domain, (stats) => ({ ...stats, proposalsMuted: true }));
+}
+
+/** Clears the last proposal stamp so a longer record can raise the domain again. */
+export async function allowNextProposal(
+  store: Pick<HqStore, "updateDomain">,
+  domain: string,
+): Promise<void> {
+  await store.updateDomain(domain, (stats) => ({ ...stats, proposedAt: null }));
+}
+
 /** Counts one stop this domain answered from doctrine, which ages its audit rate. */
 export async function recordAutoAnswer(
   store: Pick<HqStore, "updateDomain">,
@@ -77,6 +93,7 @@ export function graduationProposalCheck(
   now: string,
 ): ProposalCheck {
   if (stats.graduated) return { propose: false, reason: "already graduated" };
+  if (stats.proposalsMuted) return { propose: false, reason: "muted-by-user" };
   if (stats.proposedAt) return { propose: false, reason: "already proposed" };
   if (stats.consecutiveAgreements < meta.graduationConsecutiveAgreements) {
     return {
