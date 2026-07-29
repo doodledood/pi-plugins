@@ -26,6 +26,11 @@ export const PLAIN_THEME: ThemeLike = {
   bold: (text) => text,
 };
 
+/** How many lines of model-written prose a row that is not in focus may take. */
+const PRICE_LINES = 2;
+/** Same, for the flip condition above the rows. */
+const FLIP_LINES = 2;
+
 export type AskRowKind = "option" | "defer" | "words" | "dive";
 
 export interface AskDialogRow {
@@ -44,8 +49,10 @@ export interface AskDialogTab {
   label: string;
   title: string;
   question: string;
-  /** Blast radius, reversibility and what would change the answer. */
+  /** Blast radius and reversibility: one short line, always shown in full. */
   stakes: string;
+  /** What would change the answer. Model-written, so often a paragraph. */
+  flipCondition: string;
   /** Earlier questions from this session that this packet replaced. */
   replaces: string[];
   rows: AskDialogRow[];
@@ -75,7 +82,8 @@ export function buildAskDialog(packets: readonly Packet[]): AskDialogTab[] {
       label: shorten(packet.title, 18),
       title: packet.title,
       question: packet.question,
-      stakes: `${packet.blastRadius} blast · ${packet.reversibility} · changes if: ${packet.flipCondition}`,
+      stakes: `${packet.blastRadius} blast · ${packet.reversibility}`,
+      flipCondition: packet.flipCondition,
       replaces: packet.supersedes ?? [],
       rows: [
         ...(recommended
@@ -258,49 +266,75 @@ export function renderAskDialog(
   deps: RenderDeps,
 ): string[] {
   const { theme } = deps;
-  const width = Math.max(20, deps.width);
+  // One column short of what the host offered. A line that exactly fills the width
+  // wrapped onto the next row in a narrow terminal, which is what made the dialog look
+  // ragged: the frame and the prose disagreed about where the edge was.
+  const width = Math.max(20, deps.width - 2);
   const lines: string[] = [];
   const rule = () => lines.push(theme.fg("accent", "─".repeat(width)));
-  const wrapped = (text: string, indent = " ") => {
-    for (const line of wrap(text, width - indent.length)) lines.push(`${indent}${line}`);
+  const wrapped = (text: string, indent = " ", maxLines?: number) => {
+    const all = wrap(text, width - indent.length);
+    const shown = maxLines === undefined ? all : all.slice(0, maxLines);
+    if (maxLines !== undefined && all.length > maxLines && shown.length > 0) {
+      shown[shown.length - 1] = `${shown[shown.length - 1]}…`;
+    }
+    for (const line of shown) lines.push(`${indent}${line}`);
   };
 
   rule();
 
   if (tabs.length > 1) {
-    const cells = tabs.map((tab, index) => {
-      const answered = state.answers.has(tab.packetId);
-      const cell = ` ${answered ? "■" : "□"} ${tab.label} `;
-      return index === state.tab
-        ? theme.bg("selectedBg", theme.fg("text", cell))
-        : theme.fg(answered ? "success" : "muted", cell);
-    });
-    const ready = answeredAll(tabs, state);
-    const submit = " ✓ rule all ";
-    cells.push(
-      state.tab === tabs.length
-        ? theme.bg("selectedBg", theme.fg("text", submit))
-        : theme.fg(ready ? "success" : "dim", submit),
+    // One short line, not a bar of labelled cells: a bar wide enough for five titles
+    // wraps in a narrow terminal, and a cell split across lines reads as a sixth
+    // decision that does not exist. The titles are on the last tab, in full.
+    const dots = tabs.length <= 12
+      ? tabs
+        .map((tab, index) =>
+          index === state.tab ? "◉" : state.answers.has(tab.packetId) ? "■" : "□"
+        )
+        .join(" ")
+      : "";
+    const position = state.tab === tabs.length
+      ? `all ${tabs.length} decisions`
+      : `decision ${state.tab + 1} of ${tabs.length}`;
+    const ruled = tabs.filter((tab) => state.answers.has(tab.packetId)).length;
+    wrapped(
+      `${theme.fg("accent", position)}${theme.fg("muted", dots === "" ? " · " : ` · ${dots} · `)}${
+        theme.fg(ruled === tabs.length ? "success" : "muted", `${ruled}/${tabs.length} ruled`)
+      }`,
     );
-    wrapped(cells.join(" "));
     lines.push("");
   }
 
   if (state.tab === tabs.length) {
     wrapped(theme.fg("accent", theme.bold(`${tabs.length} decisions, ready to rule`)));
     lines.push("");
-    for (const tab of tabs) {
+    for (const [index, tab] of tabs.entries()) {
       const answer = state.answers.get(tab.packetId);
       const row = answer ? tab.rows[answer.rowIndex] : undefined;
       const said = answer?.text ? `“${answer.text}”` : row?.label ?? "";
-      wrapped(`${theme.fg("muted", `${tab.label}: `)}${theme.fg("text", said)}`);
+      // Whole titles here, not the tab-sized short ones: two packets can shorten to
+      // the same 18 characters, and this is the list the user rules from.
+      wrapped(theme.fg("text", `${index + 1}. ${tab.title}`), " ", 2);
+      wrapped(
+        answer ? theme.fg("success", said) : theme.fg("warning", "not ruled yet"),
+        "    ",
+        2,
+      );
+      if (index < tabs.length - 1) lines.push("");
     }
     lines.push("");
-    const missing = tabs.filter((tab) => !state.answers.has(tab.packetId)).map((tab) => tab.label);
+    const missing = tabs
+      .map((tab, index) => ({ tab, index }))
+      .filter((entry) => !state.answers.has(entry.tab.packetId))
+      .map((entry) => `${entry.index + 1}`);
     wrapped(
       missing.length === 0
         ? theme.fg("success", "enter to rule all of them")
-        : theme.fg("warning", `still open: ${missing.join(", ")}`),
+        : theme.fg(
+          "warning",
+          `still open: ${missing.length === 1 ? "decision" : "decisions"} ${missing.join(", ")}`,
+        ),
     );
     lines.push("");
     wrapped(theme.fg("dim", "←→ move · enter rule all · esc leave them pending"));
@@ -318,6 +352,9 @@ export function renderAskDialog(
   wrapped(theme.fg("text", tab.question));
   lines.push("");
   wrapped(theme.fg("muted", tab.stakes));
+  // Capped: a flip condition the model wrote as a paragraph would push the options
+  // themselves off the screen, and the options are what the user is here for.
+  wrapped(theme.fg("muted", `changes if: ${tab.flipCondition}`), " ", FLIP_LINES);
   if (tab.replaces.length > 0) {
     wrapped(
       theme.fg("dim", `replaces ${tab.replaces.length} earlier question${
@@ -335,7 +372,9 @@ export function renderAskDialog(
       theme.fg(selected || typing ? "accent" : "text", label),
       selected ? theme.fg("accent", "> ") : "  ",
     );
-    wrapped(theme.fg("muted", row.price), "     ");
+    // The row in focus shows its price in full; the rest are capped, so a long one
+    // cannot bury the options below it. Moving the cursor is how you read the rest.
+    wrapped(theme.fg("muted", row.price), "     ", selected ? undefined : PRICE_LINES);
     // A blank line between rows: the crowding was the complaint, and the price
     // underneath each label needs room to read as belonging to it.
     if (index < tab.rows.length - 1) lines.push("");

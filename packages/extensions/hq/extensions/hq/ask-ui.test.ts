@@ -114,10 +114,9 @@ test("a batch is one dialog: a tab each, and nothing is ruled until they all are
   assert.equal(first.state.tab, 1, "it moves to the next open decision");
   state = first.state;
 
-  // The tab bar shows which are done and which are not.
+  // Progress is one short line that cannot wrap into a phantom decision.
   const midway = renderAskDialog(tabs, state, { theme: PLAIN_THEME, width: 80 }).join("\n");
-  assert.match(midway, /■ retry the suite/);
-  assert.match(midway, /□ raise the CI tim/);
+  assert.match(midway, /decision 2 of 3 · ■ ◉ □ · 1\/3 ruled/);
 
   state = askDialogKey(tabs, state, "enter").state;
   const last = askDialogKey(tabs, state, "enter");
@@ -139,7 +138,11 @@ test("the submit tab refuses while a decision is still open, and names which", (
   const state = { ...initialAskState(), tab: 2 };
   assert.equal(askDialogKey(tabs, state, "enter").effect.kind, "none");
   const body = renderAskDialog(tabs, state, { theme: PLAIN_THEME, width: 80 }).join("\n");
-  assert.match(body, /still open: retry the suite, raise the CI tim/);
+  assert.match(body, /still open: decisions 1, 2/);
+  // The summary identifies them by their whole titles, since two can shorten alike.
+  assert.match(body, /1\. retry the suite/);
+  assert.match(body, /2\. raise the CI timeout/);
+  assert.match(body, /all 2 decisions · □ □ · 0\/2 ruled/);
 });
 
 test("esc leaves everything pending, from any tab", () => {
@@ -154,4 +157,39 @@ test("a packet that replaced earlier questions says so where it is decided", () 
   const tabs = buildAskDialog([packet({ supersedes: ["which branch", "which reviewer"] })]);
   const body = renderAskDialog(tabs, initialAskState(), { theme: PLAIN_THEME, width: 80 }).join("\n");
   assert.match(body, /replaces 2 earlier questions here: which branch; which reviewer/);
+});
+
+test("model-written prose cannot bury the options, and focus reveals it", () => {
+  const wordy = "unverified: " + "the residual question needs the owner or a session replay. ".repeat(6);
+  const tabs = buildAskDialog([packet({
+    flipCondition: "if " + "the same assertion fails on the previous two runs and nothing else changed. ".repeat(4),
+    options: [
+      { id: "accept", label: "Accept as done", price: wordy },
+      { id: "follow-up", label: "There is a follow-up", price: "the session is resumed with your instruction" },
+    ],
+    recommendationId: "accept",
+  })]);
+
+  const lines = renderAskDialog(tabs, { ...initialAskState(), cursor: 1 }, {
+    theme: PLAIN_THEME,
+    width: 72,
+  });
+  const body = lines.join("\n");
+  assert.match(body, /changes if: [\s\S]*?…/, "a paragraph-long flip condition is capped");
+  assert.match(body, /2\. There is a follow-up/, "the options are still on screen");
+
+  // The unfocused long price is capped; focusing it shows the whole thing.
+  const cappedAt = lines.findIndex((line) => line.includes("unverified:"));
+  assert.ok(lines[cappedAt + 1]?.includes("…") || lines[cappedAt]?.includes("…"));
+  const focused = renderAskDialog(tabs, initialAskState(), { theme: PLAIN_THEME, width: 72 })
+    .join("\n");
+  const focusedLines = renderAskDialog(tabs, initialAskState(), {
+    theme: PLAIN_THEME,
+    width: 72,
+  });
+  assert.ok(
+    focusedLines.length > lines.length + 3,
+    "focusing the row shows the whole price the capped version elided",
+  );
+  assert.ok(focused.includes("unverified:"));
 });

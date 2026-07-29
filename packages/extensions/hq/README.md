@@ -230,10 +230,14 @@ digit picks one, and the last three are always there: ask something first, rule 
 own words, or record that you had to open the session anyway. The two that need words
 open an editor in place rather than throwing a second dialog at you.
 
-A batch is **one dialog with a tab per decision** — filled and empty markers show what
-is still open, moving between them costs nothing because nothing is applied until you
-submit, and the last tab shows every ruling you are about to give. Esc from anywhere
-leaves all of them pending.
+A batch is **one dialog, one decision at a time** — `◉ ■ □` shows where you are and
+what is still open, ←→ moves, and the last screen lists every decision by its whole title
+with the ruling you are about to give. Nothing is applied until you submit, so moving
+around costs nothing and Esc from anywhere leaves all of them pending.
+
+Model-written prose is capped so it cannot bury the options: two lines for a price or a
+flip condition, with the row you are on shown in full. Everything wraps to two columns
+inside the terminal width, so nothing ragged runs off the edge in a narrow window.
 
 The layout is a model and a pure renderer (`ask-ui.ts`), the way the fleet card is, so
 what the dialog puts on screen is asserted on in tests rather than eyeballed: that every
