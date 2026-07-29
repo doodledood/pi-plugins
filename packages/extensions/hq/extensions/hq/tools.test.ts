@@ -15,7 +15,7 @@ import {
   packetDraftFixture,
   recordingSpawner,
 } from "./testing.ts";
-import { buildAskRows, registerHqTools, toTriageOutcome, type ToolDeps } from "./tools.ts";
+import { askFallbackLines, askHeader, buildAskRows, registerHqTools, toTriageOutcome, type ToolDeps } from "./tools.ts";
 import type { Packet } from "./types.ts";
 import type { SpawnRequest } from "./spawn.ts";
 
@@ -113,13 +113,14 @@ test("the ask rows put the recommendation first and carry the ruling each one me
   try {
     const packet = await queue(h);
     const rows = buildAskRows(packet);
-    assert.match(rows[0]?.label ?? "", /^1\) Retry the suite \(recommended\)/);
-    assert.match(rows[0]?.label ?? "", /eight minutes of CI/);
+    assert.match(rows[0]?.label ?? "", /^1\) Retry the suite \(recommended\)$/);
+    assert.match(rows[0]?.description ?? "", /eight minutes of CI/);
     assert.deepEqual(rows[0]?.intent, {
       kind: "ruling",
       request: { packetId: packet.id, form: "accept" },
     });
-    assert.match(rows[1]?.label ?? "", /^2\) Investigate the flake now — an hour of work/);
+    assert.match(rows[1]?.label ?? "", /^2\) Investigate the flake now$/);
+    assert.match(rows[1]?.description ?? "", /an hour of work/);
     assert.deepEqual(rows[1]?.intent, {
       kind: "ruling",
       request: { packetId: packet.id, form: "alternative", optionId: "investigate" },
@@ -142,7 +143,7 @@ test("choosing the recommendation records an accept and resumes the work", async
   const h = await harness("hq-tools-accept");
   try {
     const packet = await queue(h);
-    h.answers.push(buildAskRows(packet)[0]?.label);
+    h.answers.push(askFallbackLines(buildAskRows(packet))[0]);
     const report = await ask(h, [packet.id]);
     assert.match(report, /ruled \(accept/);
 
@@ -172,8 +173,8 @@ test("an option whose label starts with the recommendation's is still recorded a
       recommendationId: "retry",
     } as Partial<Packet>);
 
-    const rows = buildAskRows(packet);
-    h.answers.push(rows[1]?.label);
+    const lines = askFallbackLines(buildAskRows(packet));
+    h.answers.push(lines[1]);
     await ask(h, [packet.id]);
 
     const ruling = (await h.store.listRulings())[0];
@@ -194,9 +195,9 @@ test("deferring one packet does not block the next one in the same ask", async (
     const second = await queue(h);
 
     h.answers.push("Decide them one at a time"); // the batch ask comes first
-    h.answers.push(buildAskRows(first)[2]?.label); // "Ask first"
+    h.answers.push(askFallbackLines(buildAskRows(first))[2]); // "Ask first"
     h.typed.push("what did the failure log actually say?");
-    h.answers.push(buildAskRows(second)[0]?.label); // accept the second
+    h.answers.push(askFallbackLines(buildAskRows(second))[0]); // accept the second
 
     const report = await ask(h, [first.id, second.id]);
     const lines = report.split("\n");
@@ -217,9 +218,10 @@ test("a dive is logged with the ruling the user gave once they had looked", asyn
   try {
     const packet = await queue(h);
     const rows = buildAskRows(packet);
-    h.answers.push(rows[4]?.label); // the dive row
+    const lines = askFallbackLines(rows);
+    h.answers.push(lines[4]); // the dive row
     h.typed.push("which test actually failed");
-    h.answers.push(rows[1]?.label); // then an alternative
+    h.answers.push(askFallbackLines(rows)[1]); // then an alternative
 
     await ask(h, [packet.id]);
 
@@ -253,9 +255,9 @@ test("a blank deferral question leaves the packet pending, and a dive is still l
   try {
     const packet = await queue(h);
     const rows = buildAskRows(packet);
-    h.answers.push(rows[4]?.label); // dive
+    h.answers.push(askFallbackLines(rows)[4]); // dive
     h.typed.push("the failing assertion");
-    h.answers.push(rows[2]?.label); // then defer
+    h.answers.push(askFallbackLines(rows)[2]); // then defer
     h.typed.push("   "); // but type nothing
 
     const report = await ask(h, [packet.id]);
@@ -474,8 +476,8 @@ test("declining the batch falls through to deciding them one at a time", async (
     const first = await queue(h);
     const second = await queue(h);
     h.answers.push("Decide them one at a time");
-    h.answers.push(buildAskRows(first)[0]?.label);
-    h.answers.push(buildAskRows(second)[1]?.label);
+    h.answers.push(askFallbackLines(buildAskRows(first))[0]);
+    h.answers.push(askFallbackLines(buildAskRows(second))[1]);
 
     await ask(h, [first.id, second.id]);
     assert.equal(h.selects.length, 3, "the batch ask plus one per packet");
@@ -568,6 +570,29 @@ test("the titler writes only the title, leaving the session's own fields alone",
       missing.content.map((part) => ("text" in part ? part.text : "")).join(" "),
       /no such session/,
     );
+  } finally {
+    await dropRoot(h.root);
+  }
+});
+
+test("the ask carries what the decision costs, not just the options", async () => {
+  const h = await harness("hq-tools-header");
+  try {
+    const packet = await queue(h);
+    const header = askHeader(packet);
+
+    // The bar makes a packet carry these; the ask is the moment they are worth
+    // reading, and a plain selector title threw them away.
+    assert.equal(header[0], packet.title);
+    assert.equal(header[1], packet.question);
+    assert.match(header[2] ?? "", new RegExp(packet.blastRadius));
+    assert.match(header[2] ?? "", new RegExp(packet.reversibility));
+    assert.match(header[2] ?? "", /changes if:/);
+
+    // Every row is priced, including the ones that are not options.
+    const rows = buildAskRows(packet);
+    assert.equal(rows.every((row) => row.description.trim().length > 0), true);
+    assert.match(askFallbackLines(rows)[0] ?? "", /recommended\) — /);
   } finally {
     await dropRoot(h.root);
   }

@@ -219,6 +219,25 @@ section, so there is exactly one place to look.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
 
+## How an ask looks
+
+Rulings go through pi's own SelectList: the decision and its question at the top, then
+the blast radius, reversibility and flip condition on one line, then a row per option
+with its price underneath it. The packet bar makes options carry a price, and this is
+the moment that price is worth reading — a title-and-labels dialog hid the very thing
+that lets you decide without opening the session. The recommendation is first and
+marked, and the last three rows are always there: ask something first, rule in your own
+words, or record that you had to open the session anyway.
+
+The rows are built in code from the packet, not written by the model at ask time, and
+the ruling is recorded and routed against the option id you picked, refusing if the
+packet changed since it was shown. That is the part worth keeping in code: it makes the
+ruling log your decision rather than a model's account of it. Non-packet questions —
+"which session did you mean?" — need none of this and are just asked in chat.
+
+Where there is no TUI (an RPC client, a headless seat) the same rows come through the
+plain selector with each price on the same line.
+
 ## Asking about the fleet
 
 When the queue is empty the seat is still a conversation, and it is where you ask

@@ -13,7 +13,8 @@
 
 import { Type, type Static } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { loadDoctrine } from "./doctrine.ts";
 import {
   drillContext,
@@ -577,6 +578,12 @@ export type AskIntent =
 
 export interface AskRow {
   label: string;
+  /**
+   * What choosing this row costs, or what it records. The packet bar makes options
+   * carry a price; a dialog that shows labels alone hides the very thing that makes
+   * the decision possible without opening the session.
+   */
+  description: string;
   intent: AskIntent;
 }
 
@@ -594,7 +601,8 @@ export function buildAskRows(packet: Packet): AskRow[] {
   const rows: AskRow[] = [
     ...(recommended
       ? [{
-        label: `${recommended.label} (recommended) — ${recommended.price}`,
+        label: `${recommended.label} (recommended)`,
+        description: recommended.price,
         intent: {
           kind: "ruling",
           request: { packetId: packet.id, form: "accept" },
@@ -602,15 +610,28 @@ export function buildAskRows(packet: Packet): AskRow[] {
       }]
       : []),
     ...alternatives.map((option): AskRow => ({
-      label: `${option.label} — ${option.price}`,
+      label: option.label,
+      description: option.price,
       intent: {
         kind: "ruling",
         request: { packetId: packet.id, form: "alternative", optionId: option.id },
       },
     })),
-    { label: DEFER_LABEL, intent: { kind: "needs-question" } },
-    { label: CUSTOM_LABEL, intent: { kind: "needs-words" } },
-    { label: DIVE_LABEL, intent: { kind: "dive" } },
+    {
+      label: DEFER_LABEL,
+      description: "The packet stays in the queue; a drill answers your question and brings it back.",
+      intent: { kind: "needs-question" },
+    },
+    {
+      label: CUSTOM_LABEL,
+      description: "Rule in your own words; they are recorded and carried as written.",
+      intent: { kind: "needs-words" },
+    },
+    {
+      label: DIVE_LABEL,
+      description: "Records what the packet was missing, then still takes your ruling.",
+      intent: { kind: "dive" },
+    },
   ];
 
   // The dialog returns the chosen *string*, so two rows that render identically
@@ -713,27 +734,103 @@ async function askBatch(
 }
 
 /**
+ * What sits above the rows: the decision, then what it costs to get wrong. The bar
+ * makes a packet carry its flip condition, blast radius and reversibility, and this is
+ * the moment they are worth reading — a plain selector title threw them away.
+ */
+export function askHeader(packet: Packet): string[] {
+  const replaced = packet.supersedes ?? [];
+  return [
+    packet.title,
+    packet.question,
+    `${packet.blastRadius} blast · ${packet.reversibility} · changes if: ${packet.flipCondition}`,
+    // The earlier ask is gone from the queue, and the user is the one who knows
+    // whether what it asked still matters.
+    replaced.length > 0
+      ? `replaces ${replaced.length} earlier question${
+        replaced.length === 1 ? "" : "s"
+      } from this session: ${replaced.join("; ")}`
+      : "",
+  ].filter((line) => line.trim() !== "");
+}
+
+/** How the rows read where there is no TUI to draw them in: price on the same line. */
+export function askFallbackLines(rows: readonly AskRow[]): string[] {
+  return rows.map((row) => `${row.label} — ${row.description}`);
+}
+
+/**
+ * Puts one ask on screen and returns what the user picked. With a TUI this is pi's own
+ * SelectList, so every row shows its price under its label and a long option list
+ * scrolls instead of being crushed onto one line each. Without one — an RPC client, a
+ * headless seat — the plain selector still carries the price inline.
+ */
+async function pickRow(
+  ctx: ExtensionContext,
+  header: readonly string[],
+  rows: readonly AskRow[],
+): Promise<AskRow | undefined> {
+  if (typeof ctx.ui.custom === "function") {
+    const picked = await ctx.ui.custom<number>((tui, theme, _keybindings, done) => {
+      const container = new Container();
+      container.addChild(new DynamicBorder((line: string) => theme.fg("accent", line)));
+      for (const [index, line] of header.entries()) {
+        container.addChild(
+          new Text(index === 0 ? theme.fg("accent", theme.bold(line)) : theme.fg("muted", line), 1, 0),
+        );
+      }
+      const list = new SelectList(
+        rows.map((row, index): SelectItem => ({
+          value: String(index),
+          label: row.label,
+          description: row.description,
+        })),
+        Math.min(rows.length, 10),
+        {
+          selectedPrefix: (line: string) => theme.fg("accent", line),
+          selectedText: (line: string) => theme.fg("accent", line),
+          description: (line: string) => theme.fg("muted", line),
+          scrollInfo: (line: string) => theme.fg("dim", line),
+          noMatch: (line: string) => theme.fg("warning", line),
+        },
+      );
+      list.onSelect = (item: SelectItem) => done(Number(item.value));
+      list.onCancel = () => done(-1);
+      container.addChild(list);
+      container.addChild(
+        new Text(theme.fg("dim", "↑↓ move · enter rule · esc leave it pending"), 1, 0),
+      );
+      container.addChild(new DynamicBorder((line: string) => theme.fg("accent", line)));
+      return {
+        render: (width: number) => container.render(width),
+        invalidate: () => container.invalidate(),
+        handleInput: (data: string) => {
+          list.handleInput(data);
+          tui.requestRender();
+        },
+      };
+    });
+    return picked >= 0 ? rows[picked] : undefined;
+  }
+
+  const lines = askFallbackLines(rows);
+  const chosen = await ctx.ui.select(header.join("\n"), lines);
+  if (chosen === undefined) return undefined;
+  const index = lines.indexOf(chosen);
+  return index >= 0 ? rows[index] : undefined;
+}
+
+/**
  * One ask, presented through pi's own dialogs, ending in a recorded ruling.
  */
 async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Promise<string> {
   const rows = buildAskRows(packet);
-  const replaced = packet.supersedes ?? [];
-  // What this question took the place of, said out loud: the earlier ask is gone from
-  // the queue, and the user is the one who knows whether it still matters.
-  const title = [
-    `${packet.title} — ${packet.question}`,
-    replaced.length > 0
-      ? `(replaces ${replaced.length} earlier question${
-        replaced.length === 1 ? "" : "s"
-      } from this session: ${replaced.join("; ")})`
-      : "",
-  ].filter((line) => line !== "").join("\n");
+  const header = askHeader(packet);
 
-  const chosen = await ctx.ui.select(title, rows.map((row) => row.label));
-  if (chosen === undefined) return `${packet.id}: left pending`;
+  let selected = await pickRow(ctx, header, rows);
+  if (!selected) return `${packet.id}: left pending`;
 
   let dive: { packetId: string; missing: string } | undefined;
-  let selected = rows.find((row) => row.label === chosen);
 
   if (selected?.intent.kind === "dive") {
     const missing = await ctx.ui.input(
@@ -741,8 +838,8 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
       "what you had to go and find out",
     );
     const remaining = rows.filter((row) => row.intent.kind !== "dive");
-    const second = await ctx.ui.select(title, remaining.map((row) => row.label));
-    if (second === undefined) {
+    const second = await pickRow(ctx, header, remaining);
+    if (!second) {
       // The dive itself is the signal worth keeping, even with no ruling behind it.
       await recordDive(deps.store, {
         packetId: packet.id,
@@ -752,7 +849,7 @@ async function askOne(ctx: ExtensionContext, deps: ToolDeps, packet: Packet): Pr
       });
       return `${packet.id}: defect logged, left pending`;
     }
-    selected = remaining.find((row) => row.label === second);
+    selected = second;
     dive = { packetId: packet.id, missing: missing?.trim() || "(not stated)" };
   }
 
