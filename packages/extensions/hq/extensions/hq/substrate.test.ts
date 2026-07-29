@@ -670,3 +670,41 @@ test("a packet that recommends one option while predicting another is held", asy
     await dropRoot(root);
   }
 });
+
+test("the same question is one packet, and the same rule proposal is one packet", async () => {
+  const root = await makeRoot("hq-dedupe");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+
+    // Three stops in one session that raise the same question cost one decision.
+    const first = await store.createPacket(packetDraftFixture() as never);
+    const again = await store.createPacket(packetDraftFixture() as never);
+    assert.equal(again.packet.id, first.packet.id);
+
+    // The same question about a different session is a different decision: ruling on
+    // one resumes only that session, so deduplicating them would strand the other.
+    const elsewhere = await store.createPacket(
+      packetDraftFixture({ sourceSessionId: "other-session" }) as never,
+    );
+    assert.notEqual(elsewhere.packet.id, first.packet.id);
+
+    // A proposal acts on doctrine alone, so it deduplicates across sessions.
+    const proposal = {
+      kind: "new-rule" as const,
+      scope: "global" as const,
+      section: "Directives",
+      ruleText: "Prefer the smallest fix that removes the cause.",
+      replaces: null,
+      domain: "ci-flake",
+    };
+    const ruleOne = await store.createPacket(packetDraftFixture({ proposal }) as never);
+    const ruleTwo = await store.createPacket(
+      packetDraftFixture({ proposal, sourceSessionId: "other-session" }) as never,
+    );
+    assert.equal(ruleTwo.packet.id, ruleOne.packet.id);
+    assert.equal((await store.listQueue()).length, 3, "three decisions, not five");
+  } finally {
+    await dropRoot(root);
+  }
+});

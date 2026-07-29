@@ -149,12 +149,51 @@ export class HqStore {
    * than at presentation time so an under-specified packet is parked as `held`
    * instead of reaching the user (INV-G11).
    */
+  /**
+   * What makes two packets the same question. Rulings on repeated stops in one
+   * session produce the same proposal over and over, and three identical "add this
+   * rule" packets cost three decisions to change one thing.
+   */
+  static dedupeKey(
+    packet: Pick<Packet, "domain" | "title" | "question" | "proposal" | "sourceSessionId">,
+  ): string {
+    const flatten = (text: string) =>
+      text.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+    const proposal = packet.proposal;
+    // A proposal acts on doctrine, so the same rule from any session is one decision.
+    // A question resumes the session it came from, so the same question about two
+    // sessions is two decisions: ruling on one would strand the other.
+    return proposal
+      ? `proposal:${proposal.scope}:${proposal.section}:${flatten(proposal.ruleText)}`
+      : `question:${packet.sourceSessionId}:${flatten(packet.domain)}:${flatten(packet.title)}:${
+        flatten(packet.question)
+      }`;
+  }
+
+  /** The packet already waiting on this exact question, if there is one. */
+  async findOpenDuplicate(
+    candidate: Pick<Packet, "domain" | "title" | "question" | "proposal" | "sourceSessionId">,
+  ): Promise<Packet | undefined> {
+    const key = HqStore.dedupeKey(candidate);
+    const open = await this.listQueue();
+    return open.find(
+      (packet) =>
+        (packet.status === "pending" || packet.status === "held" || packet.status === "drilling") &&
+        HqStore.dedupeKey(packet) === key,
+    );
+  }
+
   async createPacket(
     draft: Omit<Packet, "version" | "id" | "createdAt" | "updatedAt" | "generation" | "status"> & {
       id?: string;
       status?: Packet["status"];
     },
   ): Promise<{ packet: Packet; violations: ReturnType<typeof packetBarViolations> }> {
+    // One question, one decision: an identical packet already waiting is the answer
+    // to this one, so the caller gets that packet instead of a second copy of it.
+    const existing = await this.findOpenDuplicate(draft);
+    if (existing) return { packet: existing, violations: [] };
+
     const at = this.now().toISOString();
     const candidate: Packet = {
       ...draft,

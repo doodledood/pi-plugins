@@ -43,7 +43,11 @@ async function seedQueue(root: string): Promise<HqStore> {
     id: string,
     overrides: Partial<Parameters<typeof packetDraftFixture>[0]> = {},
   ) => {
-    const { violations } = await store.createPacket({ id, ...packetDraftFixture(overrides) });
+    // Distinct questions, so the store's deduplication treats them as distinct.
+    const { violations } = await store.createPacket({
+      id,
+      ...packetDraftFixture({ title: `decide ${id}`, question: `what about ${id}?`, ...overrides }),
+    });
     assert.deepEqual(violations, [], `${id} must clear the packet bar to be presentable`);
   };
 

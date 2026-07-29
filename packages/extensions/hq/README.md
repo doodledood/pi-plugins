@@ -87,6 +87,7 @@ it gone.
 | Command | What it does |
 |---|---|
 | `/hq` | Take the seat: sweep unfinished stops, then work the queue. `/hq off` hands it back. |
+| | While seated, HQ watches the queue and wakes itself when a packet arrives behind it, so work that lands after you sat down still reaches you. |
 | `/fleet` | Show or hide the fleet card. |
 | `/hq_send_off [what to do next]` | Hand the session you are in to HQ. Run it in any session, in your own words — talk the work through, then send it off and pick it up at the desk. |
 | `/hq_graduate <domain>` | Grant HQ authority to answer that domain from doctrine. Confirms first. |
@@ -217,6 +218,14 @@ section, so there is exactly one place to look.
   because a distilled answer you cannot check is one you have to go and verify.
 - A resumed session keeps its session id, so a continuation appears as the same
   fleet row rather than a new one.
+
+## One question, one decision
+
+Packets are deduplicated where they are written, so repeated stops in one session
+cannot cost three decisions to settle one thing. A rule proposal is the same decision
+whichever session raised it, and deduplicates across all of them. A question is not:
+ruling on it resumes the session it came from, so the same question about two sessions
+stays two decisions.
 
 ## Developing this while it is installed
 

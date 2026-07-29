@@ -146,3 +146,16 @@ export function planPresentation(
 export function planIds(plan: PresentationPlan): string[][] {
   return plan.batches.map((batch) => batch.packets.map((packet) => packet.id));
 }
+
+/**
+ * What the seat has not been told about yet, and what it should remember. Ids that
+ * have left the queue are forgotten, so a packet that comes back — a held one that
+ * was filled, a drill that returned — is announced again rather than staying silent.
+ */
+export function newlyArrived(
+  announced: ReadonlySet<string>,
+  present: readonly string[],
+): { fresh: string[]; next: Set<string> } {
+  const fresh = present.filter((id) => !announced.has(id));
+  return { fresh, next: new Set(present) };
+}

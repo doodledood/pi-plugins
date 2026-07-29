@@ -17,6 +17,7 @@ import { SessionReporter } from "./reporter.ts";
 import { createSpawner, isManagedEnv, type Spawner } from "./spawn.ts";
 import { HqStore, pruneState, reopenStalledDrills } from "./store.ts";
 import { sweepStops } from "./triage.ts";
+import { newlyArrived } from "./queue.ts";
 import { registerHqTools } from "./tools.ts";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { FLEET_OVERLAY_OPTIONS, FleetOverlay } from "./ui.ts";
@@ -25,6 +26,8 @@ export const SEAT_MESSAGE_TYPE = "hq-seat";
 
 /** How long HQ keeps its own bookkeeping before pruning it on the next seat. */
 export const RETENTION_DAYS = 14;
+/** How often a seated session looks for work that arrived behind it. */
+export const SEAT_WATCH_MS = 10_000;
 
 /** A drill silent for this long is assumed dead and its packet is re-queued. */
 export const STALLED_DRILL_MINUTES = 30;
@@ -64,6 +67,11 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
     let overlayComponent: FleetOverlay | undefined;
     let cardModel: FleetCardModel | undefined;
     let cardTimer: ReturnType<typeof setInterval> | undefined;
+    let watchTimer: ReturnType<typeof setInterval> | undefined;
+    // Packets the seat has already been told about. Work arrives from triage
+    // workers, so without a nudge a seated session that has cleared the queue sits
+    // there while packets pile up behind it.
+    let announced = new Set<string>();
 
     const doneToday = async (): Promise<number> => {
       const today = now().toISOString().slice(0, 10);
@@ -88,6 +96,22 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         meta: doctrine.meta,
         readyToGraduate: readyDomains(await store.readGraduation(), doctrine.meta, now()),
       });
+    };
+
+    /** Wakes the seat when work it has not seen arrives in the queue. */
+    const nudgeSeat = async (): Promise<void> => {
+      if (!seatActive) return;
+      const presentable = await store.listPresentable();
+      const { fresh, next } = newlyArrived(announced, presentable.map((packet) => packet.id));
+      announced = next;
+      if (fresh.length === 0) return;
+      pi.sendMessage({
+        customType: SEAT_MESSAGE_TYPE,
+        content: `${fresh.length} new packet${
+          fresh.length === 1 ? "" : "s"
+        } arrived in the queue (${presentable.length} waiting in total). Put the next ask to me.`,
+        display: false,
+      }, { deliverAs: "followUp", triggerTurn: true });
     };
 
     registerHqTools(pi, {
@@ -130,6 +154,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
     pi.on("session_shutdown", async () => {
       overlayComponent?.dispose();
       if (cardTimer) clearInterval(cardTimer);
+      if (watchTimer) clearInterval(watchTimer);
       await reporter?.onShutdown();
     });
 
@@ -158,6 +183,9 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         if (argument === "off") {
           seatActive = false;
           seatPromptSent = false;
+          if (watchTimer) clearInterval(watchTimer);
+          watchTimer = undefined;
+          announced = new Set();
           hideOverlay();
           ctx.ui.notify("HQ seat released.", "info");
           return;
@@ -182,6 +210,14 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         });
         await refreshCard();
         await showOverlay(ctx);
+        // The queue as it stands is what the kickoff below covers, so only work that
+        // arrives after this moment is worth waking the seat for.
+        announced = new Set((await store.listPresentable()).map((packet) => packet.id));
+        watchTimer ??= setInterval(() => {
+          void refreshCard();
+          void nudgeSeat();
+        }, SEAT_WATCH_MS);
+        watchTimer.unref?.();
 
         const pending = (await store.listPresentable()).length;
         ctx.ui.notify(

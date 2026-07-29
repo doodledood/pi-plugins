@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { META_DEFAULTS, type MetaDoctrine } from "./doctrine.ts";
-import { orderWithDependencies, planIds, planPresentation } from "./queue.ts";
+import { orderWithDependencies, planIds, planPresentation, newlyArrived } from "./queue.ts";
 import { packetDraftFixture } from "./testing.ts";
 import type { BlastRadius, Packet, Reversibility } from "./types.ts";
 
@@ -167,4 +167,17 @@ test("an annotated drill return rejoins its project group rather than going last
   ];
   const flat = planIds(planPresentation(packets, meta)).flat();
   assert.deepEqual(flat, ["alpha-1", "alpha-returned", "beta-1"]);
+});
+
+test("the seat is told about work once, and again if it comes back", () => {
+  const first = newlyArrived(new Set(), ["a", "b"]);
+  assert.deepEqual(first.fresh, ["a", "b"]);
+
+  // Nothing new: a seated session is not nudged every ten seconds forever.
+  assert.deepEqual(newlyArrived(first.next, ["a", "b"]).fresh, []);
+
+  // Ruling on one leaves the other silent, and a returning packet speaks again.
+  const afterRuling = newlyArrived(first.next, ["b"]);
+  assert.deepEqual(afterRuling.fresh, []);
+  assert.deepEqual(newlyArrived(afterRuling.next, ["b", "a"]).fresh, ["a"]);
 });

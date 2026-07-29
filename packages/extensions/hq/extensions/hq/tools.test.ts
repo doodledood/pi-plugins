@@ -83,9 +83,13 @@ async function harness(label: string, options: { seatActive?: boolean; env?: Nod
   return { root, store, tools, calls, deps, selects, inputs, answers, typed, ctx };
 }
 
+let queued = 0;
+
 async function queue(h: Harness, overrides: Partial<Packet> = {}): Promise<Packet> {
+  // Each call is a distinct question; identical ones are deduplicated by the store.
+  queued += 1;
   const { packet } = await h.store.createPacket({
-    ...packetDraftFixture(),
+    ...packetDraftFixture({ title: `decide ${queued}`, question: `what about ${queued}?` }),
     ...overrides,
   } as never);
   return packet;
