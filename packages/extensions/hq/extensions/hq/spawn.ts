@@ -11,9 +11,10 @@
  */
 
 import { spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { join } from "node:path";
-import { newId } from "./io.ts";
+import { newId, atomicWriteJson } from "./io.ts";
 import { hqPaths } from "./paths.ts";
 import { KINDS, type SessionKind } from "./types.ts";
 
@@ -38,6 +39,18 @@ export const BIN_ENV = "HQ_PI_BIN";
  */
 export const EXTENSION_ENV = "HQ_EXTENSION_PATH";
 
+/**
+ * The kinds that exercise judgment on the user's behalf: reading a stop and deciding
+ * what it means, answering a question about a session, generalising a ruling into a
+ * rule. These run on the seat's own model and effort, because a weaker model here does
+ * not save the user work — it changes what reaches them and what it says.
+ */
+export const JUDGMENT_KINDS: ReadonlySet<SessionKind | "titler"> = new Set([
+  "triage",
+  "drill",
+  "rule",
+]);
+
 /** A worker kind that must never itself be triaged or titled. */
 export const INTERNAL_KINDS: ReadonlySet<SessionKind | "titler"> = new Set([
   "triage",
@@ -55,6 +68,8 @@ export interface SpawnRequest {
   /** Fork this session file into a new session (the drill's copy). */
   forkSessionFile?: string;
   model?: string;
+  /** Reasoning effort for the child, when it should not take its own default. */
+  thinking?: string;
   /** Tool allowlist passed through to the child. */
   tools?: string[];
   originSessionId?: string;
@@ -98,6 +113,7 @@ export function buildArgv(
   if (request.resumeSessionFile) argv.push("--session", request.resumeSessionFile);
   if (request.forkSessionFile) argv.push("--fork", request.forkSessionFile);
   if (request.model) argv.push("--model", request.model);
+  if (request.thinking) argv.push("--thinking", request.thinking);
   if (request.name) argv.push("--name", request.name);
   if (request.tools && request.tools.length > 0) argv.push("--tools", request.tools.join(","));
   // pi's CLI only treats the argument after --print as the prompt when it does
@@ -126,6 +142,38 @@ export function buildEnv(
   return env;
 }
 
+/** How HQ's judgment workers think, recorded by the seat for other processes to read. */
+export interface JudgmentSettings {
+  model?: string;
+  thinking?: string;
+}
+
+/**
+ * Records the model and effort the seat itself runs on. Stop triage is spawned by the
+ * session that stopped, not by the seat, so the seat cannot pass this down an argument
+ * chain — it leaves it in the substrate where every process can read it.
+ */
+export async function recordJudgmentSettings(
+  root: string,
+  settings: JudgmentSettings,
+): Promise<void> {
+  await atomicWriteJson(hqPaths(root).judgment, { version: 1, ...settings });
+}
+
+export function readJudgmentSettings(root: string): JudgmentSettings {
+  try {
+    const raw = JSON.parse(readFileSync(hqPaths(root).judgment, "utf8")) as Record<string, unknown>;
+    return {
+      ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+      ...(typeof raw.thinking === "string" ? { thinking: raw.thinking } : {}),
+    };
+  } catch {
+    // No seat has been taken yet, or the file is unreadable: the child falls back to
+    // its own default, which is the same behaviour as before this existed.
+    return {};
+  }
+}
+
 export function createSpawner(options: SpawnerOptions): Spawner {
   const spawnImpl = options.spawnImpl ?? nodeSpawn;
   const baseEnv = options.env ?? process.env;
@@ -136,8 +184,12 @@ export function createSpawner(options: SpawnerOptions): Spawner {
     await mkdir(logs, { recursive: true });
     const runId = newId(request.kind);
     const logPath = join(logs, `${runId}.log`);
+    // A judgment worker inherits how the seat thinks unless the caller said otherwise.
+    const judged: SpawnRequest = JUDGMENT_KINDS.has(request.kind)
+      ? { ...readJudgmentSettings(options.root), ...request }
+      : request;
     const argv = buildArgv(
-      request,
+      judged,
       baseEnv[EXTENSION_ENV]?.trim() || undefined,
       baseEnv[ISOLATE_ENV] === "1",
     );
@@ -146,7 +198,7 @@ export function createSpawner(options: SpawnerOptions): Spawner {
     try {
       const spawnOptions: SpawnOptions = {
         cwd: request.cwd,
-        env: buildEnv(request, options.root, baseEnv),
+        env: buildEnv(judged, options.root, baseEnv),
         detached: !request.wait,
         stdio: ["ignore", handle.fd, handle.fd],
       };

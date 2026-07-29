@@ -31,6 +31,8 @@ export interface HqPaths {
   drillsLog: string;
   /** Per-domain shadow-agreement and graduation state. */
   graduation: string;
+  /** How HQ's judgment workers think: the seat's own model and effort. */
+  judgment: string;
   /** Stdout/stderr of spawned workers, for debugging a failed worker. */
   logs: string;
 }
@@ -74,6 +76,7 @@ export function hqPaths(root: string): HqPaths {
     defectsLog: join(root, "defects.jsonl"),
     drillsLog: join(root, "drills.jsonl"),
     graduation: join(root, "graduation.json"),
+    judgment: join(root, "judgment.json"),
     logs: join(root, "logs"),
   };
 }

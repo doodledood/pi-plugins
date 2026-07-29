@@ -13,12 +13,23 @@ import { expandHome } from "./paths.ts";
 export interface HqConfig {
   /** Small, fast model used only to label sessions on the board. */
   titleModel: string | undefined;
+  /**
+   * Overrides the model HQ's judgment workers run on — stop triage, drills, and rule
+   * drafting. Left unset, they run on whatever the seat itself runs on, which is the
+   * point: triage reads a stop, applies doctrine and writes the decision the user will
+   * act on, so it is the last place to economise.
+   */
+  judgmentModel: string | undefined;
+  /** Same, for reasoning effort: off, minimal, low, medium, high, xhigh, max. */
+  judgmentThinking: string | undefined;
   /** Refuses further delegation past this many live managed workers. */
   maxConcurrentWorkers: number;
 }
 
 export const DEFAULT_CONFIG: HqConfig = {
   titleModel: undefined,
+  judgmentModel: undefined,
+  judgmentThinking: undefined,
   maxConcurrentWorkers: 10,
 };
 
@@ -41,6 +52,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HqConfig {
   const workers = record.maxConcurrentWorkers;
   return {
     titleModel: typeof record.titleModel === "string" ? record.titleModel : undefined,
+    judgmentModel: typeof record.judgmentModel === "string" ? record.judgmentModel : undefined,
+    judgmentThinking: typeof record.judgmentThinking === "string"
+      ? record.judgmentThinking
+      : undefined,
     maxConcurrentWorkers:
       typeof workers === "number" && Number.isFinite(workers) && workers > 0
         ? Math.floor(workers)

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-hq",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Pi HQ: supervise delegated Pi sessions as one ordered decision queue — headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you can rule on without opening the session.",
   "keywords": [

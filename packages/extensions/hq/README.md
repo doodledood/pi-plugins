@@ -194,9 +194,22 @@ hatch when spawning fails.
 
 Optional mechanical settings live in `~/.pi/agent/hq.json` (see
 [`config/hq.example.json`](config/hq.example.json)) — a fast model for titling the
-board, and a cap on concurrent workers. Everything else, including the staleness
-threshold and the batching and graduation numbers, lives in doctrine's Meta
-section, so there is exactly one place to look.
+board, a cap on concurrent workers, and overrides for the judgment model and effort.
+Everything else, including the staleness threshold and the batching and graduation
+numbers, lives in doctrine's Meta section, so there is exactly one place to look.
+
+## What HQ's own workers run on
+
+Stop triage, drills and rule drafting inherit **the model and reasoning effort the seat
+itself runs on**, recorded to the state root when you take the seat and read from there
+by whichever process spawns them. That is deliberate: triage reads a stop, applies your
+doctrine, and writes the decision you will act on, including the shadow ruling its own
+authority is later graded against. A cheaper model there does not save you work, it
+changes what reaches you and what it says. Only titling the board — six words on a card
+— runs on a small fast model.
+
+Set `judgmentModel` and `judgmentThinking` in `hq.json` to pin them instead of following
+the seat. Before any seat has been taken, workers fall back to the child's own default.
 
 ## How it works
 

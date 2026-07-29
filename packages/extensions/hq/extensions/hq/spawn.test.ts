@@ -8,6 +8,7 @@ import {
   isManagedEnv,
   KIND_ENV,
   MANAGED_ENV,
+  recordJudgmentSettings,
   TITLER_ENV,
 } from "./spawn.ts";
 import { dropRoot, makeRoot } from "./testing.ts";
@@ -156,4 +157,68 @@ test("a working copy can be the only HQ a child loads", () => {
     "/repo/hq/index.ts",
   ]);
   assert.equal(buildArgv(request, "/repo/hq/index.ts").includes("-ne"), false);
+});
+
+/** A child that starts and exits cleanly, enough for the spawner's detached path. */
+function fakeChild() {
+  return {
+    pid: 4242,
+    unref() {},
+    once(_event: string, _handler: (value: unknown) => void) {},
+  } as never;
+}
+
+test("judgment workers inherit how the seat thinks; a titler does not", async () => {
+  const root = await makeRoot("hq-judgment");
+  try {
+    // Triage reads a stop, applies doctrine and writes the decision the user acts on.
+    // A cheaper model there does not save the user work, it changes what reaches them.
+    await recordJudgmentSettings(root, { model: "anthropic/big-model", thinking: "high" });
+    const seen: string[][] = [];
+    const spawner = createSpawner({
+      root,
+      env: { PATH: process.env.PATH ?? "" },
+      spawnImpl: ((_bin: string, argv: string[]) => {
+        seen.push(argv);
+        return fakeChild();
+      }) as never,
+    });
+
+    await spawner({ kind: "triage", prompt: "triage it", cwd: root });
+    assert.deepEqual(seen[0]?.slice(0, 4), [
+      "--model",
+      "anthropic/big-model",
+      "--thinking",
+      "high",
+    ]);
+
+    await spawner({ kind: "titler", prompt: "name it", cwd: root, model: "fast/small" });
+    assert.equal(seen[1]?.includes("anthropic/big-model"), false, "the titler keeps its own");
+    assert.equal(seen[1]?.includes("--thinking"), false);
+
+    // An explicit model on the request still wins over the recorded one.
+    await spawner({ kind: "drill", prompt: "read it", cwd: root, model: "chosen/model" });
+    assert.equal(seen[2]?.includes("chosen/model"), true);
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("no seat has been taken yet, so a judgment worker just takes its own default", async () => {
+  const root = await makeRoot("hq-judgment-none");
+  try {
+    const seen: string[][] = [];
+    const spawner = createSpawner({
+      root,
+      env: { PATH: process.env.PATH ?? "" },
+      spawnImpl: ((_bin: string, argv: string[]) => {
+        seen.push(argv);
+        return fakeChild();
+      }) as never,
+    });
+    await spawner({ kind: "triage", prompt: "triage it", cwd: root });
+    assert.equal(seen[0]?.includes("--model"), false);
+  } finally {
+    await dropRoot(root);
+  }
 });

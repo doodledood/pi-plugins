@@ -14,7 +14,7 @@ import { graduateDomain, revokeDomain, readyDomains } from "./graduation.ts";
 import { resolveStateRoot } from "./paths.ts";
 import { SEAT_PROMPT } from "./prompts.ts";
 import { SessionReporter } from "./reporter.ts";
-import { createSpawner, isManagedEnv, type Spawner } from "./spawn.ts";
+import { createSpawner, isManagedEnv, type Spawner, recordJudgmentSettings } from "./spawn.ts";
 import { HqStore, pruneState, reopenStalledDrills } from "./store.ts";
 import { sweepStops } from "./triage.ts";
 import { newlyArrived } from "./queue.ts";
@@ -194,6 +194,19 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         seatActive = true;
         seatPromptSent = false;
         await store.ensure();
+        // Triage, drills and rule drafting run on the seat's own model and effort: they
+        // read a stop, apply doctrine and write the decision the user acts on, so a
+        // cheaper model there does not save the user work, it changes what reaches them.
+        const seatModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+        const seatThinking = pi.getThinkingLevel?.();
+        await recordJudgmentSettings(root, {
+          ...(config.judgmentModel ?? seatModel
+            ? { model: config.judgmentModel ?? seatModel ?? "" }
+            : {}),
+          ...(config.judgmentThinking ?? seatThinking
+            ? { thinking: config.judgmentThinking ?? seatThinking ?? "" }
+            : {}),
+        });
         await seedDoctrine(root);
         // Anything whose triage never finished is picked up here, so a crashed
         // worker cannot quietly cost the user a decision.
