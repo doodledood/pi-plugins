@@ -221,13 +221,24 @@ section, so there is exactly one place to look.
 
 ## How an ask looks
 
-Rulings go through pi's own SelectList: the decision and its question at the top, then
-the blast radius, reversibility and flip condition on one line, then a row per option
-with its price underneath it. The packet bar makes options carry a price, and this is
-the moment that price is worth reading — a title-and-labels dialog hid the very thing
-that lets you decide without opening the session. The recommendation is first and
-marked, and the last three rows are always there: ask something first, rule in your own
-words, or record that you had to open the session anyway.
+The decision and its question at the top, then the blast radius, reversibility and what
+would change the answer, then a row per option with its price on its own line under it.
+The packet bar makes options carry a price, and the ask is the moment that price is
+worth reading — a title-and-labels dialog hid the very thing that lets you decide
+without opening the session. The recommendation is marked, the rows are numbered so a
+digit picks one, and the last three are always there: ask something first, rule in your
+own words, or record that you had to open the session anyway. The two that need words
+open an editor in place rather than throwing a second dialog at you.
+
+A batch is **one dialog with a tab per decision** — filled and empty markers show what
+is still open, moving between them costs nothing because nothing is applied until you
+submit, and the last tab shows every ruling you are about to give. Esc from anywhere
+leaves all of them pending.
+
+The layout is a model and a pure renderer (`ask-ui.ts`), the way the fleet card is, so
+what the dialog puts on screen is asserted on in tests rather than eyeballed: that every
+option shows its price, that no line overflows the width, that the batch refuses to
+submit while a decision is still open.
 
 The rows are built in code from the packet, not written by the model at ask time, and
 the ruling is recorded and routed against the option id you picked, refusing if the

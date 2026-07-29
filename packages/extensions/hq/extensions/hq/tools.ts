@@ -14,7 +14,25 @@
 import { Type, type Static } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { DynamicBorder, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Editor,
+  type EditorTheme,
+  Key,
+  matchesKey,
+  type SelectItem,
+  SelectList,
+  Text,
+} from "@earendil-works/pi-tui";
+import {
+  type AskAnswer,
+  buildAskDialog,
+  askDialogKey,
+  type AskDialogRow,
+  type AskKey,
+  initialAskState,
+  renderAskDialog,
+} from "./ask-ui.ts";
 import { loadDoctrine } from "./doctrine.ts";
 import {
   drillContext,
@@ -368,8 +386,13 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
         presentable.push(packet);
       }
 
-      // A batch the plan grouped is put as one ask, which is the whole point of
-      // batching: fewer interruptions, not just a tidier order.
+      // A batch the plan grouped is one dialog with a tab per decision, which is the
+      // whole point of batching: one sitting, not one interruption each.
+      if (presentable.length > 0 && typeof ctx.ui.custom === "function") {
+        lines.push(...await askDialog(ctx, deps, presentable));
+        return text(lines.join("\n"));
+      }
+
       if (presentable.length > 1) {
         const batched = await askBatch(ctx, deps, presentable);
         lines.push(...batched.lines);
@@ -682,6 +705,129 @@ async function requestFor(
     case "dive":
       return undefined;
   }
+}
+
+/**
+ * One dialog for however many decisions were grouped: a tab each, nothing applied
+ * until the user submits, and Esc leaves every one of them pending. The layout and the
+ * keys live in ask-ui.ts so they can be asserted on without a terminal.
+ */
+async function askDialog(
+  ctx: ExtensionContext,
+  deps: ToolDeps,
+  packets: readonly Packet[],
+): Promise<string[]> {
+  const tabs = buildAskDialog(packets);
+  const collected = await ctx.ui.custom<Map<string, AskAnswer> | null>(
+    (tui, theme, _keybindings, done) => {
+      let state = initialAskState();
+      let cached: string[] | undefined;
+      const editor = new Editor(tui, theme as unknown as EditorTheme);
+      editor.onSubmit = (value: string) => {
+        const result = askDialogKey(tabs, state, { text: value });
+        state = result.state;
+        editor.setText("");
+        if (result.effect.kind === "submit") done(state.answers);
+        else if (result.effect.kind === "cancel") done(null);
+        cached = undefined;
+        tui.requestRender();
+      };
+      const step = (key: AskKey) => {
+        const result = askDialogKey(tabs, state, key);
+        state = result.state;
+        if (result.effect.kind === "submit") done(state.answers);
+        else if (result.effect.kind === "cancel") done(null);
+        cached = undefined;
+        tui.requestRender();
+      };
+      return {
+        render: (width: number) => {
+          cached ??= renderAskDialog(tabs, state, {
+            theme,
+            width,
+            ...(state.typingFor ? { editorLines: editor.render(Math.max(1, width - 2)) } : {}),
+          });
+          return cached;
+        },
+        invalidate: () => {
+          cached = undefined;
+        },
+        handleInput: (data: string) => {
+          if (state.typingFor && !matchesKey(data, Key.escape)) {
+            editor.handleInput(data);
+            cached = undefined;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.up)) return step("up");
+          if (matchesKey(data, Key.down)) return step("down");
+          if (matchesKey(data, Key.right) || matchesKey(data, Key.tab)) return step("right");
+          if (matchesKey(data, Key.left)) return step("left");
+          if (matchesKey(data, Key.enter)) return step("enter");
+          if (matchesKey(data, Key.escape)) return step("escape");
+          if (/^[1-9]$/.test(data)) return step({ digit: Number(data) });
+        },
+      };
+    },
+  );
+
+  if (!collected) return [`left ${packets.length} packet(s) pending`];
+
+  const lines: string[] = [];
+  for (const packet of packets) {
+    const tab = tabs.find((candidate) => candidate.packetId === packet.id);
+    const answer = collected.get(packet.id);
+    const row = tab && answer ? tab.rows[answer.rowIndex] : undefined;
+    if (!row) {
+      lines.push(`${packet.id}: left pending`);
+      continue;
+    }
+    lines.push(await applyDialogAnswer(deps, packet, row, answer?.text));
+  }
+  return lines;
+}
+
+/** Turns one row of the dialog into the recorded ruling it stands for. */
+async function applyDialogAnswer(
+  deps: ToolDeps,
+  packet: Packet,
+  row: AskDialogRow,
+  typed: string | undefined,
+): Promise<string> {
+  const words = typed?.trim() ?? "";
+  if (row.kind === "dive") {
+    // The dive is the signal worth keeping even though it carries no ruling: it says
+    // the packet failed the bar in practice, whatever the user then decided.
+    await recordDive(deps.store, {
+      packetId: packet.id,
+      missing: words || "(not stated)",
+      ruling: "(left pending)",
+      at: deps.now().toISOString(),
+    });
+    return `${packet.id}: defect logged, left pending`;
+  }
+
+  const request: RulingRequest = row.kind === "defer"
+    ? { packetId: packet.id, form: "defer", question: words }
+    : row.kind === "words"
+    ? { packetId: packet.id, form: "custom", text: words }
+    : row.recommended
+    ? { packetId: packet.id, form: "accept" }
+    : { packetId: packet.id, form: "alternative", optionId: row.optionId ?? "" };
+
+  const result = await applyRuling(
+    {
+      store: deps.store,
+      spawner: deps.spawner,
+      now: deps.now,
+      startDrill: (target, question) =>
+        startDrill({ store: deps.store, spawner: deps.spawner, now: deps.now }, target, question),
+    },
+    { ...request, presentedGeneration: packet.generation },
+  );
+  if ("error" in result) return `${packet.id}: ${result.error}`;
+  const proposals = result.proposals.length > 0 ? `; ${result.proposals.length} proposal(s) queued` : "";
+  return `${packet.id}: ruled (${result.ruling.form}, ${result.ruling.coverage}). ${result.note}${proposals}`;
 }
 
 /**
