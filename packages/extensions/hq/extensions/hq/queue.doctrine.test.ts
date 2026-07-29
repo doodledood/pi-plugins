@@ -61,7 +61,16 @@ async function seedQueue(root: string): Promise<HqStore> {
   await add("alpha-3");
   await add("alpha-4");
   await add("alpha-5");
-  await add("alpha-high", { blastRadius: "high" });
+  // A high-blast decision must carry real alternatives, not a recommendation and a
+  // fallback, so the bar asks for a third course of action.
+  await add("alpha-high", {
+    blastRadius: "high",
+    options: [
+      { id: "retry", label: "Retry the suite", price: "eight minutes of CI, no code change" },
+      { id: "investigate", label: "Investigate now", price: "an hour of work, delays the branch" },
+      { id: "disable", label: "Disable the test for now", price: "the gap stays uncovered until someone fixes it" },
+    ],
+  });
   await add("beta-1", { project: "/work/beta" });
   await add("beta-dep-base", { project: "/work/beta" });
   await add("beta-dep-follow", { project: "/work/beta", dependsOn: ["beta-dep-base"] });

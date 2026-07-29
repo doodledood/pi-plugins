@@ -266,27 +266,42 @@ export function renderAskDialog(
   deps: RenderDeps,
 ): string[] {
   const { theme } = deps;
-  // One column short of what the host offered. A line that exactly fills the width
-  // wrapped onto the next row in a narrow terminal, which is what made the dialog look
-  // ragged: the frame and the prose disagreed about where the edge was.
+  // Two columns in hand: the host draws this inside its own padding, and a line that
+  // exactly fills the width lands over the edge and gets wrapped by the terminal.
   const width = Math.max(20, deps.width - 2);
   const lines: string[] = [];
-  const rule = () => lines.push(theme.fg("accent", "─".repeat(width)));
-  const wrapped = (text: string, indent = " ", maxLines?: number) => {
+
+  /**
+   * Wraps the plain text, then styles each line that comes out of it. Styling first
+   * and wrapping after put the colour's opening escape on the first line only, so
+   * every continuation line rendered in the default colour — a muted paragraph turned
+   * white halfway through — and the escape characters threw off the width the wrap
+   * measured, which is what pushed long lines off the right edge.
+   */
+  const say = (
+    text: string,
+    style: (line: string) => string,
+    indent = " ",
+    maxLines?: number,
+  ) => {
     const all = wrap(text, width - indent.length);
     const shown = maxLines === undefined ? all : all.slice(0, maxLines);
     if (maxLines !== undefined && all.length > maxLines && shown.length > 0) {
       shown[shown.length - 1] = `${shown[shown.length - 1]}…`;
     }
-    for (const line of shown) lines.push(`${indent}${line}`);
+    for (const line of shown) lines.push(`${indent}${style(line)}`);
   };
+  const muted = (line: string) => theme.fg("muted", line);
+  const dim = (line: string) => theme.fg("dim", line);
+  const plain = (line: string) => theme.fg("text", line);
+  const rule = () => lines.push(theme.fg("accent", "─".repeat(width)));
 
   rule();
 
   if (tabs.length > 1) {
-    // One short line, not a bar of labelled cells: a bar wide enough for five titles
-    // wraps in a narrow terminal, and a cell split across lines reads as a sixth
-    // decision that does not exist. The titles are on the last tab, in full.
+    // One short line that cannot wrap: a bar of labelled cells split across lines in a
+    // narrow terminal and drew a marker with no label, reading as a decision that does
+    // not exist. The titles live on the last screen, in full.
     const dots = tabs.length <= 12
       ? tabs
         .map((tab, index) =>
@@ -298,26 +313,28 @@ export function renderAskDialog(
       ? `all ${tabs.length} decisions`
       : `decision ${state.tab + 1} of ${tabs.length}`;
     const ruled = tabs.filter((tab) => state.answers.has(tab.packetId)).length;
-    wrapped(
-      `${theme.fg("accent", position)}${theme.fg("muted", dots === "" ? " · " : ` · ${dots} · `)}${
-        theme.fg(ruled === tabs.length ? "success" : "muted", `${ruled}/${tabs.length} ruled`)
-      }`,
+    say(
+      `${position}${dots === "" ? " · " : ` · ${dots} · `}${ruled}/${tabs.length} ruled`,
+      (line) => theme.fg("accent", line),
+      " ",
+      1,
     );
     lines.push("");
   }
 
   if (state.tab === tabs.length) {
-    wrapped(theme.fg("accent", theme.bold(`${tabs.length} decisions, ready to rule`)));
+    say(`${tabs.length} decisions, ready to rule`, (line) => theme.fg("accent", theme.bold(line)));
     lines.push("");
     for (const [index, tab] of tabs.entries()) {
       const answer = state.answers.get(tab.packetId);
       const row = answer ? tab.rows[answer.rowIndex] : undefined;
       const said = answer?.text ? `“${answer.text}”` : row?.label ?? "";
       // Whole titles here, not the tab-sized short ones: two packets can shorten to
-      // the same 18 characters, and this is the list the user rules from.
-      wrapped(theme.fg("text", `${index + 1}. ${tab.title}`), " ", 2);
-      wrapped(
-        answer ? theme.fg("success", said) : theme.fg("warning", "not ruled yet"),
+      // the same eighteen characters, and this is the list the user rules from.
+      say(`${index + 1}. ${tab.title}`, plain, " ", 2);
+      say(
+        answer ? said : "not ruled yet",
+        answer ? (line) => theme.fg("success", line) : (line) => theme.fg("warning", line),
         "    ",
         2,
       );
@@ -328,16 +345,16 @@ export function renderAskDialog(
       .map((tab, index) => ({ tab, index }))
       .filter((entry) => !state.answers.has(entry.tab.packetId))
       .map((entry) => `${entry.index + 1}`);
-    wrapped(
-      missing.length === 0
-        ? theme.fg("success", "enter to rule all of them")
-        : theme.fg(
-          "warning",
-          `still open: ${missing.length === 1 ? "decision" : "decisions"} ${missing.join(", ")}`,
-        ),
-    );
+    if (missing.length === 0) {
+      say("enter to rule all of them", (line) => theme.fg("success", line));
+    } else {
+      say(
+        `still open: ${missing.length === 1 ? "decision" : "decisions"} ${missing.join(", ")}`,
+        (line) => theme.fg("warning", line),
+      );
+    }
     lines.push("");
-    wrapped(theme.fg("dim", "←→ move · enter rule all · esc leave them pending"));
+    say("←→ move · enter rule all · esc leave them pending", dim);
     rule();
     return lines;
   }
@@ -348,18 +365,21 @@ export function renderAskDialog(
     return lines;
   }
 
-  wrapped(theme.fg("accent", theme.bold(tab.title)));
-  wrapped(theme.fg("text", tab.question));
+  say(tab.title, (line) => theme.fg("accent", theme.bold(line)));
+  say(tab.question, plain);
   lines.push("");
-  wrapped(theme.fg("muted", tab.stakes));
+  say(tab.stakes, muted);
   // Capped: a flip condition the model wrote as a paragraph would push the options
   // themselves off the screen, and the options are what the user is here for.
-  wrapped(theme.fg("muted", `changes if: ${tab.flipCondition}`), " ", FLIP_LINES);
+  say(`changes if: ${tab.flipCondition}`, muted, " ", FLIP_LINES);
   if (tab.replaces.length > 0) {
-    wrapped(
-      theme.fg("dim", `replaces ${tab.replaces.length} earlier question${
+    say(
+      `replaces ${tab.replaces.length} earlier question${
         tab.replaces.length === 1 ? "" : "s"
-      } here: ${tab.replaces.join("; ")}`),
+      } here: ${tab.replaces.join("; ")}`,
+      dim,
+      " ",
+      2,
     );
   }
   lines.push("");
@@ -367,65 +387,70 @@ export function renderAskDialog(
   for (const [index, row] of tab.rows.entries()) {
     const selected = index === state.cursor;
     const typing = state.typingFor?.rowIndex === index;
-    const label = `${index + 1}. ${row.label}${row.recommended ? "  ← recommended" : ""}`;
-    wrapped(
-      theme.fg(selected || typing ? "accent" : "text", label),
+    const focused = selected || typing;
+    say(
+      `${index + 1}. ${row.label}${row.recommended ? " ← recommended" : ""}`,
+      (line) => theme.fg(focused ? "accent" : "text", line),
       selected ? theme.fg("accent", "> ") : "  ",
     );
     // The row in focus shows its price in full; the rest are capped, so a long one
     // cannot bury the options below it. Moving the cursor is how you read the rest.
-    wrapped(theme.fg("muted", row.price), "     ", selected ? undefined : PRICE_LINES);
-    // A blank line between rows: the crowding was the complaint, and the price
-    // underneath each label needs room to read as belonging to it.
+    say(row.price, muted, "     ", focused ? undefined : PRICE_LINES);
+    // A blank line between rows: the price underneath a label needs room to read as
+    // belonging to it.
     if (index < tab.rows.length - 1) lines.push("");
   }
 
   if (state.typingFor) {
     lines.push("");
-    wrapped(theme.fg("text", state.typingFor.prompt));
+    say(state.typingFor.prompt, plain);
     for (const line of deps.editorLines ?? [""]) lines.push(` ${line}`);
     lines.push("");
-    wrapped(theme.fg("dim", "enter to record · esc to go back to the options"));
+    say("enter to record · esc to go back to the options", dim);
     rule();
     return lines;
   }
 
   lines.push("");
-  wrapped(
-    theme.fg(
-      "dim",
-      tabs.length > 1
-        ? "↑↓ or 1-9 choose · ←→ next decision · enter rule · esc leave pending"
-        : "↑↓ or 1-9 choose · enter rule · esc leave it pending",
-    ),
+  say(
+    tabs.length > 1
+      ? "↑↓ or 1-9 choose · ←→ next decision · enter rule · esc leave pending"
+      : "↑↓ or 1-9 choose · enter rule · esc leave it pending",
+    dim,
   );
   rule();
   return lines;
 }
 
+/**
+ * Wraps plain, unstyled text. Callers style what comes out, never what goes in, so
+ * this counts characters and no escape sequence can distort the measurement. A word
+ * longer than the width is broken rather than allowed to run over the edge.
+ */
 function wrap(text: string, width: number): string[] {
   if (width <= 0) return [text];
   const out: string[] = [];
   for (const paragraph of text.split("\n")) {
     let line = "";
     for (const word of paragraph.split(/\s+/).filter((part) => part !== "")) {
-      // Measured on the styled string, so a colour code never counts as width.
-      if (line !== "" && visible(`${line} ${word}`) > width) {
-        out.push(line);
-        line = word;
-        continue;
+      for (const piece of word.length > width ? chop(word, width) : [word]) {
+        if (line !== "" && line.length + 1 + piece.length > width) {
+          out.push(line);
+          line = piece;
+          continue;
+        }
+        line = line === "" ? piece : `${line} ${piece}`;
       }
-      line = line === "" ? word : `${line} ${word}`;
     }
     out.push(line);
   }
   return out;
 }
 
-/** Printable width: ANSI escapes take no columns. */
-function visible(text: string): number {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\u001B\[[0-9;]*m/g, "").length;
+function chop(word: string, width: number): string[] {
+  const pieces: string[] = [];
+  for (let at = 0; at < word.length; at += width) pieces.push(word.slice(at, at + width));
+  return pieces;
 }
 
 function shorten(text: string, max: number): string {

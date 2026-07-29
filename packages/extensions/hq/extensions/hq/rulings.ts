@@ -11,6 +11,7 @@
 import { applyRatifiedRule, coverageFor, loadDoctrine } from "./doctrine.ts";
 import { recordShadowOutcome } from "./graduation.ts";
 import { newId } from "./io.ts";
+import { RULE_DRAFT_PROMPT } from "./prompts.ts";
 import type { Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
 import type {
@@ -208,8 +209,9 @@ export async function applyRuling(
       at,
     });
     void stats;
-    const doctrineProposal = await createDoctrineProposal(deps, packet, ruling);
-    if (doctrineProposal) proposals.push(doctrineProposal);
+    // The rule this implies is drafted by a worker and arrives as its own packet, so
+    // nothing here waits on a model to answer.
+    await draftDoctrineProposal(deps, packet, ruling);
   }
 
   return {
@@ -332,10 +334,49 @@ async function applyProposalRuling(
   return { applied: true };
 }
 
-async function createDoctrineProposal(
+/**
+ * Asks a small worker to draft the standing rule this ruling implies. HQ used to build
+ * that text by template — "In <domain>: <what the user chose>" — which can only restate
+ * the one case it came from. Generalising is a judgement about a class of cases, so it
+ * needs a model that can read the case and name the class; and it needs the user to
+ * ratify whatever comes back, which they already do.
+ */
+async function draftDoctrineProposal(
   deps: RulingDeps,
   packet: Packet,
   ruling: Ruling,
+): Promise<void> {
+  if (ruling.coverage === "covered-agreed") return;
+  const doctrine = await loadDoctrine(deps.store.root, packet.project);
+  const citedRule = packet.doctrineCitations[0]
+    ? doctrine.rules.find((rule) => rule.citation === packet.doctrineCitations[0])
+    : undefined;
+  await deps.spawner({
+    kind: "rule",
+    prompt: RULE_DRAFT_PROMPT({
+      packetId: packet.id,
+      domain: packet.domain,
+      question: packet.question,
+      ruling: ruling.text || "the recommended option",
+      citedRule: ruling.coverage === "contradicts" && citedRule ? citedRule.text : null,
+    }),
+    cwd: packet.project,
+    originSessionId: packet.sourceSessionId,
+    packetId: packet.id,
+    tools: ["hq_propose_rule", "hq_skip_rule"],
+  });
+}
+
+/**
+ * Builds the ratification packet around a rule someone has drafted. The user is the
+ * only path into doctrine, so this is a packet like any other and nothing is written
+ * until they choose to ratify.
+ */
+export async function createDoctrineProposal(
+  deps: Pick<RulingDeps, "store">,
+  packet: Packet,
+  ruling: Ruling,
+  draftedRule: string,
 ): Promise<Packet | undefined> {
   if (ruling.coverage === "covered-agreed") return undefined;
 
@@ -348,9 +389,7 @@ async function createDoctrineProposal(
     ? doctrine.rules.find((rule) => rule.citation === packet.doctrineCitations[0])
     : undefined;
   const amendment = ruling.coverage === "contradicts" && citedRule !== undefined;
-  const ruleText = amendment
-    ? `In ${packet.domain}: ${ruling.text || "the user's ruling"} — this overrides the earlier rule for this case.`
-    : `In ${packet.domain}: ${ruling.text || "the user's ruling"}.`;
+  const ruleText = draftedRule.trim();
 
   const { packet: created } = await deps.store.createPacket({
     sourceSessionId: packet.sourceSessionId,

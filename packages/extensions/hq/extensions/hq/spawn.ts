@@ -15,7 +15,7 @@ import { mkdir, open } from "node:fs/promises";
 import { join } from "node:path";
 import { newId } from "./io.ts";
 import { hqPaths } from "./paths.ts";
-import type { SessionKind } from "./types.ts";
+import { KINDS, type SessionKind } from "./types.ts";
 
 /** Marks a session as HQ-managed. Absent means attended: hands off. */
 export const MANAGED_ENV = "HQ_MANAGED";
@@ -43,6 +43,7 @@ export const INTERNAL_KINDS: ReadonlySet<SessionKind | "titler"> = new Set([
   "triage",
   "drill",
   "titler",
+  "rule",
 ]);
 
 export interface SpawnRequest {
@@ -181,9 +182,10 @@ export function isManagedEnv(env: NodeJS.ProcessEnv = process.env): boolean {
 
 export function envKind(env: NodeJS.ProcessEnv = process.env): SessionKind | "titler" {
   const kind = env[KIND_ENV];
-  if (kind === "worker" || kind === "triage" || kind === "drill" || kind === "continuation") {
-    return kind;
-  }
+  // Read from the shared list rather than a copy of it: a kind added to SessionKind but
+  // missed here reads as a plain worker, and every tool that belongs to that kind then
+  // refuses the very session it was spawned for.
+  if ((KINDS as readonly string[]).includes(kind ?? "")) return kind as SessionKind;
   if (kind === "titler") return "titler";
   return "worker";
 }

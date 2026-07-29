@@ -287,3 +287,24 @@ export async function startCompletionDrill(
     `This packet cannot be shown to the user yet because it misses the bar: ${missing}. Read the source session and supply what is missing, quoting the evidence.`,
   );
 }
+
+/**
+ * Records that a ruling implied no general rule. Kept in the drill log because it is
+ * the same kind of fact: a worker was asked something about a packet, and this is what
+ * it concluded.
+ */
+export async function logRuleSkipped(
+  store: HqStore,
+  entry: { at: string; packetId: string; reason: string },
+): Promise<void> {
+  await appendJsonl(hqPaths(store.root).drillsLog, {
+    version: DRILL_LOG_VERSION,
+    at: entry.at,
+    packetId: entry.packetId,
+    question: "does this ruling imply a standing rule?",
+    tier: 1,
+    action: "rule-skipped",
+    runId: null,
+    detail: entry.reason.slice(0, 400),
+  });
+}

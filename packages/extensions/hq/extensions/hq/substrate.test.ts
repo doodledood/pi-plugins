@@ -20,6 +20,7 @@ import {
   parseRuling,
   parseSessionState,
   type Packet,
+  ruleGeneralityViolations,
 } from "./types.ts";
 
 test("the state root resolves from HQ_HOME, then the pi dir, then the default", () => {
@@ -771,5 +772,34 @@ test("a rule proposal is not superseded by the session carrying on", async () =>
     assert.equal((await store.readPacket(proposal.packet.id))?.status, "pending");
   } finally {
     await dropRoot(root);
+  }
+});
+
+test("a rule that only restates its own case is refused before it reaches the user", () => {
+  // Doctrine is read on every cycle and is meant to decide the *next* case. A rule
+  // naming the case it came from can never do that, and costs a decision to reject.
+  const overfit = [
+    "In investigation-completion: Accept as done.",
+    "When pkt-20260729-abcd asked about the timeout, raise it.",
+    "Accept as done for session 019fad12-9d8b-78da-a0a2-974c6d0ee828.",
+    "Update ~/Lemonade/cxllm/src/router.ts when the router changes.",
+    "In this case, prefer reverting rather than holding the release.",
+    "Keep `currentStepIndex` monotonic when the reply anchor stalls.",
+    "Accept.",
+  ];
+  for (const rule of overfit) {
+    assert.ok(
+      ruleGeneralityViolations(rule).length > 0,
+      `should have been refused: ${rule}`,
+    );
+  }
+
+  const general = [
+    "Prefer reverting a risky change over holding a release while a fix is found.",
+    "Treat a suite that fails the same way twice as broken rather than flaky.",
+    "When an investigation answers the question it was given, close it rather than widening its scope.",
+  ];
+  for (const rule of general) {
+    assert.deepEqual(ruleGeneralityViolations(rule), [], `should have passed: ${rule}`);
   }
 });

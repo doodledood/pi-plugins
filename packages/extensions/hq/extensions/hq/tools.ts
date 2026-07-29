@@ -39,13 +39,14 @@ import {
   type DrillDeps,
   type PacketPatch,
   startDrill,
+  logRuleSkipped,
   submitDrillResult,
 } from "./drills.ts";
 import { readyDomains } from "./graduation.ts";
 import { buildFleetCard } from "./fleet.ts";
 import { isPidAlive } from "./io.ts";
 import { planPresentation } from "./queue.ts";
-import { applyRuling, recordDive, type RulingRequest } from "./rulings.ts";
+import { applyRuling, recordDive, type RulingRequest, createDoctrineProposal } from "./rulings.ts";
 import { envKind, isManagedEnv, type Spawner } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
 import { readTranscriptTail, renderTranscript } from "./transcript.ts";
@@ -56,7 +57,7 @@ import {
   type PacketDraft,
   type TriageOutcome,
 } from "./triage.ts";
-import { meetsPacketBar, type Packet } from "./types.ts";
+import { meetsPacketBar, type Packet, ruleGeneralityViolations } from "./types.ts";
 
 export interface ToolDeps {
   store: HqStore;
@@ -299,6 +300,65 @@ export function registerHqTools(pi: ExtensionAPI, deps: ToolDeps): void {
         return text("Reading was not enough; a copy of the session is being asked directly.");
       }
       return text(`Recorded on packet ${outcome.packet.id}; it is back in the queue.`);
+    },
+  });
+
+  pi.registerTool({
+    name: "hq_propose_rule",
+    label: "HQ propose a doctrine rule",
+    description:
+      "Propose the standing rule a ruling implies. Queues it for the user to ratify; it never reaches doctrine on its own. Rules that name the case they came from are refused.",
+    parameters: Type.Object({
+      packetId: Type.String(),
+      ruleText: Type.String({
+        description:
+          "One plainly written sentence stating what to do in a class of situations. No session, packet, path, branch or identifier names.",
+      }),
+    }),
+    async execute(_id, params) {
+      if (envKind(deps.env) !== "rule") return refuse("this tool belongs to rule drafting");
+      const overfits = ruleGeneralityViolations(params.ruleText);
+      if (overfits.length > 0) {
+        // Refused rather than queued: a rule that cannot decide the next case would
+        // cost the user a decision to reject, and doctrine is read on every cycle.
+        return refuse(
+          `That is not yet a rule that could decide another case: ${
+            overfits.join("; ")
+          }. Rewrite it as the general principle and call this again.`,
+        );
+      }
+      const packet = await deps.store.readPacket(params.packetId);
+      if (!packet) return text(`no such packet: ${params.packetId}`);
+      const ruling = (await deps.store.listRulings()).findLast(
+        (candidate) => candidate.packetId === params.packetId,
+      );
+      if (!ruling) return text(`no ruling recorded for ${params.packetId} yet`);
+      const proposal = await createDoctrineProposal(deps, packet, ruling, params.ruleText);
+      return text(
+        proposal
+          ? `queued ${proposal.id} for the user to ratify`
+          : "that ruling needs no rule; nothing was queued",
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "hq_skip_rule",
+    label: "HQ skip the rule",
+    description:
+      "Record that a ruling implies no general rule, so nothing is proposed. Use when the ruling was a one-off rather than a preference about a class of cases.",
+    parameters: Type.Object({ packetId: Type.String(), reason: Type.String() }),
+    async execute(_id, params) {
+      if (envKind(deps.env) !== "rule") return refuse("this tool belongs to rule drafting");
+      // Logged where drills are logged: it is the same kind of fact — what a worker
+      // was asked, and what it concluded — and it is the only trace that the question
+      // was considered at all.
+      await logRuleSkipped(deps.store, {
+        at: deps.now().toISOString(),
+        packetId: params.packetId,
+        reason: params.reason,
+      });
+      return text("noted; no rule proposed");
     },
   });
 
@@ -721,7 +781,10 @@ async function askDialog(
   const collected = await ctx.ui.custom<Map<string, AskAnswer> | null>(
     (tui, theme, _keybindings, done) => {
       let state = initialAskState();
-      let cached: string[] | undefined;
+      // Keyed by width as well as invalidated on change: a cache that ignores the
+      // width serves lines built for the old one after a resize, which is how a rule
+      // ends up a different length from the prose inside it.
+      let cached: { width: number; lines: string[] } | undefined;
       const editor = new Editor(tui, theme as unknown as EditorTheme);
       editor.onSubmit = (value: string) => {
         const result = askDialogKey(tabs, state, { text: value });
@@ -742,12 +805,17 @@ async function askDialog(
       };
       return {
         render: (width: number) => {
-          cached ??= renderAskDialog(tabs, state, {
-            theme,
-            width,
-            ...(state.typingFor ? { editorLines: editor.render(Math.max(1, width - 2)) } : {}),
-          });
-          return cached;
+          if (!cached || cached.width !== width) {
+            cached = {
+              width,
+              lines: renderAskDialog(tabs, state, {
+                theme,
+                width,
+                ...(state.typingFor ? { editorLines: editor.render(Math.max(1, width - 2)) } : {}),
+              }),
+            };
+          }
+          return cached.lines;
         },
         invalidate: () => {
           cached = undefined;

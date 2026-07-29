@@ -29,6 +29,11 @@ cannot be cited as the rule that answers a stop.
 
 - Prefer the simplest durable solution that fixes the root cause and leaves the
   touched area easier to reason about.
+- Ask at the level the decision can be made: what will be true afterwards, what it
+  costs, what it risks. Implementation detail belongs in a packet only when the
+  choice is between implementations.
+- A rule earns its place by deciding the next case, not by recording the last one.
+  Keep it general enough to apply without knowing the case that produced it.
 - Preserve attention for choices where preference, risk, or irreversibility
   changes the answer.
 

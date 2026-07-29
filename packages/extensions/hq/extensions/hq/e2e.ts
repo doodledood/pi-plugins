@@ -22,6 +22,7 @@ import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
 import { startDrill, submitDrillResult, readDrillLog } from "./drills.ts";
 import { graduateDomain, revokeDomain } from "./graduation.ts";
 import { hqPaths } from "./paths.ts";
+import { ruleGeneralityViolations } from "./types.ts";
 import { applyRuling } from "./rulings.ts";
 import { createSpawner, EXTENSION_ENV, ISOLATE_ENV, type SpawnRequest, type Spawner } from "./spawn.ts";
 import { HqStore } from "./store.ts";
@@ -648,7 +649,11 @@ function draft(domain: string) {
 
 async function runDoctrine(world: World): Promise<void> {
   stage("doctrine: a ruling becomes a rule the next packet cites");
-  const { spawner, calls } = recordingSpawner();
+  const { spawner: recorded, calls } = recordingSpawner();
+  // Rule drafting runs for real, because what this stage is testing is what a model
+  // writes when asked to generalise. Everything else is recorded rather than launched.
+  const spawner: Spawner = async (request) =>
+    request.kind === "rule" ? world.real(request) : recorded(request);
   const deps = { store: world.store, spawner };
 
   const first = await seedStop(world, "doc-1", `${world.root}/doc-1.jsonl`);
@@ -666,30 +671,37 @@ async function runDoctrine(world: World): Promise<void> {
     fail("the first ruling was recorded", ruled.error);
     return;
   }
-  await check("an uncovered ruling proposed a rule", () => {
-    assert.equal(ruled.ruling.coverage, "uncovered");
-    const proposal = ruled.proposals.find((candidate) => candidate.proposal?.kind === "new-rule");
-    assert.ok(proposal, "a new-rule proposal was queued");
-    return `${proposal?.id}: ${proposal?.proposal?.ruleText.slice(0, 60)}`;
-  });
-
-  const proposal = ruled.proposals.find((candidate) => candidate.proposal?.kind === "new-rule");
+  // The rule is drafted by a real worker now, so the proposal arrives after the ruling
+  // rather than with it. What is being tested is what that worker writes: a rule that
+  // could decide another case, not a restatement of this one.
+  const proposal = await waitFor("an uncovered ruling had a general rule drafted for it", async () => {
+    const queued = await world.store.listQueue();
+    return queued.find((candidate) => candidate.proposal?.kind === "new-rule");
+  }, 300_000);
   if (!proposal) return;
+  await check("the drafted rule reads as a rule, not as this case", () => {
+    assert.equal(ruled.ruling.coverage, "uncovered");
+    const ruleText = proposal.proposal?.ruleText ?? "";
+    assert.deepEqual(ruleGeneralityViolations(ruleText), [], ruleText);
+    return `${proposal.id}: ${ruleText.slice(0, 80)}`;
+  });
   const ratified = await applyRuling(deps, { packetId: proposal.id, form: "accept" });
   if ("error" in ratified) {
     fail("the proposal was ratified", ratified.error);
     return;
   }
+  const ratifiedText = proposal.proposal?.ruleText ?? "";
   await check("the ratified rule is in the doctrine file", async () => {
     const doctrine = await loadDoctrine(world.root, world.workspace);
-    const rule = doctrine.rules.find((candidate) => candidate.text.includes("ci-flake"));
+    const rule = doctrine.rules.find((candidate) => candidate.text.includes(ratifiedText.slice(0, 40)));
     assert.ok(rule, "the rule is readable and citable");
     return `${rule?.citation}: ${rule?.text.slice(0, 60)}`;
   });
 
   // The same situation again: triage can now cite the ratified rule.
   const doctrine = await loadDoctrine(world.root, world.workspace);
-  const citation = doctrine.rules.find((rule) => rule.text.includes("ci-flake"))?.citation ?? "";
+  const citation = doctrine.rules.find((rule) => rule.text.includes(ratifiedText.slice(0, 40)))
+    ?.citation ?? "";
   const second = await seedStop(world, "doc-2", `${world.root}/doc-2.jsonl`);
   const secondOutcome = await applyTriageOutcome(deps, second.stopId, {
     kind: "packet",

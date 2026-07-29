@@ -262,6 +262,24 @@ answers from the board and from the sessions' own transcripts, quoting rather th
 characterising, and drills the session itself when reading cannot settle it. Name a
 session by its title; the board gives it the id.
 
+## What reaches you, and how it is written
+
+The person at the desk runs the place and does not read the code. So a packet is about
+outcomes and costs — what will be true afterwards, what it risks — and names files,
+identifiers or error strings only when the choice is literally between them. It also
+offers the real courses of action rather than one recommendation with a token fallback:
+where a decision is hard to reverse or wide in effect, the bar refuses a packet with
+fewer than three, because a choice between one option and "or not" is a decision the
+packet has quietly made itself.
+
+Doctrine is held to the same standard from the other side. The rule a ruling implies is
+drafted by its own small worker, not built from a template — HQ used to write
+"In <area>: <what you chose>", which restates one case and can never decide another. The
+drafter is asked for the general principle, and the store refuses a draft that names a
+session, packet, path, branch or identifier, or that points at "this case", so an
+overfitted rule never costs you a decision to reject. A ruling that implies no rule at
+all is recorded as such rather than forced into one.
+
 ## One question, one decision
 
 A session is one line of work, so it has at most one open decision. When a later stop

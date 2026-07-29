@@ -22,7 +22,7 @@ export type SessionRole =
   | "managed";
 
 /** What a managed session is for. */
-export type SessionKind = "worker" | "triage" | "drill" | "continuation";
+export type SessionKind = "worker" | "triage" | "drill" | "continuation" | "rule";
 
 /** Fleet-facing lifecycle state. */
 export type FleetState = "running" | "idle" | "drilling" | "done";
@@ -233,8 +233,12 @@ export interface DrillLogEntry {
   packetId: string;
   question: string;
   tier: 1 | 2;
-  /** "read" never opens a copy; "fork" resumes one. */
-  action: "read" | "fork" | "answered" | "gave-up";
+  /**
+   * "read" never opens a copy; "fork" resumes one. "rule-skipped" is the rule drafter
+   * concluding that a ruling implies no general rule, which is the only trace that the
+   * question was asked at all.
+   */
+  action: "read" | "fork" | "answered" | "gave-up" | "rule-skipped";
   runId: string | null;
 }
 
@@ -330,7 +334,7 @@ export function oneOf<T extends string>(value: unknown, allowed: readonly T[]): 
 }
 
 export const ROLES = ["attended", "managed"] as const;
-export const KINDS = ["worker", "triage", "drill", "continuation"] as const;
+export const KINDS = ["worker", "triage", "drill", "continuation", "rule"] as const;
 const FLEET_STATES = ["running", "idle", "drilling", "done"] as const;
 export const STOP_STATES = [
   "working",
@@ -726,6 +730,19 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
   if (packet.options.length < 2) {
     violations.push({ field: "options", reason: "fewer than two options to choose between" });
   }
+  // A recommendation and one token fallback is not a choice. Where the decision is one
+  // the user is here for — costly to reverse, or wide in effect — the real courses of
+  // action have to be on the table, or the packet has quietly made the decision itself.
+  if (
+    packet.options.length < 3 &&
+    (packet.reversibility === "one-way" || packet.blastRadius !== "low")
+  ) {
+    violations.push({
+      field: "options",
+      reason:
+        "a decision this costly to reverse or this wide needs at least three real courses of action, not a recommendation and a fallback",
+    });
+  }
   packet.options.forEach((option, index) => {
     if (!substantive(option.label, 1)) {
       violations.push({ field: `options[${index}].label`, reason: "empty or placeholder label" });
@@ -805,4 +822,38 @@ export function packetBarViolations(packet: Packet): BarViolation[] {
 
 export function meetsPacketBar(packet: Packet): boolean {
   return packetBarViolations(packet).length === 0;
+}
+
+/**
+ * Why a drafted rule cannot be proposed as written. Doctrine is the behaviour surface
+ * for every future decision, so a rule that names the case it came from is worse than
+ * no rule: it can never decide the next one, and it makes the file longer to read for
+ * nothing. These are the overfits a template or a hurried draft actually produces.
+ */
+export function ruleGeneralityViolations(text: string): string[] {
+  const rule = text.trim();
+  const found: string[] = [];
+  if (rule.length < 20) found.push("too short to be a rule anyone could apply");
+  if (rule.length > 240) {
+    found.push("too long: a rule that needs a paragraph is really several rules");
+  }
+  if (/^in [^:]{1,40}:/i.test(rule)) {
+    found.push('starts "In <area>: …", which restates one case rather than stating a rule');
+  }
+  if (/\b(pkt|rul|sess|stop|run|drl)-[0-9a-z]{4,}/i.test(rule)) {
+    found.push("names a packet, ruling or session id, which the next case will not have");
+  }
+  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i.test(rule)) found.push("contains a session uuid");
+  // An absolute or home-relative path, and a bare path with a file extension: both
+  // tie the rule to one tree, and the next case will be in another one.
+  if (/(^|\s)(~\/|\.{0,2}\/)[\w.\-]/.test(rule) || /\b[\w.\-]+\/[\w.\-]*\.[a-z]{2,4}\b/.test(rule)) {
+    found.push("names a file path");
+  }
+  if (/\b(this|that) (session|packet|case|run|ruling|task|investigation)\b/i.test(rule)) {
+    found.push("points at this case rather than describing the class of cases it covers");
+  }
+  if (/`[^`]+`/.test(rule)) {
+    found.push("quotes an identifier in backticks, which ties the rule to one codebase");
+  }
+  return found;
 }

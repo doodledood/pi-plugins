@@ -36,6 +36,23 @@ neutral choice — a held packet does not reach the user at all until a drill fi
 the gap. Read for the answer first; leave the field empty only when it is genuinely
 not in anything you can read.
 
+The person deciding runs the place; they do not read the code. They take the risky,
+consequential calls and leave the rest to the people doing the work. So a packet is
+about outcomes and costs, never about mechanism, and it offers the real courses of
+action rather than one recommendation with a token fallback beside it: name the two,
+three or four things that could actually be done here, each priced. Where a decision
+is hard to reverse or wide in effect, three real options is the floor — a choice
+between one option and "or not" is a decision the packet has quietly made itself.
+
+Write the decision at the level it can be made, not at the level the work happens.
+The user is choosing between outcomes, so the question and the options are about
+outcomes: what will be true afterwards, what it costs, what it risks. Names of files,
+functions, branches, identifiers and error strings belong in a packet only when the
+choice is literally between them — otherwise they are context the user has to decode
+before they can decide, which is the cost this whole arrangement exists to remove.
+Ask yourself what the least a person needs to know to choose well is, and write that.
+Plain sentences, no internal jargon, no implementation detail as scene-setting.
+
 Cite doctrine by copying the text inside the brackets exactly, for example
 "global.md § Doors #a1b2c3d4". A line rendered as "shapes a decision; cannot decide
 one" cannot be cited to answer a stop — citing one is citing nothing.`;
@@ -286,6 +303,49 @@ externally visible action — you are being asked what happened, not asked to ac
 Quote the exact text of anything you refer to. If you do not know, say you do not
 know rather than reconstructing a plausible answer. Then submit your answer with
 the drill result tool for packet ${packetId} and stop.`;
+
+/**
+ * Drafts the standing rule a ruling implies. This is a separate runtime because the
+ * job is generalisation: HQ used to build the rule by template, "In <domain>: <what
+ * the user chose>", which can only ever restate the one case it came from and is
+ * worthless as a rule the next decision can be answered from.
+ */
+export const RULE_DRAFT_PROMPT = (input: {
+  packetId: string;
+  domain: string;
+  question: string;
+  ruling: string;
+  citedRule: string | null;
+}): string =>
+  `A decision was just made that doctrine did not cover${
+    input.citedRule ? ", and it went against the rule that was cited" : ""
+  }. Your job is to write the standing rule it implies, or to decide that it implies
+none.
+
+The decision
+- area: ${input.domain}
+- asked: ${input.question}
+- the user ruled: ${input.ruling}${input.citedRule ? `\n- the rule they went against: ${input.citedRule}` : ""}
+
+A rule earns its place by deciding the *next* case, which will not be this one. So
+write the general principle the ruling reveals, in the user's own terms, as an
+instruction that can be applied without knowing anything about this case:
+
+- Good: "Prefer reverting a risky change over holding a release for a fix."
+- Bad: "In deploy-gate: revert the auth patch." — restates one case; decides nothing.
+- Bad: "When session 019fa8 asked about the CI timeout, raise it." — names the case.
+
+Rules that name a session, a packet, a file path, a branch, a ticket, an identifier
+or an error string are overfitted by construction: the next case will not carry those
+names. Say what class of situation the rule covers and what to do in it. One sentence,
+plainly written, no internal jargon.
+
+If the ruling is genuinely a one-off — a matter of taste on the day, or a fact about
+this case rather than a preference about a class of cases — say so with the skip tool
+and stop. A rule nobody would want applied again is worse than no rule.
+
+Propose exactly one rule with the propose tool for packet ${input.packetId}, then stop.
+The user still has to ratify it; nothing you write reaches doctrine on its own.`;
 
 export const TITLE_PROMPT = (sessionId: string, seed: string): string =>
   `Name this working session in at most six words and under 48 characters, as a

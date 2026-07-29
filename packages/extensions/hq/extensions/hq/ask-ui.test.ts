@@ -193,3 +193,70 @@ test("model-written prose cannot bury the options, and focus reveals it", () => 
   );
   assert.ok(focused.includes("unverified:"));
 });
+
+/** A theme that colours with real escape codes, the way pi's does. */
+const ANSI_THEME = {
+  fg: (color: string, text: string) => `\u001B[38;5;${color.length}m${text}\u001B[0m`,
+  bg: (color: string, text: string) => `\u001B[48;5;${color.length}m${text}\u001B[0m`,
+  bold: (text: string) => `\u001B[1m${text}\u001B[22m`,
+};
+
+test("a wrapped paragraph keeps its colour on every line", () => {
+  // Styling first and wrapping after left the colour's opening escape on line one, so
+  // continuation lines rendered in the terminal's default colour: a muted paragraph
+  // turned white halfway through.
+  const tagged = {
+    fg: (color: string, text: string) => `<${color}>${text}</>`,
+    bg: (color: string, text: string) => `<bg:${color}>${text}</>`,
+    bold: (text: string) => `<b>${text}</>`,
+  };
+  const tabs = buildAskDialog([packet({
+    question:
+      "the integration suite has failed nine nights running and each retry costs eight minutes of CI, so is it worth retrying again or looking at the fixture?",
+  })]);
+  const lines = renderAskDialog(tabs, initialAskState(), { theme: tagged, width: 56 });
+
+  const wrappedQuestion = lines.filter((line) => line.includes("<text>"));
+  assert.ok(wrappedQuestion.length >= 2, "the question wrapped onto more than one line");
+
+  for (const line of lines.filter((line) => line.trim() !== "")) {
+    assert.match(
+      line,
+      /^\s*<[a-z:]+>/,
+      `every line must carry its own colour, this one did not: ${line}`,
+    );
+    assert.ok(line.trimEnd().endsWith("</>"), `unterminated style: ${line}`);
+  }
+});
+
+test("escape codes never count as width", () => {
+  const long = packet({
+    title: "finished: the read-only transcript-fidelity investigation is complete",
+    options: [
+      { id: "accept", label: "Accept as done", price: "unverified: the residual question needs the uniclient owner or a session replay" },
+      { id: "follow", label: "There is a follow-up", price: "the session is resumed with your instruction" },
+    ],
+    recommendationId: "accept",
+  });
+  const strip = (line: string) => line.replace(/\u001B\[[0-9;]*m/g, "");
+  for (const width of [40, 60, 84]) {
+    const lines = renderAskDialog(buildAskDialog([long]), initialAskState(), {
+      theme: ANSI_THEME,
+      width,
+    });
+    for (const line of lines) {
+      assert.ok(
+        strip(line).length <= width,
+        `"${strip(line)}" (${strip(line).length}) exceeds ${width}`,
+      );
+    }
+  }
+});
+
+test("a word longer than the width is broken, not allowed to run over", () => {
+  const tabs = buildAskDialog([packet({
+    question: `see ${"x".repeat(90)} for the detail`,
+  })]);
+  const lines = renderAskDialog(tabs, initialAskState(), { theme: PLAIN_THEME, width: 40 });
+  for (const line of lines) assert.ok(line.length <= 40, `${line.length} > 40`);
+});
