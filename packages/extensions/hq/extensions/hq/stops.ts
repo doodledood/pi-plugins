@@ -230,6 +230,27 @@ export async function openStopsForSession(
     .filter((record) => record.sessionId === sessionId && record.status !== "done");
 }
 
+/**
+ * Closes stops nobody triaged in time. Without this, opening the seat after a week away
+ * would spawn a triage worker for every stop that piled up while nothing was watching,
+ * and hand back a queue of decisions about work that has since moved on.
+ */
+export async function expireStaleStops(
+  root: string,
+  before: Date,
+  onError: ErrorReporter = silentReporter,
+): Promise<StopRecord[]> {
+  const scan = await scanJsonDir(hqPaths(root).stops, parseStopRecord, (r) => r.stopId, onError);
+  const stale = scan.records
+    .map(({ record }) => record)
+    .filter((record) => record.status !== "done" && record.createdAt < before.toISOString());
+  for (const record of stale) {
+    await writeStopRecord(root, { ...record, status: "done", outcome: "taken-back", packetId: null });
+    await releaseClaim(root, record.stopId);
+  }
+  return stale;
+}
+
 export async function findStopsNeedingTriage(
   root: string,
   onError: ErrorReporter = silentReporter,

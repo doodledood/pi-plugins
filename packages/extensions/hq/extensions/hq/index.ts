@@ -11,6 +11,8 @@ import { loadConfig, type HqConfig } from "./config.ts";
 import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
 import { buildFleetCard, type FleetCardModel } from "./fleet.ts";
 import { graduateDomain, revokeDomain, readyDomains } from "./graduation.ts";
+import { markSeatGone, markSeatLive, staleBefore } from "./seat.ts";
+import { expireStaleStops } from "./stops.ts";
 import { resolveStateRoot } from "./paths.ts";
 import { SEAT_PROMPT } from "./prompts.ts";
 import { SessionReporter } from "./reporter.ts";
@@ -152,6 +154,9 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
     });
 
     pi.on("session_shutdown", async () => {
+      // A seat that dies without saying so would keep HQ thinking for another
+      // heartbeat window; saying so on the way out closes that gap.
+      if (seatActive) await markSeatGone(root).catch(() => undefined);
       overlayComponent?.dispose();
       if (cardTimer) clearInterval(cardTimer);
       if (watchTimer) clearInterval(watchTimer);
@@ -183,6 +188,9 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         if (argument === "off") {
           seatActive = false;
           seatPromptSent = false;
+          // The seat is gone the moment it is handed back, so managed sessions stop
+          // spending anything from here.
+          await markSeatGone(root);
           if (watchTimer) clearInterval(watchTimer);
           watchTimer = undefined;
           announced = new Set();
@@ -210,6 +218,15 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         await seedDoctrine(root);
         // Anything whose triage never finished is picked up here, so a crashed
         // worker cannot quietly cost the user a decision.
+        // Whoever is at the desk is at the desk now: the heartbeat is what tells every
+        // other process that HQ's own thinking is allowed to run.
+        await markSeatLive(root, process.pid, now());
+        // Cold decisions go before the sweep, so a week away does not become a week's
+        // worth of triage workers and a queue of questions about work that has moved on.
+        const doctrineForMeta = await loadDoctrine(root, undefined, report);
+        const cutoff = staleBefore(now(), doctrineForMeta.meta.decisionStaleDays);
+        const expiredStops = await expireStaleStops(root, cutoff, report);
+        const expiredPackets = await store.expireStaleDecisions(cutoff);
         const swept = await sweepStops({ store, spawner, now, onError: report });
         // HQ's own bookkeeping is not history the user asked to keep: dead session
         // rows, finished stops and worker logs age out, so the board and the
@@ -227,6 +244,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         // arrives after this moment is worth waking the seat for.
         announced = new Set((await store.listPresentable()).map((packet) => packet.id));
         watchTimer ??= setInterval(() => {
+          void markSeatLive(root, process.pid, now());
           void refreshCard();
           void nudgeSeat();
         }, SEAT_WATCH_MS);
@@ -240,7 +258,11 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
             pruned.sessions + pruned.stops + pruned.logs > 0
               ? `; pruned ${pruned.sessions} session rows, ${pruned.stops} stops, ${pruned.logs} logs`
               : ""
-          }${revived.length > 0 ? `; re-queued ${revived.length} stalled drill(s)` : ""}${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
+          }${revived.length > 0 ? `; re-queued ${revived.length} stalled drill(s)` : ""}${
+            expiredPackets.length + expiredStops.length > 0
+              ? `; expired ${expiredPackets.length} cold decision(s) and ${expiredStops.length} untriaged stop(s) older than ${doctrineForMeta.meta.decisionStaleDays}d`
+              : ""
+          }${lastProblemAt ? `; ${problems.length} substrate problem(s) reported` : ""}.`,
           "info",
         );
         for (const problem of problems.slice(-3)) ctx.ui.notify(problem, "warning");

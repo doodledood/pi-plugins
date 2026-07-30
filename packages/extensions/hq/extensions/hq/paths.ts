@@ -33,6 +33,8 @@ export interface HqPaths {
   graduation: string;
   /** How HQ's judgment workers think: the seat's own model and effort. */
   judgment: string;
+  /** Who is at the desk right now, with a heartbeat. */
+  seat: string;
   /** Stdout/stderr of spawned workers, for debugging a failed worker. */
   logs: string;
 }
@@ -77,6 +79,7 @@ export function hqPaths(root: string): HqPaths {
     drillsLog: join(root, "drills.jsonl"),
     graduation: join(root, "graduation.json"),
     judgment: join(root, "judgment.json"),
+    seat: join(root, "seat.json"),
     logs: join(root, "logs"),
   };
 }

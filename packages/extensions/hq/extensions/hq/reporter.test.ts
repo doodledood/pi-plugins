@@ -3,6 +3,8 @@ import test from "node:test";
 import { scanJsonDir } from "./io.ts";
 import { hqPaths } from "./paths.ts";
 import { SessionReporter } from "./reporter.ts";
+import { markSeatLive } from "./seat.ts";
+import type { SpawnRequest } from "./spawn.ts";
 import { KIND_ENV, MANAGED_ENV, TITLER_ENV } from "./spawn.ts";
 import { parseStopRecord } from "./stops.ts";
 import { dropRoot, fixedClock, makeRoot, makeStore, recordingSpawner, packetDraftFixture } from "./testing.ts";
@@ -78,6 +80,8 @@ test("sending a session off hands it to HQ, which takes it over by forking", asy
       env: { [TITLER_ENV]: "1" },
       now: fixedClock(),
     });
+    // HQ only thinks while someone is at the desk.
+    await markSeatLive(root, process.pid, new Date(fixedClock()()));
     await reporter.start();
     reporter.onAgentEnd([{ role: "assistant", content: "Done with the first pass." }]);
     await reporter.onAgentSettled();
@@ -188,6 +192,8 @@ test("a managed worker's stop is recorded and triaged exactly once per stop", as
     });
 
     assert.equal(reporter.role, "managed");
+    // HQ only thinks while someone is at the desk.
+    await markSeatLive(root, process.pid, new Date(fixedClock()()));
     await reporter.start();
     await reporter.onAgentStart();
     reporter.onAgentEnd([{ role: "assistant", content: "Blocked: retry or investigate?" }]);
@@ -231,6 +237,8 @@ test("a later stop on a different branch leaf is its own stop", async () => {
       now: fixedClock(),
     });
 
+    // HQ only thinks while someone is at the desk.
+    await markSeatLive(root, process.pid, new Date(fixedClock()()));
     await reporter.start();
     await reporter.onAgentSettled();
     leaf = "leaf2";
@@ -283,6 +291,8 @@ test("a session asks for a title once, from its first user message", async () =>
       titleModel: "fast-model",
     });
 
+    // HQ only thinks while someone is at the desk.
+    await markSeatLive(root, process.pid, new Date(fixedClock()()));
     await reporter.start();
     await reporter.onAgentStart();
     await reporter.onAgentStart();
@@ -402,6 +412,56 @@ test("a run that died on an error is recorded as a death, not as finished work",
 
     const state = await store.readSessionState("sess-a");
     assert.equal(state?.stopState, "aborted", "the board shows it failed, not done");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("with no seat open, a stop is recorded and nothing is spent on it", async () => {
+  const root = await makeRoot("hq-no-seat");
+  try {
+    const store = makeStore(root);
+    const { spawner, calls } = recordingSpawner();
+    // A stop is identified by its branch leaf, so a second stop needs a second leaf.
+    let leaf = "leaf1";
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: {
+        mode: "print",
+        cwd: "/work/alpha",
+        sessionManager: {
+          getSessionId: () => "sess-a",
+          getSessionFile: () => "/tmp/sess-a.jsonl",
+          getLeafId: () => leaf,
+          getBranch: () => [
+            { message: { role: "user", content: [{ type: "text", text: "do the thing" }] } },
+          ],
+        },
+      } as SessionContextLike,
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker" },
+      now: fixedClock(),
+    });
+
+    await reporter.start();
+    await reporter.onAgentStart();
+    reporter.onAgentEnd([{ role: "assistant", content: "Which of these should I do?" }]);
+    await reporter.onAgentSettled();
+
+    // The stop is on disk, so the seat can pick it up whenever it opens.
+    const stops = await stopRecords(root);
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0]?.status, "open", "unclaimed, so the seat's sweep will find it");
+
+    // But nothing was spawned: no triage worker, and not even a titler.
+    assert.deepEqual(calls, []);
+
+    // With the seat open, the next stop does spawn triage.
+    await markSeatLive(root, process.pid, new Date(fixedClock()()));
+    leaf = "leaf2";
+    reporter.onAgentEnd([{ role: "assistant", content: "And now this one?" }]);
+    await reporter.onAgentSettled();
+    assert.equal(calls.some((call: SpawnRequest) => call.kind === "triage"), true);
   } finally {
     await dropRoot(root);
   }

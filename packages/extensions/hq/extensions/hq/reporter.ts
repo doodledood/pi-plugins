@@ -12,6 +12,7 @@
 import { truncatePreview } from "./io.ts";
 import { assistantFromMessages, firstUserText, type SessionContextLike } from "./host.ts";
 import { TITLE_PROMPT } from "./prompts.ts";
+import { isSeatLive } from "./seat.ts";
 import {
   envKind,
   INTERNAL_KINDS,
@@ -22,7 +23,13 @@ import {
   TITLER_ENV,
 } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
-import { claimStop, ensureStopRecord, stopIdFor, finishStop, openStopsForSession } from "./stops.ts";
+import {
+  claimStop,
+  ensureStopRecord,
+  finishStop,
+  openStopsForSession,
+  stopIdFor,
+} from "./stops.ts";
 import { TRIAGE_KICKOFF } from "./prompts.ts";
 import type { FleetState, SessionKind, SessionRole, SessionState, StopState } from "./types.ts";
 
@@ -235,6 +242,7 @@ export class SessionReporter {
   }
 
   private async recordAndTriageStop(stopState: StopState): Promise<void> {
+    const seated = isSeatLive(this.store.root, this.now());
     this.settleCount += 1;
     const stopId = stopIdFor(
       this.sessionId,
@@ -263,6 +271,13 @@ export class SessionReporter {
     // claim below is the cross-process guard, and this is the same-process one.
     if (!created) return;
 
+    // The stop is on disk either way. Triage is HQ thinking on the user's behalf, so it
+    // waits for someone to be at the desk: with no seat open there is nobody for a
+    // packet to reach, and the seat sweeps unfinished stops when it opens. Nothing is
+    // lost by waiting, and nothing is spent while the user is elsewhere. Checked before
+    // the claim, so the stop is left plainly unclaimed for that sweep.
+    if (!seated) return;
+
     const won = await claimStop(this.store.root, stopId, process.pid, at);
     if (!won) return;
 
@@ -278,6 +293,9 @@ export class SessionReporter {
   private async requestTitleIfNeeded(): Promise<void> {
     if (this.title || this.titleRequested || this.internal || this.mine) return;
     if (this.env[TITLER_ENV] === "1") return;
+    // Naming a session is for a board someone is looking at. With no seat open there is
+    // no board, so there is no reason to spend a model call on it.
+    if (!isSeatLive(this.store.root, this.now())) return;
     const branch = this.ctx.sessionManager.getBranch?.() ?? [];
     const seed = firstUserText(branch);
     if (!seed) return;

@@ -53,6 +53,12 @@ export interface MetaDoctrine {
   graduationMinDays: number;
   auditSampleRate: number;
   stalenessMinutes: number;
+  /**
+   * How long a decision keeps its meaning. Coming back to HQ after a week away should
+   * not mean answering last week's questions: anything older than this is expired when
+   * the seat opens, rather than presented as though it were still live.
+   */
+  decisionStaleDays: number;
 }
 
 export const META_DEFAULTS: MetaDoctrine = {
@@ -62,6 +68,7 @@ export const META_DEFAULTS: MetaDoctrine = {
   graduationMinDays: 14,
   auditSampleRate: 0.2,
   stalenessMinutes: 30,
+  decisionStaleDays: 3,
 };
 
 export interface Doctrine {
@@ -207,6 +214,7 @@ export function parseMeta(text: string): MetaDoctrine {
   meta.graduationMinDays = numeric("graduation-min-days", meta.graduationMinDays, 0, 3650);
   meta.auditSampleRate = numeric("audit-sample-rate", meta.auditSampleRate, 0, 1);
   meta.stalenessMinutes = numeric("staleness-minutes", meta.stalenessMinutes, 1, 10080);
+  meta.decisionStaleDays = numeric("decision-stale-days", meta.decisionStaleDays, 1, 365);
   return meta;
 }
 

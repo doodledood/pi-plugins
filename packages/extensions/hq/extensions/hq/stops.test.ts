@@ -6,6 +6,7 @@ import { dropRoot, makeRoot } from "./testing.ts";
 import { isPidAlive } from "./io.ts";
 import {
   claimStop,
+  ensureStopRecord,
   findStopsNeedingTriage,
   finishStop,
   readStopRecord,
@@ -13,6 +14,7 @@ import {
   stopIdFor,
   takeOverClaim,
   writeStopRecord,
+  expireStaleStops,
   type StopRecord,
 } from "./stops.ts";
 
@@ -172,6 +174,36 @@ test("a finished stop records its outcome and the packet it produced", async () 
     assert.equal(stored?.status, "done");
     assert.equal(stored?.outcome, "packet");
     assert.equal(stored?.packetId, "pkt-9");
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("stops nobody triaged in time are closed rather than swept later", async () => {
+  const root = await makeRoot("hq-stale-stops");
+  try {
+    // Without this, opening the seat after a week away spawns a triage worker for every
+    // stop that piled up while nothing was watching.
+    await ensureStopRecord(root, stopFixture({
+      stopId: "stop-old",
+      sessionId: "sess-a",
+      createdAt: "2026-07-20T09:00:00.000Z",
+    }));
+    await ensureStopRecord(root, stopFixture({
+      stopId: "stop-new",
+      sessionId: "sess-b",
+      createdAt: "2026-07-28T09:00:00.000Z",
+    }));
+
+    const expired = await expireStaleStops(root, new Date("2026-07-25T00:00:00.000Z"));
+    assert.deepEqual(expired.map((record) => record.stopId), ["stop-old"]);
+    assert.equal((await readStopRecord(root, "stop-old"))?.status, "done");
+    assert.equal((await readStopRecord(root, "stop-new"))?.status, "open");
+    assert.deepEqual(
+      (await findStopsNeedingTriage(root)).map((stale) => stale.record.stopId),
+      ["stop-new"],
+      "only the recent one is still worth triaging",
+    );
   } finally {
     await dropRoot(root);
   }

@@ -83,6 +83,7 @@ value outside its range is ignored and the default stands.
 - graduation-min-days: 14                 (0–3650)
 - audit-sample-rate: 0.2                  (0–1)
 - staleness-minutes: 30                   (1–10080)
+- decision-stale-days: 3                  (1–365)
 `;
 
 export const DOCTRINE_PROJECT_SEED = (project: string): string =>

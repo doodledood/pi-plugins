@@ -282,6 +282,26 @@ export class HqStore {
     return { withdrawn: open.map((packet) => packet.id) };
   }
 
+  /**
+   * Retires decisions that have gone cold. Coming back to HQ after a week away should
+   * not mean answering last week's questions: the work moved on, the sessions behind
+   * them have gone, and presenting them as live would be a lie about what they can
+   * still change. They are archived, not deleted, so the record survives.
+   */
+  async expireStaleDecisions(before: Date): Promise<Packet[]> {
+    const cutoff = before.toISOString();
+    const stale = (await this.listQueue()).filter(
+      (packet) =>
+        (packet.status === "pending" || packet.status === "held" || packet.status === "drilling") &&
+        packet.createdAt < cutoff,
+    );
+    for (const packet of stale) {
+      await this.updatePacket(packet.id, (current) => ({ ...current, status: "withdrawn" }));
+      await this.archivePacket(packet.id);
+    }
+    return stale;
+  }
+
   async readPacket(packetId: string): Promise<Packet | undefined> {
     const live = await readJsonFile(
       packetPath(this.root, packetId),

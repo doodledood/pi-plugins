@@ -206,6 +206,26 @@ board, a cap on concurrent workers, and overrides for the judgment model and eff
 Everything else, including the staleness threshold and the batching and graduation
 numbers, lives in doctrine's Meta section, so there is exactly one place to look.
 
+## HQ is quiet when you are not using it
+
+Nothing HQ does on your behalf costs a model call unless the seat is open. A managed
+session that stops still records the stop — that is a file, and free — but triage is not
+spawned, and the session is not even titled: with no seat there is no board to title it
+for. The seat writes a heartbeat while it is held and removes it on `/hq off` or on
+shutdown, and every other process reads that before spending anything. A seat killed
+without warning goes stale within ninety seconds.
+
+Nothing is lost by waiting. Taking the seat sweeps the stops that were left unclaimed,
+so a stop that happened while you were away is triaged when you come back, in one pass,
+instead of arriving at the moment nobody was reading.
+
+**Decisions go cold.** Coming back after a week should not mean answering last week's
+questions, so taking the seat first expires anything older than
+`decision-stale-days` (default 3, in doctrine's Meta): untriaged stops are closed and
+queued decisions are withdrawn and archived, and the seat tells you how many. That runs
+*before* the sweep, so a month away cannot turn into a month's worth of triage workers
+and a queue of questions about work that has long since moved on.
+
 ## What HQ's own workers run on
 
 Stop triage, drills and rule drafting inherit **the model and reasoning effort the seat

@@ -853,3 +853,35 @@ test("a decision written in implementation detail is held, not shown", async () 
     await dropRoot(root);
   }
 });
+
+test("decisions that went cold while nobody was at the desk are expired, not presented", async () => {
+  const root = await makeRoot("hq-cold");
+  try {
+    const store = makeStore(root);
+    await store.ensure();
+
+    // Two decisions: one queued a week ago, one this morning. createdAt is written by
+    // the store's own clock and never editable afterwards, so the old one is queued
+    // through a store that thinks it is last week.
+    const lastWeek = makeStore(root, () => new Date("2026-07-20T09:00:00.000Z"));
+    await lastWeek.createPacket({
+      id: "pkt-old",
+      ...packetDraftFixture({ sourceSessionId: "sess-old" }),
+    } as never);
+    const fresh = await store.createPacket({
+      id: "pkt-fresh",
+      ...packetDraftFixture({ sourceSessionId: "sess-fresh" }),
+    } as never);
+
+    const expired = await store.expireStaleDecisions(new Date("2026-07-25T00:00:00.000Z"));
+
+    // Coming back after a week should not mean answering last week's questions: the
+    // work moved on, and presenting them as live would misstate what they can change.
+    assert.deepEqual(expired.map((packet) => packet.id), ["pkt-old"]);
+    assert.deepEqual((await store.listPresentable()).map((packet) => packet.id), [fresh.packet.id]);
+    // Archived, not deleted: the record of what was asked survives.
+    assert.equal((await store.readPacket("pkt-old"))?.status, "withdrawn");
+  } finally {
+    await dropRoot(root);
+  }
+});

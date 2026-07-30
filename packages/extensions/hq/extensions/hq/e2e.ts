@@ -22,6 +22,7 @@ import { loadDoctrine, seedDoctrine, seedProjectDoctrine } from "./doctrine.ts";
 import { startDrill, submitDrillResult, readDrillLog } from "./drills.ts";
 import { graduateDomain, revokeDomain } from "./graduation.ts";
 import { hqPaths } from "./paths.ts";
+import { markSeatLive } from "./seat.ts";
 import { ruleGeneralityViolations } from "./types.ts";
 import { applyRuling } from "./rulings.ts";
 import { createSpawner, EXTENSION_ENV, ISOLATE_ENV, type SpawnRequest, type Spawner } from "./spawn.ts";
@@ -126,6 +127,12 @@ async function makeWorld(): Promise<World> {
   await store.ensure();
   await seedDoctrine(root);
   await seedProjectDoctrine(root, workspace);
+  // The stages stand in for a user at the desk, and HQ only thinks while someone is
+  // there: without presence a managed session records its stop and spends nothing. A run
+  // outlives the heartbeat window, so it keeps beating for as long as the run lasts.
+  await markSeatLive(root, process.pid, new Date());
+  const heartbeat = setInterval(() => void markSeatLive(root, process.pid, new Date()), 30_000);
+  heartbeat.unref?.();
   const real = createSpawner({
     root,
     env: {

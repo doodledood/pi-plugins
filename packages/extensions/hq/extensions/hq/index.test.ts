@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHqExtension, SEAT_MESSAGE_TYPE } from "./index.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
+import { isSeatLive } from "./seat.ts";
 import { dropRoot, fixedClock, makeRoot, makeStore, packetDraftFixture, recordingSpawner } from "./testing.ts";
 import { KIND_ENV, MANAGED_ENV, PACKET_ENV } from "./spawn.ts";
 import { DRILL_TIER_ENV } from "./drills.ts";
@@ -154,6 +155,14 @@ test("taking the seat seeds doctrine, sweeps stops, and kicks off a cycle", asyn
     const { ctx, notifications } = fakeCommandCtx();
     await host.commands.get("hq")?.("", ctx);
     assert.match(notifications.join("\n"), /HQ seat active/);
+    // Presence is what lets managed sessions spend anything: with no seat, a stop is
+    // recorded and left for the sweep instead of triaged.
+    // The extension runs on the fixed test clock, so presence is read on that clock too.
+    assert.equal(
+      isSeatLive(root, new Date(fixedClock()())),
+      true,
+      "the seat announced itself to other processes",
+    );
     assert.equal(host.sentUserMessages.length, 1);
     assert.match(host.sentUserMessages[0] ?? "", /queue is empty/);
   } finally {
@@ -167,8 +176,15 @@ test("/hq off hands the seat back", async () => {
     const { host } = await activate(root);
     const { ctx, notifications } = fakeCommandCtx();
     await host.commands.get("hq")?.("", ctx);
+    assert.equal(isSeatLive(root, new Date(fixedClock()())), true);
     await host.commands.get("hq")?.("off", ctx);
     assert.match(notifications.join("\n"), /seat released/);
+    // And managed sessions go quiet again the moment it is handed back.
+    assert.equal(
+      isSeatLive(root, new Date(fixedClock()())),
+      false,
+      "presence is gone, so nothing spends on HQ's behalf",
+    );
 
     const injected = await host.handlers.get("before_agent_start")?.(
       { type: "before_agent_start", prompt: "", systemPrompt: "base", systemPromptOptions: {} },
