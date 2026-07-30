@@ -46,7 +46,6 @@ const PI_BUILTIN_TOOLS = new Set([
   "grep",
   "find",
   "ls",
-  "managed_chrome_status",
   "load_tools",
   "subagent",
   "get_subagent_result",

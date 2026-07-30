@@ -63,7 +63,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - **Sync scope:** full portable sync (default), or choose parts. In a full sync, ask what to opt out of rather than forcing the user to select every item.
    - **Existing conflicts:** for each selected part whose target differs, apply Aviram's portable default, preserve the current value, or customize it.
    - **Agent behavior:** apply `setup/AGENTS.md`, `setup/APPEND_SYSTEM.md`, and the Luna-backed `Explore` override; preserve current behavior; or choose these individually.
-   - **Optional integrations:** configure web search, MCP servers, managed browser tools, image generation, or none. Preserve working local integrations by default.
+   - **Optional integrations:** configure web search, MCP servers, browser tools, image generation, or none. Preserve working local integrations by default.
 
    When the user chooses parts, explain and offer these independently:
 
@@ -272,7 +272,6 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-sol` at `xhigh` while the extension default remains `inherit`.
 - `hq` — `/hq` decision-queue supervision of delegated sessions: headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you rule on without opening the session; `/fleet` shows the board.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
-- `managed-chrome-devtools` — managed Chrome DevTools MCP wrapper/profile.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
 - `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; the portable setup defines Sol as a 372K/1.05M dual-window alias and Luna as a 1.05M/1.05M alias.
