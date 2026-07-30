@@ -350,3 +350,5 @@ npm test
 ```
 
 `npm run verify` runs structure checks, typechecks, and package test suites, including BTW's deterministic child-runtime and TUI coverage.
+
+`npm run sync:doctrine` copies the live HQ doctrine (`~/.pi/hq/doctrine/global.md`) into `setup/hq/doctrine.global.md`, so the rules HQ decides by are versioned with the rest of the setup; `npm run sync:doctrine -- --install` puts it on a machine that has none and leaves an existing one alone.

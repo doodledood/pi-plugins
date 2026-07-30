@@ -28,29 +28,34 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
 6. If package/resource paths change, update all install surfaces together: root `package.json`, package READMEs, root docs, `setup/`, and `scripts/verify-structure.mjs`.
 7. Do not add a separate local-only setup layer. The repo uses templates with placeholders; filled files stay local.
 
-## HQ state is never portable
+## HQ doctrine is synced; the rest of HQ state is not
 
-`~/.pi/hq/**` is HQ's live state, not setup: doctrine, rulings, the audit and defect logs,
-queued and archived decisions, per-session rows, stop records, seat presence, and worker
-logs. It carries internal project names, ticket ids, and transcript previews, and **this
-repo is public**. Never copy any of it into the repo, in whole or in part, including the
-doctrine files under `~/.pi/hq/doctrine/`.
+The user's HQ global doctrine is part of this setup and is kept in the repo. Sync it
+mechanically rather than by reading and re-typing it, every time this skill runs, with no
+question asked:
 
-Nothing is lost by that: HQ seeds a complete doctrine file on install from
-`packages/extensions/hq/extensions/hq/templates.ts`, so a fresh machine gets the whole
-structure and every Meta default from the package. Portable doctrine changes belong in
-that seed, as a change to the package, where they are reviewed like code. Personal rules
-stay local; if the user wants them versioned, point them at a private repo and a symlink —
-HQ resolves the real path before writing, so a symlinked doctrine file is written through
-rather than replaced.
+```bash
+npm run sync:doctrine          # ~/.pi/hq/doctrine/global.md -> setup/hq/doctrine.global.md
+npm run sync:doctrine:check    # non-zero when the repo copy is stale
+```
 
-`~/.pi/agent/hq.json` is different: it is a non-secret extension config like the others,
-and its template is `setup/configs/hq.json`.
+It is copied verbatim, at the user's explicit direction, in full knowledge that this repo
+is public. Do not redact it, do not summarise it, and do not ask again. If it ever contains
+something that is plainly a secret rather than a rule — a key, a token, a credential-bearing
+URL — say so and stop before committing; that is the only exception.
+
+Nothing else under `~/.pi/hq/` goes in the repo: not the project doctrine files (they are
+keyed by working directory and name whatever the user was working in), and not rulings, the
+audit and defect logs, queued or archived decisions, session rows, stop records, seat
+presence, or worker logs. That is live state.
+
+`~/.pi/agent/hq.json` is a non-secret extension config like the others; its template is
+`setup/configs/hq.json`.
 
 ## Never copy into the repo
 
 - raw `auth.json`, API keys, OAuth state, tokens, cookies, sessions, caches, logs, package caches, or `node_modules`
-- anything under `~/.pi/hq/` — see above
+- anything under `~/.pi/hq/` except the global doctrine file — see above
 - filled MCP URLs, proxy IDs, credential-bearing command args, or private/internal endpoints
 - live `web-search.json` keys
 - private/internal workflow instructions that are not part of the portable setup
@@ -60,6 +65,7 @@ and its template is `setup/configs/hq.json`.
 After changing the repo, run targeted verification:
 
 ```bash
+npm run sync:doctrine:check
 npm run verify:structure
 ! rg "profiles/"'aviram' README.md docs setup packages AGENTS.md scripts .agents .claude
 find setup -name '*.json' -print0 | xargs -0 node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f,"utf8"))'
