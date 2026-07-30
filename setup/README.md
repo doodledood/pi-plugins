@@ -13,6 +13,21 @@ For agent-guided replication onto another computer—including target inspection
 - `skills/` — portable global skills. Copy a skill directory such as `skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level (harness-agnostic home; Pi also discovers `~/.pi/agent/skills/`). `deletion-pass` is an audit-only "deletion pass" over a plan/design/architecture/process — it reports what to cut and question, never rewrites.
 - `mcp.example.json` — MCP template with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
 - `web-search.example.json` — `pi-web-access` template. Copy to `~/.pi/web-search.json` and fill provider secrets locally.
+- `configs/hq.json` — HQ's mechanical settings: the small model that titles the board and
+  the cap on live workers. Everything else HQ runs on lives in its doctrine file, which is
+  local state and deliberately not in this repo (it carries project names and decisions);
+  HQ seeds a complete one on install. Add `judgmentModel` / `judgmentThinking` only to pin
+  HQ's triage and drill workers to a fixed model instead of following the seat's own.
+- HQ doctrine is **not** a file in this repo, and that is deliberate. The canonical copy is
+  the seed in `packages/extensions/hq/extensions/hq/templates.ts`, which HQ writes to
+  `~/.pi/hq/doctrine/global.md` on install and never overwrites afterwards — so a fresh
+  machine gets the whole structure and every Meta default from the package. A rule worth
+  having everywhere belongs in that seed, as a change to the package, reviewed like code.
+  A rule that names internal work does not belong in a public repo at all: keep it local,
+  and if you want it versioned, hold it in a private repo and symlink it — HQ resolves the
+  real path before writing, so a symlinked doctrine file is written through rather than
+  replaced (`ln -s ~/private-notes/hq-doctrine.md ~/.pi/hq/doctrine/global.md`). Project
+  doctrine under `~/.pi/hq/doctrine/projects/` is always local.
 - `models.example.json` — empty model-provider template. The full profile keeps regular Sol's dual-window configuration in `configs/model-aliases.json` instead of using a model-provider override.
 - `auth.example.json` — secret-free template for `~/.pi/agent/auth.json`. It uses `$OPENAI_API_KEY` env indirection and scopes `PI_CACHE_RETENTION=long` to the built-in OpenAI provider.
 - `AGENTS.md` and `APPEND_SYSTEM.md` — Aviram's portable operating posture for the agent.

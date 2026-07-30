@@ -28,9 +28,29 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
 6. If package/resource paths change, update all install surfaces together: root `package.json`, package READMEs, root docs, `setup/`, and `scripts/verify-structure.mjs`.
 7. Do not add a separate local-only setup layer. The repo uses templates with placeholders; filled files stay local.
 
+## HQ state is never portable
+
+`~/.pi/hq/**` is HQ's live state, not setup: doctrine, rulings, the audit and defect logs,
+queued and archived decisions, per-session rows, stop records, seat presence, and worker
+logs. It carries internal project names, ticket ids, and transcript previews, and **this
+repo is public**. Never copy any of it into the repo, in whole or in part, including the
+doctrine files under `~/.pi/hq/doctrine/`.
+
+Nothing is lost by that: HQ seeds a complete doctrine file on install from
+`packages/extensions/hq/extensions/hq/templates.ts`, so a fresh machine gets the whole
+structure and every Meta default from the package. Portable doctrine changes belong in
+that seed, as a change to the package, where they are reviewed like code. Personal rules
+stay local; if the user wants them versioned, point them at a private repo and a symlink —
+HQ resolves the real path before writing, so a symlinked doctrine file is written through
+rather than replaced.
+
+`~/.pi/agent/hq.json` is different: it is a non-secret extension config like the others,
+and its template is `setup/configs/hq.json`.
+
 ## Never copy into the repo
 
 - raw `auth.json`, API keys, OAuth state, tokens, cookies, sessions, caches, logs, package caches, or `node_modules`
+- anything under `~/.pi/hq/` — see above
 - filled MCP URLs, proxy IDs, credential-bearing command args, or private/internal endpoints
 - live `web-search.json` keys
 - private/internal workflow instructions that are not part of the portable setup

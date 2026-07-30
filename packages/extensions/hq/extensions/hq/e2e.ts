@@ -390,13 +390,26 @@ async function seedTieringSession(
   world: World,
 ): Promise<{ sessionId: string; sessionFile: string } | undefined> {
   const sessionFile = join(world.workspace, "tiering-source.jsonl");
-  const env = { ...process.env };
-  for (const key of ["HQ_MANAGED", "HQ_KIND", "HQ_HOME", "HQ_ORIGIN_SESSION_ID", "HQ_PACKET_ID"]) {
+  // Unmanaged is about the managed markers, not about which state root HQ reads: this
+  // session must still live inside the run's own root, or it writes into the user's real
+  // state — which is exactly what it used to do.
+  const env: NodeJS.ProcessEnv = { ...process.env, HQ_HOME: world.root, [ISOLATE_ENV]: "1" };
+  for (const key of ["HQ_MANAGED", "HQ_KIND", "HQ_ORIGIN_SESSION_ID", "HQ_PACKET_ID"]) {
     delete env[key];
   }
   const bin = process.env.HQ_PI_BIN?.trim() || "pi";
   const exitCode = await new Promise<number>((resolve, reject) => {
-    const child = nodeSpawn(bin, ["--session", sessionFile, "--print", TIERING_SEED_PROMPT], {
+    // The copy under test, and only that copy: with an installed HQ also on disk the
+    // child would load both and die on a duplicate tool registration.
+    const child = nodeSpawn(bin, [
+      "-ne",
+      "-e",
+      EXTENSION_PATH,
+      "--session",
+      sessionFile,
+      "--print",
+      TIERING_SEED_PROMPT,
+    ], {
       cwd: world.workspace,
       env,
       stdio: ["ignore", "ignore", "ignore"],

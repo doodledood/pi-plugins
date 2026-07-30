@@ -1,0 +1,4 @@
+{
+  "titleModel": "anthropic/claude-fable-5",
+  "maxConcurrentWorkers": 10
+}

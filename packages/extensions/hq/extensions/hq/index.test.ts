@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import test from "node:test";
 import type {
   ExtensionAPI,
@@ -7,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHqExtension, SEAT_MESSAGE_TYPE } from "./index.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
+import { hqPaths, projectDoctrinePath } from "./paths.ts";
 import { isSeatLive } from "./seat.ts";
 import { dropRoot, fixedClock, makeRoot, makeStore, packetDraftFixture, recordingSpawner } from "./testing.ts";
 import { KIND_ENV, MANAGED_ENV, PACKET_ENV } from "./spawn.ts";
@@ -374,3 +376,25 @@ async function runPlan(host: Host, ctx: ExtensionCommandContext): Promise<string
 function idsIn(plan: string): string[] {
   return [...plan.matchAll(/\b(pkt-[A-Za-z0-9-]+)\b/g)].map((match) => match[1] ?? "");
 }
+
+test("a session HQ does not manage writes no doctrine for the directory it is in", async () => {
+  const root = await makeRoot("hq-no-seed");
+  try {
+    // Seeding on every session start wrote a doctrine file for every directory the user
+    // ever opened a session in: state for sessions HQ has no business in, and noise in
+    // the one directory they are meant to read.
+    const { host } = await activate(root);
+    const { ctx } = fakeCommandCtx();
+    await host.handlers.get("session_start")?.({ type: "session_start", cwd: "/work/alpha" }, ctx);
+
+    assert.equal(existsSync(projectDoctrinePath(root, "/work/alpha")), false);
+    assert.equal(existsSync(hqPaths(root).doctrineGlobal), false, "and no global file either");
+
+    // Taking the seat is what creates them, for the project the seat is in.
+    await host.commands.get("hq")?.("", ctx);
+    assert.equal(existsSync(hqPaths(root).doctrineGlobal), true);
+    assert.equal(existsSync(projectDoctrinePath(root, "/work/alpha")), true);
+  } finally {
+    await dropRoot(root);
+  }
+});

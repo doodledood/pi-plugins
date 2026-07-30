@@ -136,8 +136,14 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
         ...(config.titleModel ? { titleModel: config.titleModel } : {}),
       });
       await reporter.start();
-      await seedDoctrine(root);
-      await seedProjectDoctrine(root, ctx.cwd);
+      // Only for sessions HQ manages. Seeding on every session start wrote a doctrine
+      // file for every directory the user ever opened a session in — state for sessions
+      // HQ has no business in, and noise in the one directory they are meant to read.
+      // The seat seeds its own project below, and triage seeds a stop's project itself.
+      if (isManagedEnv()) {
+        await seedDoctrine(root);
+        await seedProjectDoctrine(root, ctx.cwd);
+      }
     });
 
     pi.on("agent_start", async () => {
@@ -216,6 +222,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
             : {}),
         });
         await seedDoctrine(root);
+        await seedProjectDoctrine(root, ctx.cwd);
         // Anything whose triage never finished is picked up here, so a crashed
         // worker cannot quietly cost the user a decision.
         // Whoever is at the desk is at the desk now: the heartbeat is what tells every
