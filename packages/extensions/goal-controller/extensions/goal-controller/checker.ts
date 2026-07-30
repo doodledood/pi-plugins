@@ -458,7 +458,11 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
 }
 
 function isTerminalMessageEnvelope(value: unknown): value is Record<string, unknown> {
-  return isAgentMessageEnvelope(value);
+  // A terminal assistant message must have settled: "pending" is only valid on
+  // partial streaming envelopes, never on the final message_end record.
+  // Non-assistant message_end records (custom, toolResult, ...) carry no stopReason.
+  if (!isAgentMessageEnvelope(value)) return false;
+  return value.role !== "assistant" || checkerStopReason(stringProperty(value, "stopReason")) !== undefined;
 }
 
 function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown> {
@@ -469,7 +473,7 @@ function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown
         && Array.isArray(value.content)
         && value.content.every(isAssistantContent)
         && isUsage(value.usage)
-        && checkerStopReason(stringProperty(value, "stopReason")) !== undefined
+        && streamStopReason(stringProperty(value, "stopReason")) !== undefined
         && (value.errorMessage === undefined || typeof value.errorMessage === "string")
         && (value.responseModel === undefined || typeof value.responseModel === "string")
         && (value.responseId === undefined || typeof value.responseId === "string")
@@ -674,6 +678,15 @@ function assistantMessageHasText(message: Record<string, unknown>): boolean {
 function checkerStopReason(value: string | undefined): "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
   if (value === "stop" || value === "length" || value === "toolUse" || value === "error" || value === "aborted") return value;
   return undefined;
+}
+
+// Pi 0.83 streams partial assistant messages with stopReason "pending"
+// (message_start / message_update); envelope validation accepts it wherever a
+// message may still be in flight, while terminal verdict reads stay restricted
+// to checkerStopReason.
+function streamStopReason(value: string | undefined): "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
+  if (value === "pending") return value;
+  return checkerStopReason(value);
 }
 
 function checkerConfigSummary(config: GoalControllerConfig, modelPattern: string | undefined): string {

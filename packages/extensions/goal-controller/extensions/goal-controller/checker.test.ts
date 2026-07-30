@@ -739,6 +739,60 @@ test("PiSubprocessCheckerRunner accepts a terminal verdict after an earlier retr
   assert.equal(verdict.reason, "retry succeeded");
 });
 
+test("PiSubprocessCheckerRunner accepts pending-stopReason streaming envelopes before a terminal verdict", async () => {
+  // Pi 0.83 streams partial assistant messages with stopReason "pending" on
+  // message_start / message_update; only the terminal message_end must settle.
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const pendingPartial = jsonAssistantMessage([], "pending");
+      const terminalVerdict = jsonAssistantMessage([{
+        type: "text",
+        text: JSON.stringify({
+          decision: "complete",
+          complete: true,
+          reason: "all requirements proven",
+          evidence: ["fake evidence"],
+          requirements: [{ requirement: "fake", status: "satisfied", evidence: "fake evidence" }],
+        }),
+      }]);
+      return {
+        stdout: settledJsonl([
+          { type: "message_start", message: pendingPartial },
+          {
+            type: "message_update",
+            message: pendingPartial,
+            assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: pendingPartial },
+          },
+          { type: "message_end", message: terminalVerdict },
+        ].map((event) => JSON.stringify(event)).join("\n")),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(verdict.decision, "complete");
+  assert.equal(verdict.reason, "all requirements proven");
+});
+
+test("PiSubprocessCheckerRunner rejects a pending-stopReason message_end as malformed", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const pendingVerdict = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }], "pending");
+      return {
+        stdout: settledJsonl(JSON.stringify({ type: "message_end", message: pendingVerdict })),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
+});
+
 test("PiSubprocessCheckerRunner distinguishes an empty assistant response from invalid verdict text", async () => {
   const runner = new PiSubprocessCheckerRunner({
     async exec() {
