@@ -539,13 +539,40 @@ async function runTiering(world: World): Promise<void> {
     });
   }
 
-  // Fixture two: the answer depends on reasoning the session never wrote down.
+  // Fixture two: a question about reasoning rather than about what was said. Whether
+  // reading can answer it depends on what the source session happened to write down,
+  // which a real model decides — so what is asserted here is the invariant that holds
+  // either way: the answer is grounded in the source, by quotation or by asking it.
+  // Escalation itself is pinned deterministically in drills.test.ts, with a transcript
+  // that provably lacks the answer.
   const opaque = await tieringPacket(world, source, "tiering: needs the session itself");
   await startDrill(deps, opaque, REASONING_QUESTION);
-  const escalated = await waitFor("the reasoning question escalated to the copy", async () => {
+  const settled = await waitFor("the reasoning question was answered or escalated", async () => {
     const log = await readDrillLog(world.store);
-    return log.find((entry) => entry.packetId === opaque.id && entry.action === "fork");
+    const forked = log.find((entry) => entry.packetId === opaque.id && entry.action === "fork");
+    if (forked) return { forked };
+    const current = await world.store.readPacket(opaque.id);
+    return current && current.annotations.length > 0 ? { answered: current } : undefined;
   }, 600_000);
+  const answeredByReading = settled && "answered" in settled ? settled.answered : undefined;
+  if (answeredByReading) {
+    await check("answering from reading alone is quoted from the source, not inferred", () => {
+      const annotation = answeredByReading.annotations.at(-1)!;
+      assert.equal(annotation.tier, 1);
+      assert.ok(annotation.quotes.length > 0, "a tier-1 answer must carry its evidence");
+      for (const quote of annotation.quotes) {
+        const needle = quote.text.trim().replace(/\s+/g, " ").slice(0, 40);
+        assert.ok(
+          sourceBefore.includes(needle) || sourceBefore.includes(quote.text.trim().slice(0, 40)),
+          `quote is not in the source session: ${quote.text.slice(0, 60)}`,
+        );
+      }
+      return `tier 1, ${annotation.quotes.length} verbatim quote(s): ${
+        annotation.answer.slice(0, 70)
+      }`;
+    });
+  }
+  const escalated = settled && "forked" in settled ? settled.forked : undefined;
   if (escalated) {
     await check("the escalation is tier 2, and the parent never forked anything itself", () => {
       assert.equal(escalated.tier, 2);

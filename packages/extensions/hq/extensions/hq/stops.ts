@@ -218,6 +218,18 @@ export const CLAIM_GRACE_MS = 10 * 60_000;
  * off — the observing session claims, the triage worker it spawns takes over —
  * so a dead claimant inside the window means "handing over", not "abandoned".
  */
+/** Stops of one session that triage has not finished. */
+export async function openStopsForSession(
+  root: string,
+  sessionId: string,
+  onError: ErrorReporter = silentReporter,
+): Promise<StopRecord[]> {
+  const scan = await scanJsonDir(hqPaths(root).stops, parseStopRecord, (r) => r.stopId, onError);
+  return scan.records
+    .map(({ record }) => record)
+    .filter((record) => record.sessionId === sessionId && record.status !== "done");
+}
+
 export async function findStopsNeedingTriage(
   root: string,
   onError: ErrorReporter = silentReporter,

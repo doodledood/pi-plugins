@@ -90,6 +90,7 @@ it gone.
 | | While seated, HQ watches the queue and wakes itself when a packet arrives behind it, so work that lands after you sat down still reaches you. |
 | `/fleet` | Show or hide the fleet card. |
 | `/hq_send_off [what to do next]` | Hand the session you are in to HQ. Run it in any session, in your own words — talk the work through, then send it off and pick it up at the desk. |
+| `/hq_take_back` | The reverse: this session is yours again. Off the board, no triage, and any decision waiting about it is withdrawn. |
 | `/hq_graduate <domain>` | Grant HQ authority to answer that domain from doctrine. Confirms first. |
 | `/hq_revoke <domain>` | Take the domain back. |
 
@@ -101,6 +102,13 @@ so its own reporter records the stop and HQ triages it from there. HQ then works
 **fork** of the session rather than resuming it: your tab may still be open, and two
 pi processes appending to one transcript would corrupt both readings of it. Leave the
 tab or close it — either way the work carries on and reaches you at the desk.
+
+`/hq_take_back` undoes it, which is what makes sending off a comfortable decision rather
+than a commitment: the row leaves the board, unfinished stops are closed so no sweep
+picks them up later, and decisions waiting about that session are withdrawn — they could
+only route into work HQ would carry on itself, which is no longer HQ's to carry. Work
+already forked from it keeps going under its own row. A session HQ started is not
+yours to take: end it instead.
 
 From the seat, ask for work to be delegated (`hq_delegate`), and rule on what comes
 back. A ruling can be: accept the recommendation, pick an alternative, say it in

@@ -22,7 +22,7 @@ import {
   TITLER_ENV,
 } from "./spawn.ts";
 import type { HqStore } from "./store.ts";
-import { claimStop, ensureStopRecord, stopIdFor } from "./stops.ts";
+import { claimStop, ensureStopRecord, stopIdFor, finishStop, openStopsForSession } from "./stops.ts";
 import { TRIAGE_KICKOFF } from "./prompts.ts";
 import type { FleetState, SessionKind, SessionRole, SessionState, StopState } from "./types.ts";
 
@@ -205,6 +205,33 @@ export class SessionReporter {
     await this.publish("done", this.classifyStop());
     await this.recordAndTriageStop(this.classifyStop());
     return { ok: true };
+  }
+
+  /**
+   * Takes this session back from HQ. The reverse of handOff, and the reason it exists:
+   * handing over is a decision the user makes in the moment, and a decision they can
+   * only make comfortably if it can be undone. Any stop of this session that triage has
+   * not finished is closed, so nothing picks it up afterwards.
+   */
+  async takeBack(): Promise<
+    { ok: true; withdrawn: string[] } | { ok: false; reason: string }
+  > {
+    if (!this.handedOff) {
+      return {
+        ok: false,
+        reason: this.role === "managed"
+          ? "HQ started this session; end it rather than taking it back"
+          : "this session is already yours",
+      };
+    }
+    this.role = "attended";
+    this.handedOff = false;
+    this.mandate = null;
+    for (const stop of await openStopsForSession(this.store.root, this.sessionId)) {
+      await finishStop(this.store.root, stop.stopId, "taken-back", null);
+    }
+    const { withdrawn } = await this.store.releaseSession(this.sessionId);
+    return { ok: true, withdrawn };
   }
 
   private async recordAndTriageStop(stopState: StopState): Promise<void> {

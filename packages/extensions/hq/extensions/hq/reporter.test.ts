@@ -5,7 +5,7 @@ import { hqPaths } from "./paths.ts";
 import { SessionReporter } from "./reporter.ts";
 import { KIND_ENV, MANAGED_ENV, TITLER_ENV } from "./spawn.ts";
 import { parseStopRecord } from "./stops.ts";
-import { dropRoot, fixedClock, makeRoot, makeStore, recordingSpawner } from "./testing.ts";
+import { dropRoot, fixedClock, makeRoot, makeStore, recordingSpawner, packetDraftFixture } from "./testing.ts";
 import type { SessionContextLike } from "./host.ts";
 
 function fakeCtx(overrides: {
@@ -99,6 +99,76 @@ test("sending a session off hands it to HQ, which takes it over by forking", asy
       ok: false,
       reason: "HQ already owns this session",
     });
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("taking a session back undoes the handover and clears what was waiting", async () => {
+  const root = await makeRoot("hq-takeback");
+  try {
+    const store = makeStore(root);
+    const { spawner, calls } = recordingSpawner();
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: fakeCtx(),
+      env: { [TITLER_ENV]: "1" },
+      now: fixedClock(),
+    });
+    await reporter.start();
+    reporter.onAgentEnd([{ role: "assistant", content: "First pass done." }]);
+    await reporter.onAgentSettled();
+    await reporter.handOff("carry on");
+
+    // A decision was queued about it, the way triage would.
+    const { packet } = await store.createPacket(
+      packetDraftFixture({ sourceSessionId: "sess-a" }) as never,
+    );
+    assert.equal((await store.listPresentable()).length, 1);
+
+    const taken = await reporter.takeBack();
+    assert.deepEqual(taken, { ok: true, withdrawn: [packet.id] });
+
+    // Off the board, nothing waiting, and no stop left for a sweep to pick up.
+    assert.equal(await store.readSessionState("sess-a"), undefined);
+    assert.deepEqual(await store.listPresentable(), []);
+    assert.equal((await store.readPacket(packet.id))?.status, "withdrawn");
+    const stops = await stopRecords(root);
+    assert.equal(stops.every((stop) => stop.status === "done"), true);
+    assert.equal(stops.some((stop) => stop.outcome === "taken-back"), true);
+
+    // And it is genuinely the user's again: settling records nothing.
+    const spawnsBefore = calls.length;
+    reporter.onAgentEnd([{ role: "assistant", content: "Still talking." }]);
+    await reporter.onAgentSettled();
+    assert.equal(await store.readSessionState("sess-a"), undefined, "still off the board");
+    assert.equal(calls.length, spawnsBefore, "and nothing was spawned for it");
+
+    assert.deepEqual(await reporter.takeBack(), {
+      ok: false,
+      reason: "this session is already yours",
+    });
+  } finally {
+    await dropRoot(root);
+  }
+});
+
+test("a session HQ started cannot be taken back; it is HQ's to finish", async () => {
+  const root = await makeRoot("hq-takeback-managed");
+  try {
+    const store = makeStore(root);
+    const { spawner } = recordingSpawner();
+    const reporter = new SessionReporter({
+      store,
+      spawner,
+      ctx: fakeCtx(),
+      env: { [MANAGED_ENV]: "1", [KIND_ENV]: "worker", [TITLER_ENV]: "1" },
+      now: fixedClock(),
+    });
+    await reporter.start();
+    const result = await reporter.takeBack();
+    assert.equal(result.ok, false);
   } finally {
     await dropRoot(root);
   }

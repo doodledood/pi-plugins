@@ -289,6 +289,29 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
       },
     });
 
+    pi.registerCommand("hq_take_back", {
+      description: "Take this session back from HQ: /hq_take_back — the reverse of /hq_send_off",
+      handler: async (_args, ctx) => {
+        if (!reporter) {
+          ctx.ui.notify("HQ is not watching this session.", "warning");
+          return;
+        }
+        const result = await reporter.takeBack();
+        if (!result.ok) {
+          ctx.ui.notify(result.reason, "warning");
+          return;
+        }
+        ctx.ui.notify(
+          `Yours again. It is off the board, HQ will not triage it${
+            result.withdrawn.length > 0
+              ? `, and ${result.withdrawn.length} decision(s) waiting about it were withdrawn`
+              : ""
+          }. Work HQ already forked from it carries on under its own row.`,
+          "info",
+        );
+      },
+    });
+
     pi.registerCommand("hq_graduate", {
       description:
         "Grant HQ authority to answer a domain from doctrine: /hq_graduate <domain> (user only)",

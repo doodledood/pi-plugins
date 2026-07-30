@@ -201,7 +201,7 @@ export interface Ruling {
 
 /** The four things a stop can turn into. Closed set, so a typo cannot silently
  * disable a limit that counts outcomes (the respawn ceiling reads this). */
-export type StopOutcome = "packet" | "continue" | "close" | "respawn";
+export type StopOutcome = "packet" | "continue" | "close" | "respawn" | "taken-back";
 
 /** A stop answered from doctrine without the user, kept inspectable. */
 export interface AuditRecord {
@@ -342,7 +342,7 @@ export const STOP_STATES = [
   "idle-done",
   "aborted",
 ] as const;
-export const STOP_OUTCOMES = ["packet", "continue", "close", "respawn"] as const;
+export const STOP_OUTCOMES = ["packet", "continue", "close", "respawn", "taken-back"] as const;
 const BLASTS = ["low", "medium", "high"] as const;
 const REVERSIBILITIES = ["reversible", "one-way"] as const;
 const PACKET_STATUSES = ["pending", "held", "drilling", "ruled", "withdrawn"] as const;

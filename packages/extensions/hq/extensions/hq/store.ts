@@ -262,6 +262,26 @@ export class HqStore {
     }
   }
 
+  /**
+   * Hands a session back to the user: its row leaves the board, and the decisions
+   * waiting about it are withdrawn. Those decisions can only route into work HQ would
+   * carry on itself, so once the user has taken the session back they would resume
+   * something that is no longer HQ's to resume.
+   */
+  async releaseSession(sessionId: string): Promise<{ withdrawn: string[] }> {
+    const open = (await this.listQueue()).filter(
+      (packet) =>
+        packet.sourceSessionId === sessionId &&
+        (packet.status === "pending" || packet.status === "held" || packet.status === "drilling"),
+    );
+    for (const packet of open) {
+      await this.updatePacket(packet.id, (current) => ({ ...current, status: "withdrawn" }));
+      await this.archivePacket(packet.id);
+    }
+    await rm(sessionStatePath(this.root, sessionId), { force: true });
+    return { withdrawn: open.map((packet) => packet.id) };
+  }
+
   async readPacket(packetId: string): Promise<Packet | undefined> {
     const live = await readJsonFile(
       packetPath(this.root, packetId),
