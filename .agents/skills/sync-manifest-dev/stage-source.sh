@@ -20,6 +20,21 @@ CURL=(curl -sSL)
 echo ">> staging $REPO@$REF -> $DEST"
 rm -rf "$DEST" && mkdir -p "$DEST"
 
+# --- Tier 0: an existing local clone is the only COMPLETE source.
+# Both CDN tiers below enumerate from a cached index that can under-list (see the
+# integrity note in Tier 2), so a real checkout is strictly preferred. The agent
+# gets one by calling the `add_repo` MCP tool for this repo and cloning it; see
+# SKILL.md → "Fetching the source".
+for candidate in "${MANIFEST_DEV_CLONE:-}" /workspace/manifest-dev; do
+  [ -n "$candidate" ] || continue
+  if [ -d "$candidate/claude-plugins" ]; then
+    echo ">> using local clone at $candidate (complete source)"
+    rm -rf "$DEST" && mkdir -p "$DEST"
+    cp -R "$candidate/claude-plugins" "$DEST/"
+    exit 0
+  fi
+done
+
 # --- Tier 1: single tarball (works locally, or when session GitHub access includes the repo)
 tar_url="https://codeload.github.com/$REPO/tar.gz/refs/heads/$REF"
 code=$("${CURL[@]}" -o /tmp/manifest-dev.tar.gz -w "%{http_code}" "$tar_url" || echo 000)
@@ -101,4 +116,114 @@ if dropped:
     for r in dropped: print(f"     - {r[1]}")
 print(">> NOTE: file list came from jsDelivr's cached tree; a brand-new upstream")
 print(">>       file added within jsDelivr's metadata TTL may not yet be listed.")
+PY
+
+# --- Tier 2b: repair the tree's UNDER-listing.
+# The reconstruction above defends against the cached tree OVER-listing (a file it
+# still lists but that raw 404s is treated as deleted). It has no defense against
+# the opposite, and that is the failure that actually bites: jsDelivr's metadata
+# lags, so a subdirectory added upstream is simply absent from the tree, never
+# fetched, and the sync reports success having silently dropped it. This is not
+# hypothetical — it shipped `skills/do/` with SKILL.md and none of its four
+# `references/` files, which silently downgraded /do's verification mode.
+#
+# Skills declare their own companion files, so the staged text is an independent
+# index the stale tree cannot suppress. Chase every `references/`, `tasks/`, and
+# `assets/` path a staged file names, probe raw for it, and pull anything real.
+# Runs to a fixed point, since a fetched companion can name further companions.
+python3 - "$DEST" "$REPO" "$REF" "$CACERT" <<'PY'
+import os, re, sys, subprocess, tempfile
+dest, repo, ref, cacert = sys.argv[1:5]
+raw = f"https://raw.githubusercontent.com/{repo}/{ref}"
+curl = ["curl","-sSL"] + (["--cacert",cacert] if os.path.exists(cacert) else [])
+
+# Either an explicit companion path, or a bare backticked filename that a skill's
+# prose names without its directory (e.g. define/SKILL.md's task-file table).
+EXPLICIT = re.compile(r"(?:references|tasks|assets)/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+")
+BARE     = re.compile(r"`([A-Za-z0-9_-]+\.(?:md|html|json|txt))`")
+# A backticked relative path with its own directory component, e.g. `research/RESEARCH.md`
+# — named relative to a companion dir rather than to the skill root.
+RELPATH  = re.compile(r"`([A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*\.(?:md|html|json|txt))`")
+SUBDIRS  = ("references", "tasks", "assets")
+
+def fetch(relpath):
+    """Probe raw for a repo-relative path; write it if present. True if fetched."""
+    out = os.path.join(dest, relpath)
+    if os.path.exists(out):
+        return False
+    fd, tmp = tempfile.mkstemp(); os.close(fd)
+    try:
+        r = subprocess.run(curl+["-o",tmp,"-w","%{http_code}",f"{raw}/{relpath}"],
+                           capture_output=True, text=True)
+        if r.stdout.strip() != "200":
+            return False
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        os.replace(tmp, out)
+        return True
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+def candidates(path, text):
+    """Repo-relative paths this file might be naming, resolved against its own dir."""
+    owner = os.path.dirname(os.path.relpath(path, dest))
+    # A companion under skills/<name>/references/ is named from the skill root, so
+    # walk up out of any subdir the naming file itself sits in.
+    root = owner
+    while os.path.basename(root) in SUBDIRS:
+        root = os.path.dirname(root)
+    # Try both: a task file naming `references/X.md` can mean the skill's own
+    # references/ OR one nested beside it (tasks/references/X.md). Probing both is
+    # cheap — a wrong guess is one 404 — and guessing only one silently drops files.
+    for base in dict.fromkeys((root, owner)):
+        for m in EXPLICIT.findall(text):
+            yield f"{base}/{m}"
+        for name in BARE.findall(text):
+            for sub in SUBDIRS:
+                yield f"{base}/{sub}/{name}"
+        for rel in RELPATH.findall(text):
+            if "/" not in rel:
+                continue                      # already covered by BARE
+            yield f"{base}/{rel}"
+            for sub in SUBDIRS:
+                yield f"{base}/{sub}/{rel}"
+
+recovered, seen = [], set()
+for _ in range(5):                                   # fixed point; companions nest shallowly
+    found = False
+    for dirpath, _dirs, names in os.walk(dest):
+        for name in names:
+            if not name.endswith((".md", ".txt")):
+                continue
+            path = os.path.join(dirpath, name)
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            for rel in set(candidates(path, text)):
+                if "/claude-plugins/" not in "/"+rel and not rel.startswith("claude-plugins/"):
+                    continue
+                if fetch(rel):
+                    recovered.append(rel); found = True
+    if not found:
+        break
+
+if recovered:
+    print(f"!! tree UNDER-listed {len(recovered)} file(s) — recovered by reference-chasing:")
+    for r in sorted(recovered):
+        print(f"     + {r}")
+    print("!! the cached tree is stale; prefer a real clone (see SKILL.md).")
+else:
+    print(">> no under-listed companion files detected")
+
+# Reference-chasing is a backstop, not a guarantee: it can only find files that
+# some staged file names, so a companion nothing references stays invisible. The
+# CDN path can therefore never certify completeness — say so every time, rather
+# than letting a quiet run read as a verified one.
+print("!! CDN reconstruction cannot certify completeness — a file no staged text")
+print("!! names is undetectable here. For a guaranteed-complete source, call the")
+print("!! add_repo MCP tool for this repo, clone it, and re-run (see SKILL.md).")
 PY
