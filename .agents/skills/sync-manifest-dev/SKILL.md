@@ -22,11 +22,22 @@ Both plugins are synced into the same `.claude/` target and recorded in one trac
 
 ## Fetching the source
 
-Get a clean copy of `doodledood/manifest-dev` at `/tmp/manifest-dev` before syncing. Default branch is `main`. Just run the staging helper — it handles every environment:
+Get a clean copy of `doodledood/manifest-dev` at `/tmp/manifest-dev` before syncing. Default branch is `main`.
+
+**Get a real clone first.** The CDN fallback below reconstructs the tree from a *cached index* that can silently under-list, so it is a degraded source, not an equivalent one. Before running the helper, call the `add_repo` MCP tool for `doodledood/manifest-dev` (public, read access) and clone it — despite what the fallback rationale below says about GitHub being gated, `add_repo` is exactly the mechanism for widening that gate, and it works:
+
+```bash
+# after add_repo succeeds
+git clone --depth 1 https://github.com/doodledood/manifest-dev /workspace/manifest-dev
+```
+
+The helper picks up a clone at `/workspace/manifest-dev` (or `$MANIFEST_DEV_CLONE`) automatically and skips the CDN path entirely. Only if `add_repo` is unavailable or denied should you rely on reconstruction.
 
 ```bash
 bash .claude/skills/sync-manifest-dev/stage-source.sh
 ```
+
+**Why the clone matters.** A sync from the CDN path once shipped `skills/do/` with its `SKILL.md` and none of its four `references/` files. Nothing failed — `/do` simply could not load its verification-mode reference and silently fell back to in-session self-verification, so runs reported a verification mode they were not actually performing. Missing files here degrade behavior quietly rather than erroring, which is what makes an incomplete source worse than a failed one. The helper now chases companion files named in staged text to repair under-listing, but that is a backstop; a clone is the fix.
 
 On success it leaves `/tmp/manifest-dev/claude-plugins/manifest-dev{,-tools}/` populated and (in CDN mode) hash-verifies every file. The clone has no `.git/`, which is fine: this sync only reads files, never runs git inside it.
 
