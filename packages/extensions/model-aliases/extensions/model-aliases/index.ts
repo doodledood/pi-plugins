@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { ModelRegistry, ModelRuntime, VERSION, type EventBus } from "@earendil-works/pi-coding-agent";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import * as piAiCompat from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
@@ -60,6 +61,12 @@ export const CHECKER_MODEL_BOOTSTRAP_KIND = "model-provider-bootstrap";
 export const CHECKER_MODEL_BOOTSTRAP_TOOL_SURFACE = "none";
 export const MODEL_ALIASES_PACKAGE_NAME = "@doodledood/pi-model-aliases";
 export const MODEL_ALIASES_API = "model-aliases";
+
+const CHARS_PER_TOKEN = 4;
+const ESTIMATED_IMAGE_CHARS = 4_800;
+const PI_SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
 export function registerCheckerModelBootstrap(
   pi: ModelAliasesHost,
@@ -262,9 +269,154 @@ export function createAliasStreamSimple(
       throw new Error(`No model alias target registered for ${model.provider}/${model.id}`);
     }
 
-    const source = delegate(target as Model<any>, context, options);
+    const enforceVisibleWindow = shouldEnforceAliasContextWindow(model, target) && !isPiSummarizationRequest(context);
+    const estimatedTokens = enforceVisibleWindow ? estimateAliasRequestTokens(context) : 0;
+    const source = enforceVisibleWindow && estimatedTokens >= model.contextWindow
+      ? createAliasContextOverflowStream(target as Model<any>, estimatedTokens, model.contextWindow)
+      : delegate(target as Model<any>, context, options);
     return wrapAliasIdentityStream(source, model);
   };
+}
+
+/**
+ * A dual-window alias is an operating-window contract, not just a footer label.
+ * Pi checks automatic compaction after a complete agent run, but one run can span
+ * many provider/tool turns. Stop the next request at the visible edge so Pi's
+ * native context-overflow recovery compacts and resumes the tool loop.
+ */
+export function shouldEnforceAliasContextWindow(aliasModel: Model<any>, targetModel: ExistingModel): boolean {
+  return aliasModel.contextWindow > 0 &&
+    (targetModel.contextWindow ?? aliasModel.contextWindow) > aliasModel.contextWindow;
+}
+
+/**
+ * Compaction and branch summaries must be able to read the context they are
+ * replacing. They are one-off Pi-owned requests, not another normal agent turn,
+ * and cannot recover from a second synthetic overflow inside summarization.
+ */
+export function isPiSummarizationRequest(context: Context): boolean {
+  if (context.systemPrompt !== PI_SUMMARIZATION_SYSTEM_PROMPT || context.messages.length !== 1) return false;
+  const message = context.messages[0];
+  if (message?.role !== "user") return false;
+  const text = typeof message.content === "string"
+    ? message.content
+    : message.content.find((block) => block.type === "text")?.text;
+  return typeof text === "string" && text.startsWith("<conversation>\n") && text.includes("\n</conversation>");
+}
+
+/** Estimate the request context with the same last-usage-plus-tail shape Pi uses. */
+export function estimateAliasRequestTokens(context: Context): number {
+  let latestPrefixTimestamp = Number.NEGATIVE_INFINITY;
+  let usageInfo: { index: number; tokens: number } | undefined;
+
+  for (let index = 0; index < context.messages.length; index += 1) {
+    const message = context.messages[index]!;
+    if (message.role === "assistant") {
+      const tokens = contextTokensFromUsage(message.usage);
+      if (
+        message.timestamp >= latestPrefixTimestamp &&
+        message.stopReason !== "aborted" &&
+        message.stopReason !== "error" &&
+        tokens > 0
+      ) {
+        usageInfo = { index, tokens };
+      }
+    }
+    latestPrefixTimestamp = Math.max(latestPrefixTimestamp, message.timestamp);
+  }
+
+  if (usageInfo) {
+    const trailingMessages = context.messages.slice(usageInfo.index + 1);
+    const addedToolNames = new Set(
+      trailingMessages.flatMap((message) =>
+        message.role === "toolResult" ? (message.addedToolNames ?? []) : [],
+      ),
+    );
+    const addedTools = context.tools?.filter((tool) => addedToolNames.has(tool.name));
+    return usageInfo.tokens +
+      trailingMessages.reduce((total, message) => total + estimateMessageTokens(message), 0) +
+      estimateJsonTokens(addedTools);
+  }
+
+  return estimateTextTokens(context.systemPrompt ?? "") +
+    estimateJsonTokens(context.tools) +
+    context.messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+function createAliasContextOverflowStream(
+  targetModel: Model<any>,
+  estimatedTokens: number,
+  contextWindow: number,
+): AssistantMessageEventStream {
+  if (estimatedTokens < contextWindow) {
+    throw new Error("Alias context overflow stream requested below the configured context window");
+  }
+
+  const stream = createAssistantMessageEventStream();
+  const error: AssistantMessage = {
+    role: "assistant",
+    content: [],
+    api: targetModel.api,
+    provider: targetModel.provider,
+    model: targetModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage: `context_length_exceeded: estimated request context ${estimatedTokens} tokens meets or exceeds the configured alias operating window of ${contextWindow} tokens`,
+    timestamp: Date.now(),
+  };
+  queueMicrotask(() => stream.push({ type: "error", reason: "error", error }));
+  return stream;
+}
+
+function contextTokensFromUsage(usage: AssistantMessage["usage"]): number {
+  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+}
+
+function estimateMessageTokens(message: Context["messages"][number]): number {
+  if (message.role === "user" || message.role === "toolResult") {
+    return estimateContentTokens(message.content);
+  }
+
+  let chars = 0;
+  for (const block of message.content) {
+    if (block.type === "text") chars += block.text.length;
+    else if (block.type === "thinking") chars += block.thinking.length;
+    else chars += block.name.length + safeJsonStringify(block.arguments).length;
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+function estimateContentTokens(content: Context["messages"][number]["content"]): number {
+  if (typeof content === "string") return estimateTextTokens(content);
+  let chars = 0;
+  for (const block of content) {
+    chars += block.type === "text" ? block.text.length : ESTIMATED_IMAGE_CHARS;
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+function estimateTextTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+function estimateJsonTokens(value: unknown): number {
+  if (value === undefined || (Array.isArray(value) && value.length === 0)) return 0;
+  return estimateTextTokens(safeJsonStringify(value));
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "undefined";
+  } catch {
+    return "[unserializable]";
+  }
 }
 
 function defaultAliasStreamDelegate(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {

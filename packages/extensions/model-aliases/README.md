@@ -15,6 +15,7 @@ This extension makes that split configurable:
 - Normal chat turns, compaction, branch summaries, and other Pi-owned model calls share the same alias routing because the model itself owns the delegation.
 - Streamed/session assistant messages are mapped back to the selected alias identity, so session history still records the visible alias.
 - Visible context-window metadata can differ from the hard target context window used to clamp delegated provider requests; max-token, cost, input, reasoning, and compatibility metadata can also be inherited or overridden per alias.
+- For a dual-window alias, the hidden stream checks every request against the visible window. At the edge it returns a local context-overflow signal instead of sending another oversized request, which lets Pi compact and resume through its native overflow-recovery path.
 - If the configured `provider/id` already exists, the configured entry wins and the provider's other models are preserved.
 
 A `before_provider_request` payload rewrite is still registered as a compatibility fallback for call paths that expose Pi's payload hook, but alias routing does not depend on that hook.
@@ -115,7 +116,9 @@ If `provider/id` already exists, your configured entry wins and sibling models r
 }
 ```
 
-Pi uses `contextWindow` for display and automatic-compaction accounting. The hidden alias stream delegates with `targetContextWindow`, so Pi's provider request clamp still reserves output against the model's real hard capacity. Without this split, an artificially small `contextWindow` can reduce `max_output_tokens` to the provider minimum during a long tool loop before Pi gets a chance to compact.
+Pi uses `contextWindow` for display and normal automatic-compaction accounting. The alias stream also treats it as an enforced operating boundary: when the estimated next normal agent request reaches that window, the request stays local and Pi receives a context-overflow signal, runs its native compaction, and resumes the interrupted tool loop. This matters because Pi's normal threshold check runs after a complete agent run, while one long run can contain many provider/tool turns.
+
+Pi-owned compaction and branch-summary requests bypass the visible boundary and use the target window: they must be able to read the context they are replacing, and a second synthetic overflow inside summarization cannot compact itself. All other delegated calls below the boundary use `targetContextWindow`, so the provider request clamp still reserves output against the model's real hard capacity. Without the split, an artificially small hard window can reduce `max_output_tokens` to the provider minimum before Pi gets a chance to compact.
 
 Because `targetProvider` defaults to `provider` and `targetModel` defaults to `id`, the upstream request still sends the original model id.
 
@@ -162,6 +165,8 @@ Synthetic providers still work for unusual setups, but they have their own provi
 If normal chat appears to work but `/compact` or automatic compaction fails with an upstream `model_not_found` error for the alias id (for example `gpt-5.5-1m`), check that the `model-aliases` extension actually loaded after updating packages. Compaction and branch summaries rely on the hidden `model-aliases` stream API; the compatibility payload rewrite hook is only a fallback for provider call paths that expose Pi's payload hook.
 
 If a deliberately smaller visible window causes repeated `maximum output token limit` stops immediately before compaction, set `targetContextWindow` to the provider's real hard capacity. Do not represent an early compaction boundary by lowering both the visible and target windows.
+
+The dual-window request guard relies on Pi's automatic compaction. If automatic compaction is disabled, reaching the visible window stops with the local context-overflow error instead of silently continuing toward `targetContextWindow`; compact manually or re-enable automatic compaction.
 
 For Git installs that track `main`, run `pi update --extensions` (or otherwise fast-forward the installed package clone), then `/reload` or restart Pi.
 

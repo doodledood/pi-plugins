@@ -34,7 +34,7 @@ For agent-guided replication onto another computer—including target inspection
 3. Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Remove any obsolete regular-Sol context override from an existing `models.json` while preserving unrelated providers and overrides.
 4. Run `npm run sync:doctrine -- --install` to place HQ doctrine on a machine that has none;
    it leaves an existing one alone. Copy or merge `configs/*.json` into `~/.pi/agent/` after
-   reviewing them. The regular-Sol entry in `configs/model-aliases.json` exposes 372K to Pi while delegating requests with a 1.05M target window. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
+   reviewing them. The regular-Sol entry in `configs/model-aliases.json` enforces a 372K operating boundary through Pi's native compact-and-retry path while delegating allowed requests with a 1.05M target window. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
 7. Merge `AGENTS.md` / `APPEND_SYSTEM.md` only when the user wants Aviram's agent behavior.

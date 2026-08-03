@@ -3,7 +3,24 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { test } from "node:test";
-import { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAssistantMessageEventStream,
+  InMemoryCredentialStore,
+  isContextOverflow,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type ToolCall,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  createEventBus,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import {
   CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
@@ -14,8 +31,10 @@ import {
   buildProviderRegistrations,
   buildTargetModelLookup,
   createAliasStreamSimple,
+  estimateAliasRequestTokens,
   findUnpricedAliases,
   getAliasForModel,
+  isPiSummarizationRequest,
   registerCheckerModelBootstrap,
   rewriteModelAliasPayload,
 } from "./index.ts";
@@ -117,6 +136,162 @@ test("Pi extension loader loads model-aliases and registers the hidden alias API
     } else {
       process.env.PI_AGENT_HOME = previousPiAgentHome;
     }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dual-window alias uses Pi's native compact-and-retry before another oversized provider request", { timeout: 10_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-model-aliases-compaction-"));
+  const workspace = join(dir, "workspace");
+  const agentDir = join(dir, "agent");
+  const targetApi = "model-aliases-compaction-test";
+  const timeline: string[] = [];
+  const targetRequests: Array<{ kind: "regular" | "summary"; serializedTokens: number }> = [];
+  let regularCalls = 0;
+  let summaryCalls = 0;
+  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+
+  try {
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ compaction: { enabled: true, reserveTokens: 2_000, keepRecentTokens: 200 } }),
+    );
+
+    const settingsManager = SettingsManager.create(workspace, agentDir);
+    assert.equal(settingsManager.getCompactionEnabled(), true);
+    assert.equal(settingsManager.getCompactionKeepRecentTokens(), 200);
+    settingsManager.setProjectTrusted(true);
+    const loader = new DefaultResourceLoader({
+      cwd: workspace,
+      agentDir,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("alias-test", async () => ({ type: "api_key", key: "deterministic-test-key" }));
+    const runtime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const targetStreamSimple = (selectedModel: Model<any>, context: Context) => {
+      const isSummary = isPiSummarizationRequest(context);
+      targetRequests.push({ kind: isSummary ? "summary" : "regular", serializedTokens: serializedContextTokens(context) });
+      if (isSummary) {
+        summaryCalls += 1;
+        timeline.push("summary-request");
+        return assistantTextStream(selectedModel, "Compacted test history with the probe result preserved.", 500);
+      }
+
+      regularCalls += 1;
+      timeline.push(`regular-request-${regularCalls}`);
+      if (regularCalls === 1) {
+        return assistantToolCallStream(
+          selectedModel,
+          { type: "toolCall", id: "probe-call", name: "probe", arguments: {} },
+          21_000,
+          "summary-only padding ".repeat(6_000),
+        );
+      }
+      return assistantTextStream(selectedModel, "resumed after compaction", 700);
+    };
+    const integrationConfig: ModelAliasesConfig = {
+      enabled: true,
+      aliases: [
+        {
+          provider: "alias-test",
+          id: "visible-20k",
+          targetProvider: "alias-target",
+          targetModel: "target-100k",
+          api: targetApi,
+          baseUrl: "http://127.0.0.1/never-called",
+          contextWindow: 20_000,
+          targetContextWindow: 100_000,
+          maxTokens: 4_096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+    const targetModels = [
+      {
+        provider: "alias-target",
+        id: "target-100k",
+        api: targetApi,
+        baseUrl: "http://127.0.0.1/never-called",
+        contextWindow: 100_000,
+        maxTokens: 4_096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ];
+    const aliasStream = createAliasStreamSimple(
+      buildAliasLookup(integrationConfig),
+      buildTargetModelLookup(integrationConfig, targetModels),
+      targetStreamSimple,
+    );
+    const registration = buildProviderRegistrations(integrationConfig, targetModels, aliasStream)[0]!;
+    runtime.registerProvider(registration.provider, registration.config);
+
+    ({ session } = await createAgentSession({
+      cwd: workspace,
+      agentDir,
+      sessionManager: SessionManager.inMemory(workspace),
+      settingsManager,
+      modelRuntime: runtime,
+      resourceLoader: loader,
+      tools: ["probe"],
+      customTools: [
+        {
+          name: "probe",
+          label: "Probe",
+          description: "Return a deterministic result for compaction testing",
+          parameters: Type.Object({}),
+          async execute() {
+            return { content: [{ type: "text" as const, text: "probe completed ".repeat(100) }], details: {} };
+          },
+        },
+      ],
+    }));
+
+    const alias = session.modelRuntime.getModel("alias-test", "visible-20k");
+    assert.ok(alias);
+    await session.setModel(alias);
+    session.subscribe((event) => {
+      if (event.type === "compaction_end" && !event.aborted) {
+        timeline.push(event.errorMessage ? `compaction-error:${event.errorMessage}` : "compaction-end");
+      }
+    });
+
+    await session.prompt(`Run the probe and then report completion.\n${"context padding ".repeat(300)}`);
+
+    const compactions = session.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
+    assert.equal(compactions.length, 1);
+    assert.equal(regularCalls, 2, "one request before the edge and one native retry after compaction");
+    assert.ok(summaryCalls >= 1, "Pi generated the compaction summary through the alias route");
+    assert.deepEqual(timeline.filter((item) => item.startsWith("regular") || item === "compaction-end"), [
+      "regular-request-1",
+      "compaction-end",
+      "regular-request-2",
+    ]);
+    const regularTargetRequests = targetRequests.filter((request) => request.kind === "regular");
+    const summaryTargetRequests = targetRequests.filter((request) => request.kind === "summary");
+    assert.ok(regularTargetRequests.every((request) => request.serializedTokens < 20_000));
+    assert.ok(summaryTargetRequests.some((request) => request.serializedTokens >= 20_000));
+    assert.ok(summaryTargetRequests.every((request) => request.serializedTokens < 100_000));
+    assert.equal(session.getLastAssistantText(), "resumed after compaction");
+
+    const overflowEntries = session.sessionManager.getEntries().filter(
+      (entry) => entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.stopReason === "error" &&
+        isContextOverflow(entry.message, 20_000),
+    );
+    assert.equal(overflowEntries.length, 1, "the synthetic overflow is persisted for audit but removed from retry context");
+  } finally {
+    session?.dispose();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -392,6 +567,372 @@ test("hidden alias stream delegates with the target context window without paylo
   assert.equal(result.api, "openai-responses");
 });
 
+test("dual-window alias stops the next request at its visible context edge", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 372000,
+        targetContextWindow: 1050000,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+  const context = {
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "tool call completed" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        usage: usageWithTotal(371997),
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "eight chars" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ],
+  };
+
+  assert.equal(estimateAliasRequestTokens(context as any), 372000);
+  const result = await streamSimple(
+    { provider: "openai", id: "gpt-5.6-sol", api: MODEL_ALIASES_API, contextWindow: 372000 } as any,
+    context as any,
+  ).result();
+
+  assert.equal(delegated, 0, "the oversized request never reaches the 1.05M target");
+  assert.equal(result.provider, "openai");
+  assert.equal(result.model, "gpt-5.6-sol");
+  assert.equal(result.stopReason, "error");
+  assert.equal(isContextOverflow(result, 372000), true, "Pi recognizes the synthetic error and runs native compact-and-retry");
+  assert.match(result.errorMessage ?? "", /estimated request context 372000.*operating window of 372000/);
+});
+
+test("dual-window alias enforces the visible edge before any assistant usage exists", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "tiny-visible-window",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 10,
+        targetContextWindow: 100,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+  const context = {
+    systemPrompt: "12345678", // 2 tokens
+    tools: [{ name: "x" }], // 4 serialized tokens
+    messages: [{ role: "user", content: [{ type: "text", text: "1234567890123456" }], timestamp: 1 }], // 4 tokens
+  };
+
+  assert.equal(estimateAliasRequestTokens(context as any), 10);
+  const result = await streamSimple(
+    { provider: "openai", id: "tiny-visible-window", api: MODEL_ALIASES_API, contextWindow: 10 } as any,
+    context as any,
+  ).result();
+
+  assert.equal(delegated, 0);
+  assert.equal(isContextOverflow(result, 10), true);
+});
+
+test("request estimation ignores retained assistant usage older than a compaction summary", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "tiny-visible-window",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 4,
+        targetContextWindow: 100,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+  const context = {
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "compact summary!" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        content: [],
+        api: "openai-responses",
+        provider: "openai",
+        model: "tiny-visible-window",
+        usage: usageWithTotal(100),
+        stopReason: "toolUse",
+        timestamp: 50,
+      },
+    ],
+  };
+
+  assert.equal(estimateAliasRequestTokens(context as any), 4);
+  const result = await streamSimple(
+    { provider: "openai", id: "tiny-visible-window", api: MODEL_ALIASES_API, contextWindow: 4 } as any,
+    context as any,
+  ).result();
+
+  assert.equal(delegated, 0);
+  assert.equal(isContextOverflow(result, 4), true);
+});
+
+test("request estimation ignores errored and aborted assistant usage", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "tiny-visible-window",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 10,
+        targetContextWindow: 100,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+
+  for (const stopReason of ["error", "aborted"] as const) {
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          content: [],
+          api: "openai-responses",
+          provider: "openai",
+          model: "tiny-visible-window",
+          usage: usageWithTotal(6),
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [],
+          api: "openai-responses",
+          provider: "openai",
+          model: "tiny-visible-window",
+          usage: usageWithTotal(100),
+          stopReason,
+          timestamp: 2,
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "1234567890123456" }],
+          timestamp: 3,
+        },
+      ],
+    };
+
+    assert.equal(estimateAliasRequestTokens(context as any), 10, stopReason);
+    const result = await streamSimple(
+      { provider: "openai", id: "tiny-visible-window", api: MODEL_ALIASES_API, contextWindow: 10 } as any,
+      context as any,
+    ).result();
+    assert.equal(isContextOverflow(result, 10), true, stopReason);
+  }
+  assert.equal(delegated, 0);
+});
+
+test("dual-window alias counts newly loaded tool definitions at the visible edge", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "tiny-visible-window",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 10,
+        targetContextWindow: 100,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+  const context = {
+    tools: [{ name: "x" }],
+    messages: [
+      {
+        role: "assistant",
+        content: [],
+        api: "openai-responses",
+        provider: "openai",
+        model: "tiny-visible-window",
+        usage: usageWithTotal(6),
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "load_tools",
+        content: [],
+        addedToolNames: ["x"],
+        isError: false,
+        timestamp: 2,
+      },
+    ],
+  };
+
+  assert.equal(estimateAliasRequestTokens(context as any), 10);
+  const result = await streamSimple(
+    { provider: "openai", id: "tiny-visible-window", api: MODEL_ALIASES_API, contextWindow: 10 } as any,
+    context as any,
+  ).result();
+
+  assert.equal(delegated, 0);
+  assert.equal(isContextOverflow(result, 10), true);
+});
+
+test("dual-window alias delegates normally while the estimated request stays below its visible edge", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 372000,
+        targetContextWindow: 1050000,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+
+  const result = await streamSimple(
+    { provider: "openai", id: "gpt-5.6-sol", api: MODEL_ALIASES_API, contextWindow: 372000 } as any,
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          usage: usageWithTotal(371999),
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+      ],
+    } as any,
+  ).result();
+
+  assert.equal(delegated, 1);
+  assert.equal(result.stopReason, "stop");
+});
+
+test("same-window aliases keep provider-owned context enforcement", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [
+      {
+        provider: "openai",
+        id: "gpt-5.5-1m",
+        targetProvider: "openai",
+        targetModel: "gpt-5.5",
+        contextWindow: 1050000,
+        targetContextWindow: 1050000,
+      },
+    ],
+  };
+  let delegated = 0;
+  const streamSimple = createAliasStreamSimple(
+    buildAliasLookup(config),
+    buildTargetModelLookup(config, existingModels),
+    (model) => {
+      delegated += 1;
+      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+    },
+  );
+
+  await streamSimple(
+    { provider: "openai", id: "gpt-5.5-1m", api: MODEL_ALIASES_API, contextWindow: 1050000 } as any,
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.5-1m",
+          usage: usageWithTotal(1050000),
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+      ],
+    } as any,
+  ).result();
+
+  assert.equal(delegated, 1, "aliases without a larger target window retain their existing provider path");
+});
+
 test("hidden alias stream rewrites streamed events back to alias identity", async () => {
   const config: ModelAliasesConfig = {
     enabled: true,
@@ -438,6 +979,54 @@ function withoutStreamSimple(config: Record<string, unknown>): Record<string, un
   const { streamSimple, ...rest } = config;
   assert.equal(typeof streamSimple, "function");
   return rest;
+}
+
+function assistantTextStream(model: Model<any>, text: string, totalTokens: number) {
+  const stream = createAssistantMessageEventStream();
+  const message = assistantMessage(model, "stop", totalTokens);
+  message.content = [{ type: "text", text }];
+  queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+  return stream;
+}
+
+function assistantToolCallStream(model: Model<any>, toolCall: ToolCall, totalTokens: number, leadingText?: string) {
+  const stream = createAssistantMessageEventStream();
+  const message = assistantMessage(model, "toolUse", totalTokens);
+  message.content = [...(leadingText ? [{ type: "text" as const, text: leadingText }] : []), toolCall];
+  queueMicrotask(() => stream.push({ type: "done", reason: "toolUse", message }));
+  return stream;
+}
+
+function assistantMessage(model: Model<any>, stopReason: AssistantMessage["stopReason"], totalTokens: number): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: usageWithTotal(totalTokens),
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+function serializedContextTokens(context: Context): number {
+  return Math.ceil(JSON.stringify({
+    systemPrompt: context.systemPrompt,
+    messages: context.messages,
+    tools: context.tools,
+  }).length / 4);
+}
+
+function usageWithTotal(totalTokens: number) {
+  return {
+    input: totalTokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
 }
 
 function fakeAssistantStream(identity: { api?: string; provider: string; model: string }) {

@@ -113,7 +113,7 @@ A Pi extension in this repo that manages one long-running session goal and deleg
 _Avoid_: Goal mode when referring to the extension implementation.
 
 **Model aliases**:
-A Pi extension in this repo that registers selector-visible provider/model aliases and routes aliased model calls through a hidden stream API to configured upstream provider/model IDs while preserving the selected alias identity in session history.
+A Pi extension in this repo that registers selector-visible provider/model aliases, routes aliased calls through a hidden stream API while preserving alias identity in session history, and enforces a smaller visible operating window before delegating to a larger target window by signaling Pi's native context-overflow recovery.
 _Avoid_: Model override when referring to selector-visible aliases.
 
 **OpenAI max-output floor**:
@@ -125,7 +125,7 @@ The condition where Pi's `clampMaxTokensToContext` returns a value below the Ope
 _Avoid_: Context overflow (that is a different, input-side condition).
 
 **Artificial context boundary**:
-A Pi model `contextWindow` deliberately set below the provider's real hard window to induce earlier compaction or display a preferred operating envelope; on Pi 0.80.6 it also hard-clamps request output and can stop long mid-agent turns before compaction runs.
+A Pi model `contextWindow` deliberately set below the provider's real hard window to define a preferred operating envelope; a dual-window **Model aliases** route enforces that edge locally before the next provider request, while its separate target window prevents artificial output clamping below the edge.
 _Avoid_: Provider context window, compaction threshold.
 
 **Goal checker**:
@@ -168,6 +168,6 @@ _Avoid_: Terminal goal when resumability matters.
 - **Session-tree cost accounting** sums the parent plus every **Sidecar child session** recursively, and adds each **Cost record** for billed calls that produce no session; **Unreported spend** stays outside the total by necessity and is disclosed rather than estimated.
 - The cost surfaces stay extension-agnostic: producers reach them only through self-describing session entries (a **Cost record**, or a tier record carrying its own premium) and pi's own status API, so any subset of extensions can be installed and the total stays correct for what is there.
 - Two extensions distort the *price* rather than the discovery: `gpt-fast-toggle` buys OpenAI's priority service tier at a premium Pi's static per-model rates do not model, and `model-aliases` falls back to zero cost when an alias has neither an explicit price nor a resolvable target. Both are surfaced rather than silently absorbed, so a tree total stays honest.
-- The **OpenAI max-output floor** prevents a hard provider 400 during **Context-clamp output underflow**, but at an **Artificial context boundary** the accepted 16-token response can still stop for length; a durable alias must keep Pi's visible compaction window separate from the target model metadata used for provider clamping.
+- The **OpenAI max-output floor** prevents a hard provider 400 during **Context-clamp output underflow**; a durable **Artificial context boundary** instead keeps the visible operating window separate from provider-clamp metadata and enforces the visible edge through Pi's native compact-and-retry path.
 
 ## Flagged ambiguities

@@ -143,7 +143,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes `anthropic/claude-opus-5` the default at xhigh thinking. The model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol as a dual-window alias—Pi sees a 372,000-token operating window for display and compaction while provider requests use its 1,050,000-token target window—and exposes Luna's full 1,050,000-token window.
+The setup makes `anthropic/claude-opus-5` the default at xhigh thinking. The model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol as a dual-window alias: Pi displays and enforces a 372,000-token operating window, triggering native compact-and-retry before another oversized request, while delegated provider calls use its 1,050,000-token hard window. Luna exposes and targets the full 1,050,000-token window.
 
 [`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-5.6-sol` at `xhigh`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
 
@@ -274,7 +274,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; the portable setup defines Sol as a 372K/1.05M dual-window alias and Luna as a 1.05M/1.05M alias.
+- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Sol as a 372K/1.05M alias and Luna as a 1.05M/1.05M alias.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.

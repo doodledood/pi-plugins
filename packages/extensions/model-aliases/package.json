@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-model-aliases",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "Configurable Pi model aliases with separate visible and provider-target metadata.",
   "scripts": {
