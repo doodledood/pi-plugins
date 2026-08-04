@@ -136,11 +136,11 @@ if (setupModelAliases) {
   if (aliases.size !== 2) {
     errors.push("setup/configs/model-aliases.json: full profile must define only Sol and Luna aliases");
   }
-  if (regularSol?.contextWindow !== 372000 || regularSol?.targetContextWindow !== 1050000) {
-    errors.push("setup/configs/model-aliases.json: regular Sol must expose 372K and target 1.05M");
+  if (regularSol?.contextWindow !== 272000 || regularSol?.targetContextWindow !== 1050000) {
+    errors.push("setup/configs/model-aliases.json: Sol must expose 272K and target 1.05M");
   }
-  if (luna?.contextWindow !== 1050000 || luna?.targetContextWindow !== 1050000) {
-    errors.push("setup/configs/model-aliases.json: Luna must expose and target 1.05M");
+  if (luna?.contextWindow !== 272000 || luna?.targetContextWindow !== 1050000) {
+    errors.push("setup/configs/model-aliases.json: Luna must expose 272K and target 1.05M");
   }
 }
 for (const name of expectedExtensions) {

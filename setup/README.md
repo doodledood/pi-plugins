@@ -6,7 +6,7 @@ For agent-guided replication onto another computer—including target inspection
 
 ## Files
 
-- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to `anthropic/claude-opus-5` at xhigh thinking, and limits the model cycle to Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium. Sol uses a 372K visible / 1.05M target dual-window alias, Luna exposes and targets 1.05M, the setup enables `deep-focus-pi`, and image generation uses `gpt-image-2`.
+- `settings.example.json` — normal installed setup. It tracks `git:github.com/doodledood/pi-plugins@main`, installs external helper packages, defaults to `anthropic/claude-opus-5` at xhigh thinking, and limits the model cycle to Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium. Sol and Luna use 272K visible / 1.05M target dual-window aliases, the setup enables `deep-focus-pi`, and image generation uses `gpt-image-2`.
 - `settings.local.example.json` — local development setup. Replace `/ABSOLUTE/PATH/TO/pi-plugins` with the clone path before use. It lists each local extension package—including BTW—and the theme separately, replacing rather than duplicating the root Git bundle.
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename. In particular, `configs/goal-controller.config.json` pins this setup's checker to `openai/gpt-5.6-luna` at `high`, regardless of the active session model; the extension itself still defaults to `inherit`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
@@ -23,7 +23,7 @@ For agent-guided replication onto another computer—including target inspection
   `npm run sync:doctrine --install` writes it to a machine that has no doctrine yet and
   never touches one that does. Project doctrine under `~/.pi/hq/doctrine/projects/` stays
   local, and so does the rest of `~/.pi/hq`: rulings, decisions, logs and session state.
-- `models.example.json` — empty model-provider template. The full profile keeps regular Sol's dual-window configuration in `configs/model-aliases.json` instead of using a model-provider override.
+- `models.example.json` — empty model-provider template. The full profile keeps Sol and Luna's dual-window configuration in `configs/model-aliases.json` instead of using model-provider overrides.
 - `auth.example.json` — secret-free template for `~/.pi/agent/auth.json`. It uses `$OPENAI_API_KEY` env indirection and scopes `PI_CACHE_RETENTION=long` to the built-in OpenAI provider.
 - `AGENTS.md` and `APPEND_SYSTEM.md` — Aviram's portable operating posture for the agent.
 
@@ -31,10 +31,10 @@ For agent-guided replication onto another computer—including target inspection
 
 1. Back up existing local files before replacing anything.
 2. Use `settings.example.json` for normal installs and `settings.local.example.json` only while developing this repo. The normal root Git bundle already includes BTW; do not add a duplicate BTW source there.
-3. Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Remove any obsolete regular-Sol context override from an existing `models.json` while preserving unrelated providers and overrides.
+3. Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Remove obsolete Sol or Luna context overrides from an existing `models.json` while preserving unrelated providers and overrides.
 4. Run `npm run sync:doctrine -- --install` to place HQ doctrine on a machine that has none;
    it leaves an existing one alone. Copy or merge `configs/*.json` into `~/.pi/agent/` after
-   reviewing them. The regular-Sol entry in `configs/model-aliases.json` enforces a 372K operating boundary through Pi's native compact-and-retry path while delegating allowed requests with a 1.05M target window. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
+   reviewing them. The Sol and Luna entries in `configs/model-aliases.json` enforce a 272K operating boundary through Pi's automatic compaction and native compact-and-retry paths while delegating allowed requests with a 1.05M target window. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
 7. Merge `AGENTS.md` / `APPEND_SYSTEM.md` only when the user wants Aviram's agent behavior.
