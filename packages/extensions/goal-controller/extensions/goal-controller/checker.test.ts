@@ -1022,6 +1022,8 @@ for (const malformedEvent of [
   { name: "message_update with malformed done output", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "done", reason: "stop", message: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "message_update with malformed error output", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "error", reason: "error", error: { ...jsonAssistantMessage([], "error"), timestamp: "invalid" } } } },
   { name: "message_update with malformed thinking end partial", event: { type: "message_update", message: jsonAssistantMessage(), assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "done", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
+  { name: "message_update with a malformed legacy message snapshot", event: { type: "message_update", message: { ...jsonAssistantMessage(), timestamp: "invalid" }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" } } },
+  { name: "message_update with a malformed legacy partial and no message snapshot", event: { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: { ...jsonAssistantMessage(), timestamp: "invalid" } } } },
   { name: "tool_execution_start without args", event: { type: "tool_execution_start", toolCallId: "call-1", toolName: "read" } },
   { name: "tool_execution_update without a partial result", event: { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {} } },
   { name: "tool_execution_end without isError", event: { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {} } },
@@ -1117,6 +1119,50 @@ test("PiSubprocessCheckerRunner accepts current recognized event envelopes after
       ];
       return {
         stdout: [verdict, ...events].map((event) => JSON.stringify(event)).join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  });
+
+  assert.equal((await runCheckerVerdict(runner, DEFAULT_CONFIG)).decision, "continue");
+});
+
+// Pi >= 0.84 emits message_update as an assistantMessageEvent delta only: the
+// cumulative `message` snapshot and `assistantMessageEvent.partial` are stripped
+// on the wire (Pi's toJsonEvent). Rejecting that shape counted every streaming
+// delta as malformed and failed every checker run.
+test("PiSubprocessCheckerRunner accepts delta-only message_update events", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const assistant = jsonAssistantMessage();
+      const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: {} };
+      const events = [
+        { type: "session", version: 3, id: "session-1", timestamp: "2026-07-19T00:00:00.000Z", cwd: "/tmp" },
+        { type: "agent_start" },
+        { type: "turn_start" },
+        { type: "message_start", message: assistant },
+        { type: "message_update", assistantMessageEvent: { type: "start" } },
+        { type: "message_update", assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } },
+        { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "weigh" } },
+        { type: "message_update", assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "weigh" } },
+        { type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 1 } },
+        { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "{" } },
+        { type: "message_update", assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "{}" } },
+        { type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex: 2 } },
+        { type: "message_update", assistantMessageEvent: { type: "toolcall_delta", contentIndex: 2, delta: "{" } },
+        { type: "message_update", assistantMessageEvent: { type: "toolcall_end", contentIndex: 2, toolCall } },
+        {
+          type: "message_end",
+          message: { ...assistant, content: [{ type: "text", text: '{"decision":"continue"}' }] },
+        },
+        { type: "turn_end", message: assistant, toolResults: [] },
+        { type: "agent_end", messages: [assistant], willRetry: false },
+        { type: "agent_settled" },
+      ];
+      return {
+        stdout: events.map((event) => JSON.stringify(event)).join("\n"),
         stderr: "",
         code: 0,
         killed: false,

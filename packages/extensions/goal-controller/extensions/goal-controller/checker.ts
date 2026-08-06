@@ -416,7 +416,11 @@ function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
     case "message_end":
       return isTerminalMessageEnvelope(event.message);
     case "message_update":
-      return isAgentMessageEnvelope(event.message) && isAssistantMessageEventEnvelope(event.assistantMessageEvent);
+      // Pi >= 0.84 strips the cumulative `message` snapshot from the wire event
+      // to avoid quadratic output growth; `message_end` stays authoritative.
+      // Older Pi versions still send it, so validate it only when present.
+      return isAssistantMessageEventEnvelope(event.assistantMessageEvent)
+        && (event.message === undefined || isAgentMessageEnvelope(event.message));
     case "tool_execution_start":
       return hasStringProperties(event, "toolCallId", "toolName") && Object.hasOwn(event, "args");
     case "tool_execution_update":
@@ -598,37 +602,41 @@ function isCompactionResult(value: unknown): boolean {
     && (value.estimatedTokensAfter === undefined || typeof value.estimatedTokensAfter === "number");
 }
 
+// Pi >= 0.84 omits `partial` from streaming delta events (see toJsonEvent in
+// Pi's JSON mode). Older versions carry the cumulative snapshot, which must
+// still be a well-formed assistant message when it is present.
+function isOptionalAssistantPartial(value: unknown): boolean {
+  if (value === undefined) return true;
+  return isAgentMessageEnvelope(value) && value.role === "assistant";
+}
+
 function isAssistantMessageEventEnvelope(value: unknown): boolean {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "start":
-      return isAgentMessageEnvelope(value.partial) && value.partial.role === "assistant";
+      return isOptionalAssistantPartial(value.partial);
     case "text_start":
     case "thinking_start":
     case "toolcall_start":
       return typeof value.contentIndex === "number"
-        && isAgentMessageEnvelope(value.partial)
-        && value.partial.role === "assistant";
+        && isOptionalAssistantPartial(value.partial);
     case "text_delta":
     case "thinking_delta":
     case "toolcall_delta":
       return typeof value.contentIndex === "number"
         && typeof value.delta === "string"
-        && isAgentMessageEnvelope(value.partial)
-        && value.partial.role === "assistant";
+        && isOptionalAssistantPartial(value.partial);
     case "text_end":
     case "thinking_end":
       return typeof value.contentIndex === "number"
         && typeof value.content === "string"
-        && isAgentMessageEnvelope(value.partial)
-        && value.partial.role === "assistant";
+        && isOptionalAssistantPartial(value.partial);
     case "toolcall_end":
       return typeof value.contentIndex === "number"
         && isAssistantContent(value.toolCall)
         && isRecord(value.toolCall)
         && value.toolCall.type === "toolCall"
-        && isAgentMessageEnvelope(value.partial)
-        && value.partial.role === "assistant";
+        && isOptionalAssistantPartial(value.partial);
     case "done":
       return (value.reason === "stop" || value.reason === "length" || value.reason === "toolUse")
         && isAgentMessageEnvelope(value.message)
