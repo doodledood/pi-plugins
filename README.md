@@ -292,6 +292,70 @@ Use these descriptions when guiding a partial sync. The user may select individu
 
 Global skills are intentionally not packaged as installable Pi *package* resources (no `packages/skills`, no `pi.skills`). Portable global skills instead ship under `setup/skills/` and are copied to the user level during replication, exactly like `setup/agents/`. This repo also includes project-local maintenance skills: [`sync-pi-setup`](.agents/skills/sync-pi-setup/SKILL.md), for syncing current local Pi setup changes back into `setup/`, and [`sync-manifest-dev`](.agents/skills/sync-manifest-dev/SKILL.md), for pulling the `manifest-dev` plugins' agents/hooks/skills into this repo. Both are symlinked into `.claude/skills/` for harnesses that discover Claude-style project skills, and so are the synced skills themselves: their content lives under `.agents/skills/` and is symlinked into `.claude/skills/`, so Claude-style and non-Claude agents read the same files. That is the reverse of how the other repos `sync-manifest-dev` serves are laid out; the skill handles both.
 
+## Prime Agent setup
+
+[Prime Agent](https://app.primeintellect.ai/prime-agent) is an independently developed fork of Pi's codebase — it still carries the inherited `@earendil-works/pi-*` package identifiers — with its own CLI (`prime-agent`), config dir (`~/.prime/agent`), and package commands. The extensions in this repo load in it unchanged; what differs is how sources are declared and updated.
+
+This section documents the Prime Agent setup actually in use, not a second full portable sync. For the wider profile (models, theme, agents, integrations) follow the Pi guidance above and translate `~/.pi/agent/` to `~/.prime/agent/`.
+
+Install Prime Agent itself with `curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh`.
+
+### What this setup installs
+
+`manifest-dev` whole, and only two extensions from this repo — the statusline and the cache work — rather than the full bundle:
+
+```json
+{
+  "packages": [
+    "git:github.com/doodledood/manifest-dev",
+    {
+      "source": "git:github.com/doodledood/pi-plugins",
+      "extensions": [
+        "packages/extensions/simple-statusline/extensions/simple-statusline.ts",
+        "packages/extensions/cache-optimization/extensions/cache-optimization.ts"
+      ],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    }
+  ]
+}
+```
+
+```bash
+prime-agent package install git:github.com/doodledood/manifest-dev
+prime-agent package install git:github.com/doodledood/pi-plugins   # then narrow it with the filter above
+prime-agent package list
+```
+
+### Git sources must be ref-less
+
+Write `git:github.com/doodledood/pi-plugins`, not `...@main` — the opposite of the Pi snippets elsewhere in this README. Prime Agent 0.7.0 parses any ref as `pinned: true` and skips pinned sources in both `package update` and the startup update notice, so a `@main` source silently never updates while `package update` still prints `Updated packages`. A ref-less source tracks the default branch and reconciles normally.
+
+Pi is not affected the same way: its update path deliberately includes pinned git refs, so `@main` keeps working there. Only Pi's startup "packages have updates" notice skips them, which is why `setup/settings.example.json` can keep its `@main` entries.
+
+### Updating
+
+In 0.7.0 the two halves are separate commands — the top level is self-only and rejects package targets:
+
+```bash
+prime-agent package update      # extensions/packages only
+prime-agent update              # Prime Agent itself; restarts the daemon and resumes live sessions
+```
+
+Run packages first, because a self-update restarts the background daemon and ends the command. Run `package update` from a neutral working directory, never `$HOME`: Prime Agent's project config path (`.prime/agent/settings.json`) resolves to the global settings file when the cwd is the home directory, so every package is collected twice and the concurrent git checkouts race on `.git/index.lock`.
+
+A wrapper that gets both halves right:
+
+```zsh
+upgrade-prime-agent() {
+  local rc=0
+  (cd -q / && prime-agent package update) || rc=$?
+  prime-agent update "$@" || rc=$?
+  return $rc
+}
+```
+
 ## Installing individual resources
 
 Install the root bundle when you want all included extensions and the theme:
@@ -330,7 +394,7 @@ Theme-only example:
 }
 ```
 
-Do not rely on undocumented Git subdirectory install syntax. Examples track `@main` so installs follow the latest version. Pin a specific commit only when intentionally using a frozen snapshot.
+Do not rely on undocumented Git subdirectory install syntax. These Pi examples track `@main` so installs follow the latest version. Pin a specific commit only when intentionally using a frozen snapshot. Prime Agent is the exception — drop the ref entirely there, see [Prime Agent setup](#prime-agent-setup).
 
 ## Security
 

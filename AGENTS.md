@@ -24,6 +24,7 @@ If an extension starts reading or writing local files, env vars, credentials, br
 
 Pi clients install this repo via a Git source tracking the `main` branch (`git:github.com/doodledood/pi-plugins@main`), so installs and `pi update --extensions` always follow the latest version — no doc reference needs to move on release. Tags are not published for new versions; a few old `vX.Y.Z` tags remain as frozen historical snapshots.
 
-- All install snippets in docs (`README.md`, `docs/installing.md`, package READMEs, setup templates) reference `@main`. Do not reintroduce `@vX.Y.Z` pins into install examples.
+- All Pi install snippets in docs (`README.md`, `docs/installing.md`, package READMEs, setup templates) reference `@main`. Do not reintroduce `@vX.Y.Z` pins into install examples.
+- Prime Agent install snippets are deliberately ref-less (`git:github.com/doodledood/pi-plugins`). Prime Agent 0.7.0 treats any ref as pinned and silently skips pinned sources in `prime-agent package update` and in its startup update notice, so `@main` there means the package never updates. Do not "fix" those snippets to `@main`.
 - Any change under `packages/**` must still bump the root `package.json` `version` (and the affected package's own `version`) in the same change. Bump minor for new features, patch for fixes, per semver — versions remain the release history and npm-publish metadata.
 - `.github/workflows/version-bump-check.yml` fails PRs that touch `packages/**` without bumping the root version, so this can't regress silently.
