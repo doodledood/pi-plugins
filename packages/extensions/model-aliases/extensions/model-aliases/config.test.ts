@@ -103,3 +103,46 @@ test("loadConfig merges model-aliases config files from low to high priority", (
   assert.equal(config.aliases[0]?.provider, "project");
   assert.equal(config.aliases[0]?.targetModel, "project-real");
 });
+
+// Pi resolves every registered provider/model header through its config-value
+// resolver, which throws `TypeError: Cannot read properties of null (reading
+// 'startsWith')` on a null value. Keeping a null out of the normalized config is
+// what stops that unattributable crash at provider composition.
+test("normalizeConfig keeps only string header values and names what it dropped", () => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: unknown) => { warnings.push(String(message)); };
+  try {
+    const config = normalizeConfig({
+      aliases: [
+        {
+          provider: "openai",
+          id: "aliased",
+          targetModel: "real",
+          headers: { "X-Keep": "value", "X-Drop": null, "X-Also-Drop": 42 },
+        },
+      ],
+    });
+
+    assert.deepEqual(config.aliases[0]?.headers, { "X-Keep": "value" });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /X-Drop/u);
+  assert.match(warnings[0] ?? "", /X-Also-Drop/u);
+});
+
+test("normalizeConfig leaves headers undefined when every value is dropped", () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const config = normalizeConfig({
+      aliases: [{ provider: "openai", id: "aliased", targetModel: "real", headers: { "X-Drop": null } }],
+    });
+    assert.equal(config.aliases[0]?.headers, undefined);
+  } finally {
+    console.warn = originalWarn;
+  }
+});

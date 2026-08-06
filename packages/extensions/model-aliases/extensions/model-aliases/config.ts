@@ -27,7 +27,7 @@ export interface ModelAliasConfig {
   api?: string;
   baseUrl?: string;
   apiKey?: string;
-  headers?: Record<string, string | null>;
+  headers?: Record<string, string>;
   authHeader?: boolean;
 
   reasoning?: boolean;
@@ -152,11 +152,25 @@ function positiveIntegerValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-function stringRecordValue(value: unknown): Record<string, string | null> | undefined {
+/**
+ * Header values must be strings. Pi resolves every registered provider/model
+ * header through its config-value resolver, which does string work on the value
+ * and throws a bare `TypeError` on a null — so a null here would surface as an
+ * unattributable crash rather than as "drop this header". Non-strings are
+ * dropped with a named warning instead.
+ */
+function stringRecordValue(value: unknown): Record<string, string> | undefined {
   if (!isPlainObject(value)) return undefined;
-  const out: Record<string, string | null> = {};
+  const out: Record<string, string> = {};
+  const dropped: string[] = [];
   for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string" || item === null) out[key] = item;
+    if (typeof item === "string") out[key] = item;
+    else dropped.push(key);
+  }
+  if (dropped.length > 0) {
+    console.warn(
+      `[model-aliases] Ignoring non-string header value${dropped.length === 1 ? "" : "s"} for ${dropped.join(", ")} — header values must be strings.`,
+    );
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

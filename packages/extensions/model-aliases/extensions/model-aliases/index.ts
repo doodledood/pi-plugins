@@ -26,7 +26,7 @@ interface ExistingModel {
   contextWindow?: number;
   maxTokens?: number;
   compat?: Record<string, unknown>;
-  headers?: Record<string, string | null>;
+  headers?: Record<string, string>;
 }
 
 interface ProviderRegistration {

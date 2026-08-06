@@ -143,7 +143,7 @@ That explicit bootstrap lets the checker subprocess register the same alias mode
 | `api` | no | Target Pi provider API type, such as `openai-responses` or `anthropic-messages`, when it cannot be inherited from `targetProvider` / `targetModel`. |
 | `baseUrl` | no | Target provider base URL when it cannot be inherited. |
 | `apiKey` | no | Env interpolation, shell command, or literal key using Pi provider config syntax, e.g. `$OPENAI_API_KEY`. This is a fallback; normal auth storage for `provider` wins first. |
-| `headers` | no | Extra provider/model headers. |
+| `headers` | no | Extra provider/model headers. String values only — non-string values are dropped with a warning, because Pi's header resolver rejects them. |
 | `authHeader` | no | Add `Authorization: Bearer <key>` for non-standard providers. |
 | `reasoning` | no | Whether the alias supports Pi thinking levels. Defaults to inherited target metadata or `false`. |
 | `thinkingLevelMap` | no | Per-level provider values / `null` for hidden unsupported levels. |

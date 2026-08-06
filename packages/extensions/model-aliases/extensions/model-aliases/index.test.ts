@@ -22,6 +22,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+// Hermetic by intent: the integration test registers its own provider and never
+// needs a remote catalog, but ModelRuntime.create still fetches pi.dev provider
+// catalogs unless pi is told it is offline — a slow leg there costs 15s per
+// creation (pi's abort bound) and times the test out.
+process.env.PI_OFFLINE ??= "1";
+
 import {
   CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL,
   CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
