@@ -20,6 +20,14 @@ When adding, removing, renaming, or moving an extension/theme, keep all install 
 
 If an extension starts reading or writing local files, env vars, credentials, browser profiles, caches, or generated state, document that in its package README and add/verify matching `.gitignore` coverage. Do not leave stale install paths such as `~/.pi/agent/extensions/<name>` unless that is truly the supported install mode.
 
+## Project Language and Decision Records
+
+**The glossary is not optional reading.** `CONTEXT.md` is this project's language. Read it at the start of every session before doing anything else — it exists to stop silent misreading, and nobody looks up a term they already believe they understand.
+
+**Read `docs/adr/README.md` before re-deciding something** — before settling a question this project may already have settled, and when a change contradicts or narrows an existing decision. Outside those two moments, leave it closed.
+
+**Writing a decision record is one act, not three** — the record, the restatus of anything whose standing it changes, and the index, in one change. Step two is the one that gets dropped, and dropping any of them leaves the corpus asserting something untrue. The index is rebuilt from the records rather than edited beside them, so it can never assert something they do not. `docs/adr/CONVENTIONS.md` carries the bar, the template, and the rebuild rules — open it before you start.
+
 ## Version and install-ref policy
 
 Pi clients install this repo via a Git source tracking the `main` branch (`git:github.com/doodledood/pi-plugins@main`), so installs and `pi update --extensions` always follow the latest version — no doc reference needs to move on release. Tags are not published for new versions; a few old `vX.Y.Z` tags remain as frozen historical snapshots.
