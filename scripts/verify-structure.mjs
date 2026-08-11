@@ -168,7 +168,6 @@ const replicationSources = [
   "setup/agents/*.md",
   "setup/skills/*",
   "setup/AGENTS.md",
-  "setup/APPEND_SYSTEM.md",
   "setup/auth.example.json",
   "setup/mcp.example.json",
   "setup/web-search.example.json",

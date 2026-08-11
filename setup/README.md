@@ -25,7 +25,7 @@ For agent-guided replication onto another computer—including target inspection
   local, and so does the rest of `~/.pi/hq`: rulings, decisions, logs and session state.
 - `models.example.json` — empty model-provider template. The full profile keeps Sol and Luna's dual-window configuration in `configs/model-aliases.json` instead of using model-provider overrides.
 - `auth.example.json` — secret-free template for `~/.pi/agent/auth.json`. It uses `$OPENAI_API_KEY` env indirection and scopes `PI_CACHE_RETENTION=long` to the built-in OpenAI provider.
-- `AGENTS.md` and `APPEND_SYSTEM.md` — Aviram's portable operating posture for the agent.
+- `AGENTS.md` — Aviram's portable operating posture for the agent, in one file. It used to be split between `AGENTS.md` and an `APPEND_SYSTEM.md` appended to Pi's system prompt; both halves are merged here, so the same posture reaches every harness that reads a global agent-instructions file. Employer-specific workflows and machine-specific paths are deliberately left out of this template.
 
 ## Sync flow
 
@@ -37,7 +37,7 @@ For agent-guided replication onto another computer—including target inspection
    reviewing them. The Sol and Luna entries in `configs/model-aliases.json` enforce a 272K operating boundary through Pi's automatic compaction and native compact-and-retry paths while delegating allowed requests with a 1.05M target window. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
-7. Merge `AGENTS.md` / `APPEND_SYSTEM.md` only when the user wants Aviram's agent behavior.
+7. Merge `AGENTS.md` only when the user wants Aviram's agent behavior, and delete any leftover `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync once its content is folded in.
 8. Copy `mcp.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.
 9. If local MCP server names are changed, update matching `mcp-tool-loadout` prior keys in `configs/mcp-tool-loadout.json` before copying that config.
 10. If a previous machine used `models.json` or `model-aliases.json` for an older model profile, remove obsolete overrides and aliases before merging the current Sol and Luna aliases.

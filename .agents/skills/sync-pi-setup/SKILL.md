@@ -18,7 +18,7 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
 2. Inspect local Pi config only as needed:
    - `~/.pi/agent/settings.json`, especially `packages`, default provider/model, enabled models, theme, and package-specific settings
    - the installed package list from local settings and, when useful, `pi list`; compare it to `setup/settings.example.json` and `setup/settings.local.example.json`
-   - prompt/profile files such as `~/.pi/agent/AGENTS.md`, `~/.pi/agent/APPEND_SYSTEM.md`, and any local template-like setup files that correspond to files under `setup/`
+   - prompt/profile files such as `~/.pi/agent/AGENTS.md` and any local template-like setup files that correspond to files under `setup/`
    - non-secret extension configs that correspond to `setup/configs/*.json`
    - `~/.pi/agent/models.json` only if model-provider overrides are expected
    - `~/.pi/agent/mcp.json` and `~/.pi/web-search.json` only through redacted/structural inspection for shape, provider choice, and placeholder-worthy fields — never for copying or exposing secrets verbatim
