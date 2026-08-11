@@ -28,7 +28,10 @@ function walkFiles(dir, predicate, out = []) {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     if (["node_modules", ".git"].includes(entry)) continue;
-    const st = statSync(path);
+    const st = lstatSync(path);
+    // Skip symlinks: `.claude/skills/*` point back into `.agents/skills/*`, so following
+    // them would walk the same real files twice.
+    if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) walkFiles(path, predicate, out);
     else if (predicate(path)) out.push(path);
   }
@@ -242,6 +245,27 @@ for (const contract of recordTypeContracts) {
         errors.push(`${relative}: ${role} no longer declares record type "${contract.literal}" — cost accounting would silently stop`);
       }
     }
+  }
+}
+
+// Employer-specific material belongs in the local install, never in this repo. This is
+// published, and a term naming a workplace cannot be unpublished once pushed. A scan is
+// what keeps it out; the rule "don't commit work material" already let a stale test
+// fixture and a bot-specific PR rule through. This file is exempt because it has to
+// contain the terms to look for them.
+const employerTerms = ["lemonade", "lmnd", "lmcp", "cxllm", "devctx", "fibery", "arnica"];
+const employerScanExempt = new Set([join(root, "scripts", "verify-structure.mjs")]);
+for (const path of walkFiles(
+  root,
+  (p) => /\.(md|json|mjs|js|ts|tsx|yml|yaml|txt|html|py|sh)$/.test(p) && !employerScanExempt.has(p),
+)) {
+  const lines = readFileSync(path, "utf8").split("\n");
+  for (const term of employerTerms) {
+    const index = lines.findIndex((line) => line.toLowerCase().includes(term));
+    if (index === -1) continue;
+    errors.push(
+      `${path.slice(root.length + 1)}:${index + 1}: employer-specific term "${term}" — keep workplace material in the local install, not in this repo`,
+    );
   }
 }
 

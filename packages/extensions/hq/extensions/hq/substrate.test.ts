@@ -782,7 +782,7 @@ test("a rule that only restates its own case is refused before it reaches the us
     "In investigation-completion: Accept as done.",
     "When pkt-20260729-abcd asked about the timeout, raise it.",
     "Accept as done for session 019fad12-9d8b-78da-a0a2-974c6d0ee828.",
-    "Update ~/Lemonade/cxllm/src/router.ts when the router changes.",
+    "Update ~/Projects/example-service/src/router.ts when the router changes.",
     "In this case, prefer reverting rather than holding the release.",
     "Keep `currentStepIndex` monotonic when the reply anchor stalls.",
     "Accept.",
