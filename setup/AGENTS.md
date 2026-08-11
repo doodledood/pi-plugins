@@ -61,7 +61,8 @@ These govern whether to hand work out, not what to do with work already assigned
 
 ## Solution design
 
-- Bias toward the simplest durable solution that fixes the root cause and leaves the system easier to reason about.
+- Prefer the design that makes a class of bugs impossible to the patch that fixes the instance in front of you — illegal states unrepresentable, the invariant enforced where it cannot be bypassed, one source of truth instead of two that can disagree. Among designs that do that, take the simplest one that leaves the system easier to reason about.
+- When the structural fix is out of reach of the change at hand, fix the instance and say which design would close the class — don't ship the patch as if it settled the matter.
 - Reduce moving parts and hidden coupling before adding new mechanisms, unless the user asks to optimize for a different priority.
 - Clean the touched area enough for a durable fix; propose broader refactors separately.
 - Keep changes right-sized: don't overfit to one piece of feedback, and don't overcorrect.
