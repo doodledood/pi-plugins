@@ -22,6 +22,22 @@
       "contextWindow": 272000,
       "targetContextWindow": 1050000,
       "maxTokens": 128000
+    },
+    {
+      "provider": "anthropic",
+      "id": "claude-opus-5",
+      "targetProvider": "anthropic",
+      "targetModel": "claude-opus-5",
+      "contextWindow": 500000,
+      "targetContextWindow": 1000000
+    },
+    {
+      "provider": "anthropic",
+      "id": "claude-fable-5",
+      "targetProvider": "anthropic",
+      "targetModel": "claude-fable-5",
+      "contextWindow": 500000,
+      "targetContextWindow": 1000000
     }
   ]
 }

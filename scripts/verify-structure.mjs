@@ -131,19 +131,28 @@ if (setupGoalController) {
     errors.push("setup/configs/goal-controller.config.json: checker override must contain only model and thinking");
   }
 }
+// The full profile's operating boundaries live here rather than in models.json, so this is
+// the one place they are stated: an exact id set (no stale aliases) with each window pair.
+const expectedSetupAliases = new Map([
+  ["gpt-5.6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-5.6-luna", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["claude-opus-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-fable-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
+]);
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModelAliases) {
   const aliases = new Map((setupModelAliases.aliases ?? []).map((alias) => [alias.id, alias]));
-  const regularSol = aliases.get("gpt-5.6-sol");
-  const luna = aliases.get("gpt-5.6-luna");
-  if (aliases.size !== 2) {
-    errors.push("setup/configs/model-aliases.json: full profile must define only Sol and Luna aliases");
+  const actualIds = [...aliases.keys()].sort().join(", ");
+  const expectedIds = [...expectedSetupAliases.keys()].sort().join(", ");
+  if (actualIds !== expectedIds) {
+    errors.push(`setup/configs/model-aliases.json: full profile must define exactly [${expectedIds}], found [${actualIds}]`);
   }
-  if (regularSol?.contextWindow !== 272000 || regularSol?.targetContextWindow !== 1050000) {
-    errors.push("setup/configs/model-aliases.json: Sol must expose 272K and target 1.05M");
-  }
-  if (luna?.contextWindow !== 272000 || luna?.targetContextWindow !== 1050000) {
-    errors.push("setup/configs/model-aliases.json: Luna must expose 272K and target 1.05M");
+  for (const [id, expected] of expectedSetupAliases) {
+    const alias = aliases.get(id);
+    if (!alias) continue;
+    if (alias.contextWindow !== expected.contextWindow || alias.targetContextWindow !== expected.targetContextWindow) {
+      errors.push(`setup/configs/model-aliases.json: ${id} must expose ${expected.contextWindow} and target ${expected.targetContextWindow}`);
+    }
   }
 }
 for (const name of expectedExtensions) {

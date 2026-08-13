@@ -112,7 +112,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 6. **Verify the effective setup**
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
-   - Run `pi --list-models`; for the full profile confirm `anthropic/claude-opus-5`, `anthropic/claude-fable-5`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium; Opus 5 reports 1M context, both OpenAI models report 272K context, and `model-aliases.json` gives both OpenAI models a 1,050,000-token target window.
+   - Run `pi --list-models`; for the full profile confirm `anthropic/claude-opus-5`, `anthropic/claude-fable-5`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium; both OpenAI models report 272K context and both Anthropic models report 500K, and `model-aliases.json` gives the OpenAI models a 1,050,000-token target window and the Anthropic models a 1,000,000-token one.
    - Confirm each selected config, instruction, and agent file exists at its target path. For the goal-controller profile, confirm `checker.model: openai/gpt-5.6-sol` and `checker.thinking: xhigh`; for the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
@@ -272,7 +272,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines both Sol and Luna as 272K/1.05M aliases.
+- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Sol and Luna as 272K/1.05M aliases, and Opus 5 and Fable 5 as 500K/1M ones.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
