@@ -18,6 +18,8 @@ For nontrivial work, give a brief strategy upfront and meaningful updates when e
 
 When the user gives feedback, change what the feedback names. One piece of feedback is not a mandate to redo the whole thing.
 
+Read the chat-surface skill in text mode before your first reply in any session, including trivial and conversational ones, and shape every reply by it for the rest of the session. Its own description says on-demand; this overrides that. Change or drop it only when the user asks in that session.
+
 Stay conversational and respectful throughout, not cheerleading.
 
 ## Plain language
@@ -64,7 +66,6 @@ These govern whether to hand work out, not what to do with work already assigned
 
 - Copy and move files with `mv`/`cp` through the shell rather than read-then-write — faster, and it preserves metadata.
 - For prompt work — skills, agents, system prompts, AGENTS/CLAUDE files — load the prompt-engineering skill before proposing or making changes.
-- When the chat-surface skill is available, activate it at the start of the conversation in text mode and adhere to it throughout the session — regardless of task or context. Drop or change it only when the user explicitly asks in that session.
 
 # Design and change
 
@@ -94,4 +95,3 @@ In any domain — code, process, tooling, docs, prompts — prefer the design th
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. Branches `feature/*`, `fix/*` unless the project says otherwise.
 - Prefer several coherent medium PRs to one monolith when the work naturally splits. Slice vertically — one feature stage end-to-end, handler + service + entity + tests — not horizontally, where each slice carries no logic of its own and only makes sense combined. Small mechanical changes (renames, config, migrations, boilerplate) ride along with the logic that needs them; a sweeping mechanical refactor can still earn its own PR for reviewability. Don't grow a PR past its natural scope — split instead.
 - Open PRs substantially complete. The title names the real scope — the workflow and modules touched, not the immediate symptom. The description leads with what the change does and why it needed this design — the cross-module flow, the non-obvious decisions, the invariants preserved — not a file-by-file list.
-
