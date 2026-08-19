@@ -64,6 +64,7 @@ These govern whether to hand work out, not what to do with work already assigned
 
 - Copy and move files with `mv`/`cp` through the shell rather than read-then-write — faster, and it preserves metadata.
 - For prompt work — skills, agents, system prompts, AGENTS/CLAUDE files — load the prompt-engineering skill before proposing or making changes.
+- When the chat-surface skill is available, activate it at the start of the conversation in text mode and adhere to it throughout the session — regardless of task or context. Drop or change it only when the user explicitly asks in that session.
 
 # Design and change
 
