@@ -171,6 +171,20 @@ if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents
 for (const name of expectedSetupSkills) {
   mustExist(join(root, "setup", "skills", name, "SKILL.md"));
 }
+
+// The coding conventions were split out of setup/AGENTS.md, which now names the
+// new file. Copy one without the other and the reference dangles silently — no
+// install step fails, the rules are just gone. Checked here so it cannot.
+const setupAgentsFile = join(root, "setup", "AGENTS.md");
+const setupConventions = join(root, "setup", "CODING_CONVENTIONS.md");
+mustExist(setupAgentsFile);
+mustExist(setupConventions);
+if (existsSync(setupAgentsFile) && !readFileSync(setupAgentsFile, "utf8").includes("CODING_CONVENTIONS.md")) {
+  errors.push("setup/AGENTS.md: must reference CODING_CONVENTIONS.md by name — the conventions live there now");
+}
+if (existsSync(setupConventions) && !readFileSync(setupConventions, "utf8").startsWith("# Coding Conventions\n")) {
+  errors.push("setup/CODING_CONVENTIONS.md: must open with '# Coding Conventions' — repo syncs anchor on that title");
+}
 const readme = readFileSync(join(root, "README.md"), "utf8");
 const replicationSources = [
   "setup/README.md",
@@ -180,6 +194,7 @@ const replicationSources = [
   "setup/agents/*.md",
   "setup/skills/*",
   "setup/AGENTS.md",
+  "setup/CODING_CONVENTIONS.md",
   "setup/auth.example.json",
   "setup/mcp.example.json",
   "setup/web-search.example.json",

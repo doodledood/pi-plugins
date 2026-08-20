@@ -18,7 +18,7 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
 2. Inspect local Pi config only as needed:
    - `~/.pi/agent/settings.json`, especially `packages`, default provider/model, enabled models, theme, and package-specific settings
    - the installed package list from local settings and, when useful, `pi list`; compare it to `setup/settings.example.json` and `setup/settings.local.example.json`
-   - prompt/profile files such as `~/.pi/agent/AGENTS.md` and any local template-like setup files that correspond to files under `setup/`
+   - prompt/profile files such as `~/.pi/agent/AGENTS.md` and its `CODING_CONVENTIONS.md` companion, plus any local template-like setup files that correspond to files under `setup/`
    - non-secret extension configs that correspond to `setup/configs/*.json`
    - `~/.pi/agent/models.json` only if model-provider overrides are expected
    - `~/.pi/agent/mcp.json` and `~/.pi/web-search.json` only through redacted/structural inspection for shape, provider choice, and placeholder-worthy fields — never for copying or exposing secrets verbatim
@@ -26,6 +26,7 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
 4. For secrets, credential-bearing URLs, OAuth material, private endpoints, local absolute paths, proxy IDs, and user-specific tokens, keep or introduce placeholders/env references in the repo template. Do not ask the user to paste secrets into chat.
 5. If a local value is ambiguous — personal preference vs machine-specific vs private/internal — ask before adopting it. Default to leaving it local.
 6. If package/resource paths change, update all install surfaces together: root `package.json`, package READMEs, root docs, `setup/`, and `scripts/verify-structure.mjs`.
+   `setup/AGENTS.md` and `setup/CODING_CONVENTIONS.md` are one pair: the posture file references the conventions by name, so a machine that gets one without the other loses the conventions with nothing failing to say so. `npm run verify:structure` checks the pairing, and other repos anchor a synced section on the conventions file's `# Coding Conventions` title — so keep that title when editing it.
 7. Do not add a separate local-only setup layer. The repo uses templates with placeholders; filled files stay local.
 
 ## HQ doctrine is synced; the rest of HQ state is not

@@ -15,3 +15,4 @@
 | 2026-07-09 | [Advisor Consult Uses an Independent Subprocess](20260709-advisor-consult-independent-subprocess.md) | Accepted |
 | 2026-07-28 | [Session-tree cost accounting via persistent parent-linked child sessions](20260728-session-tree-cost-accounting.md) | Accepted |
 | 2026-08-03 | [enforce the dual-window alias boundary before provider requests](20260803-enforce-dual-window-alias-boundary.md) | Accepted |
+| 2026-08-20 | [Split the coding conventions out of setup/AGENTS.md](20260820-split-coding-conventions-from-setup-agents.md) | Accepted |
