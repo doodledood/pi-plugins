@@ -20,7 +20,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 ### Guided agent workflow
 
 1. **Inspect before asking or editing**
-   - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/`, `setup/agents/`, and `setup/skills/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` before explaining the agent-behavior option.
+   - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/`, `setup/agents/`, and `setup/skills/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` and `setup/CODING_CONVENTIONS.md` before explaining the agent-behavior option.
    - Check `node --version`, `npm --version`, `git --version`, and `pi --version`. If Pi is missing, ask before installing it with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
    - Detect existing target files under `~/.pi/agent/` and `~/.pi/`. Inspect ordinary JSON and instruction files as needed. **Do not use raw file reads, `cat`, `grep`, or similar content-printing commands on `auth.json`, `mcp.json`, or `web-search.json`.** Inspect only structural key paths with a targeted script such as the one below.
    - Discover whether this is fresh or existing setup; do not ask questions the filesystem already answers.
@@ -62,7 +62,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - **Change strategy:** merge and preserve existing values (recommended when config exists), replace selected files after timestamped backups, or dry run only.
    - **Sync scope:** full portable sync (default), or choose parts. In a full sync, ask what to opt out of rather than forcing the user to select every item.
    - **Existing conflicts:** for each selected part whose target differs, apply Aviram's portable default, preserve the current value, or customize it.
-   - **Agent behavior:** apply `setup/AGENTS.md` and the Luna-backed `Explore` override; preserve current behavior; or choose these individually.
+   - **Agent behavior:** apply `setup/AGENTS.md` with its `CODING_CONVENTIONS.md` companion and the Luna-backed `Explore` override; preserve current behavior; or choose these individually.
    - **Optional integrations:** configure web search, MCP servers, browser tools, image generation, or none. Preserve working local integrations by default.
 
    When the user chooses parts, explain and offer these independently:
@@ -99,6 +99,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/agents/*.md` | `~/.pi/agent/agents/` | The matching agent override is selected |
 | `setup/skills/*` | `~/.agents/skills/` | The matching global skill is selected |
 | `setup/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Aviram's operating posture is selected |
+| `setup/CODING_CONVENTIONS.md` | `~/.pi/agent/CODING_CONVENTIONS.md` | Always, whenever `AGENTS.md` is copied — it references this file by name |
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
 | `setup/mcp.example.json` | `~/.pi/agent/mcp.json` | MCP/browser integration is selected; fill placeholders locally |
 | `setup/web-search.example.json` | `~/.pi/web-search.json` | Web search is selected; fill the provider secret locally |
@@ -184,6 +185,7 @@ cp setup/configs/*.json ~/.pi/agent/
 cp setup/agents/*.md ~/.pi/agent/agents/
 cp -R setup/skills/* ~/.agents/skills/
 cp setup/AGENTS.md ~/.pi/agent/AGENTS.md
+cp setup/CODING_CONVENTIONS.md ~/.pi/agent/CODING_CONVENTIONS.md
 ```
 
 Choose authentication rather than assuming it:
@@ -222,7 +224,7 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths. Remove obsolete `models.json` context-window overrides for Sol or Luna when adopting the full profile; the selected `model-aliases.json` config now owns their dual-window behavior.
 3. Install only missing selected packages. `pi install` updates the package entry while preserving unrelated settings.
 4. Compare each selected `setup/configs/*.json` file with its target and merge extension settings intentionally. When MCP server names differ, update the matching `prior` keys in `mcp-tool-loadout.json`.
-5. Copy the Explore definition only if the user selected the Luna-backed override. Copy selected global skills from `setup/skills/` to `~/.agents/skills/` as whole skill directories, backing up any same-named skill first. Merge `AGENTS.md` by concept rather than blindly appending duplicate rules. If the target machine still has a `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync, fold anything it still carries into `AGENTS.md` and remove it — the posture now lives in one file.
+5. Copy the Explore definition only if the user selected the Luna-backed override. Copy selected global skills from `setup/skills/` to `~/.agents/skills/` as whole skill directories, backing up any same-named skill first. Merge `AGENTS.md` by concept rather than blindly appending duplicate rules, and copy `CODING_CONVENTIONS.md` alongside it so its reference resolves. If the target machine still has a `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync, fold anything it still carries into `AGENTS.md` and remove it — the posture now lives in one file.
 6. Preserve existing auth and private integration files. If a selected integration is absent, create its local file from the example and leave unresolved private values for the user to fill locally.
 
 The full-profile defaults available for an explicit merge are:
