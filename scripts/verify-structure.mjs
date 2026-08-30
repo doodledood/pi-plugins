@@ -137,7 +137,7 @@ if (setupGoalController) {
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 const expectedSetupAliases = new Map([
   ["gpt-5.6-sol", { contextWindow: 240000, targetContextWindow: 1050000 }],
-  ["gpt-5.6-luna", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
   ["claude-fable-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
   ["claude-opus-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
