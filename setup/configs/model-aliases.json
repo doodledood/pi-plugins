@@ -8,7 +8,7 @@
       "targetProvider": "openai",
       "targetModel": "gpt-5.6-sol",
       "apiKey": "$OPENAI_API_KEY",
-      "contextWindow": 272000,
+      "contextWindow": 240000,
       "targetContextWindow": 1050000,
       "maxTokens": 128000
     },
@@ -28,7 +28,7 @@
       "id": "claude-opus-5",
       "targetProvider": "anthropic",
       "targetModel": "claude-opus-5",
-      "contextWindow": 500000,
+      "contextWindow": 350000,
       "targetContextWindow": 1000000
     },
     {
@@ -36,7 +36,25 @@
       "id": "claude-fable-5",
       "targetProvider": "anthropic",
       "targetModel": "claude-fable-5",
-      "contextWindow": 500000,
+      "contextWindow": 350000,
+      "targetContextWindow": 1000000
+    },
+    {
+      "provider": "anthropic",
+      "id": "claude-opus-5-full",
+      "name": "Claude Opus 5 (Full Window)",
+      "targetProvider": "anthropic",
+      "targetModel": "claude-opus-5",
+      "contextWindow": 1000000,
+      "targetContextWindow": 1000000
+    },
+    {
+      "provider": "anthropic",
+      "id": "claude-fable-5-full",
+      "name": "Claude Fable 5 (Full Window)",
+      "targetProvider": "anthropic",
+      "targetModel": "claude-fable-5",
+      "contextWindow": 1000000,
       "targetContextWindow": 1000000
     }
   ]

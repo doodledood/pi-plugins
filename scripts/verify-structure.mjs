@@ -12,10 +12,12 @@ const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
 const expectedSetupSkills = ["deletion-pass"];
 const expectedEnabledModels = [
-  "openai/gpt-5.6-sol:xhigh",
-  "anthropic/claude-opus-5:xhigh",
+  "openai/gpt-5.6-sol:high",
+  "anthropic/claude-opus-5:high",
+  "anthropic/claude-opus-5-full:high",
   "openai/gpt-5.6-luna:max",
-  "anthropic/claude-fable-5:medium",
+  "anthropic/claude-fable-5:high",
+  "anthropic/claude-fable-5-full:high",
 ];
 
 function readJson(path) {
@@ -105,7 +107,7 @@ if (installedSettings && localSettings) {
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
     if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
     if (settings.defaultModel !== "claude-opus-5") errors.push(`setup ${label} settings: defaultModel must be claude-opus-5`);
-    if (settings.defaultThinkingLevel !== "xhigh") errors.push(`setup ${label} settings: defaultThinkingLevel must be xhigh`);
+    if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
     }
@@ -134,10 +136,12 @@ if (setupGoalController) {
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 const expectedSetupAliases = new Map([
-  ["gpt-5.6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-5.6-sol", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 272000, targetContextWindow: 1050000 }],
-  ["claude-opus-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
-  ["claude-fable-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-opus-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
+  ["claude-fable-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
+  ["claude-opus-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
 ]);
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModelAliases) {
