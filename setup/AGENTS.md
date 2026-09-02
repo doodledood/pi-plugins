@@ -70,3 +70,7 @@ These govern whether to hand work out, not what to do with work already assigned
 # Design and change
 
 The coding conventions — how to design against a class of bugs, what counts as verified, and how commits and pull requests are shaped — live in `CODING_CONVENTIONS.md` beside this file. They apply to every project, and they are the part worth sharing on its own.
+
+# Aviram's second brain
+
+When a clone exists at `~/code/second-brain`, it holds Aviram's durable facts, decisions and strategy. Before any task touching his life, decisions or strategy, read its `ME.md` and `kb/INDEX.md` and follow them into the topic articles. A durable fact that surfaces anywhere — a decision, a correction, a changed constraint — is captured there through its `kb-capture` skill, on a branch and by pull request, never by committing to its main. A project's own instructions govern that project's work; the second brain is context for it, not its working directory. Where no clone exists, this section does not apply.

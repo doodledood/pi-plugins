@@ -98,8 +98,8 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/configs/*.json` | `~/.pi/agent/` | The matching extension/config is selected |
 | `setup/agents/*.md` | `~/.pi/agent/agents/` | The matching agent override is selected |
 | `setup/skills/*` | `~/.agents/skills/` | The matching global skill is selected |
-| `setup/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Aviram's operating posture is selected |
-| `setup/CODING_CONVENTIONS.md` | `~/.pi/agent/CODING_CONVENTIONS.md` | Always, whenever `AGENTS.md` is copied — it references this file by name |
+| `setup/AGENTS.md` | `~/.agents/AGENTS.md`, with `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` as symlinks onto it | Aviram's operating posture is selected; an existing file at a symlink path is backed up first |
+| `setup/CODING_CONVENTIONS.md` | `~/.agents/CODING_CONVENTIONS.md` | Always, whenever `AGENTS.md` is copied — it references this file by name |
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
 | `setup/mcp.example.json` | `~/.pi/agent/mcp.json` | MCP/browser integration is selected; fill placeholders locally |
 | `setup/web-search.example.json` | `~/.pi/web-search.json` | Web search is selected; fill the provider secret locally |
@@ -180,14 +180,18 @@ fi
 
 git clone https://github.com/doodledood/pi-plugins.git
 cd pi-plugins
-mkdir -p ~/.pi/agent/agents ~/.pi ~/.agents/skills
+mkdir -p ~/.pi/agent/agents ~/.pi ~/.agents/skills ~/.claude ~/.codex
 
 cp setup/settings.example.json ~/.pi/agent/settings.json
 cp setup/configs/*.json ~/.pi/agent/
 cp setup/agents/*.md ~/.pi/agent/agents/
 cp -R setup/skills/* ~/.agents/skills/
-cp setup/AGENTS.md ~/.pi/agent/AGENTS.md
-cp setup/CODING_CONVENTIONS.md ~/.pi/agent/CODING_CONVENTIONS.md
+cp setup/AGENTS.md ~/.agents/AGENTS.md
+cp setup/CODING_CONVENTIONS.md ~/.agents/CODING_CONVENTIONS.md
+for f in ~/.pi/agent/AGENTS.md ~/.claude/CLAUDE.md ~/.codex/AGENTS.md; do
+  [ -e "$f" ] && [ ! -L "$f" ] && mv "$f" "$f.bak.$(date +%Y%m%d%H%M%S)"
+  ln -sfn ~/.agents/AGENTS.md "$f"
+done
 ```
 
 Choose authentication rather than assuming it:
@@ -226,7 +230,7 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 2. Merge selected settings structurally. Preserve unknown keys and current defaults that the user chose to keep; union the package list without duplicate npm package names, Git repository identities, or local paths. Remove obsolete `models.json` context-window overrides for Sol or Luna when adopting the full profile; the selected `model-aliases.json` config now owns their dual-window behavior.
 3. Install only missing selected packages. `pi install` updates the package entry while preserving unrelated settings.
 4. Compare each selected `setup/configs/*.json` file with its target and merge extension settings intentionally. When MCP server names differ, update the matching `prior` keys in `mcp-tool-loadout.json`.
-5. Copy the Explore definition only if the user selected the Luna-backed override. Copy selected global skills from `setup/skills/` to `~/.agents/skills/` as whole skill directories, backing up any same-named skill first. Merge `AGENTS.md` by concept rather than blindly appending duplicate rules, and copy `CODING_CONVENTIONS.md` alongside it so its reference resolves. If the target machine still has a `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync, fold anything it still carries into `AGENTS.md` and remove it — the posture now lives in one file.
+5. Copy the Explore definition only if the user selected the Luna-backed override. Copy selected global skills from `setup/skills/` to `~/.agents/skills/` as whole skill directories, backing up any same-named skill first. Merge `AGENTS.md` by concept rather than blindly appending duplicate rules, into `~/.agents/AGENTS.md`, and copy `CODING_CONVENTIONS.md` alongside it so its reference resolves. Then make `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` symlinks onto that file: if any of them is a real file with local rules, merge those rules into `~/.agents/AGENTS.md` first, back the file up with the shared timestamp, and replace it with the symlink — one file, read by Pi, Claude Code and Codex alike. If the target machine still has a `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync, fold anything it still carries into `AGENTS.md` and remove it — the posture now lives in one file.
 6. Preserve existing auth and private integration files. If a selected integration is absent, create its local file from the example and leave unresolved private values for the user to fill locally.
 
 The full-profile defaults available for an explicit merge are:
