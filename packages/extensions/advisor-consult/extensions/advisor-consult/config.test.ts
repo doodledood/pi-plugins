@@ -20,7 +20,7 @@ test("loadConfig merges valid overrides", () => {
   writeFileSync(
     path,
     JSON.stringify({
-      defaultModel: "anthropic/claude-fable-5",
+      defaultModel: "anthropic/claude-fable-5-1",
       defaultThinking: "high",
       defaultTimeoutMs: 120000,
       minTimeoutMs: 10000,
@@ -30,7 +30,7 @@ test("loadConfig merges valid overrides", () => {
   );
   const loaded = loadConfig(path);
   assert.equal(loaded.warning, undefined);
-  assert.equal(loaded.config.defaultModel, "anthropic/claude-fable-5");
+  assert.equal(loaded.config.defaultModel, "anthropic/claude-fable-5-1");
   assert.equal(loaded.config.defaultThinking, "high");
   assert.equal(loaded.config.defaultTimeoutMs, 120000);
   assert.deepEqual(loaded.config.excludedTools, ["goal", "subagent"]);

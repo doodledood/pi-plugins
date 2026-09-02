@@ -113,7 +113,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 6. **Verify the effective setup**
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
-   - Run `pi --list-models`; for the full profile confirm `anthropic/claude-opus-5`, `anthropic/claude-fable-5`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium; both OpenAI models report 272K context and both Anthropic models report 500K, and `model-aliases.json` gives the OpenAI models a 1,050,000-token target window and the Anthropic models a 1,000,000-token one.
+   - Run `pi --list-models`; for the full profile confirm `anthropic/claude-opus-5`, `anthropic/claude-fable-5-1`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the `-full` variants; both OpenAI models report 240K context and both Anthropic models report 350K, and `model-aliases.json` gives the OpenAI models a 1,050,000-token target window and the Anthropic models a 1,000,000-token one.
    - Confirm each selected config, instruction, and agent file exists at its target path. For the goal-controller profile, confirm `checker.model: openai/gpt-5.6-sol` and `checker.thinking: xhigh`; for the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
@@ -129,12 +129,14 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 {
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "high",
   "enabledModels": [
-    "openai/gpt-5.6-sol:xhigh",
-    "anthropic/claude-opus-5:xhigh",
+    "openai/gpt-5.6-sol:high",
+    "anthropic/claude-opus-5:high",
+    "anthropic/claude-opus-5-full:high",
     "openai/gpt-5.6-luna:max",
-    "anthropic/claude-fable-5:medium"
+    "anthropic/claude-fable-5-1:high",
+    "anthropic/claude-fable-5-1-full:high"
   ],
   "theme": "deep-focus-pi",
   "pi-image-gen": {
@@ -143,7 +145,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes `anthropic/claude-opus-5` the default at xhigh thinking. The model cycle contains only Sol at xhigh, Opus 5 at xhigh, Luna at max, and Fable at medium. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol and Luna as dual-window aliases: Pi displays and enforces a 272,000-token operating window for both. With Pi's default 16,384-token response reserve, automatic compaction starts after 255,616 context tokens; if one tool loop reaches the visible edge first, the aliases trigger native compact-and-retry. Delegated provider calls and Pi-owned summaries retain the 1,050,000-token target window.
+The setup makes `anthropic/claude-opus-5` the default at high thinking. The model cycle contains only Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the unrestricted `-full` Anthropic variants. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol and Luna as dual-window aliases: Pi displays and enforces a 240,000-token operating window for both. With Pi's default 16,384-token response reserve, automatic compaction starts after 223,616 context tokens; if one tool loop reaches the visible edge first, the aliases trigger native compact-and-retry. Delegated provider calls and Pi-owned summaries retain the 1,050,000-token target window.
 
 [`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-5.6-sol` at `xhigh`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
 
@@ -274,7 +276,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Sol and Luna as 272K/1.05M aliases, and Opus 5 and Fable 5 as 500K/1M ones.
+- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Sol and Luna as 240K/1.05M aliases, and Opus 5 and Fable 5.1 as 350K/1M ones.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.

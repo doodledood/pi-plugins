@@ -105,7 +105,7 @@ Optional config at `~/.pi/agent/advisor-consult.json` (see `config/advisor-consu
 
 | Field | Default | Meaning |
 |---|---|---|
-| `defaultModel` | `anthropic/claude-fable-5` | Preferred advisor model (Pi `--model` pattern). `"inherit"` uses the parent's model. |
+| `defaultModel` | `anthropic/claude-fable-5-1` | Preferred advisor model (Pi `--model` pattern). `"inherit"` uses the parent's model. |
 | `defaultThinking` | `xhigh` | Advisor reasoning effort (Pi-native names only). |
 | `defaultTimeoutMs` | `600000` | Default subprocess timeout (10 min). |
 | `minTimeoutMs` | `30000` | Lower bound for a per-call `timeout_ms`. |

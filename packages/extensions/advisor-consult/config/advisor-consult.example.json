@@ -1,5 +1,5 @@
 {
-  "defaultModel": "anthropic/claude-fable-5",
+  "defaultModel": "anthropic/claude-fable-5-1",
   "defaultThinking": "xhigh",
   "defaultTimeoutMs": 600000,
   "minTimeoutMs": 30000,

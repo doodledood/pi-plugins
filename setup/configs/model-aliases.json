@@ -33,11 +33,29 @@
     },
     {
       "provider": "anthropic",
-      "id": "claude-fable-5",
+      "id": "claude-fable-5-1",
       "targetProvider": "anthropic",
-      "targetModel": "claude-fable-5",
+      "targetModel": "claude-fable-5-1",
       "contextWindow": 350000,
-      "targetContextWindow": 1000000
+      "targetContextWindow": 1000000,
+      "api": "anthropic-messages",
+      "baseUrl": "https://api.anthropic.com",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 10,
+        "output": 50,
+        "cacheRead": 0.25,
+        "cacheWrite": 12.5
+      },
+      "maxTokens": 128000,
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsStrictTools": true
+      }
     },
     {
       "provider": "anthropic",
@@ -50,12 +68,30 @@
     },
     {
       "provider": "anthropic",
-      "id": "claude-fable-5-full",
-      "name": "Claude Fable 5 (Full Window)",
+      "id": "claude-fable-5-1-full",
+      "name": "Claude Fable 5.1 (Full Window)",
       "targetProvider": "anthropic",
-      "targetModel": "claude-fable-5",
+      "targetModel": "claude-fable-5-1",
       "contextWindow": 1000000,
-      "targetContextWindow": 1000000
+      "targetContextWindow": 1000000,
+      "api": "anthropic-messages",
+      "baseUrl": "https://api.anthropic.com",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 10,
+        "output": 50,
+        "cacheRead": 0.25,
+        "cacheWrite": 12.5
+      },
+      "maxTokens": 128000,
+      "compat": {
+        "forceAdaptiveThinking": true,
+        "supportsStrictTools": true
+      }
     }
   ]
 }

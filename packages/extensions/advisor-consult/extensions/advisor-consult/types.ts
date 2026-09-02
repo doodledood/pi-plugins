@@ -8,7 +8,7 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 /**
  * Sentinel `defaultModel` value: run the advisor on the parent session's current
  * model instead of a fixed one. Any other value is treated as a Pi `--model`
- * pattern (e.g. `anthropic/claude-fable-5` or `provider/id`).
+ * pattern (e.g. `anthropic/claude-fable-5-1` or `provider/id`).
  */
 export const INHERIT_MODEL = "inherit";
 

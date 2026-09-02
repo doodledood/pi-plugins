@@ -22,7 +22,7 @@ export const CONFIG_PATH = join(
 );
 
 export const DEFAULT_CONFIG: AdvisorConsultConfig = {
-  defaultModel: "anthropic/claude-fable-5",
+  defaultModel: "anthropic/claude-fable-5-1",
   defaultThinking: "xhigh",
   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
   minTimeoutMs: MIN_TIMEOUT_MS,

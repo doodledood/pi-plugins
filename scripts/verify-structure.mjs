@@ -16,8 +16,8 @@ const expectedEnabledModels = [
   "anthropic/claude-opus-5:high",
   "anthropic/claude-opus-5-full:high",
   "openai/gpt-5.6-luna:max",
-  "anthropic/claude-fable-5:high",
-  "anthropic/claude-fable-5-full:high",
+  "anthropic/claude-fable-5-1:high",
+  "anthropic/claude-fable-5-1-full:high",
 ];
 
 function readJson(path) {
@@ -139,9 +139,9 @@ const expectedSetupAliases = new Map([
   ["gpt-5.6-sol", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
-  ["claude-fable-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-1", { contextWindow: 350000, targetContextWindow: 1000000 }],
   ["claude-opus-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
-  ["claude-fable-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
 ]);
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModelAliases) {

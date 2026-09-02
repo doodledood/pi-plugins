@@ -14,12 +14,12 @@ function baseInput(overrides: Partial<AdvisorRunInput> = {}): AdvisorRunInput {
     systemPrompt: "ADVISOR SYSTEM PROMPT",
     bootstrapExtensionPath: "/abs/child-bootstrap.ts",
     excludedTools: ["advisor_consult", "ask_user_question", "goal"],
-    model: "anthropic/claude-fable-5",
+    model: "anthropic/claude-fable-5-1",
     ...overrides,
   };
 }
 
-function messageEnd(text: string | null, model = "anthropic/claude-fable-5"): string {
+function messageEnd(text: string | null, model = "anthropic/claude-fable-5-1"): string {
   const content = text === null ? [{ type: "tool_call", name: "read" }] : [{ type: "text", text }];
   return JSON.stringify({ type: "message_end", message: { role: "assistant", model, content } });
 }
@@ -55,7 +55,7 @@ test("advisorArgs builds the expected subprocess invocation", () => {
   const xtIdx = args.indexOf("--exclude-tools");
   assert.equal(args[xtIdx + 1], "advisor_consult,ask_user_question,goal");
   const modelIdx = args.indexOf("--model");
-  assert.equal(args[modelIdx + 1], "anthropic/claude-fable-5");
+  assert.equal(args[modelIdx + 1], "anthropic/claude-fable-5-1");
   const thinkIdx = args.indexOf("--thinking");
   assert.equal(args[thinkIdx + 1], "xhigh");
   assert.match(args[args.length - 1] ?? "", /advisory_brief/);
@@ -70,13 +70,13 @@ test("advisorArgs omits --model when inheriting", () => {
 test("parseAdvisorOutput extracts the last assistant text and model", () => {
   const stdout = [
     JSON.stringify({ type: "message_start" }),
-    messageEnd("interim thoughts", "anthropic/claude-fable-5"),
+    messageEnd("interim thoughts", "anthropic/claude-fable-5-1"),
     JSON.stringify({ type: "tool_result" }),
-    messageEnd("final advice here", "anthropic/claude-fable-5"),
+    messageEnd("final advice here", "anthropic/claude-fable-5-1"),
   ].join("\n");
   const parsed = parseAdvisorOutput(stdout);
   assert.equal(parsed.advice, "final advice here");
-  assert.equal(parsed.model, "anthropic/claude-fable-5");
+  assert.equal(parsed.model, "anthropic/claude-fable-5-1");
 });
 
 test("reachedTimeout classifies near-limit terminations", () => {
@@ -103,7 +103,7 @@ test("run returns advice on a clean exit", async () => {
   const result = await runner.run(baseInput());
   assert.equal(result.ok, true);
   assert.equal(result.advice, "ship it behind a flag");
-  assert.equal(result.model, "anthropic/claude-fable-5");
+  assert.equal(result.model, "anthropic/claude-fable-5-1");
 });
 
 test("run reports a non-advice result on a nonzero exit and redacts secrets", async () => {
@@ -165,7 +165,7 @@ test("run does NOT return truncated advice when the advice-bearing message error
   // Pi keeps partial streamed text on a message it then tags stopReason "error".
   const stdout = messageEndError(
     "429 rate_limit_error: stream interrupted",
-    "anthropic/claude-fable-5",
+    "anthropic/claude-fable-5-1",
     "My read: ship it behind a flag because the migrat",
   );
   const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
@@ -177,7 +177,7 @@ test("run does NOT return truncated advice when the advice-bearing message error
 });
 
 test("run gives generic guidance (no list-models hint) for a non-not-found model error", async () => {
-  const stdout = messageEndError("429 rate_limit_error: too many requests", "anthropic/claude-fable-5");
+  const stdout = messageEndError("429 rate_limit_error: too many requests", "anthropic/claude-fable-5-1");
   const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
   const result = await runner.run(baseInput());
   assert.equal(result.ok, false);
@@ -187,7 +187,7 @@ test("run gives generic guidance (no list-models hint) for a non-not-found model
 });
 
 test("run redacts secrets echoed in a model error", async () => {
-  const stdout = messageEndError("auth failed { apiKey: 'sk-supersecret999value' }", "anthropic/claude-fable-5");
+  const stdout = messageEndError("auth failed { apiKey: 'sk-supersecret999value' }", "anthropic/claude-fable-5-1");
   const runner = new PiSubprocessAdvisorRunner(fakeExec({ code: 0, killed: false, stderr: "", stdout }));
   const result = await runner.run(baseInput());
   assert.equal(result.ok, false);

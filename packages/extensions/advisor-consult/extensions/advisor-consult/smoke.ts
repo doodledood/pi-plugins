@@ -3,7 +3,7 @@ import { consult } from "./index.ts";
 import { defaultConfig } from "./config.ts";
 import type { AdvisorResult } from "./types.ts";
 
-const fakeAdvice: AdvisorResult = { ok: true, advice: "Smoke advice: proceed, but add a rollback.", model: "anthropic/claude-fable-5", elapsedMs: 1234 };
+const fakeAdvice: AdvisorResult = { ok: true, advice: "Smoke advice: proceed, but add a rollback.", model: "anthropic/claude-fable-5-1", elapsedMs: 1234 };
 
 const out = await consult(
   { query: "Smoke brief: are we clear to proceed with the change?" },

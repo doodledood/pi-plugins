@@ -54,7 +54,7 @@ export const QUERY_FIELD_DESCRIPTION =
 
 /** Description shown for the optional `model` parameter. */
 export const MODEL_FIELD_DESCRIPTION =
-  "Optional Pi model pattern for the advisor (e.g. `anthropic/claude-fable-5` or `provider/id`). Defaults to the configured high-capability advisor model. Use `inherit` to run on the parent session's current model.";
+  "Optional Pi model pattern for the advisor (e.g. `anthropic/claude-fable-5-1` or `provider/id`). Defaults to the configured high-capability advisor model. Use `inherit` to run on the parent session's current model.";
 
 /** Description shown for the optional `timeout_ms` parameter. */
 export const TIMEOUT_FIELD_DESCRIPTION =
