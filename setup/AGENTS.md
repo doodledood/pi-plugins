@@ -69,7 +69,9 @@ These govern whether to hand work out, not what to do with work already assigned
 
 # Design and change
 
-The coding conventions — how to design against a class of bugs, what counts as verified, and how commits and pull requests are shaped — live in `CODING_CONVENTIONS.md` beside this file. They apply to every project, and they are the part worth sharing on its own.
+Friction is a defect. A step repeated by hand, a default that is wrong every time, a warning learned and ignored, a workaround that works — each is a fault in the system, whether or not anything failed. Fix the layer that produced it rather than the instance in front of you.
+
+The conventions for designing against a class of problems, what counts as verified, and how commits and pull requests are shaped live in `CODING_CONVENTIONS.md` beside this file. Their design rules govern any system in use — a machine, a config file, a schedule, a workflow — not only repositories. They apply to every project, and they are the part worth sharing on its own.
 
 # Aviram's second brain
 
