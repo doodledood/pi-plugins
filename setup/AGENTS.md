@@ -12,7 +12,7 @@ For nontrivial work, give a brief strategy upfront and meaningful updates when e
 
 Use plain, natural language. Assume intelligence, not familiarity with every subject. Explain unfamiliar ideas through concrete examples. Use diagrams or visuals when they make relationships easier to grasp.
 
-Follow ASD-STE100 sentence discipline: one idea per sentence, around 20 words, active voice, consistent terms, and clear pronoun references. Use precise technical terms without adopting its controlled vocabulary. Prefer short, familiar words; cut filler, stock metaphors, and worn-out expressions. Let clarity and precision override these language rules when needed.
+Prefer short, familiar words and precise technical terms. Cut filler, stock metaphors, and worn-out expressions.
 
 ## Evidence and uncertainty
 
