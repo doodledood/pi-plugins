@@ -113,8 +113,8 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 6. **Verify the effective setup**
    - Parse every JSON file changed without printing credential-bearing contents.
    - Run `pi list` and compare package identities with the selected package list.
-   - Run `pi --list-models`; for the full profile confirm `anthropic/claude-opus-5`, `anthropic/claude-fable-5-1`, `openai/gpt-5.6-sol`, and `openai/gpt-5.6-luna` are available. Confirm the configured model cycle contains only Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the `-full` variants; both OpenAI models report 240K context and both Anthropic models report 350K, and `model-aliases.json` gives the OpenAI models a 1,050,000-token target window and the Anthropic models a 1,000,000-token one.
-   - Confirm each selected config, instruction, and agent file exists at its target path. For the goal-controller profile, confirm `checker.model: openai/gpt-5.6-sol` and `checker.thinking: xhigh`; for the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
+   - Run `pi --list-models`; for the full profile confirm `openai/gpt-6-astra`, `openai/gpt-5.6-sol`, `openai/gpt-5.6-luna`, `anthropic/claude-opus-5`, and `anthropic/claude-fable-5-1` are available. Confirm the configured model cycle contains only Astra at high, Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the `-full` variants; all three OpenAI models report 240K context and both Anthropic models report 350K, and `model-aliases.json` gives the OpenAI models a 1,050,000-token target window and the Anthropic models a 1,000,000-token one.
+   - Confirm each selected config, instruction, and agent file exists at its target path. For the goal-controller profile, confirm `checker.model: openai/gpt-5.6-luna` and `checker.thinking: high`; for the Explore override, confirm `model: openai/gpt-5.6-luna` and `thinking: medium` without displaying unrelated local content.
    - Search copied files for unresolved markers such as `<...>` and `/ABSOLUTE/PATH/TO`; report them rather than inventing values.
    - Restart Pi or run `/reload` after changing settings, instruction files, or agent definitions.
    - When editing this repository itself, also run `npm run verify:structure` and the secret-safety scans from the `sync-pi-setup` skill.
@@ -127,10 +127,11 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 
 ```json
 {
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-5",
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "high",
   "enabledModels": [
+    "openai/gpt-6-astra:high",
     "openai/gpt-5.6-sol:high",
     "anthropic/claude-opus-5:high",
     "anthropic/claude-opus-5-full:high",
@@ -145,9 +146,9 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
 }
 ```
 
-The setup makes `anthropic/claude-opus-5` the default at high thinking. The model cycle contains only Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the unrestricted `-full` Anthropic variants. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Sol and Luna as dual-window aliases: Pi displays and enforces a 240,000-token operating window for both. With Pi's default 16,384-token response reserve, automatic compaction starts after 223,616 context tokens; if one tool loop reaches the visible edge first, the aliases trigger native compact-and-retry. Delegated provider calls and Pi-owned summaries retain the 1,050,000-token target window.
+The setup makes `openai/gpt-6-astra` the default at high thinking. The model cycle contains Astra at high, Sol at high, Opus 5 at high, Luna at max, and Fable 5.1 at high, plus the unrestricted `-full` Anthropic variants. [`setup/configs/model-aliases.json`](setup/configs/model-aliases.json) keeps Astra, Sol, and Luna as dual-window aliases: Pi displays and enforces a 240,000-token operating window for each. With Pi's default 16,384-token response reserve, automatic compaction starts after 223,616 context tokens; if one tool loop reaches the visible edge first, the aliases trigger native compact-and-retry. Delegated provider calls and Pi-owned summaries retain the 1,050,000-token target window.
 
-[`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-5.6-sol` at `xhigh`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
+[`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-5.6-luna` at `high`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
 
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
@@ -199,7 +200,7 @@ Choose authentication rather than assuming it:
 - For provider subscription auth, start Pi and use `/login`; do not create `auth.json` from the API-key example.
 - For environment-based OpenAI auth, copy `setup/auth.example.json` to `~/.pi/agent/auth.json`, set mode `0600`, and have the user provide `OPENAI_API_KEY` in their local environment.
 - Copy `mcp.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
-- Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Sol and Luna's dual-window behavior comes from `configs/model-aliases.json`.
+- Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Astra, Sol, and Luna's dual-window behavior comes from `configs/model-aliases.json`.
 
 Install the selected packages:
 
@@ -235,9 +236,9 @@ Merge is the default when target configuration exists. Do not run the fresh-prof
 
 The full-profile defaults available for an explicit merge are:
 
-- `defaultProvider: "anthropic"`
-- `defaultModel: "claude-opus-5"`
-- `defaultThinkingLevel: "xhigh"`
+- `defaultProvider: "openai"`
+- `defaultModel: "gpt-6-astra"`
+- `defaultThinkingLevel: "high"`
 - the `enabledModels` list from `setup/settings.example.json`
 - `enableInstallTelemetry: false`
 - `followUpMode: "all"` and `steeringMode: "all"`
@@ -275,12 +276,12 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `btw` — `/btw` side conversations with separate child history and a shared project workspace; the aside persists under the parent session so its spend stays countable.
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
-- `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-sol` at `xhigh` while the extension default remains `inherit`.
+- `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-5.6-luna` at `high` while the extension default remains `inherit`.
 - `hq` — `/hq` decision-queue supervision of delegated sessions: headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you rule on without opening the session; `/fleet` shows the board.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; records the billing tier so priority-tier turns can be priced.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
-- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Sol and Luna as 240K/1.05M aliases, and Opus 5 and Fable 5.1 as 350K/1M ones.
+- `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Astra, Sol, and Luna as 240K/1.05M aliases, and Opus 5 and Fable 5.1 as 350K/1M ones.
 - `openai-max-output-floor` — prevents OpenAI min-output-token 400s near context limits.
 - `openai-tts` — local OpenAI Speech API text-to-speech tool.
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
