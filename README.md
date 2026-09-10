@@ -88,7 +88,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - For `settings.json`, preserve unknown keys, merge nested objects, and union package entries by package identity instead of duplicating them. Apply model, thinking, theme, telemetry, and delivery defaults only when selected.
    - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
    - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
-   - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`.
+   - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`. The Telegram skill includes its Python helper; follow [Telegram setup](setup/README.md#telegram-notifications) to pair a user's bot without copying credentials.
    - Do not overwrite working `auth.json`, `mcp.json`, or `web-search.json`. Start from an example only when the integration is selected and no usable local file exists.
 
 | Portable source | Target | Apply when |

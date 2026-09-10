@@ -20,6 +20,9 @@ trust.json
 token.json
 access-token.json
 credentials.json
+**/telegram-notify/config.json
+__pycache__/
+*.pyc
 cookies.json
 **/token.json
 **/access-token.json
