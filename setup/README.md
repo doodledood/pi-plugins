@@ -45,4 +45,18 @@ For agent-guided replication onto another computer—including target inspection
 
 ## Secret handling
 
+### Telegram notifications
+
+`skills/telegram/` provides one-way phone messages through a user-owned Telegram bot. Copy the whole directory to `~/.agents/skills/telegram/` as part of the selected global skills. It requires Python 3 and access to `api.telegram.org`; no extra Python packages or listener are needed. The skill describes readable plain-text messages and safe handling of uncertain sends.
+
+Create a bot with [@BotFather](https://t.me/BotFather), then run this in your own terminal:
+
+```sh
+python3 ~/.agents/skills/telegram/scripts/telegram.py setup
+```
+
+Paste the token into the hidden prompt and send the generated pairing phrase to the bot. Setup saves only the matching private chat. Credentials stay in `~/.config/telegram-notify/config.json`, mode `0600`, outside the skill and repository. Reuse an existing configuration on the same machine; do not copy credentials into this setup bundle. With the user's permission, verify delivery using `send --text 'Telegram notifications are ready.'` and check that Telegram accepted it. Notification triggers come from the user's instructions; installing the skill does not authorize unsolicited alerts.
+
+### Private local values
+
 Never commit filled local values. Keep raw API keys, OAuth state, tokens, cookies, sessions, caches, logs, generated package repos, raw `auth.json`, filled `mcp.json`, and real `web-search.json` outside this repo. Templates here should use placeholders or environment-variable references only.
