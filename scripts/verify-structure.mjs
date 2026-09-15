@@ -109,6 +109,9 @@ if (installedSettings && localSettings) {
     if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
     if (settings.defaultModel !== "gpt-6-astra") errors.push(`setup ${label} settings: defaultModel must be gpt-6-astra`);
     if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
+    if (settings["pi-image-gen"]?.defaultModel !== "gpt-image-2.5-sunburst") {
+      errors.push(`setup ${label} settings: pi-image-gen.defaultModel must be gpt-image-2.5-sunburst`);
+    }
     if (JSON.stringify(settings.enabledModels) !== JSON.stringify(expectedEnabledModels)) {
       errors.push(`setup ${label} settings: enabledModels must match the full profile`);
     }

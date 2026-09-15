@@ -16,7 +16,7 @@
   "enableInstallTelemetry": false,
   "theme": "deep-focus-pi",
   "pi-image-gen": {
-    "defaultModel": "gpt-image-2"
+    "defaultModel": "gpt-image-2.5-sunburst"
   },
   "packages": [
     "npm:pi-mcp-adapter",

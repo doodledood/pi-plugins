@@ -141,7 +141,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
   ],
   "theme": "deep-focus-pi",
   "pi-image-gen": {
-    "defaultModel": "gpt-image-2"
+    "defaultModel": "gpt-image-2.5-sunburst"
   }
 }
 ```
@@ -243,7 +243,7 @@ The full-profile defaults available for an explicit merge are:
 - `enableInstallTelemetry: false`
 - `followUpMode: "all"` and `steeringMode: "all"`
 - `theme: "deep-focus-pi"`
-- `pi-image-gen.defaultModel: "gpt-image-2"`
+- `pi-image-gen.defaultModel: "gpt-image-2.5-sunburst"`
 - the non-secret extension configs under `setup/configs/`
 - the agent behavior files selected during questioning
 
