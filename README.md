@@ -197,7 +197,7 @@ Choose authentication rather than assuming it:
 - For provider subscription auth, start Pi and use `/login`; do not create `auth.json` from the API-key example.
 - For environment-based OpenAI auth, copy `setup/auth.example.json` to `~/.pi/agent/auth.json`, set mode `0600`, and have the user provide `OPENAI_API_KEY` in their local environment.
 - Copy `mcp.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
-- Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Astra, Sol, and both Luna generations's dual-window behavior comes from `configs/model-aliases.json`.
+- Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Dual-window behavior for Astra, Sol, and both Luna generations comes from `configs/model-aliases.json`.
 
 Install the selected packages:
 
