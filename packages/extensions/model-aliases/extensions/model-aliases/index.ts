@@ -6,12 +6,26 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
-  Context,
+  Context as PiContext,
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 
 import { loadConfig, type ModelAliasConfig, type ModelAliasesConfig } from "./config.ts";
+
+// Pi 0.86+ carries prompts and tool changes in the transcript. Keep the legacy
+// fields optional so the same extension still works on its minimum Pi 0.80.8.
+interface SystemTranscriptMessage {
+  role: "system";
+  content: string | { type: "text"; text: string }[];
+  sections?: Record<string, string | null>;
+  toolsAdded?: PiContext["tools"];
+  toolsRemoved?: { name: string }[];
+  timestamp: number;
+}
+type Context = Omit<PiContext, "messages"> & {
+  messages: (PiContext["messages"][number] | SystemTranscriptMessage)[];
+};
 
 interface ExistingModel {
   id: string;
@@ -295,8 +309,19 @@ export function shouldEnforceAliasContextWindow(aliasModel: Model<any>, targetMo
  * and cannot recover from a second synthetic overflow inside summarization.
  */
 export function isPiSummarizationRequest(context: Context): boolean {
-  if (context.systemPrompt !== PI_SUMMARIZATION_SYSTEM_PROMPT || context.messages.length !== 1) return false;
-  const message = context.messages[0];
+  const [first] = context.messages;
+  const transcriptSystem = first?.role === "system" ? first : undefined;
+  const systemPrompt = transcriptSystem
+    ? typeof transcriptSystem.content === "string"
+      ? transcriptSystem.content
+      : transcriptSystem.content.map((block) => block.text).join("\n")
+    : context.systemPrompt;
+  // Only the exact Pi-owned summary request bypasses the operating boundary.
+  // Extra system updates/sections must not turn an ordinary turn into a bypass.
+  if (transcriptSystem && Object.values(transcriptSystem.sections ?? {}).some(Boolean)) return false;
+  const messages = transcriptSystem ? context.messages.slice(1) : context.messages;
+  if (systemPrompt !== PI_SUMMARIZATION_SYSTEM_PROMPT || messages.length !== 1) return false;
+  const message = messages[0];
   if (message?.role !== "user") return false;
   const text = typeof message.content === "string"
     ? message.content
@@ -380,6 +405,12 @@ function contextTokensFromUsage(usage: AssistantMessage["usage"]): number {
 }
 
 function estimateMessageTokens(message: Context["messages"][number]): number {
+  if (message.role === "system") {
+    return estimateContentTokens(message.content) +
+      estimateJsonTokens(message.sections) +
+      estimateJsonTokens(message.toolsAdded) +
+      estimateJsonTokens(message.toolsRemoved);
+  }
   if (message.role === "user" || message.role === "toolResult") {
     return estimateContentTokens(message.content);
   }
@@ -388,7 +419,8 @@ function estimateMessageTokens(message: Context["messages"][number]): number {
   for (const block of message.content) {
     if (block.type === "text") chars += block.text.length;
     else if (block.type === "thinking") chars += block.thinking.length;
-    else chars += block.name.length + safeJsonStringify(block.arguments).length;
+    else if (block.type === "toolCall") chars += block.name.length + safeJsonStringify(block.arguments).length;
+    else throw new Error(`Unsupported assistant content block: ${(block as { type: string }).type}`);
   }
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }

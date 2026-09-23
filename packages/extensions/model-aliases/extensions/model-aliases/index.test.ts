@@ -8,7 +8,6 @@ import {
   InMemoryCredentialStore,
   isContextOverflow,
   type AssistantMessage,
-  type Context,
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -45,6 +44,8 @@ import {
   rewriteModelAliasPayload,
 } from "./index.ts";
 import type { ModelAliasesConfig } from "./config.ts";
+
+type Context = Parameters<typeof estimateAliasRequestTokens>[0];
 
 const existingModels = [
   {
@@ -670,6 +671,78 @@ test("dual-window alias enforces the visible edge before any assistant usage exi
 
   assert.equal(delegated, 0);
   assert.equal(isContextOverflow(result, 10), true);
+});
+
+test("transcript system messages count prompts, sections and tool declarations without crashing", () => {
+  const tool = { name: "probe", description: "probe", parameters: Type.Object({}) };
+  const context: Context = {
+    messages: [
+      { role: "system", content: "12345678", sections: { rules: "read only" }, toolsAdded: [tool], timestamp: 0 },
+      { role: "user", content: "12345678", timestamp: 1 },
+    ],
+  };
+  const expected = 4 + Math.ceil(JSON.stringify({ rules: "read only" }).length / 4) +
+    Math.ceil(JSON.stringify([tool]).length / 4);
+  assert.equal(estimateAliasRequestTokens(context), expected);
+  context.messages[0] = { ...context.messages[0], content: [{ type: "text", text: "12345678" }] } as Context["messages"][number];
+  assert.equal(estimateAliasRequestTokens(context), expected);
+});
+
+test("transcript system updates count only new context after recorded assistant usage", () => {
+  const context: Context = {
+    messages: [
+      { role: "system", content: "already accounted for ".repeat(100), timestamp: 0 },
+      assistantMessage({ api: "openai-responses", provider: "openai", id: "test" } as Model<any>, "stop", 100),
+      { role: "system", content: "12345678", sections: { old: null, rules: "new" }, toolsRemoved: [{ name: "probe" }], timestamp: Date.now() + 1 },
+    ],
+  };
+  assert.equal(estimateAliasRequestTokens(context), 102 +
+    Math.ceil(JSON.stringify({ old: null, rules: "new" }).length / 4) +
+    Math.ceil(JSON.stringify([{ name: "probe" }]).length / 4));
+});
+
+test("transcript system messages enforce the visible boundary and delegate unchanged below it", async () => {
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [{ provider: "openai", id: "test", targetProvider: "openai", targetModel: "gpt-5.5", contextWindow: 10, targetContextWindow: 100 }],
+  };
+  const context: Context = { messages: [
+    { role: "system", content: "12345678", timestamp: 0 },
+    { role: "user", content: "12345678", timestamp: 1 },
+  ] };
+  let delegated = 0;
+  const stream = createAliasStreamSimple(buildAliasLookup(config), buildTargetModelLookup(config, existingModels), (model, actual) => {
+    delegated++;
+    assert.equal(actual, context, "preserve the transcript for provider normalization");
+    return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+  });
+  const model = { provider: "openai", id: "test", api: MODEL_ALIASES_API, contextWindow: 10 } as Model<any>;
+  assert.equal((await stream(model, context).result()).stopReason, "stop");
+  context.messages.push({ role: "system", content: "123456789012345678901234", timestamp: 2 });
+  assert.equal(isContextOverflow(await stream(model, context).result(), 10), true);
+  assert.equal(delegated, 1);
+});
+
+test("Pi summaries bypass the visible boundary in legacy and transcript contexts only", async () => {
+  const prompt = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
+  const user = { role: "user" as const, content: "<conversation>\n" + "history ".repeat(100) + "\n</conversation>", timestamp: 1 };
+  const config: ModelAliasesConfig = { enabled: true, aliases: [
+    { provider: "openai", id: "test", targetProvider: "openai", targetModel: "gpt-5.5", contextWindow: 10, targetContextWindow: 1000 },
+  ] };
+  let delegated = 0;
+  const stream = createAliasStreamSimple(buildAliasLookup(config), buildTargetModelLookup(config, existingModels), (model) => {
+    delegated++;
+    return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
+  });
+  const transcript: Context = { messages: [{ role: "system", content: prompt, timestamp: 0 }, user] };
+  for (const context of [{ systemPrompt: prompt, messages: [user] }, transcript]) {
+    assert.equal(isPiSummarizationRequest(context), true);
+    assert.equal((await stream({ provider: "openai", id: "test", contextWindow: 10 } as Model<any>, context).result()).stopReason, "stop");
+  }
+  assert.equal(delegated, 2);
+  assert.equal(isPiSummarizationRequest({ messages: [user] }), false);
+  assert.equal(isPiSummarizationRequest({ messages: [transcript.messages[0]!, { role: "system", content: "extra instructions", timestamp: 1 }, user] }), false);
+  assert.equal(isPiSummarizationRequest({ messages: [{ role: "system", content: prompt, sections: { extra: "ordinary work" }, timestamp: 0 }, user] }), false);
 });
 
 test("request estimation ignores retained assistant usage older than a compaction summary", async () => {

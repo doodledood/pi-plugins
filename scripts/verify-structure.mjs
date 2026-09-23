@@ -12,13 +12,10 @@ const expectedThemes = ["deep-focus-pi"];
 const expectedSetupAgents = ["Explore"];
 const expectedSetupSkills = ["deletion-pass", "telegram"];
 const expectedEnabledModels = [
-  "openai/gpt-6-astra:high",
-  "openai/gpt-5.6-sol:high",
-  "anthropic/claude-opus-5:high",
-  "anthropic/claude-opus-5-full:high",
-  "openai/gpt-5.6-luna:max",
-  "anthropic/claude-fable-5-1:high",
-  "anthropic/claude-fable-5-1-full:high",
+  "anthropic/claude-opus-5-5:high",
+  "openai/gpt-6-astra:medium",
+  "openai/gpt-6-sol:high",
+  "anthropic/claude-fable-5-1:max",
 ];
 
 function readJson(path) {
@@ -106,8 +103,8 @@ if (installedSettings && localSettings) {
     }),
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
-    if (settings.defaultProvider !== "openai") errors.push(`setup ${label} settings: defaultProvider must be openai`);
-    if (settings.defaultModel !== "gpt-6-astra") errors.push(`setup ${label} settings: defaultModel must be gpt-6-astra`);
+    if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
+    if (settings.defaultModel !== "claude-opus-5-5") errors.push(`setup ${label} settings: defaultModel must be claude-opus-5-5`);
     if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
     if (settings["pi-image-gen"]?.defaultModel !== "gpt-image-2.5-sunburst") {
       errors.push(`setup ${label} settings: pi-image-gen.defaultModel must be gpt-image-2.5-sunburst`);
@@ -124,11 +121,11 @@ if (setupModels && Object.keys(setupModels.providers ?? {}).length !== 0) {
 const setupGoalController = readJson(join(root, "setup", "configs", "goal-controller.config.json"));
 if (setupGoalController) {
   const checker = setupGoalController.checker;
-  if (checker?.model !== "openai/gpt-5.6-luna") {
-    errors.push("setup/configs/goal-controller.config.json: checker model must be openai/gpt-5.6-luna");
+  if (checker?.model !== "openai/gpt-6-luna") {
+    errors.push("setup/configs/goal-controller.config.json: checker model must be openai/gpt-6-luna");
   }
-  if (checker?.thinking !== "high") {
-    errors.push("setup/configs/goal-controller.config.json: checker thinking must be high");
+  if (checker?.thinking !== "medium") {
+    errors.push("setup/configs/goal-controller.config.json: checker thinking must be medium");
   }
   if (JSON.stringify(Object.keys(setupGoalController).sort()) !== JSON.stringify(["checker"])) {
     errors.push("setup/configs/goal-controller.config.json: setup override must contain only checker settings");
@@ -140,12 +137,13 @@ if (setupGoalController) {
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 const expectedSetupAliases = new Map([
-  ["gpt-6-astra", { contextWindow: 240000, targetContextWindow: 1050000 }],
-  ["gpt-5.6-sol", { contextWindow: 240000, targetContextWindow: 1050000 }],
+  ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
-  ["claude-opus-5", { contextWindow: 350000, targetContextWindow: 1000000 }],
-  ["claude-fable-5-1", { contextWindow: 350000, targetContextWindow: 1000000 }],
-  ["claude-opus-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
+  ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
+  ["claude-opus-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-1", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
 ]);
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));

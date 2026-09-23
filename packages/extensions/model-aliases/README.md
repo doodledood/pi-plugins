@@ -188,3 +188,10 @@ model in pi's registry.
 ## Local state
 
 This extension does not read or write local runtime state. It reads Pi settings and registers configured models in memory.
+
+### Pi transcript compatibility
+
+The operating-window estimate supports both legacy context fields and Pi 0.86+
+system messages in the transcript, including prompt sections and tool additions
+and removals. Pi-owned compaction requests bypass the operating boundary in
+both formats. Provider delegation preserves the original transcript.
