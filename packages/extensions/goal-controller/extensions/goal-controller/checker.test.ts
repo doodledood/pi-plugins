@@ -841,7 +841,7 @@ test("PiSubprocessCheckerRunner rejects malformed Pi JSON output as a protocol f
     (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /malformed Pi JSON event stream/iu);
-      assert.match(error.message, /1 non-JSON line/iu);
+      assert.match(error.message, /1× non-JSON line/iu);
       assert.doesNotMatch(error.message, /correct horse battery staple/u);
       assert.doesNotMatch(error.message, /not-json/iu);
       assert.doesNotMatch(error.message, /checker did not return a JSON object/iu);
@@ -967,7 +967,27 @@ test("PiSubprocessCheckerRunner rejects schema-invalid JSONL records after a ver
   await assert.rejects(() => runChecker(runner, DEFAULT_CONFIG), /malformed Pi JSON event stream/iu);
 });
 
-for (const malformedEvent of [
+// Records off the verdict path are Pi's to evolve. Each of these once failed the
+// whole checker run under deep envelope validation; a Pi release that adds a
+// role, block, field or event must not pause goals (see
+// docs/adr/20260923-validate-only-the-checker-verdict-path.md).
+const SYSTEM_TRANSCRIPT_MESSAGE = {
+  role: "system",
+  content: "",
+  sections: { preamble: "You are a checker.", tools: "<tools>\n- read\n</tools>" },
+  toolsAdded: [{ name: "read", description: "Read file contents", parameters: { type: "object" } }],
+  timestamp: 0,
+};
+
+for (const offPathEvent of [
+  { name: "a system transcript message_start (Pi 0.87)", event: { type: "message_start", message: SYSTEM_TRANSCRIPT_MESSAGE } },
+  { name: "a system transcript message_end (Pi 0.87)", event: { type: "message_end", message: SYSTEM_TRANSCRIPT_MESSAGE } },
+  { name: "agent_end carrying a system transcript message (Pi 0.87)", event: { type: "agent_end", messages: [SYSTEM_TRANSCRIPT_MESSAGE, jsonAssistantMessage()], willRetry: false } },
+  { name: "a message_end with an unknown role", event: { type: "message_end", message: { role: "futureRole", payload: 1 } } },
+  { name: "an unknown event type", event: { type: "future_event", data: { anything: true } } },
+  { name: "entry_appended with an unknown entry type", event: { type: "entry_appended", entry: { type: "future_entry", id: "entry-1", parentId: null, timestamp: "2026-07-19T00:00:00.000Z" } } },
+  { name: "message_update with an unknown assistant event", event: { type: "message_update", assistantMessageEvent: { type: "future_delta", contentIndex: 0 } } },
+
   { name: "agent_end without messages", event: { type: "agent_end", willRetry: false } },
   { name: "agent_end with a malformed nested message", event: { type: "agent_end", messages: [{ ...jsonAssistantMessage(), timestamp: "invalid" }], willRetry: false } },
   { name: "queue_update without queues", event: { type: "queue_update" } },
@@ -1028,14 +1048,97 @@ for (const malformedEvent of [
   { name: "tool_execution_update without a partial result", event: { type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {} } },
   { name: "tool_execution_end without isError", event: { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: {} } },
 ]) {
-  test(`PiSubprocessCheckerRunner rejects ${malformedEvent.name} after a verdict`, async () => {
+  test(`PiSubprocessCheckerRunner tolerates ${offPathEvent.name} beside a verdict`, async () => {
     const runner = new PiSubprocessCheckerRunner({
       async exec() {
-        const verdict = JSON.stringify({
-          type: "message_end",
-          message: { role: "assistant", ...JSON_ASSISTANT_FIELDS, content: [{ type: "text", text: '{"decision":"continue"}' }], stopReason: "stop" },
-        });
-        return { stdout: settledJsonl(`${verdict}\n${JSON.stringify(malformedEvent.event)}\n`), stderr: "", code: 0, killed: false };
+        const verdict = JSON.stringify({ type: "message_end", message: jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]) });
+        return { stdout: settledJsonl(`${JSON.stringify(offPathEvent.event)}\n${verdict}\n`), stderr: "", code: 0, killed: false };
+      },
+    });
+
+    assert.equal((await runCheckerVerdict(runner, DEFAULT_CONFIG)).decision, "continue");
+  });
+}
+
+test("PiSubprocessCheckerRunner reads the verdict from an assistant message with unknown content blocks and fields", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const verdict = {
+        role: "assistant",
+        content: [
+          { type: "future_block", payload: { anything: true } },
+          { type: "text", text: '{"decision":"continue","reason":"still working"}' },
+        ],
+        stopReason: "stop",
+        futureField: 42,
+      };
+      return { stdout: settledJsonl(JSON.stringify({ type: "message_end", message: verdict })), stderr: "", code: 0, killed: false };
+    },
+  });
+
+  const result = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(result.decision, "continue");
+  assert.equal(result.reason, "still working");
+});
+
+// Shape of a real Pi 0.87.1 `--mode json` checker run (texts shortened): the
+// system transcript message rides message_start, message_end and agent_end.
+test("PiSubprocessCheckerRunner accepts a Pi 0.87 checker stream with a system transcript message", async () => {
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const toolCall = { type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/session.jsonl" } };
+      const toolTurn = jsonAssistantMessage([{ type: "thinking", thinking: "inspect", thinkingSignature: "sig" }, toolCall], "toolUse");
+      const toolResult = { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 0 };
+      const user = { role: "user", content: [{ type: "text", text: "audit the goal" }], timestamp: 0 };
+      const verdict = jsonAssistantMessage([{ type: "text", text: '{"decision":"continue","reason":"not yet proven"}' }]);
+      const events = [
+        { type: "session", version: 3, id: "session-1", timestamp: "2026-09-23T15:21:35.760Z", cwd: "/tmp" },
+        { type: "agent_start" },
+        { type: "turn_start" },
+        { type: "message_start", message: SYSTEM_TRANSCRIPT_MESSAGE },
+        { type: "message_end", message: SYSTEM_TRANSCRIPT_MESSAGE },
+        { type: "message_start", message: user },
+        { type: "message_end", message: user },
+        { type: "message_start", message: toolTurn },
+        { type: "message_update", usage: toolTurn.usage, assistantMessageEvent: { type: "toolcall_end", contentIndex: 1, toolCall } },
+        { type: "message_end", message: toolTurn },
+        { type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: toolCall.arguments },
+        { type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: { content: [] }, isError: false },
+        { type: "message_start", message: toolResult },
+        { type: "message_end", message: toolResult },
+        { type: "turn_end", message: toolTurn, toolResults: [toolResult] },
+        { type: "turn_start" },
+        { type: "message_start", message: verdict },
+        { type: "message_update", usage: verdict.usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "{" } },
+        { type: "message_end", message: verdict },
+        { type: "turn_end", message: verdict, toolResults: [] },
+        { type: "agent_end", messages: [SYSTEM_TRANSCRIPT_MESSAGE, user, toolTurn, toolResult, verdict], willRetry: false },
+        { type: "agent_settled" },
+      ];
+      return { stdout: events.map((event) => JSON.stringify(event)).join("\n"), stderr: "", code: 0, killed: false };
+    },
+  });
+
+  const result = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(result.decision, "continue");
+  assert.equal(result.reason, "not yet proven");
+});
+
+// The verdict path itself stays strict: these are the records the verdict is
+// read from, so a malformed one is a protocol failure, named by kind.
+for (const verdictPathViolation of [
+  { name: "message_end without a message", event: { type: "message_end" }, kind: /message_end without a message/u },
+  { name: "assistant message_end without content", event: { type: "message_end", message: { ...jsonAssistantMessage(), content: "text" } }, kind: /assistant message_end without content array/u },
+  { name: "assistant message_end without stopReason", event: { type: "message_end", message: { ...jsonAssistantMessage(), stopReason: undefined } }, kind: /assistant message_end without terminal stopReason/u },
+  { name: "assistant message_end with an unknown stopReason", event: { type: "message_end", message: jsonAssistantMessage([], "future") }, kind: /assistant message_end without terminal stopReason/u },
+  { name: "assistant message_end with a non-string errorMessage", event: { type: "message_end", message: { ...jsonAssistantMessage(), errorMessage: 42 } }, kind: /assistant message_end with non-string errorMessage/u },
+  { name: "an untyped record", event: { message: "no type" }, kind: /untyped record/u },
+]) {
+  test(`PiSubprocessCheckerRunner rejects ${verdictPathViolation.name} as a named protocol violation`, async () => {
+    const runner = new PiSubprocessCheckerRunner({
+      async exec() {
+        const verdict = JSON.stringify({ type: "message_end", message: jsonAssistantMessage([{ type: "text", text: '{"decision":"continue"}' }]) });
+        return { stdout: settledJsonl(`${verdict}\n${JSON.stringify(verdictPathViolation.event)}\n`), stderr: "", code: 0, killed: false };
       },
     });
 
@@ -1044,7 +1147,7 @@ for (const malformedEvent of [
       (error: unknown) => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /malformed Pi JSON event stream/iu);
-        assert.match(error.message, /malformed recognized event envelope/iu);
+        assert.match(error.message, verdictPathViolation.kind);
         assert.doesNotMatch(error.message, /returned an invalid verdict/iu);
         return true;
       },

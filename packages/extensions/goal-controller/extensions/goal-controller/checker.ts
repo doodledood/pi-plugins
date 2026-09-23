@@ -254,23 +254,16 @@ function verdictTextFromJsonMode(
   config: GoalControllerConfig,
   effectiveModel: string | undefined,
 ): string {
-  const { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount } = scanJsonMode(stdout);
+  const { textBlocks, finalAssistantMessage, violations } = scanJsonMode(stdout);
   const stopReason = checkerStopReason(stringProperty(finalAssistantMessage, "stopReason"));
   const errorMessage = stringProperty(finalAssistantMessage, "errorMessage");
 
-  // The terminal outcome is trustworthy only after every emitted JSONL record
-  // passes the protocol boundary.
-  if (nonJsonLineCount > 0 || malformedEventCount > 0) {
-    const counts = [
-      nonJsonLineCount > 0
-        ? `${nonJsonLineCount} non-JSON line${nonJsonLineCount === 1 ? "" : "s"}`
-        : undefined,
-      malformedEventCount > 0
-        ? `${malformedEventCount} malformed recognized event envelope${malformedEventCount === 1 ? "" : "s"}`
-        : undefined,
-    ].filter((count): count is string => count !== undefined).join(", ");
+  // The terminal outcome is trustworthy only once the stream satisfies the
+  // verdict-path contract enforced by scanJsonMode. Violations are named by
+  // kind only, never by content, so the message cannot leak transcript text.
+  if (violations.length > 0) {
     throw new CheckerFailure([
-      `Goal checker returned a malformed Pi JSON event stream (${counts}).`,
+      `Goal checker returned a malformed Pi JSON event stream (${describeViolations(violations)}).`,
       checkerConfigSummary(config, effectiveModel),
     ].join("\n"));
   }
@@ -323,357 +316,100 @@ function verdictTextFromJsonMode(
   ].join("\n"));
 }
 
-function scanJsonMode(stdout: string): {
+// The checker trusts Pi's JSON stream only as far as the verdict depends on it:
+// every line is a typed JSON record, the run settles exactly once with nothing
+// after it, and each assistant `message_end` is a finished message whose text is
+// readable. Everything else — new event types, message roles, content blocks,
+// fields — is Pi's to evolve and is ignored. Deep-validating those records made
+// every Pi protocol addition (0.83 `pending`, 0.84 delta-only updates, 0.87
+// `system` transcript messages) fail every goal check. See
+// docs/adr/20260923-validate-only-the-checker-verdict-path.md.
+type ProtocolViolation =
+  | "non-JSON line"
+  | "untyped record"
+  | "event after agent_settled"
+  | "message_end without a message"
+  | "assistant message_end without content array"
+  | "assistant message_end without terminal stopReason"
+  | "assistant message_end with non-string errorMessage"
+  | "stream never reached agent_settled";
+
+interface JsonModeScan {
   textBlocks: string[];
   finalAssistantMessage: Record<string, unknown> | undefined;
-  nonJsonLineCount: number;
-  malformedEventCount: number;
-} {
+  violations: ProtocolViolation[];
+}
+
+function scanJsonMode(stdout: string): JsonModeScan {
   const textBlocks: string[] = [];
   let finalAssistantMessage: Record<string, unknown> | undefined;
-  let nonJsonLineCount = 0;
-  let malformedEventCount = 0;
-  let lifecycleObserved = false;
-  let lifecycleSettled = false;
+  const violations: ProtocolViolation[] = [];
+  let settled = false;
 
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const event = safeJsonParse(line);
-    if (!isRecord(event) || typeof event.type !== "string") {
-      nonJsonLineCount += 1;
+    if (!isRecord(event)) {
+      violations.push("non-JSON line");
       continue;
     }
-    if (!isValidJsonModeEventEnvelope(event)) {
-      malformedEventCount += 1;
+    if (typeof event.type !== "string") {
+      violations.push("untyped record");
       continue;
     }
-    if (lifecycleSettled) {
-      malformedEventCount += 1;
+    if (settled) {
+      violations.push("event after agent_settled");
       continue;
     }
-    if (isLifecycleEvent(event.type)) {
-      lifecycleObserved = true;
-      lifecycleSettled = event.type === "agent_settled";
+    if (event.type === "agent_settled") {
+      settled = true;
+      continue;
     }
     if (event.type !== "message_end") continue;
+
     const message = event.message;
     if (!isRecord(message) || typeof message.role !== "string") {
-      nonJsonLineCount += 1;
+      violations.push("message_end without a message");
       continue;
     }
+    // Only assistant messages can carry the verdict; other roles are Pi's to add.
     if (message.role !== "assistant") continue;
-    if (!Array.isArray(message.content)) {
-      nonJsonLineCount += 1;
+    const violation = assistantMessageEndViolation(message);
+    if (violation) {
+      violations.push(violation);
       continue;
     }
+
     finalAssistantMessage = message;
     textBlocks.length = 0;
-    const content = message.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
+    for (const block of message.content as unknown[]) {
       if (isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text.trim()) {
         textBlocks.push(block.text);
       }
     }
   }
 
-  if (!lifecycleObserved || !lifecycleSettled) malformedEventCount += 1;
-  return { textBlocks, finalAssistantMessage, nonJsonLineCount, malformedEventCount };
+  if (!settled) violations.push("stream never reached agent_settled");
+  return { textBlocks, finalAssistantMessage, violations };
 }
 
-function isLifecycleEvent(type: unknown): boolean {
-  return type === "agent_start"
-    || type === "agent_end"
-    || type === "agent_settled"
-    || type === "compaction_start"
-    || type === "compaction_end"
-    || type === "auto_retry_start"
-    || type === "auto_retry_end";
-}
-
-function isValidJsonModeEventEnvelope(event: Record<string, unknown>): boolean {
-  switch (event.type) {
-    case "session":
-      return hasStringProperties(event, "id", "timestamp", "cwd")
-        && (event.version === undefined || typeof event.version === "number")
-        && (event.parentSession === undefined || typeof event.parentSession === "string");
-    case "agent_start":
-    case "agent_settled":
-    case "turn_start":
-      // JSON mode serializes AgentSession listener events, not extension-hook
-      // events; raw turn_start records have no turnIndex or timestamp fields.
-      return true;
-    case "agent_end":
-      return Array.isArray(event.messages)
-        && event.messages.every(isAgentMessageEnvelope)
-        && typeof event.willRetry === "boolean";
-    case "turn_end":
-      return isAgentMessageEnvelope(event.message)
-        && Array.isArray(event.toolResults)
-        && event.toolResults.every((result) => isAgentMessageEnvelope(result) && result.role === "toolResult");
-    case "message_start":
-      return isAgentMessageEnvelope(event.message);
-    case "message_end":
-      return isTerminalMessageEnvelope(event.message);
-    case "message_update":
-      // Pi >= 0.84 strips the cumulative `message` snapshot from the wire event
-      // to avoid quadratic output growth; `message_end` stays authoritative.
-      // Older Pi versions still send it, so validate it only when present.
-      return isAssistantMessageEventEnvelope(event.assistantMessageEvent)
-        && (event.message === undefined || isAgentMessageEnvelope(event.message));
-    case "tool_execution_start":
-      return hasStringProperties(event, "toolCallId", "toolName") && Object.hasOwn(event, "args");
-    case "tool_execution_update":
-      return hasStringProperties(event, "toolCallId", "toolName")
-        && Object.hasOwn(event, "args")
-        && Object.hasOwn(event, "partialResult");
-    case "tool_execution_end":
-      return hasStringProperties(event, "toolCallId", "toolName")
-        && Object.hasOwn(event, "result")
-        && typeof event.isError === "boolean";
-    case "queue_update":
-      return isStringArray(event.steering) && isStringArray(event.followUp);
-    case "compaction_start":
-      return isCompactionReason(event.reason);
-    case "entry_appended":
-      return isSessionEntryEnvelope(event.entry);
-    case "session_info_changed":
-      return event.name === undefined || typeof event.name === "string";
-    case "thinking_level_changed":
-      return isThinkingLevel(event.level);
-    case "compaction_end":
-      return isCompactionReason(event.reason)
-        && typeof event.aborted === "boolean"
-        && typeof event.willRetry === "boolean"
-        && (event.result === undefined || isCompactionResult(event.result))
-        && (event.errorMessage === undefined || typeof event.errorMessage === "string");
-    case "auto_retry_start":
-      return hasNumberProperties(event, "attempt", "maxAttempts", "delayMs")
-        && typeof event.errorMessage === "string";
-    case "auto_retry_end":
-      return typeof event.success === "boolean"
-        && typeof event.attempt === "number"
-        && (event.finalError === undefined || typeof event.finalError === "string");
-    default:
-      // Unknown event types remain forward-compatible; every event type known to
-      // the current Pi JSON contract must carry its required envelope fields.
-      return true;
+function assistantMessageEndViolation(message: Record<string, unknown>): ProtocolViolation | undefined {
+  if (!Array.isArray(message.content)) return "assistant message_end without content array";
+  // A terminal message must have settled: "pending" (Pi 0.83) is only valid on
+  // in-flight message_start / message_update records, which are not read here.
+  if (checkerStopReason(stringProperty(message, "stopReason")) === undefined) {
+    return "assistant message_end without terminal stopReason";
   }
-}
-
-function isTerminalMessageEnvelope(value: unknown): value is Record<string, unknown> {
-  // A terminal assistant message must have settled: "pending" is only valid on
-  // partial streaming envelopes, never on the final message_end record.
-  // Non-assistant message_end records (custom, toolResult, ...) carry no stopReason.
-  if (!isAgentMessageEnvelope(value)) return false;
-  return value.role !== "assistant" || checkerStopReason(stringProperty(value, "stopReason")) !== undefined;
-}
-
-function isAgentMessageEnvelope(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || typeof value.role !== "string") return false;
-  switch (value.role) {
-    case "assistant":
-      return hasStringProperties(value, "api", "provider", "model")
-        && Array.isArray(value.content)
-        && value.content.every(isAssistantContent)
-        && isUsage(value.usage)
-        && streamStopReason(stringProperty(value, "stopReason")) !== undefined
-        && (value.errorMessage === undefined || typeof value.errorMessage === "string")
-        && (value.responseModel === undefined || typeof value.responseModel === "string")
-        && (value.responseId === undefined || typeof value.responseId === "string")
-        && (value.diagnostics === undefined || (Array.isArray(value.diagnostics) && value.diagnostics.every(isAssistantDiagnostic)))
-        && typeof value.timestamp === "number";
-    case "user":
-      return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
-        && typeof value.timestamp === "number";
-    case "toolResult":
-      return hasStringProperties(value, "toolCallId", "toolName")
-        && Array.isArray(value.content)
-        && value.content.every(isUserContent)
-        && (value.addedToolNames === undefined || isStringArray(value.addedToolNames))
-        && typeof value.isError === "boolean"
-        && typeof value.timestamp === "number";
-    case "custom":
-      return typeof value.customType === "string"
-        && (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
-        && typeof value.display === "boolean"
-        && typeof value.timestamp === "number";
-    case "bashExecution":
-      return hasStringProperties(value, "command", "output")
-        && (value.exitCode === undefined || typeof value.exitCode === "number")
-        && typeof value.cancelled === "boolean"
-        && typeof value.truncated === "boolean"
-        && (value.fullOutputPath === undefined || typeof value.fullOutputPath === "string")
-        && (value.excludeFromContext === undefined || typeof value.excludeFromContext === "boolean")
-        && typeof value.timestamp === "number";
-    case "branchSummary":
-      return hasStringProperties(value, "summary", "fromId") && typeof value.timestamp === "number";
-    case "compactionSummary":
-      return typeof value.summary === "string"
-        && typeof value.tokensBefore === "number"
-        && typeof value.timestamp === "number";
-    default:
-      return false;
+  if (message.errorMessage !== undefined && typeof message.errorMessage !== "string") {
+    return "assistant message_end with non-string errorMessage";
   }
+  return undefined;
 }
 
-function isSessionEntryEnvelope(value: unknown): boolean {
-  if (!isRecord(value)
-    || !hasStringProperties(value, "type", "id", "timestamp")
-    || (value.parentId !== null && typeof value.parentId !== "string")) return false;
-  switch (value.type) {
-    case "message":
-      return isAgentMessageEnvelope(value.message);
-    case "thinking_level_change":
-      return typeof value.thinkingLevel === "string";
-    case "model_change":
-      return hasStringProperties(value, "provider", "modelId");
-    case "compaction":
-      return hasStringProperties(value, "summary", "firstKeptEntryId")
-        && typeof value.tokensBefore === "number"
-        && (value.fromHook === undefined || typeof value.fromHook === "boolean");
-    case "branch_summary":
-      return hasStringProperties(value, "fromId", "summary")
-        && (value.fromHook === undefined || typeof value.fromHook === "boolean");
-    case "custom":
-      return typeof value.customType === "string";
-    case "custom_message":
-      return typeof value.customType === "string"
-        && (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(isUserContent)))
-        && typeof value.display === "boolean";
-    case "label":
-      return typeof value.targetId === "string"
-        && (value.label === undefined || typeof value.label === "string");
-    case "session_info":
-      return value.name === undefined || typeof value.name === "string";
-    default:
-      return false;
-  }
-}
-
-function isAssistantDiagnostic(value: unknown): boolean {
-  if (!isRecord(value) || typeof value.type !== "string" || typeof value.timestamp !== "number") return false;
-  if (value.details !== undefined && !isRecord(value.details)) return false;
-  if (value.error === undefined) return true;
-  return isRecord(value.error)
-    && typeof value.error.message === "string"
-    && (value.error.name === undefined || typeof value.error.name === "string")
-    && (value.error.stack === undefined || typeof value.error.stack === "string")
-    && (value.error.code === undefined || typeof value.error.code === "string" || typeof value.error.code === "number");
-}
-
-function isAssistantContent(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.type === "text") {
-    return typeof value.text === "string"
-      && (value.textSignature === undefined || typeof value.textSignature === "string");
-  }
-  if (value.type === "thinking") {
-    return typeof value.thinking === "string"
-      && (value.thinkingSignature === undefined || typeof value.thinkingSignature === "string")
-      && (value.redacted === undefined || typeof value.redacted === "boolean");
-  }
-  return value.type === "toolCall"
-    && hasStringProperties(value, "id", "name")
-    && isRecord(value.arguments)
-    && (value.thoughtSignature === undefined || typeof value.thoughtSignature === "string");
-}
-
-function isUserContent(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (value.type === "text") return typeof value.text === "string";
-  return value.type === "image"
-    && hasStringProperties(value, "data", "mimeType");
-}
-
-function isUsage(value: unknown): boolean {
-  return isRecord(value)
-    && hasNumberProperties(value, "input", "output", "cacheRead", "cacheWrite", "totalTokens")
-    && (value.cacheWrite1h === undefined || typeof value.cacheWrite1h === "number")
-    && (value.reasoning === undefined || typeof value.reasoning === "number")
-    && isRecord(value.cost)
-    && hasNumberProperties(value.cost, "input", "output", "cacheRead", "cacheWrite", "total");
-}
-
-function isCompactionResult(value: unknown): boolean {
-  return isRecord(value)
-    && hasStringProperties(value, "summary", "firstKeptEntryId")
-    && typeof value.tokensBefore === "number"
-    && (value.estimatedTokensAfter === undefined || typeof value.estimatedTokensAfter === "number");
-}
-
-// Pi >= 0.84 omits `partial` from streaming delta events (see toJsonEvent in
-// Pi's JSON mode). Older versions carry the cumulative snapshot, which must
-// still be a well-formed assistant message when it is present.
-function isOptionalAssistantPartial(value: unknown): boolean {
-  if (value === undefined) return true;
-  return isAgentMessageEnvelope(value) && value.role === "assistant";
-}
-
-function isAssistantMessageEventEnvelope(value: unknown): boolean {
-  if (!isRecord(value) || typeof value.type !== "string") return false;
-  switch (value.type) {
-    case "start":
-      return isOptionalAssistantPartial(value.partial);
-    case "text_start":
-    case "thinking_start":
-    case "toolcall_start":
-      return typeof value.contentIndex === "number"
-        && isOptionalAssistantPartial(value.partial);
-    case "text_delta":
-    case "thinking_delta":
-    case "toolcall_delta":
-      return typeof value.contentIndex === "number"
-        && typeof value.delta === "string"
-        && isOptionalAssistantPartial(value.partial);
-    case "text_end":
-    case "thinking_end":
-      return typeof value.contentIndex === "number"
-        && typeof value.content === "string"
-        && isOptionalAssistantPartial(value.partial);
-    case "toolcall_end":
-      return typeof value.contentIndex === "number"
-        && isAssistantContent(value.toolCall)
-        && isRecord(value.toolCall)
-        && value.toolCall.type === "toolCall"
-        && isOptionalAssistantPartial(value.partial);
-    case "done":
-      return (value.reason === "stop" || value.reason === "length" || value.reason === "toolUse")
-        && isAgentMessageEnvelope(value.message)
-        && value.message.role === "assistant";
-    case "error":
-      return (value.reason === "error" || value.reason === "aborted")
-        && isAgentMessageEnvelope(value.error)
-        && value.error.role === "assistant";
-    default:
-      return false;
-  }
-}
-
-function hasStringProperties(value: Record<string, unknown>, ...keys: string[]): boolean {
-  return keys.every((key) => typeof value[key] === "string");
-}
-
-function hasNumberProperties(value: Record<string, unknown>, ...keys: string[]): boolean {
-  return keys.every((key) => typeof value[key] === "number");
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isCompactionReason(value: unknown): boolean {
-  return value === "manual" || value === "threshold" || value === "overflow";
-}
-
-function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return value === "off"
-    || value === "minimal"
-    || value === "low"
-    || value === "medium"
-    || value === "high"
-    || value === "xhigh"
-    || value === "max";
+function describeViolations(violations: readonly ProtocolViolation[]): string {
+  const counts = new Map<ProtocolViolation, number>();
+  for (const violation of violations) counts.set(violation, (counts.get(violation) ?? 0) + 1);
+  return [...counts].map(([violation, count]) => `${count}× ${violation}`).join(", ");
 }
 
 function assistantMessageHasText(message: Record<string, unknown>): boolean {
@@ -686,15 +422,6 @@ function assistantMessageHasText(message: Record<string, unknown>): boolean {
 function checkerStopReason(value: string | undefined): "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
   if (value === "stop" || value === "length" || value === "toolUse" || value === "error" || value === "aborted") return value;
   return undefined;
-}
-
-// Pi 0.83 streams partial assistant messages with stopReason "pending"
-// (message_start / message_update); envelope validation accepts it wherever a
-// message may still be in flight, while terminal verdict reads stay restricted
-// to checkerStopReason.
-function streamStopReason(value: string | undefined): "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
-  if (value === "pending") return value;
-  return checkerStopReason(value);
 }
 
 function checkerConfigSummary(config: GoalControllerConfig, modelPattern: string | undefined): string {
