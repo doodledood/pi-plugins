@@ -10,7 +10,7 @@ Keep this repo's `setup/` directory aligned with the user's current portable Pi 
 
 ## Privacy boundary
 
-When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, `~/.pi/agent/mcp.json`, or `~/.pi/web-search.json`, use redacted/structural reads or targeted scripts. Never print, quote, summarize, or paste raw secret values, credential-bearing URLs, OAuth material, proxy IDs, or tokens into the transcript. Preserve only key names, provider/server shape, env-var names, and placeholder-worthy fields.
+When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, `~/.pi/agent/mcp-adapter.json`, or `~/.pi/web-search.json`, use redacted/structural reads or targeted scripts. Never print, quote, summarize, or paste raw secret values, credential-bearing URLs, OAuth material, proxy IDs, or tokens into the transcript. Preserve only key names, provider/server shape, env-var names, and placeholder-worthy fields.
 
 ## Workflow
 
@@ -21,7 +21,7 @@ When inspecting credential-bearing local files such as `~/.pi/agent/auth.json`, 
    - prompt/profile files such as `~/.pi/agent/AGENTS.md` and its `CODING_CONVENTIONS.md` companion, plus any local template-like setup files that correspond to files under `setup/`
    - non-secret extension configs that correspond to `setup/configs/*.json`
    - `~/.pi/agent/models.json` only if model-provider overrides are expected
-   - `~/.pi/agent/mcp.json` and `~/.pi/web-search.json` only through redacted/structural inspection for shape, provider choice, and placeholder-worthy fields — never for copying or exposing secrets verbatim
+   - `~/.pi/agent/mcp-adapter.json` and `~/.pi/web-search.json` only through redacted/structural inspection for shape, provider choice, and placeholder-worthy fields — never for copying or exposing secrets verbatim
 3. Compare local values, package list, prompt/profile files, and template-like files to `setup/`. Update repo templates only for portable defaults the user wants preserved across machines.
 4. For secrets, credential-bearing URLs, OAuth material, private endpoints, local absolute paths, proxy IDs, and user-specific tokens, keep or introduce placeholders/env references in the repo template. Do not ask the user to paste secrets into chat.
 5. If a local value is ambiguous — personal preference vs machine-specific vs private/internal — ask before adopting it. Default to leaving it local.

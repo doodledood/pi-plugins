@@ -22,7 +22,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 1. **Inspect before asking or editing**
    - Read this README, `setup/README.md`, `setup/settings.example.json`, and the repo-root `AGENTS.md`. Inspect the available filenames under `setup/configs/`, `setup/agents/`, and `setup/skills/`; after scope is chosen, read the selected files. Read `setup/AGENTS.md` and `setup/CODING_CONVENTIONS.md` before explaining the agent-behavior option.
    - Check `node --version`, `npm --version`, `git --version`, and `pi --version`. If Pi is missing, ask before installing it with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
-   - Detect existing target files under `~/.pi/agent/` and `~/.pi/`. Inspect ordinary JSON and instruction files as needed. **Do not use raw file reads, `cat`, `grep`, or similar content-printing commands on `auth.json`, `mcp.json`, or `web-search.json`.** Inspect only structural key paths with a targeted script such as the one below.
+   - Detect existing target files under `~/.pi/agent/` and `~/.pi/`. Inspect ordinary JSON and instruction files as needed. **Do not use raw file reads, `cat`, `grep`, or similar content-printing commands on `auth.json`, `mcp-adapter.json` (or a legacy `mcp.json`), or `web-search.json`.** Inspect only structural key paths with a targeted script such as the one below.
    - Discover whether this is fresh or existing setup; do not ask questions the filesystem already answers.
 
    ```bash
@@ -32,7 +32,8 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    const path = require("node:path");
    const files = {
      "auth.json": path.join(os.homedir(), ".pi/agent/auth.json"),
-     "mcp.json": path.join(os.homedir(), ".pi/agent/mcp.json"),
+     "mcp-adapter.json": path.join(os.homedir(), ".pi/agent/mcp-adapter.json"),
+     "mcp.json (legacy)": path.join(os.homedir(), ".pi/agent/mcp.json"),
      "web-search.json": path.join(os.homedir(), ".pi/web-search.json"),
    };
    function keyPaths(value, prefix = "", out = []) {
@@ -89,7 +90,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
    - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
    - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`. The Telegram skill includes its Python helper; follow [Telegram setup](setup/README.md#telegram-notifications) to pair a user's bot without copying credentials.
-   - Do not overwrite working `auth.json`, `mcp.json`, or `web-search.json`. Start from an example only when the integration is selected and no usable local file exists.
+   - Do not overwrite working `auth.json`, `mcp-adapter.json`, or `web-search.json`. If only a legacy `~/.pi/agent/mcp.json` exists, `pi-mcp-adapter` 3.x no longer reads it: rename it with `mv ~/.pi/agent/mcp.json ~/.pi/agent/mcp-adapter.json` (merge the two if both exist). Start from an example only when the integration is selected and no usable local file exists.
 
 | Portable source | Target | Apply when |
 | --- | --- | --- |
@@ -101,7 +102,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/AGENTS.md` | `~/.agents/AGENTS.md`, with `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` as symlinks onto it | Aviram's operating posture is selected; an existing file at a symlink path is backed up first |
 | `setup/CODING_CONVENTIONS.md` | `~/.agents/CODING_CONVENTIONS.md` | Always, whenever `AGENTS.md` is copied — it references this file by name |
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
-| `setup/mcp.example.json` | `~/.pi/agent/mcp.json` | MCP/browser integration is selected; fill placeholders locally |
+| `setup/mcp-adapter.example.json` | `~/.pi/agent/mcp-adapter.json` | MCP/browser integration is selected; fill placeholders locally |
 | `setup/web-search.example.json` | `~/.pi/web-search.json` | Web search is selected; fill the provider secret locally |
 | `setup/models.example.json` | `~/.pi/agent/models.json` | A custom provider override is actually needed; the current full profile intentionally keeps this template empty |
 
@@ -196,7 +197,7 @@ Choose authentication rather than assuming it:
 
 - For provider subscription auth, start Pi and use `/login`; do not create `auth.json` from the API-key example.
 - For environment-based OpenAI auth, copy `setup/auth.example.json` to `~/.pi/agent/auth.json`, set mode `0600`, and have the user provide `OPENAI_API_KEY` in their local environment.
-- Copy `mcp.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
+- Copy `mcp-adapter.example.json` and `web-search.example.json` only for integrations the user selected. Their placeholders must be filled locally before those integrations can work.
 - Do not copy `models.example.json` for the normal full profile; it is intentionally empty. Dual-window behavior for Astra, Sol, and both Luna generations comes from `configs/model-aliases.json`.
 
 Install the selected packages:

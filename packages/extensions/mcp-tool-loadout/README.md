@@ -76,7 +76,7 @@ Built-in tools (read, bash, edit, grep, …), the `mcp` proxy, and `load_tools` 
 - **Awareness over blind search.** A pure proxy hides tool names and forces keyword
   search. Listing names (≈1–1.5k tokens) is far cheaper than the schemas (~20k+) and
   removes the discovery guesswork.
-- **No `mcp.json` change required.** It rides on the adapter's existing `directTools`
+- **No `mcp-adapter.json` change required.** It rides on the adapter's existing `directTools`
   registration via Pi's native `setActiveTools`/`getAllTools`; it does not patch or
   depend on adapter internals.
 

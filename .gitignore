@@ -37,9 +37,11 @@ sessions/
 session*/
 mcp-oauth/
 mcp.json
+mcp-adapter.json
 mcp-onboarding.json
 web-search.json
 mcp.json.pre-*.bak
+mcp-adapter.json.pre-*.bak
 mcp-cache.json
 mcp-npx-cache.json
 *-stats.json
@@ -53,9 +55,11 @@ setup/**/.pi/
 setup/**/git/
 setup/**/npm/
 setup/**/mcp.json
+setup/**/mcp-adapter.json
 setup/**/mcp-onboarding.json
 setup/**/web-search.json
 setup/**/mcp.json.pre-*.bak
+setup/**/mcp-adapter.json.pre-*.bak
 setup/**/auth.json
 setup/**/settings.json
 setup/**/models.json

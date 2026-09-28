@@ -204,7 +204,7 @@ const replicationSources = [
   "setup/AGENTS.md",
   "setup/CODING_CONVENTIONS.md",
   "setup/auth.example.json",
-  "setup/mcp.example.json",
+  "setup/mcp-adapter.example.json",
   "setup/web-search.example.json",
   "setup/models.example.json",
 ];

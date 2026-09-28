@@ -11,7 +11,7 @@ For agent-guided replication onto another computer—including target inspection
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename. In particular, `configs/goal-controller.config.json` pins this setup's checker to `openai/gpt-6-luna` at `medium`, regardless of the active session model; the extension itself still defaults to `inherit`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
 - `skills/` — portable global skills. Copy a skill directory such as `skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level (harness-agnostic home; Pi also discovers `~/.pi/agent/skills/`). `deletion-pass` is an audit-only "deletion pass" over a plan/design/architecture/process — it reports what to cut and question, never rewrites.
-- `mcp.example.json` — MCP template with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
+- `mcp-adapter.example.json` — `pi-mcp-adapter` template (target `~/.pi/agent/mcp-adapter.json`; the adapter no longer reads `mcp.json`) with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
 - `web-search.example.json` — `pi-web-access` template. Copy to `~/.pi/web-search.json` and fill provider secrets locally.
 - `configs/hq.json` — HQ's mechanical settings: the small model that titles the board and the
   cap on live workers. Everything else HQ runs on lives in doctrine's Meta section, in
@@ -39,7 +39,7 @@ For agent-guided replication onto another computer—including target inspection
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
 7. Merge `AGENTS.md` only when the user wants Aviram's agent behavior, into `~/.agents/AGENTS.md`, and copy `CODING_CONVENTIONS.md` beside it — `AGENTS.md` points at it by name, so the reference dangles without it. Then symlink `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` onto `~/.agents/AGENTS.md`, backing up any real file at those paths first (merge its local rules in before replacing it). Delete any leftover `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync once its content is folded in.
-8. Copy `mcp.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.
+8. Copy `mcp-adapter.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.
 9. If local MCP server names are changed, update matching `mcp-tool-loadout` prior keys in `configs/mcp-tool-loadout.json` before copying that config.
 10. If a previous machine used `models.json` or `model-aliases.json` for an older model profile, remove obsolete overrides and aliases before merging the current alias set.
 
@@ -59,4 +59,4 @@ Paste the token into the hidden prompt and send the generated pairing phrase to 
 
 ### Private local values
 
-Never commit filled local values. Keep raw API keys, OAuth state, tokens, cookies, sessions, caches, logs, generated package repos, raw `auth.json`, filled `mcp.json`, and real `web-search.json` outside this repo. Templates here should use placeholders or environment-variable references only.
+Never commit filled local values. Keep raw API keys, OAuth state, tokens, cookies, sessions, caches, logs, generated package repos, raw `auth.json`, filled `mcp-adapter.json` or `mcp.json`, and real `web-search.json` outside this repo. Templates here should use placeholders or environment-variable references only.
