@@ -160,6 +160,10 @@ function createParentUpdateTool(tracker: ParentUpdateTracker, parent: ReadonlyPa
   });
 }
 
+export function missingInheritedToolsNotice(missingTools: readonly string[]): string {
+  return `BTW opened without ${missingTools.length} parent tool(s) that are not available in a fresh load: ${missingTools.join(", ")}. Restart or /reload the parent to bring them back in sync.`;
+}
+
 export async function createChildRuntime(input: CreateChildRuntimeInput): Promise<ChildRuntimeHandle> {
   const { snapshot, callbacks } = input;
   const extensionRoot = input.extensionRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -283,7 +287,11 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
     const actualTools = new Set(session.getActiveToolNames());
     const missingTools = activeToolNames.filter((name) => !actualTools.has(name));
     if (missingTools.length > 0) {
-      throw new Error(`BTW could not inherit active tool(s): ${missingTools.join(", ")}`);
+      // The parent's tool registry can legitimately drift from what a fresh load produces:
+      // config edited since the parent started, runtime-only SDK tools, a server that failed
+      // to connect in the child. BTW must still open at any stage, so it opens with the tools
+      // that do resolve and says plainly which ones it could not bring along.
+      callbacks.onNotice(missingInheritedToolsNotice(missingTools), "warning");
     }
     if (session.model?.provider !== snapshot.model.provider || session.model.id !== snapshot.model.id) {
       throw new Error("BTW child model does not match the parent model.");

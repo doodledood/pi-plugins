@@ -919,20 +919,19 @@ test("controller restores mouse state and never replays prompts from a failed op
   await controller.close();
 });
 
-test("controller surfaces missing inherited active tools visibly", async () => {
+test("controller surfaces child construction failures visibly", async () => {
   const harness = makeUI();
-  const missingTool = "missing_parent_runtime_tool";
   const controller = new BtwController({
     getThinkingLevel: () => "off",
-    getActiveTools: () => [missingTool],
+    getActiveTools: () => ["read"],
   } as ExtensionAPI, async () => {
-    throw new Error(`BTW could not inherit active tool(s): ${missingTool}`);
+    throw new Error("BTW child model does not match the parent model.");
   });
 
   await controller.open("", makeContext(harness.ui));
   assert.equal(controller.isOpen, false);
   assert.deepEqual(harness.notifications, [{
-    message: `BTW child failed to open: BTW could not inherit active tool(s): ${missingTool}`,
+    message: "BTW child failed to open: BTW child model does not match the parent model.",
     type: "error",
   }]);
 });

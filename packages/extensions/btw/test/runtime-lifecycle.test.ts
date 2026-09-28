@@ -27,6 +27,7 @@ import {
   CHECK_PARENT_UPDATES_TOOL,
   createChildRuntime,
   filterBtwExtensions,
+  missingInheritedToolsNotice,
   PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE,
   PARENT_UPDATE_AVAILABLE_MESSAGE,
 } from "../src/runtime.ts";
@@ -118,8 +119,10 @@ export default function (pi) {
         entryIds: [],
         forkLeafId: null,
         model,
-        thinkingLevel: "off",
-        activeToolNames: ["definitely_missing_inherited_tool"],
+        // A non-reasoning model cannot run at "high", so the child clamps and the
+        // construction-time consistency check throws after resources are live.
+        thinkingLevel: "high",
+        activeToolNames: ["read"],
         projectTrusted: true,
         systemPromptOptions: { cwd: "/tmp/btw-runtime-failure-test" },
         parentSessionFile: undefined,
@@ -137,12 +140,61 @@ export default function (pi) {
         onChildStatus() {},
         onRequestClose() {},
       },
-    }), /could not inherit active tool.*definitely_missing_inherited_tool/);
+    }), /thinking level does not match/);
 
     assert.equal(await readFile(shutdownMarker, "utf8"), "shutdown");
     assert.deepEqual(await readdir(tempRoot), [], "failed construction leaves no pi-btw temp directory");
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("child opens without parent tools a fresh load cannot resolve and names them in a warning", async () => {
+  // The parent's registry can drift from a fresh load (e.g. an MCP config changed after the
+  // parent started, so the parent holds proxy tools the child never registers). BTW must
+  // still open, keep every tool that does resolve, and say which ones it left behind.
+  const agentDir = await mkdtemp(join(tmpdir(), "btw-missing-tool-agent-"));
+  const parent = SessionManager.inMemory("/tmp/btw-missing-tool-test");
+  const entries = parent.getBranch();
+  const notices: Array<{ message: string; type: string | undefined }> = [];
+
+  try {
+    const child = await createChildRuntime({
+      snapshot: {
+        cwd: "/tmp/btw-missing-tool-test",
+        entries,
+        entryIds: entries.map((entry) => entry.id),
+        forkLeafId: null,
+        model,
+        thinkingLevel: "off",
+        activeToolNames: ["read", "mcp__stale_server", "write"],
+        projectTrusted: true,
+        systemPromptOptions: { cwd: "/tmp/btw-missing-tool-test" },
+        parentSessionFile: undefined,
+      },
+      parentSessionManager: parent,
+      parentIsIdle: () => true,
+      parentUI: { theme: {} } as ExtensionUIContext,
+      parentModelRegistry: inMemoryRegistry(),
+      modelRuntime: testModelRuntime,
+      agentDir,
+      callbacks: {
+        onEvent() {},
+        onNotice(message, type) { notices.push({ message, type }); },
+        onChildStatus() {},
+        onRequestClose() {},
+      },
+    });
+
+    assert.deepEqual(
+      new Set(child.session.getActiveToolNames()),
+      new Set(["read", "write", CHECK_PARENT_UPDATES_TOOL]),
+    );
+    assert.deepEqual(notices, [{ message: missingInheritedToolsNotice(["mcp__stale_server"]), type: "warning" }]);
+    assert.match(notices[0]!.message, /mcp__stale_server/);
+    await child.close();
+  } finally {
     await rm(agentDir, { recursive: true, force: true });
   }
 });
@@ -783,8 +835,8 @@ test("construction failure removes only its own aside, never the shared sidecar 
           entryIds: [],
           forkLeafId: null,
           model,
-          thinkingLevel: "off",
-          activeToolNames: ["definitely_missing_inherited_tool"],
+          thinkingLevel: "high",
+          activeToolNames: ["read"],
           projectTrusted: true,
           systemPromptOptions: { cwd: "/tmp/btw-runtime-failure-test" },
           parentSessionFile,
@@ -797,7 +849,7 @@ test("construction failure removes only its own aside, never the shared sidecar 
         agentDir,
         callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
       }),
-      /could not inherit active tool.*definitely_missing_inherited_tool/,
+      /thinking level does not match/,
     );
 
     assert.equal(await pathExists(sidecarDir), true, "the shared sidecar directory survives a failed construction");

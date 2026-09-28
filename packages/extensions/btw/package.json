@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-btw",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "/btw side conversations for Pi with isolated history and a shared project workspace; the aside persists under the parent session.",
   "keywords": [
