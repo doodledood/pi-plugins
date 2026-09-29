@@ -6,7 +6,8 @@
     "anthropic/claude-opus-5-5:high",
     "openai/gpt-6-astra:medium",
     "openai/gpt-6-sol:high",
-    "anthropic/claude-fable-5-1:max"
+    "anthropic/claude-fable-5-1:max",
+    "anthropic/claude-sonnet-5-5:xhigh"
   ],
   "followUpMode": "all",
   "steeringMode": "all",

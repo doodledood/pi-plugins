@@ -16,6 +16,7 @@ const expectedEnabledModels = [
   "openai/gpt-6-astra:medium",
   "openai/gpt-6-sol:high",
   "anthropic/claude-fable-5-1:max",
+  "anthropic/claude-sonnet-5-5:xhigh",
 ];
 
 function readJson(path) {
@@ -143,6 +144,7 @@ const expectedSetupAliases = new Map([
   ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-sonnet-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
   ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
 ]);

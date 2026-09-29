@@ -63,6 +63,14 @@
     },
     {
       "provider": "anthropic",
+      "id": "claude-sonnet-5-5",
+      "targetProvider": "anthropic",
+      "targetModel": "claude-sonnet-5-5",
+      "contextWindow": 500000,
+      "targetContextWindow": 1000000
+    },
+    {
+      "provider": "anthropic",
       "id": "claude-opus-5-5-full",
       "name": "Claude Opus 5.5 (Full Window)",
       "targetProvider": "anthropic",
