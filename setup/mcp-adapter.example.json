@@ -1,4 +1,7 @@
 {
+  "settings": {
+    "warnOnLargeDirectTools": false
+  },
   "mcpServers": {
     "chrome-devtools": {
       "command": "npx",

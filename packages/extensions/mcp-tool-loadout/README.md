@@ -78,7 +78,10 @@ Built-in tools (read, bash, edit, grep, …), the `mcp` proxy, and `load_tools` 
   removes the discovery guesswork.
 - **No `mcp-adapter.json` change required.** It rides on the adapter's existing `directTools`
   registration via Pi's native `setActiveTools`/`getAllTools`; it does not patch or
-  depend on adapter internals.
+  depend on adapter internals. One optional line is worth adding: with every server on
+  `directTools`, the adapter prints its "75+ direct tools" startup advisory even though
+  the loadout keeps only the budgeted slice active. Set
+  `"settings": { "warnOnLargeDirectTools": false }` in `mcp-adapter.json` to silence it.
 
 ## Config
 
