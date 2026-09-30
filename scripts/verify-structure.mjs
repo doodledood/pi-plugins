@@ -14,7 +14,7 @@ const expectedSetupSkills = ["deletion-pass", "telegram"];
 const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
   "openai/gpt-6-astra:medium",
-  "openai/gpt-6-sol:high",
+  "openai/gpt-6.1-sol:high",
   "anthropic/claude-fable-5-1:max",
   "anthropic/claude-sonnet-5-5:xhigh",
 ];
@@ -139,7 +139,7 @@ if (setupGoalController) {
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 const expectedSetupAliases = new Map([
   ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
-  ["gpt-6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-6.1-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],

@@ -14,10 +14,10 @@
     },
     {
       "provider": "openai",
-      "id": "gpt-6-sol",
-      "name": "GPT-6 Sol",
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
       "targetProvider": "openai",
-      "targetModel": "gpt-6-sol",
+      "targetModel": "gpt-6.1-sol",
       "apiKey": "$OPENAI_API_KEY",
       "contextWindow": 272000,
       "targetContextWindow": 1050000,
