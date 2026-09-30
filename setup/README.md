@@ -11,6 +11,7 @@ For agent-guided replication onto another computer—including target inspection
 - `configs/` — non-secret per-extension configs. Copy files you use to `~/.pi/agent/` with the same basename. In particular, `configs/goal-controller.config.json` pins this setup's checker to `openai/gpt-6-luna` at `medium`, regardless of the active session model; the extension itself still defaults to `inherit`.
 - `agents/` — portable global agent overrides. Copy `agents/Explore.md` to `~/.pi/agent/agents/Explore.md` to replace `@gotgenes/pi-subagents`' hardcoded Haiku explorer with the read-only `openai/gpt-5.6-luna` profile at medium thinking.
 - `skills/` — portable global skills. Copy a skill directory such as `skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level (harness-agnostic home; Pi also discovers `~/.pi/agent/skills/`). `deletion-pass` is an audit-only "deletion pass" over a plan/design/architecture/process — it reports what to cut and question, never rewrites.
+- `install-external-skills.sh` — selected upstream design skills, installed globally for Claude Code, Codex, and Pi with `npx skills`; see [External skills](#external-skills).
 - `mcp-adapter.example.json` — `pi-mcp-adapter` template (target `~/.pi/agent/mcp-adapter.json`; the adapter no longer reads `mcp.json`) with placeholders for local wrapper paths, remote MCP hosts, proxy URLs, proxy IDs, and API keys.
 - `web-search.example.json` — `pi-web-access` template. Copy to `~/.pi/web-search.json` and fill provider secrets locally.
 - `configs/hq.json` — HQ's mechanical settings: the small model that titles the board and the
@@ -37,11 +38,26 @@ For agent-guided replication onto another computer—including target inspection
    it leaves an existing one alone. Copy or merge `configs/*.json` into `~/.pi/agent/` after
    reviewing them. The Astra and Sol entries in `configs/model-aliases.json` enforce a 272K operating boundary (240K for both Luna generations) through Pi's automatic compaction and native compact-and-retry paths while delegating allowed requests with a 1.05M target window; the Opus 5.5, Fable 5.1, and Sonnet 5.5 entries do the same at a 500K boundary against their 1M target window, and the `claude-opus-5-5-full` / `claude-fable-5-1-full` aliases leave the full 1M window unrestricted for sessions that deliberately want it. The Anthropic aliases carry no `apiKey`, so they use whatever auth that provider already has, falling back to `$ANTHROPIC_API_KEY`. All aliases inherit provider capabilities and pricing from Pi’s current model catalog; run `pi update --models` before applying this profile to an older installation. The goal-controller config deliberately overrides only checker model and thinking, leaving all other controller settings on package defaults.
 5. Copy or merge `agents/*.md` into `~/.pi/agent/agents/`; same-name files override `@gotgenes/pi-subagents` defaults. Copy or merge skill directories from `skills/` into `~/.agents/skills/`, backing up any same-named skill first.
+   When the upstream design skills are selected, run `bash setup/install-external-skills.sh` from the repo root.
 6. Copy or merge `auth.example.json` into `~/.pi/agent/auth.json`, keep it `0600`, and provide the real `OPENAI_API_KEY` through the local environment rather than in this repo.
 7. Merge `AGENTS.md` only when the user wants Aviram's agent behavior, into `~/.agents/AGENTS.md`, and copy `CODING_CONVENTIONS.md` beside it — `AGENTS.md` points at it by name, so the reference dangles without it. Then symlink `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` onto `~/.agents/AGENTS.md`, backing up any real file at those paths first (merge its local rules in before replacing it). Delete any leftover `~/.pi/agent/APPEND_SYSTEM.md` from an earlier sync once its content is folded in.
 8. Copy `mcp-adapter.example.json` and `web-search.example.json` as local templates, then fill placeholders in local files. Do not ask the user to paste secrets into chat.
 9. If local MCP server names are changed, update matching `mcp-tool-loadout` prior keys in `configs/mcp-tool-loadout.json` before copying that config.
 10. If a previous machine used `models.json` or `model-aliases.json` for an older model profile, remove obsolete overrides and aliases before merging the current alias set.
+
+## External skills
+
+[Emil Kowalski's skills](https://github.com/emilkowalski/skill) stay upstream rather than being copied into this repo. The selected names live in `install-external-skills.sh`: the nine skills listed on [his website](https://emilkowal.ski/skill), plus `mobile-native`. The installer excludes `animate-expo`, `ask-sonner`, and `write-swift`.
+
+With Node.js/npm and Git installed, run from the repo root:
+
+```sh
+bash setup/install-external-skills.sh
+```
+
+The script uses the [skills CLI](https://github.com/vercel-labs/skills) to install a shared copy in `~/.agents/skills/`. The CLI version verified here (1.7.0) uses that directory directly for Codex and creates links in `~/.claude/skills/` and `~/.pi/agent/skills/`. It installs only the selected names, without interactive prompts. Restart agent sessions to refresh skill discovery.
+
+Rerun the script to refresh this selection from upstream. Both the CLI and skill source follow their current releases/default branch rather than frozen versions, so content can change between runs. Installed files, links, and the CLI's global tracking state stay outside this repo. Back up existing same-named skills before rerunning if you have edited them locally.
 
 ## Secret handling
 

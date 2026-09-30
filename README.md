@@ -90,6 +90,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
    - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
    - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`. The Telegram skill includes its Python helper; follow [Telegram setup](setup/README.md#telegram-notifications) to pair a user's bot without copying credentials.
+   - For the selected upstream design skills, run `bash setup/install-external-skills.sh`; it installs the recorded selection globally for Claude Code, Codex, and Pi. See [external skills](setup/README.md#external-skills).
    - Do not overwrite working `auth.json`, `mcp-adapter.json`, or `web-search.json`. If only a legacy `~/.pi/agent/mcp.json` exists, `pi-mcp-adapter` 3.x no longer reads it: rename it with `mv ~/.pi/agent/mcp.json ~/.pi/agent/mcp-adapter.json` (merge the two if both exist). Start from an example only when the integration is selected and no usable local file exists.
 
 | Portable source | Target | Apply when |
@@ -99,6 +100,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
 | `setup/configs/*.json` | `~/.pi/agent/` | The matching extension/config is selected |
 | `setup/agents/*.md` | `~/.pi/agent/agents/` | The matching agent override is selected |
 | `setup/skills/*` | `~/.agents/skills/` | The matching global skill is selected |
+| `setup/install-external-skills.sh` | Shared global skills for Claude Code, Codex, and Pi | The upstream design skill selection is wanted |
 | `setup/AGENTS.md` | `~/.agents/AGENTS.md`, with `~/.pi/agent/AGENTS.md`, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` as symlinks onto it | Aviram's operating posture is selected; an existing file at a symlink path is backed up first |
 | `setup/CODING_CONVENTIONS.md` | `~/.agents/CODING_CONVENTIONS.md` | Always, whenever `AGENTS.md` is copied — it references this file by name |
 | `setup/auth.example.json` | `~/.pi/agent/auth.json` | API-key-via-environment auth is selected and no auth file should be preserved |
@@ -294,6 +296,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 ### Skills
 
 - `deletion-pass` — portable global audit skill. Runs an ordered "deletion pass" (question requirements, delete or absorb parts, simplify only what survives, accelerate/automate last) over a plan, design, architecture, or process and reports what to cut and what to question — audit only, it never rewrites the artifact. Ships as a setup template; copy `setup/skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level.
+- Emil Kowalski's design skills — ten selected upstream skills installed by [`setup/install-external-skills.sh`](setup/install-external-skills.sh) for Claude Code, Codex, and Pi. Their content remains upstream; see [installation and updates](setup/README.md#external-skills).
 
 Global skills are intentionally not packaged as installable Pi *package* resources (no `packages/skills`, no `pi.skills`). Portable global skills ship under `setup/skills/` and are copied to the user level during replication, like `setup/agents/`. Manifest Dev is supplied by its separately installed package. The project-local [`sync-pi-setup`](.agents/skills/sync-pi-setup/SKILL.md) skill syncs local Pi setup changes back into `setup/`; its content lives under `.agents/skills/` and is symlinked into `.claude/skills/` for Claude-style discovery.
 
