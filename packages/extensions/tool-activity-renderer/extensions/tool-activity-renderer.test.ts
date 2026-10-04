@@ -331,7 +331,7 @@ test("a finished row recedes from bright to muted, then stops redrawing", () => 
 		at(500, () => row.finish("x"));
 		const fresh = at(600, () => row.render(100))[0] ?? "";
 		const receded = at(2_600, () => row.render(100))[0] ?? "";
-		const soft = mixColors(parseColor(TOKENS.text!), parseColor(TOKENS.muted!), 0.35);
+		const soft = mixColors(parseColor(TOKENS.text!), parseColor(TOKENS.muted!), 0.35, "srgb");
 		assert.equal(fgAt(fresh, "Read"), hex(soft), "verb starts at the soft text tone");
 		assert.equal(fgAt(receded, "Read"), hex(parseColor(TOKENS.muted!)), "verb ends at muted");
 		assert.equal(fgAt(fresh, "a.ts"), hex(parseColor(TOKENS.text!)), "file name starts at full text");
@@ -503,7 +503,7 @@ test("edits draw a diff whose changed words carry a stronger tint, with +/− in
 	assert.match(stripTerminalSequences(lines[0] ?? ""), /\+1  −1  0\.1s$/);
 	assert.equal(lines.length, 4);
 	const added = lines[3] ?? "";
-	const strong = hex(mixColors(parseColor(TOKENS.toolSuccessBg!), parseColor(TOKENS.toolDiffAdded!), 0.28));
+	const strong = hex(mixColors(parseColor(TOKENS.toolSuccessBg!), parseColor(TOKENS.toolDiffAdded!), 0.28, "srgb"));
 	const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
 	const emphasized = [...added.matchAll(new RegExp(`\\x1b\\[48;2;${r};${g};${b}m(?:\\x1b\\[[0-9;]*m)*([^\\x1b]*)`, "g"))].map((m) => m[1]).join("");
 	assert.equal(emphasized, ", y", "only the changed span is emphasized");
@@ -616,12 +616,12 @@ test("the working line stays out of the way without a UI", () => {
 	assert.deepEqual(calls, []);
 });
 
-test("work that finished in under a tenth of a second shows no duration", () => {
+test("work that finished in under a tenth of a second reads <0.1s, not 0.0s", () => {
 	setHyperlinks(false);
 	const row = new Row(createHarness(), "read", "fast", { path: "a.ts" });
 	at(0, () => row.start());
 	at(40, () => row.finish("x"));
-	assert.match(at(50, () => row.plain(80))[0] ?? "", /1 line$/);
+	assert.match(at(50, () => row.plain(80))[0] ?? "", /1 line  <0\.1s$/);
 	row.stop();
 });
 
@@ -784,7 +784,7 @@ test("emphasis widens to whole words on both sides of a pair", () => {
 	});
 	const lines = row.render(80);
 	const emphasized = (line: string, bg: string, ink: string) => {
-		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28, "srgb"));
 		const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
 		return [...line.matchAll(new RegExp(`\\x1b\\[48;2;${r};${g};${b}m(?:\\x1b\\[[0-9;]*m)*([^\\x1b]*)`, "g"))].map((m) => m[1]).join("");
 	};
@@ -808,7 +808,7 @@ test("a line that changed end to end gets no emphasis", () => {
 	const row = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 abc\n+ 1 xyz" } });
 	const lines = row.render(80);
 	for (const [line, bg, ink] of [[lines[1], "toolErrorBg", "toolDiffRemoved"], [lines[2], "toolSuccessBg", "toolDiffAdded"]] as const) {
-		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28, "srgb"));
 		const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
 		assert.ok(!(line ?? "").includes(`\x1b[48;2;${r};${g};${b}m`), "no strong tint");
 	}
@@ -854,7 +854,7 @@ test("detail lines under a row never exceed the width: long error output and lon
 });
 
 function strongSpans(line: string, bg: string, ink: string): string {
-	const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+	const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28, "srgb"));
 	const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
 	return [...line.matchAll(new RegExp(`\\x1b\\[48;2;${r};${g};${b}m(?:\\x1b\\[[0-9;]*m)*([^\\x1b]*)`, "g"))].map((m) => m[1]).join("");
 }
@@ -965,4 +965,27 @@ test("an expanded bash failure shows its output once, in the output block", () =
 	setHyperlinks(false);
 	const row = new Row(createHarness(), "bash", "x", { command: "npm test" }).restore("1 failing\n\nCommand exited with code 1", { isError: true }).expand();
 	assert.equal(row.plain(80).filter((line) => line.includes("1 failing")).length, 1);
+});
+
+test("receded success glyphs stay in the success family, not the accent's", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "read", "hue", { path: "a.ts" });
+	at(0, () => row.start());
+	at(100, () => row.finish("x"));
+	const settled = fgAt(at(5_000, () => row.render(80))[0] ?? "", "●") ?? "";
+	const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(settled.slice(i, i + 2), 16)) as [number, number, number];
+	assert.ok(g > r && g > b, `green leads the settled glyph: ${settled}`);
+	row.stop();
+});
+
+test("expand hints draw in one quiet tone, whatever styling pi's key hint carries", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	harness.emit("message_end", { message: message(["h1", "read"], ["h2", "read"]) });
+	const h1 = new Row(harness, "read", "h1", { path: "a.ts" }).restore("x");
+	new Row(harness, "read", "h2", { path: "b.ts" }).restore("y").render();
+	const line = h1.render(100)[0] ?? "";
+	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("to expand")));
+	const colors = new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]));
+	assert.equal(colors.size, 1, `one tone across the hint: ${JSON.stringify(hint)}`);
 });

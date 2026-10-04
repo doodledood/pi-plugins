@@ -24,8 +24,12 @@ export function easeOut(value: number): number {
 	return 1 - (1 - clamp01(value)) ** 3;
 }
 
+/**
+ * Mix two theme colors in sRGB. OKLCH (pi's default) swings hue toward a gray's faint tint, so a
+ * success green mixed toward a cool gray lands blue; sRGB keeps state colors in their own family.
+ */
 export function blend(from: Color, to: Color, amount: number): Color {
-	return mixColors(from, to, clamp01(amount));
+	return mixColors(from, to, clamp01(amount), "srgb");
 }
 
 export function paint(theme: ThemeLike, text: string, fg: Color, attributes: Omit<ThemeStyle, "fg"> = {}): string {

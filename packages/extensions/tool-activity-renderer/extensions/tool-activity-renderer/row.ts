@@ -83,13 +83,13 @@ function recession(head: Pick<RowHead, "outcome" | "endedAt">, now: number): num
 	return easeOut((now - head.endedAt - RECEDE_DELAY_MS) / RECEDE_MS);
 }
 
-/** Finished work quicker than this shows no duration: "0.0s" is noise, not information. */
-const MIN_SHOWN_DURATION_MS = 100;
+/** Finished work quicker than this reads `<0.1s`: "0.0s" would claim a measurement it doesn't have. */
+const MIN_MEASURED_MS = 100;
 
 function duration(head: Pick<RowHead, "startedAt" | "endedAt">, now: number): string | undefined {
 	if (head.startedAt === undefined) return undefined;
 	const elapsed = (head.endedAt ?? now) - head.startedAt;
-	if (head.endedAt !== undefined && elapsed < MIN_SHOWN_DURATION_MS) return undefined;
+	if (head.endedAt !== undefined && elapsed < MIN_MEASURED_MS) return "<0.1s";
 	return formatDuration(elapsed);
 }
 
@@ -97,7 +97,7 @@ function glyph(head: Pick<RowHead, "outcome" | "endedAt">, theme: ThemeLike, now
 	const t = tones(theme);
 	switch (head.outcome) {
 		case "pending":
-			return paint(theme, "●", t.faint);
+			return paint(theme, "●", t.dim);
 		case "running":
 			return paint(theme, "●", breathe(t.dim, t.accent, now));
 		case "error":
@@ -266,7 +266,7 @@ export function renderFoldedRun(members: readonly RowHead[], theme: ThemeLike, w
 		.map(([one, { many, count }]) => paint(theme, `${count} ${count === 1 ? one : many}`, blend(t.text, t.soft, k)))
 		.join(paint(theme, " · ", t.dim));
 	const label = paint(theme, "Explored", blend(t.soft, t.muted, k)) + " ".repeat(VERB_COLUMN - "Explored".length);
-	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${expandHint}`, t.faint)}`;
+	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${cellText(expandHint)}`, t.faint)}`;
 	const time = duration({ startedAt, endedAt }, now);
 	const right = time ? paint(theme, time, t.dim) : "";
 	return alignRight(left, right, width);
