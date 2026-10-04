@@ -47,7 +47,7 @@ For agent-guided replication onto another computer—including target inspection
 
 ## External skills
 
-[Emil Kowalski's skills](https://github.com/emilkowalski/skill) stay upstream rather than being copied into this repo. The selected names live in `install-external-skills.sh`: the nine skills listed on [his website](https://emilkowal.ski/skill), plus `mobile-native`. The installer excludes `animate-expo`, `ask-sonner`, and `write-swift`.
+[Emil Kowalski's skills](https://github.com/emilkowalski/skills) stay upstream rather than being copied into this repo. The selected names live in `install-external-skills.sh`: the nine skills listed on [his website](https://emilkowal.ski/skill), plus `mobile-native` and `break-ui`. The installer excludes `animate-expo`, `ask-sonner`, and `write-swift`.
 
 With Node.js/npm and Git installed, run from the repo root:
 
