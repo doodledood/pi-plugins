@@ -83,13 +83,15 @@ function pairChanges(lines: DiffLine[]): DiffLine[] {
 export class GraphiteDiff implements Component {
 	private readonly lines: DiffLine[];
 
+	/** Pairs changes across every line before keeping the first `shown`, so a cut never orphans a pair. */
 	constructor(
 		rawLines: readonly string[],
+		shown: number,
 		private readonly hiddenHint: string | undefined,
 		private readonly theme: ThemeLike,
 	) {
 		const parsed = rawLines.map((raw) => parseDiffLine(raw) ?? { sign: " " as const, lineNumber: "", content: cellText(raw) });
-		this.lines = pairChanges(parsed);
+		this.lines = pairChanges(parsed).slice(0, shown);
 	}
 
 	render(width: number): string[] {
@@ -116,8 +118,7 @@ export class GraphiteDiff implements Component {
 			const fill = band.bg ? this.theme.style(" ".repeat(Math.max(0, inner - visibleWidth(fitted))), { bg: band.bg }) : "";
 			return `   ${fitted}${fill}`;
 		});
-		// pi's key hints arrive styled; repaint them in one quiet tone.
-		if (this.hiddenHint) rows.push(`   ${paint(this.theme, cellText(this.hiddenHint), t.dim)}`);
+		if (this.hiddenHint) rows.push(`   ${paint(this.theme, this.hiddenHint, t.dim)}`);
 		// Every row, the hint included, must fit: pi stops the TUI on a line wider than the terminal.
 		return rows.map((row) => truncateToWidth(row, width, "…"));
 	}

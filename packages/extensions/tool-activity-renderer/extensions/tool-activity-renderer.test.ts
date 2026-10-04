@@ -131,8 +131,9 @@ class Row {
 	}
 
 	/** Restored from history: a result with no execution events in this process. */
-	restore(text: string, options: { isError?: boolean; details?: unknown } = {}): this {
-		this.result = { content: [{ type: "text", text }], details: options.details, isError: options.isError ?? false, partial: false };
+	restore(text: string, options: { isError?: boolean; details?: unknown; image?: boolean } = {}): this {
+		const content: unknown[] = [{ type: "text", text }, ...(options.image ? [{ type: "image", data: "", mimeType: "image/png" }] : [])];
+		this.result = { content, details: options.details, isError: options.isError ?? false, partial: false };
 		return this;
 	}
 
@@ -988,4 +989,82 @@ test("expand hints draw in one quiet tone, whatever styling pi's key hint carrie
 	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("to expand")));
 	const colors = new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]));
 	assert.equal(colors.size, 1, `one tone across the hint: ${JSON.stringify(hint)}`);
+});
+
+// ─── review round 4 ───────────────────────────────────────────────────────────
+
+test("a row rendered after its tool ended without a result stays quiet: no shimmer, no running clock", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	const orphan = new Row(harness, "bash", "o", { command: "sleep 1" });
+	at(0, () => orphan.start());
+	harness.emit("tool_execution_end", { toolCallId: "o", toolName: "bash", isError: false });
+	const a = at(500, () => orphan.render(80))[0] ?? "";
+	const b = at(900, () => orphan.render(80))[0] ?? "";
+	assert.equal(a, b, "nothing moves");
+	assert.match(stripTerminalSequences(a), /^ ● Running\s+\$ sleep 1$/, "no duration");
+	assert.equal(fgAt(a, "Running"), hex(parseColor(TOKENS.muted!)));
+	orphan.stop();
+});
+
+test("a row still waiting for its tool shows a dim glyph", () => {
+	setHyperlinks(false);
+	const line = new Row(createHarness(), "read", "w", { path: "a.ts" }).render(80)[0] ?? "";
+	assert.equal(fgAt(line, "●"), hex(parseColor(TOKENS.dim!)));
+});
+
+test("the collapsed diff's expand hint is one quiet tone", () => {
+	setHyperlinks(false);
+	const diff = Array.from({ length: 15 }, (_, i) => `+ ${i + 1} line ${i + 1}`).join("\n");
+	const hint = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff } }).render(100).at(-1) ?? "";
+	assert.match(stripTerminalSequences(hint), /… 3 more lines/);
+	assert.deepEqual([...new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]))].length, 1);
+});
+
+test("a branch switch forgets execution timings: a re-rendered row settles without a duration", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	const row = new Row(harness, "read", "s", { path: "a.ts" });
+	at(0, () => row.start());
+	at(500, () => row.finish("x"));
+	harness.emit("session_start", { reason: "resume" }, { sessionManager: { getBranch: () => [] } });
+	const line = at(600, () => row.render(80))[0] ?? "";
+	assert.match(stripTerminalSequences(line), /1 line$/);
+	assert.equal(fgAt(line, "Read"), hex(parseColor(TOKENS.muted!)));
+	row.stop();
+});
+
+test("a collapsed diff pairs changes across the cut, so every shown line keeps its emphasis", () => {
+	setHyperlinks(false);
+	const ctx = ["  1 a", "  2 b", "  3 c", "  4 d"];
+	const removed = [5, 6, 7, 8, 9].map((n) => `- ${n} let foo${n} = 1;`);
+	const added = [5, 6, 7, 8, 9].map((n) => `+ ${n} let bar${n} = 1;`);
+	const lines = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff: [...ctx, ...removed, ...added].join("\n") } }).render(100);
+	for (const n of [5, 6, 7, 8, 9]) {
+		const line = lines.find((l) => stripTerminalSequences(l).includes(`foo${n}`)) ?? "";
+		assert.equal(strongSpans(line, "toolErrorBg", "toolDiffRemoved"), `foo${n}`, `removed line ${n} keeps its emphasis`);
+	}
+});
+
+test("an image read keeps its run unpacked, so the image stays under its own row", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	harness.emit("message_end", { message: message(["i1", "read"], ["i2", "read"]) });
+	const text = new Row(harness, "read", "i1", { path: "a.ts" }).restore("x");
+	const image = new Row(harness, "read", "i2", { path: "shot.png" }).restore("Read image", { image: true });
+	assert.match(text.plain()[0] ?? "", /^ ● Read\s+a\.ts/);
+	assert.equal(text.plain().length, 1);
+	assert.match(image.plain()[0] ?? "", /^ ● Read\s+shot\.png.*image$/);
+});
+
+test("result and target variants: applied, no output, no matches, truncated, timeouts, multi-line commands, offset-only ranges", () => {
+	setHyperlinks(false);
+	const h = createHarness();
+	assert.match(new Row(h, "edit", "v1", { path: "a.ts" }).restore("ok", { details: {} }).plain(100)[0] ?? "", /applied$/);
+	assert.match(new Row(h, "bash", "v2", { command: "true" }).restore("").plain(100)[0] ?? "", /no output$/);
+	assert.match(new Row(h, "grep", "v3", { pattern: "zzz" }).restore("No matches found").plain(100)[0] ?? "", /0 matches$/);
+	assert.match(new Row(h, "read", "v4", { path: "big.ts" }).restore("a\nb", { details: { truncation: { truncated: true } } }).plain(100)[0] ?? "", /2 lines  ⚠ truncated$/);
+	assert.match(new Row(h, "bash", "v5", { command: "a\nb", timeout: 5 }).restore("x").plain(100)[0] ?? "", /\$ a ⏎ b  timeout 5s/);
+	assert.match(new Row(h, "read", "v6", { path: "a.ts", offset: 10 }).restore("x").plain(100)[0] ?? "", /a\.ts:10\s/);
+	assert.match(new Row(h, "grep", "v7", { pattern: "x", glob: "*.ts", ignoreCase: true, literal: true }).restore("a:1").plain(100)[0] ?? "", /x {2}in \. {2}\*\.ts -i literal/);
 });

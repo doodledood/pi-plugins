@@ -19,7 +19,7 @@ import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
-import { cellLines } from "./tool-activity-renderer/text.ts";
+import { cellLines, cellText } from "./tool-activity-renderer/text.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
 
 type ToolRenderMode = "compact" | "default";
@@ -265,8 +265,19 @@ function buildWriteDiffLines(content: string): string[] {
 	return lines.map((line, index) => `+${String(index + 1).padStart(width)} ${line}`);
 }
 
+/** pi's expand key hint as plain text, so every place that shows it can paint it in its own tone. */
+function expandHint(): string {
+	return cellText(keyHint("app.tools.expand", "to expand"));
+}
+
 function moreLinesHint(hidden: number): string | undefined {
-	return hidden > 0 ? `… ${plural(hidden, "more line")} (${keyHint("app.tools.expand", "to expand")})` : undefined;
+	return hidden > 0 ? `… ${plural(hidden, "more line")} (${expandHint()})` : undefined;
+}
+
+/** A diff under its row: changes paired across every line, then cut to the collapsed cap. */
+function diffBlock(lines: string[], expanded: boolean, cap: number, theme: ThemeLike): Component {
+	const shown = expanded ? lines.length : Math.min(cap, lines.length);
+	return new GraphiteDiff(lines, shown, moreLinesHint(lines.length - shown), theme);
 }
 
 const emptyComponent: Component = { render: () => [], invalidate() {} };
@@ -296,7 +307,7 @@ class RowView implements Component {
 		if (role.kind === "follower") return [];
 		if (role.kind === "solo") return renderRow(head, theme, width, now);
 		if (role.complete && role.members.every((member) => member.outcome === "success")) {
-			return [renderFoldedRun(role.members, theme, width, now, keyHint("app.tools.expand", "to expand"))];
+			return [renderFoldedRun(role.members, theme, width, now, expandHint())];
 		}
 		return role.members.flatMap((member) => renderRow(member, theme, width, now));
 	}
@@ -308,17 +319,19 @@ class RowView implements Component {
 function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: RenderContext, shared: Shared): RowView {
 	const state = context.state;
 	const execution = shared.executions.get(context.toolCallId);
+	// An ended execution whose result this row never received stays quiet rather than running.
+	const running = execution !== undefined && execution.endedAt === undefined;
 	const head: RowHead = {
 		kind,
-		// An ended execution whose result this row never received stays quiet rather than running.
-		outcome: execution && execution.endedAt === undefined ? "running" : "pending",
+		outcome: running ? "running" : "pending",
 		target: targetFor(kind, (args ?? {}) as Record<string, unknown>, context.cwd),
 		meta: [],
-		startedAt: execution?.startedAt,
+		startedAt: running ? execution.startedAt : undefined,
 		endedAt: undefined,
 		detail: [],
 		detailTone: "output",
 		expanded: context.expanded,
+		standalone: false,
 	};
 	state.head = head;
 	state.view ??= new RowView(context.toolCallId, state, shared);
@@ -341,6 +354,7 @@ function settle(context: RenderContext, shared: Shared, expanded: boolean): RowH
 	const execution = shared.executions.get(context.toolCallId);
 	if (execution && execution.endedAt === undefined) execution.endedAt = clock.now();
 	head.outcome = context.isError ? "error" : "success";
+	head.startedAt = execution?.startedAt;
 	head.endedAt = execution?.endedAt;
 	head.expanded = expanded;
 	animate(context, head, shared);
@@ -423,6 +437,8 @@ function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
 			const text = getText(result);
 			if (hasImage(result)) {
 				head.meta = [{ text: "image", role: "success" }];
+				// pi draws the image below this row's own component; only a row of its own keeps them together.
+				head.standalone = true;
 				return emptyComponent;
 			}
 			head.meta = [{ text: plural(nonEmptyLines(text).length, "line"), role: "result" }];
@@ -465,8 +481,7 @@ function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
 				{ text: `+${diffLines.filter((line) => line.startsWith("+")).length}`, role: "added" },
 				{ text: `−${diffLines.filter((line) => line.startsWith("-")).length}`, role: "removed" },
 			];
-			const visible = expanded ? diffLines : diffLines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
-			return new GraphiteDiff(visible, moreLinesHint(diffLines.length - visible.length), theme);
+			return diffBlock(diffLines, expanded, EDIT_COLLAPSED_DIFF_LINES, theme);
 		},
 	});
 
@@ -474,8 +489,7 @@ function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
 		done(_result, head, expanded, theme, context) {
 			const diffLines = buildWriteDiffLines(stringArg((context.args as Record<string, unknown>).content) ?? "");
 			head.meta = [{ text: plural(diffLines.length, "line"), role: "result" }];
-			const visible = expanded ? diffLines : diffLines.slice(0, WRITE_COLLAPSED_DIFF_LINES);
-			return new GraphiteDiff(visible, moreLinesHint(diffLines.length - visible.length), theme);
+			return diffBlock(diffLines, expanded, WRITE_COLLAPSED_DIFF_LINES, theme);
 		},
 	});
 

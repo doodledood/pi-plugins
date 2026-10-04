@@ -63,12 +63,15 @@ export class ExploreRuns {
 		this.heads.set(toolCallId, head);
 	}
 
-	/** A run packs only while every member is collapsed; one expanded member turns the whole run back into ordinary rows. */
+	/**
+	 * A run packs only while every member is collapsed and drawn entirely by its row; one expanded
+	 * member, or one carrying an image, turns the whole run back into ordinary rows.
+	 */
 	role(toolCallId: string): RunRole {
 		const run = this.runOf.get(toolCallId);
 		if (!run || !this.heads.has(toolCallId)) return { kind: "solo" };
 		const heads = run.map((id) => this.heads.get(id));
-		if (heads.some((head) => head?.expanded)) return { kind: "solo" };
+		if (heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
 		// A follower hides only once its leader exists to draw it.
 		if (run[0] !== toolCallId) return heads[0] ? { kind: "follower" } : { kind: "solo" };
 		const members = heads.filter((head): head is RowHead => head !== undefined);

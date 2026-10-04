@@ -34,6 +34,8 @@ export interface RowHead {
 	detail: string[];
 	detailTone: "error" | "output";
 	expanded: boolean;
+	/** Carries content pi draws outside the row (an image), so it can't be packed into a run. */
+	standalone: boolean;
 }
 
 const VERBS: Record<ToolKind, readonly [present: string, past: string]> = {
@@ -266,7 +268,7 @@ export function renderFoldedRun(members: readonly RowHead[], theme: ThemeLike, w
 		.map(([one, { many, count }]) => paint(theme, `${count} ${count === 1 ? one : many}`, blend(t.text, t.soft, k)))
 		.join(paint(theme, " · ", t.dim));
 	const label = paint(theme, "Explored", blend(t.soft, t.muted, k)) + " ".repeat(VERB_COLUMN - "Explored".length);
-	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${cellText(expandHint)}`, t.faint)}`;
+	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${expandHint}`, t.faint)}`;
 	const time = duration({ startedAt, endedAt }, now);
 	const right = time ? paint(theme, time, t.dim) : "";
 	return alignRight(left, right, width);
