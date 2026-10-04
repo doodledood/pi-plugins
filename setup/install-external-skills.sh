@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Keep upstream skill content upstream; this list records the selected setup.
-exec npx --yes skills add emilkowalski/skill \
+exec npx --yes skills add emilkowalski/skills \
   --global --agent claude-code codex pi --yes \
   --skill \
   emil-design-eng \
@@ -14,4 +14,5 @@ exec npx --yes skills add emilkowalski/skill \
   animation-vocabulary \
   apple-design \
   pick-ui-library \
-  mobile-native
+  mobile-native \
+  break-ui

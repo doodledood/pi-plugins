@@ -297,7 +297,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 ### Skills
 
 - `deletion-pass` — portable global audit skill. Runs an ordered "deletion pass" (question requirements, delete or absorb parts, simplify only what survives, accelerate/automate last) over a plan, design, architecture, or process and reports what to cut and what to question — audit only, it never rewrites the artifact. Ships as a setup template; copy `setup/skills/deletion-pass/` to `~/.agents/skills/deletion-pass/` to install it at the user level.
-- Emil Kowalski's design skills — ten selected upstream skills installed by [`setup/install-external-skills.sh`](setup/install-external-skills.sh) for Claude Code, Codex, and Pi. Their content remains upstream; see [installation and updates](setup/README.md#external-skills).
+- Emil Kowalski's design skills — eleven selected upstream skills installed by [`setup/install-external-skills.sh`](setup/install-external-skills.sh) for Claude Code, Codex, and Pi. Their content remains upstream; see [installation and updates](setup/README.md#external-skills).
 
 Global skills are intentionally not packaged as installable Pi *package* resources (no `packages/skills`, no `pi.skills`). Portable global skills ship under `setup/skills/` and are copied to the user level during replication, like `setup/agents/`. Manifest Dev is supplied by its separately installed package. The project-local [`sync-pi-setup`](.agents/skills/sync-pi-setup/SKILL.md) skill syncs local Pi setup changes back into `setup/`; its content lives under `.agents/skills/` and is symlinked into `.claude/skills/` for Claude-style discovery.
 
