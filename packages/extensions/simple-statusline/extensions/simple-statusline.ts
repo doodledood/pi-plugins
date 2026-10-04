@@ -52,7 +52,8 @@ type RuntimeState = {
 };
 type ModelSignal = { plain: string; colored: string };
 type StatusEntry = { key: string; value: string };
-type ContextSignal = { plain: string; percent: number | undefined };
+/** The context segment: a thin fill meter, then `NN% used/window`. `meter` is empty when the percent is unknown. */
+type ContextSignal = { plain: string; meter: string; percent: number | undefined };
 
 export default function simpleStatusline(pi: any) {
   const runtime: RuntimeState = {
@@ -212,7 +213,7 @@ function renderMainLine(
     (shownBranch ? color(theme, "dim", `  ${shownBranch}`) : "");
   const right = [
     modelSignal.colored,
-    contextSignal.plain ? color(theme, contextColor(contextSignal.percent), contextSignal.plain) : "",
+    contextSignal.plain ? formatContextSegment(contextSignal, theme) : "",
     cacheSignal?.colored ?? "",
     costStr ? color(theme, "muted", costStr) : "",
   ]
@@ -338,25 +339,37 @@ function contextColor(percent: number | null | undefined): string {
   return "dim";
 }
 
-function contextBar(percent: number): string {
-  const slots = 5;
-  const filled = Math.max(0, Math.min(slots, Math.round((percent / 100) * slots)));
-  return `${"▰".repeat(filled)}${"▱".repeat(slots - filled)}`;
+const CONTEXT_METER_SLOTS = 10;
+
+/** `━━━───────`: the filled share of the context window, always shown when the percent is known. */
+function contextMeter(percent: number): { filled: string; empty: string } {
+  const filled = Math.max(0, Math.min(CONTEXT_METER_SLOTS, Math.round((percent / 100) * CONTEXT_METER_SLOTS)));
+  return { filled: "━".repeat(filled), empty: "─".repeat(CONTEXT_METER_SLOTS - filled) };
+}
+
+/** The meter's filled cells and the numbers take the context tone; the empty track stays quiet. */
+function formatContextSegment(signal: ContextSignal, theme: any): string {
+  const tone = contextColor(signal.percent);
+  if (signal.percent == null) return color(theme, tone, signal.plain);
+  const { filled, empty } = contextMeter(signal.percent);
+  const numbers = signal.plain.slice(signal.meter.length);
+  return color(theme, tone === "dim" ? "muted" : tone, filled) + color(theme, "borderMuted", empty) + color(theme, tone, numbers);
 }
 
 function formatContextUsage(usage: any, fallbackContextWindow?: number): ContextSignal {
   const contextWindow = usage?.contextWindow ?? fallbackContextWindow ?? 0;
-  if (!usage && contextWindow <= 0) return { plain: "", percent: undefined };
+  if (!usage && contextWindow <= 0) return { plain: "", meter: "", percent: undefined };
 
   const tokens = typeof usage?.tokens === "number" ? usage.tokens : undefined;
   const explicitPercent = typeof usage?.percent === "number" ? usage.percent : undefined;
   const computedPercent = explicitPercent ?? (tokens != null && contextWindow > 0 ? (tokens / contextWindow) * 100 : undefined);
   const tokenPair = `${tokens == null ? "?" : formatTokens(tokens)}/${contextWindow > 0 ? formatTokens(contextWindow) : "?"}`;
 
-  if (computedPercent == null) return { plain: tokenPair, percent: undefined };
-  const bar = computedPercent >= 70 ? `${contextBar(computedPercent)} ` : "";
+  if (computedPercent == null) return { plain: tokenPair, meter: "", percent: undefined };
+  const { filled, empty } = contextMeter(computedPercent);
+  const meter = `${filled}${empty}`;
   const hint = computedPercent >= COMPACT_HINT_THRESHOLD_PERCENT ? " · compact at boundary" : "";
-  return { plain: `${bar}${computedPercent.toFixed(0)}% ${tokenPair}${hint}`, percent: computedPercent };
+  return { plain: `${meter} ${computedPercent.toFixed(0)}% ${tokenPair}${hint}`, meter, percent: computedPercent };
 }
 
 function color(theme: any, tone: string, text: string): string {

@@ -131,6 +131,30 @@ test("footer computes context percent against the model window without a compact
   assert.doesNotMatch(line, /compact at boundary/);
 });
 
+test("footer draws a thin context meter: filled cells in the context tone, the empty track in borderMuted", () => {
+  const harness = createHarness([]);
+  harness.ctx.model.contextWindow = 200_000;
+  harness.ctx.getContextUsage = () => ({ tokens: 46_000 });
+
+  const line = renderFooter(harness);
+  assert.match(line, /━━─{8} 23% 46k\/200k/);
+  assert.ok(harness.themeCalls.some((call) => call.tone === "muted" && call.text === "━━"), "filled cells use the quiet context tone");
+  assert.ok(harness.themeCalls.some((call) => call.tone === "borderMuted" && call.text === "─".repeat(8)), "empty track recedes");
+
+  harness.ctx.getContextUsage = () => ({ tokens: 190_000 });
+  renderFooter(harness);
+  assert.ok(harness.themeCalls.some((call) => call.tone === "error" && call.text === "━".repeat(10)), "a nearly full window fills the meter in the error tone");
+});
+
+test("footer leaves the meter out when the context percent is unknown", () => {
+  const harness = createHarness([]);
+  harness.ctx.getContextUsage = () => ({ tokens: 12_000 });
+  harness.ctx.model.contextWindow = undefined;
+
+  const line = renderFooter(harness);
+  assert.doesNotMatch(line, /[━─]{10}/);
+});
+
 test("footer shows compact-at-boundary hint and warning tone at the threshold", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = 200_000;

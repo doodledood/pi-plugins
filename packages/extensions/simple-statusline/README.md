@@ -4,9 +4,13 @@ Aviram's ambient custom Pi footer/statusline.
 
 ## Context metric
 
-The footer shows context usage as a percentage of the active model's context
-window plus compact token counts, e.g. `49% 98k/200k`. If Pi reports only token
-usage, the statusline computes the percentage from the model window.
+The footer shows context usage as a thin meter, then a percentage of the active
+model's context window and compact token counts, e.g. `━━━━━───── 49% 98k/200k`.
+The meter's filled cells take the context tone (muted at rest, so they read
+above the dim numbers; warning and error as context fills); the empty track uses
+the theme's `borderMuted`. If Pi reports only token usage, the statusline computes the
+percentage from the model window; with no window to measure against, it shows
+the token count without a meter.
 
 At **50%** of the window, the context segment turns warning-colored and appends
 `compact at boundary`. This is a display-only planning hint: it does not compact
