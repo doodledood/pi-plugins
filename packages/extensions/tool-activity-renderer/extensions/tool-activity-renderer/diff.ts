@@ -20,7 +20,14 @@ function parseDiffLine(raw: string): DiffLine | undefined {
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
-/** The span of `a` that differs from `b`, after trimming their common prefix and suffix. */
+const WORD = /[\p{L}\p{N}_]/u;
+const isWord = (char: string | undefined) => char !== undefined && WORD.test(char);
+
+/**
+ * The span of `a` that differs from `b`: their common prefix and suffix trimmed, then widened to
+ * whole words, so `sum` → `subtotal` marks both words rather than `m` and `btotal`. Every widening
+ * test reads both strings the same way, so the two sides of a pair always agree.
+ */
 function changedSpan(a: string, b: string): readonly [number, number] | undefined {
 	let start = 0;
 	while (start < a.length && start < b.length && a[start] === b[start]) start++;
@@ -29,6 +36,11 @@ function changedSpan(a: string, b: string): readonly [number, number] | undefine
 	while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
 		endA--;
 		endB--;
+	}
+	while (start > 0 && isWord(a[start - 1]) && (isWord(a[start]) || isWord(b[start]))) start--;
+	while (endA < a.length && isWord(a[endA]) && (isWord(a[endA - 1]) || isWord(b[endB - 1]))) {
+		endA++;
+		endB++;
 	}
 	// Never split a surrogate pair: widen the span to whole code points.
 	if (start > 0 && isHighSurrogate(a.charCodeAt(start - 1))) start--;

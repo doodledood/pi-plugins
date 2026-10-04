@@ -718,6 +718,21 @@ test("expanding one member of a run turns every member back into its own row, wi
 	assert.equal([...r1, ...g1].filter((line) => line.includes("Searched")).length, 1);
 });
 
+test("emphasis widens to whole words on both sides of a pair", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", {
+		details: { diff: "- 2   let sum = 0;\n+ 2   let subtotal = 0;" },
+	});
+	const lines = row.render(80);
+	const emphasized = (line: string, bg: string, ink: string) => {
+		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+		const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
+		return [...line.matchAll(new RegExp(`\\x1b\\[48;2;${r};${g};${b}m(?:\\x1b\\[[0-9;]*m)*([^\\x1b]*)`, "g"))].map((m) => m[1]).join("");
+	};
+	assert.equal(emphasized(lines[1] ?? "", "toolErrorBg", "toolDiffRemoved"), "sum");
+	assert.equal(emphasized(lines[2] ?? "", "toolSuccessBg", "toolDiffAdded"), "subtotal");
+});
+
 test("word emphasis never splits an emoji", () => {
 	setHyperlinks(false);
 	const row = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 x 😀 y\n+ 1 x 😃 y" } });
