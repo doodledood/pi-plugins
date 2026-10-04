@@ -347,7 +347,7 @@ function contextMeter(percent: number): { filled: string; empty: string } {
   return { filled: "━".repeat(filled), empty: "─".repeat(CONTEXT_METER_SLOTS - filled) };
 }
 
-/** The meter's filled cells and the numbers take the context tone; the empty track stays quiet. */
+/** Filled cells take the context tone (muted when that tone is dim, so they read above the numbers); the empty track stays quiet. */
 function formatContextSegment(signal: ContextSignal, theme: any): string {
   const tone = contextColor(signal.percent);
   if (signal.percent == null) return color(theme, tone, signal.plain);

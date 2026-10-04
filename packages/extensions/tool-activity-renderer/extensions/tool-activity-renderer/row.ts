@@ -1,5 +1,5 @@
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { blend, breathe, easeOut, formatDuration, paint, shimmer, type ThemeLike, tones } from "./palette.ts";
+import { blend, breathe, cellText, easeOut, formatDuration, paint, shimmer, type ThemeLike, tones } from "./palette.ts";
 
 export type ToolKind = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
 
@@ -152,7 +152,8 @@ function renderHeadLine(head: RowHead, theme: ThemeLike, width: number, now: num
 	const k = recession(head, now);
 	const prefix = ` ${glyph(head, theme, now, k)} ${verb(head, theme, now, k)}`;
 	const right = meta(head, theme, now, k);
-	const parts = fitTarget(head.target, leftBudget(right, width) - visibleWidth(prefix));
+	const cells = head.target.map((part) => ({ ...part, text: cellText(part.text) }));
+	const parts = fitTarget(cells, leftBudget(right, width) - visibleWidth(prefix));
 	return alignRight(prefix + target(parts, theme, k), right, width);
 }
 

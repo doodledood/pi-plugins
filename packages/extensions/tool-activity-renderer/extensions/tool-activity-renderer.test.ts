@@ -292,6 +292,15 @@ test("failed rows show a cross, the failure in the result column, and the error 
 	assert.match(lines[0] ?? "", /^ ✕ Read\s+missing\.ts\s+failed  0\.1s$/);
 	assert.equal(lines[1], "   ENOENT: no such file");
 
+	for (const [trailer, label] of [
+		["Command timed out after 5 seconds", "timed out"],
+		["Command aborted", "aborted"],
+		["", "failed"],
+	] as const) {
+		const row = new Row(harness, "bash", `b-${label}`, { command: "sleep 9" }).restore(`partial\n\n${trailer}`, { isError: true });
+		assert.match(row.plain(80)[0] ?? "", new RegExp(`${label}$`));
+	}
+
 	const bash = new Row(harness, "bash", "b-err", { command: "npm test" });
 	at(0, () => bash.start());
 	at(300, () => bash.finish("1 failing\nexpected 2\n\nCommand exited with code 1", { isError: true }));
@@ -365,7 +374,10 @@ test("the live verb shimmers: same text, moving color", () => {
 	const a = at(300, () => row.render(80))[0] ?? "";
 	const b = at(700, () => row.render(80))[0] ?? "";
 	assert.equal(stripTerminalSequences(a).slice(0, 12), stripTerminalSequences(b).slice(0, 12));
-	assert.notEqual(a, b);
+	// Only the verb: the glyph breathes and the duration ticks on their own.
+	const verb = (line: string) => line.slice(line.indexOf("●") + 1, line.indexOf("a.ts"));
+	assert.notEqual(verb(a), verb(b), "the verb's colors move");
+	assert.notEqual(fgAt(at(0, () => row.render(80))[0] ?? "", "●"), fgAt(at(600, () => row.render(80))[0] ?? "", "●"), "the live glyph breathes");
 	assert.ok(row.context.state.timer, "a running row redraws on a timer");
 	row.stop();
 });
@@ -450,6 +462,19 @@ test("expanded view shows every exploratory row on its own with its output", () 
 	assert.match(r1[0] ?? "", /^ ● Read\s/);
 	assert.deepEqual(r1.slice(1), ["   one", "   two"]);
 	assert.match(rows.g1.plain()[0] ?? "", /^ ● Searched\s/);
+});
+
+test("rows pi draws before session_start (resume, reload) fold once the branch is read", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	const r1 = new Row(harness, "read", "r1", { path: "a.ts" }).restore("x");
+	const r2 = new Row(harness, "read", "r2", { path: "b.ts" }).restore("y");
+	r1.render();
+	r2.render();
+	harness.emit("session_start", { reason: "resume" }, { sessionManager: { getBranch: () => [{ type: "message", message: message(["r1", "read"], ["r2", "read"]) }] } });
+	const leader = r1.plain();
+	assert.equal(leader.length, 1);
+	assert.match(leader[0] ?? "", /^ ● Explored\s+2 files/);
 });
 
 test("runs restored from session history fold the same way", () => {
@@ -547,6 +572,37 @@ test("the working line names the current activity with elapsed time, then hands 
 	} finally {
 		mock.timers.reset();
 	}
+});
+
+test("the working line resets when the session shuts down mid-run, and a second run replaces the first", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "read", args: {} });
+		harness.emit("session_shutdown", {}, ctx);
+		assert.deepEqual(calls.slice(-2), [
+			{ method: "indicator", value: undefined },
+			{ method: "message", value: undefined },
+		]);
+		const settled = calls.length;
+		mock.timers.tick(1_000);
+		assert.equal(calls.length, settled, "no timer survives the shutdown or the replaced run");
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("the breathing dot changes color across its frames", () => {
+	const harness = createHarness();
+	const { calls, ui } = recordingUi();
+	harness.emit("agent_start", {}, { hasUI: true, ui });
+	const { frames } = calls.find((c) => c.method === "indicator")?.value as { frames: string[] };
+	assert.ok(new Set(frames).size > 1, "frames differ in color");
+	harness.emit("agent_end", { messages: [] }, { hasUI: true, ui });
 });
 
 test("the working line stays out of the way without a UI", () => {
@@ -731,6 +787,28 @@ test("emphasis widens to whole words on both sides of a pair", () => {
 	};
 	assert.equal(emphasized(lines[1] ?? "", "toolErrorBg", "toolDiffRemoved"), "sum");
 	assert.equal(emphasized(lines[2] ?? "", "toolSuccessBg", "toolDiffAdded"), "subtotal");
+});
+
+test("tabs expand to cells, so tab-indented diffs and commands stay within the width", () => {
+	setHyperlinks(false);
+	const edit = new Row(createHarness(), "edit", "e", { path: "main.go" }).restore("ok", { details: { diff: "- 12 \tfoo := 1\n+ 12 \tfoo := 2\n+ 13 \t\treturn x" } });
+	const bash = new Row(createHarness(), "bash", "b", { command: "printf 'a\tb'" }).restore("a b");
+	for (const line of [...edit.render(80), ...bash.render(80)]) {
+		assert.ok(!line.includes("\t"), `no raw tab: ${JSON.stringify(line)}`);
+		assert.ok(visibleWidth(line) <= 80);
+	}
+	assert.ok(edit.plain(80)[3]?.includes("      return x"), "two tabs become six cells");
+});
+
+test("a line that changed end to end gets no emphasis", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 abc\n+ 1 xyz" } });
+	const lines = row.render(80);
+	for (const [line, bg, ink] of [[lines[1], "toolErrorBg", "toolDiffRemoved"], [lines[2], "toolSuccessBg", "toolDiffAdded"]] as const) {
+		const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+		const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
+		assert.ok(!(line ?? "").includes(`\x1b[48;2;${r};${g};${b}m`), "no strong tint");
+	}
 });
 
 test("word emphasis never splits an emoji", () => {

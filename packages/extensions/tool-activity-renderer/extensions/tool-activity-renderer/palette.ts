@@ -10,6 +10,15 @@ export interface ThemeLike {
 	style(text: string, options: ThemeStyle): string;
 }
 
+/**
+ * Text as fixed-width cells. A terminal advances a tab to the next multiple of 8 while pi-tui counts
+ * it as 3, so a raw tab would push a full-width row past the edge; expand tabs the way pi does and
+ * drop other control characters.
+ */
+export function cellText(text: string): string {
+	return text.replace(/\t/g, "   ").replace(/[\x00-\x08\x0A-\x1F\x7F]/g, "");
+}
+
 /** Injectable clock so fades and shimmer can be tested at fixed instants. */
 export const clock = { now: (): number => Date.now() };
 

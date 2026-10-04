@@ -1,6 +1,6 @@
 import type { Color, Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { blend, paint, type ThemeLike, tones } from "./palette.ts";
+import { blend, cellText, paint, type ThemeLike, tones } from "./palette.ts";
 
 interface DiffLine {
 	sign: "+" | "-" | " ";
@@ -14,7 +14,7 @@ interface DiffLine {
 function parseDiffLine(raw: string): DiffLine | undefined {
 	const match = raw.match(/^([+\- ])(\s*\d*)\s(.*)$/);
 	if (!match) return undefined;
-	return { sign: (match[1] ?? " ") as DiffLine["sign"], lineNumber: (match[2] ?? "").trim(), content: match[3] ?? "" };
+	return { sign: (match[1] ?? " ") as DiffLine["sign"], lineNumber: (match[2] ?? "").trim(), content: cellText(match[3] ?? "") };
 }
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
@@ -87,7 +87,7 @@ export class GraphiteDiff implements Component {
 		private readonly hiddenHint: string | undefined,
 		private readonly theme: ThemeLike,
 	) {
-		const parsed = rawLines.map((raw) => parseDiffLine(raw) ?? { sign: " " as const, lineNumber: "", content: raw });
+		const parsed = rawLines.map((raw) => parseDiffLine(raw) ?? { sign: " " as const, lineNumber: "", content: cellText(raw) });
 		this.lines = pairChanges(parsed);
 	}
 

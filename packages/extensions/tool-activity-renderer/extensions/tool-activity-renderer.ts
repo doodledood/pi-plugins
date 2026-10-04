@@ -529,7 +529,7 @@ function trackActivity(pi: ExtensionAPI, shared: Shared): void {
 	pi.on("message_update", (event) => shared.runs.ingest(event.message));
 	pi.on("message_end", (event) => shared.runs.ingest(event.message));
 	const ingestBranch = (_event: unknown, ctx: { sessionManager: { getBranch(): unknown[] } }) => {
-		shared.runs.clear();
+		shared.runs.clearRuns();
 		shared.executions.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "message") shared.runs.ingest((entry as { message?: unknown }).message);

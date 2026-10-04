@@ -50,9 +50,12 @@ export class ExploreRuns {
 		close();
 	}
 
-	clear(): void {
+	/**
+	 * Forget every recorded run before a branch is re-read. Heads stay: on /resume and /reload pi draws
+	 * the rows before it fires session_start, so the heads they reported are already current.
+	 */
+	clearRuns(): void {
 		this.runOf.clear();
-		this.heads.clear();
 	}
 
 	/** Every row reports its latest head so the run's leader can draw it. */

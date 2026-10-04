@@ -146,6 +146,14 @@ test("footer draws a thin context meter: filled cells in the context tone, the e
   assert.ok(harness.themeCalls.some((call) => call.tone === "error" && call.text === "━".repeat(10)), "a nearly full window fills the meter in the error tone");
 });
 
+test("footer meter stays full, without throwing, when context runs past the window", () => {
+  const harness = createHarness([]);
+  harness.ctx.model.contextWindow = 200_000;
+  harness.ctx.getContextUsage = () => ({ tokens: 240_000 });
+
+  assert.match(renderFooter(harness), /━{10} 120%/);
+});
+
 test("footer leaves the meter out when the context percent is unknown", () => {
   const harness = createHarness([]);
   harness.ctx.getContextUsage = () => ({ tokens: 12_000 });
