@@ -595,6 +595,13 @@ test("the working line resets when the session shuts down mid-run, and a second 
 		const settled = calls.length;
 		mock.timers.tick(1_000);
 		assert.equal(calls.length, settled, "no timer survives the shutdown or the replaced run");
+
+		// A leaked interval would draw again once the next run sets a UI: exactly one draw per frame.
+		at(2_000, () => harness.emit("agent_start", {}, ctx));
+		const before = calls.filter((c) => c.method === "message").length;
+		at(2_100, () => mock.timers.tick(100));
+		assert.equal(calls.filter((c) => c.method === "message").length - before, 1, "one timer, one draw per frame");
+		harness.emit("agent_end", { messages: [] }, ctx);
 	} finally {
 		mock.timers.reset();
 	}
@@ -868,7 +875,7 @@ test("multi-line replacements pair line by line; an unpaired line gets no emphas
 	assert.equal(strongSpans(pairs[3] ?? "", "toolSuccessBg", "toolDiffAdded"), "10");
 	assert.equal(strongSpans(pairs[4] ?? "", "toolSuccessBg", "toolDiffAdded"), "20");
 
-	const uneven = new Row(createHarness(), "edit", "u", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 a = 1\n- 2 b = 2\n+ 1 a = 3" } }).render(80);
+	const uneven = new Row(createHarness(), "edit", "u", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 a = 1\n- 2 b = 2\n+ 1 a = 3\n  3 b = 9" } }).render(80);
 	assert.equal(strongSpans(uneven[1] ?? "", "toolErrorBg", "toolDiffRemoved"), "1");
 	assert.equal(strongSpans(uneven[2] ?? "", "toolErrorBg", "toolDiffRemoved"), "", "the unpaired removed line has no strong tint");
 	assert.equal(strongSpans(uneven[3] ?? "", "toolSuccessBg", "toolDiffAdded"), "3");
@@ -1067,4 +1074,50 @@ test("result and target variants: applied, no output, no matches, truncated, tim
 	assert.match(new Row(h, "bash", "v5", { command: "a\nb", timeout: 5 }).restore("x").plain(100)[0] ?? "", /\$ a ⏎ b  timeout 5s/);
 	assert.match(new Row(h, "read", "v6", { path: "a.ts", offset: 10 }).restore("x").plain(100)[0] ?? "", /a\.ts:10\s/);
 	assert.match(new Row(h, "grep", "v7", { pattern: "x", glob: "*.ts", ignoreCase: true, literal: true }).restore("a:1").plain(100)[0] ?? "", /x {2}in \. {2}\*\.ts -i literal/);
+});
+
+// ─── review round 5 ───────────────────────────────────────────────────────────
+
+test("CRLF write content still draws as an added diff", () => {
+	setHyperlinks(false);
+	const lines = new Row(createHarness(), "write", "w", { path: "a.txt", content: "a\r\nb\r\n" }).restore("ok").render(80);
+	assert.deepEqual(lines.slice(1).map((l) => stripTerminalSequences(l).trim()), ["1 + a", "2 + b"]);
+	assert.ok(lines[1]?.includes("\x1b[48;2;21;32;26m"));
+});
+
+test("empty find/ls results, grep truncation, and the five-line failure preview cap", () => {
+	setHyperlinks(false);
+	const h = createHarness();
+	assert.match(new Row(h, "find", "f0", { pattern: "*.zz" }).restore("No files found matching pattern").plain(100)[0] ?? "", /0 files$/);
+	assert.match(new Row(h, "ls", "l0", { path: "empty" }).restore("(empty directory)").plain(100)[0] ?? "", /0 entries$/);
+	assert.match(new Row(h, "grep", "g0", { pattern: "x" }).restore("a:1", { details: { truncation: { truncated: true } } }).plain(100)[0] ?? "", /1 match {2}⚠ truncated$/);
+	const out = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join("\n");
+	const failed = new Row(h, "bash", "b8", { command: "make" }).restore(`${out}\n\nCommand exited with code 2`, { isError: true }).plain(100);
+	assert.deepEqual(failed.slice(1), ["   line 4", "   line 5", "   line 6", "   line 7", "   line 8"]);
+});
+
+test("a result that arrives without tool_execution_end (aborted message) still settles with its duration", () => {
+	setHyperlinks(false);
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const row = new Row(harness, "read", "a", { path: "a.ts" });
+		at(0, () => row.start());
+		row.restore("Operation aborted", { isError: true });
+		assert.match(at(300, () => row.plain(80))[0] ?? "", /^ ✕ Read\s+a\.ts\s+failed {2}0\.3s$/);
+		assert.match(at(900, () => row.plain(80))[0] ?? "", /failed {2}0\.3s$/, "the duration is fixed when the result lands, not a running clock");
+		assert.equal(row.context.state.timer, undefined, "not running");
+
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "never-ends", toolName: "read", args: {} });
+		harness.emit("agent_end", { messages: [] }, ctx);
+		at(1_000, () => harness.emit("agent_start", {}, ctx));
+		at(1_100, () => mock.timers.tick(100));
+		assert.equal(calls.filter((c) => c.method === "message").at(-1)?.value, "Working  0.1s", "an unfinished tool from the last run is forgotten");
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
 });

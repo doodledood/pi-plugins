@@ -17,7 +17,7 @@ A finished tool row's shift from full brightness to the muted tones over about t
 _Avoid_: Dim-out, fade when the timed, success-only behavior is meant.
 
 **Exploratory run**:
-Two or more consecutive read/grep/find/ls calls in one assistant message, drawn as one packed block by the run's first row and folded into one "Explored …" line once all succeed.
+Two or more consecutive read/grep/find/ls calls in one assistant message, drawn as one packed block by the run's first row and folded into one "Explored …" line once all succeed. A run with an expanded member or an image read draws as ordinary rows.
 _Avoid_: Burst, group when the one-message, consecutive-call rule is meant.
 
 **Working line**:

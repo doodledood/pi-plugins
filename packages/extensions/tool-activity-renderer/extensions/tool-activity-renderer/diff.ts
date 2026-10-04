@@ -13,7 +13,8 @@ interface DiffLine {
 
 /** Pi's edit diff lines look like `+ 12 text` / `- 12 text` / `  12 text`. */
 function parseDiffLine(raw: string): DiffLine | undefined {
-	const match = raw.match(/^([+\- ])(\s*\d*)\s(.*)$/);
+	// `s`: a CRLF write leaves `\r` on every line, and `.` alone would refuse to match it.
+	const match = raw.match(/^([+\- ])(\s*\d*)\s(.*)$/s);
 	if (!match) return undefined;
 	return { sign: (match[1] ?? " ") as DiffLine["sign"], lineNumber: (match[2] ?? "").trim(), content: cellText(match[3] ?? "") };
 }

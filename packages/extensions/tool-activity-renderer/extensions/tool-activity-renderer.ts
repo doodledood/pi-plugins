@@ -12,14 +12,14 @@ import {
 	createReadToolDefinition,
 	createWriteToolDefinition,
 	getAgentDir,
-	keyHint,
+	keyText,
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Text } from "@earendil-works/pi-tui";
 import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
-import { cellLines, cellText } from "./tool-activity-renderer/text.ts";
+import { cellLines } from "./tool-activity-renderer/text.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
 
 type ToolRenderMode = "compact" | "default";
@@ -265,9 +265,9 @@ function buildWriteDiffLines(content: string): string[] {
 	return lines.map((line, index) => `+${String(index + 1).padStart(width)} ${line}`);
 }
 
-/** pi's expand key hint as plain text, so every place that shows it can paint it in its own tone. */
+/** pi's expand key as plain text, so every place that shows the hint can paint it in its own tone. */
 function expandHint(): string {
-	return cellText(keyHint("app.tools.expand", "to expand"));
+	return `${keyText("app.tools.expand")} to expand`;
 }
 
 function moreLinesHint(hidden: number): string | undefined {
