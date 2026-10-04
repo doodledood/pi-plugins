@@ -5,11 +5,27 @@ A collection of individually installable Pi extensions and themes maintained in 
 ## Language
 
 **Tool activity renderer**:
-A Pi extension in this repo that wraps built-in file and shell tools with compact custom TUI renderers.
+A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows and drives the working line.
 _Avoid_: Tool rendering plugin.
 
+**Graphite**:
+The visual direction the tool activity renderer and the `graphite` theme share: brightness carries hierarchy, color only means state, and what just happened is brighter than history.
+_Avoid_: Calm mode, dark mode.
+
+**Recede**:
+A finished tool row's fade from full brightness to the muted tones over about two seconds after it lands; failures never recede and restored rows start receded.
+_Avoid_: Dim-out, fade when the timed, success-only behavior is meant.
+
+**Exploratory run**:
+Two or more consecutive read/grep/find/ls calls in one assistant message, drawn as one packed block by the run's first row and folded into one "Explored …" line once all succeed.
+_Avoid_: Burst, group when the one-message, consecutive-call rule is meant.
+
+**Working line**:
+The indicator above the editor while pi works: a breathing dot, the current activity (Thinking, Reading, Running, Writing), and the run's elapsed time.
+_Avoid_: Spinner, loader.
+
 **Compact tool rendering**:
-A renderer mode that minimizes built-in tool rows by hiding routine output unless the row is expanded or something abnormal happens.
+The tool activity renderer's default mode, drawing Graphite rows that hide routine output unless the row is expanded or something abnormal happens.
 _Avoid_: Compact mode when the renderer context is unclear.
 
 **Session cache rate**:
@@ -89,7 +105,7 @@ One member model of a Panel, running agentically over a transcript fork of the c
 _Avoid_: Companion, advisor (advisor_consult is a different, dispatcher-briefed mechanism).
 
 **Tool-row glyph**:
-The leading colored dot or spinner that marks a compact tool row and anchors the rendered tool activity in the transcript.
+The leading mark of a compact tool row: a dot that breathes while the tool runs, settles to a receding success color when it lands, and becomes a cross on failure.
 _Avoid_: Dot thingy.
 
 **Session-tree cost accounting**:

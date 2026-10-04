@@ -39,7 +39,7 @@ Theme example:
       "extensions": [],
       "skills": [],
       "prompts": [],
-      "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
+      "themes": ["packages/themes/graphite/themes/graphite.json"]
     }
   ]
 }
@@ -74,4 +74,5 @@ pi install /path/to/pi-plugins/packages/extensions/goal-controller
 pi install /path/to/pi-plugins/packages/extensions/hq
 pi install /path/to/pi-plugins/packages/extensions/panel
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
+pi install /path/to/pi-plugins/packages/themes/graphite
 ```

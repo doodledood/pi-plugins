@@ -12,7 +12,7 @@
   "followUpMode": "all",
   "steeringMode": "all",
   "enableInstallTelemetry": false,
-  "theme": "deep-focus-pi",
+  "theme": "graphite",
   "pi-image-gen": {
     "defaultModel": "gpt-image-2.5-sunburst"
   },
@@ -40,6 +40,7 @@
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/openai-max-output-floor",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/openai-tts",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/themes/deep-focus-pi",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/themes/graphite",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/cache-optimization"
   ]
 }

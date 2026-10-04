@@ -1,6 +1,6 @@
 # pi-plugins
 
-Aviram's portable Pi setup plus the Pi extensions and theme it installs.
+Aviram's portable Pi setup plus the Pi extensions and themes it installs.
 
 The main use case is agentic setup sync: point an agent at this repo and ask it to make a machine's Pi configuration match this setup. The agent should use `setup/` as the source of truth, preserve local/private values as placeholders, and verify the result.
 
@@ -15,7 +15,7 @@ The agent's completion contract is:
 - private values stay local—nothing secret is copied from another machine, printed in chat, or committed;
 - the agent verifies the effective installation and reports what changed, what was preserved, and what still needs local input.
 
-Unless the user asks for a narrower scope, default to a **full portable sync**: settings defaults, package list, bundled extensions/theme, non-secret extension configs, agent definitions, and portable operating instructions. On a machine with existing config, full sync still means merge-and-preserve—not blind replacement. Authentication, private endpoints, credentials, and machine-specific paths always require local choices. Every part can be excluded or customized during questioning.
+Unless the user asks for a narrower scope, default to a **full portable sync**: settings defaults, package list, bundled extensions/themes, non-secret extension configs, agent definitions, and portable operating instructions. On a machine with existing config, full sync still means merge-and-preserve—not blind replacement. Authentication, private endpoints, credentials, and machine-specific paths always require local choices. Every part can be excluded or customized during questioning.
 
 ### Guided agent workflow
 
@@ -69,7 +69,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    When the user chooses parts, explain and offer these independently:
 
    - **Pi defaults** — default provider/model, thinking level, enabled model cycle, theme, telemetry, and message delivery behavior.
-   - **Packages and resources** — the installed helper packages plus this repo's extensions and `deep-focus-pi` theme.
+   - **Packages and resources** — the installed helper packages plus this repo's extensions and its `graphite` and `deep-focus-pi` themes.
    - **Extension tuning** — non-secret settings such as subagent concurrency, rendering mode, GPT fast mode, aliases, and MCP tool-catalog behavior.
    - **Agent behavior** — global operating instructions, appended system guidance, and the read-only Explore agent on GPT-5.6 Luna with medium thinking.
    - **Integrations** — web search, MCP/browser connections, and image generation; these may require target-local paths, login, or secrets.
@@ -139,7 +139,7 @@ The normal setup template is [`setup/settings.example.json`](setup/settings.exam
     "openai/gpt-6-sol:high",
     "anthropic/claude-fable-5-1:max"
   ],
-  "theme": "deep-focus-pi",
+  "theme": "graphite",
   "pi-image-gen": {
     "defaultModel": "gpt-image-2.5-sunburst"
   }
@@ -242,7 +242,7 @@ The full-profile defaults available for an explicit merge are:
 - the `enabledModels` list from `setup/settings.example.json`
 - `enableInstallTelemetry: false`
 - `followUpMode: "all"` and `steeringMode: "all"`
-- `theme: "deep-focus-pi"`
+- `theme: "graphite"`
 - `pi-image-gen.defaultModel: "gpt-image-2.5-sunburst"`
 - the non-secret extension configs under `setup/configs/`
 - the agent behavior files selected during questioning
@@ -287,11 +287,12 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
 - `simple-statusline` — compact Pi footer/statusline, including whole-session-tree cost (this session plus every run it spawned) and the `/cost` breakdown.
 - `skill-argument-hints` — argument hints for skill commands.
-- `tool-activity-renderer` — compact rendering wrappers for built-in tools.
+- `tool-activity-renderer` — Graphite-style rows for the built-in tools: present-tense shimmer while a tool runs, past tense and a right-aligned result when it lands, finished rows fading back, exploratory runs folding into one "Explored …" line, word-level diff emphasis, and a live working line above the editor.
 
-### Theme
+### Themes
 
-- `deep-focus-pi`
+- `graphite` — the default: calm graphite neutrals, one blue accent, and color reserved for state. Pairs with `tool-activity-renderer`.
+- `deep-focus-pi` — the previous default, kept for anyone who prefers it.
 
 ### Skills
 
@@ -366,7 +367,7 @@ upgrade-prime-agent() {
 
 ## Installing individual resources
 
-Install the root bundle when you want all included extensions and the theme:
+Install the root bundle when you want all included extensions and the themes:
 
 ```bash
 pi install git:github.com/doodledood/pi-plugins@main
@@ -396,7 +397,7 @@ Theme-only example:
       "source": "git:github.com/doodledood/pi-plugins@main",
       "extensions": [],
       "prompts": [],
-      "themes": ["packages/themes/deep-focus-pi/themes/deep-focus-pi.json"]
+      "themes": ["packages/themes/graphite/themes/graphite.json"]
     }
   ]
 }

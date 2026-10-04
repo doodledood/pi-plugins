@@ -14,35 +14,49 @@ import {
 	getAgentDir,
 	keyHint,
 } from "@earendil-works/pi-coding-agent";
-import { Container, getCapabilities, hyperlink, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Text } from "@earendil-works/pi-tui";
+import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
+import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
+import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
+import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
+import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
 
 type ToolRenderMode = "compact" | "default";
-type BuiltInToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 type BuiltInTools = ReturnType<typeof createBuiltInTools>;
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 type ToolResult = AgentToolResult<unknown>;
 
-type RenderContext = {
+/** The slice of pi's tool render context this renderer reads. */
+interface RenderContext {
 	args: unknown;
+	toolCallId: string;
 	state: RowState;
-	lastComponent?: unknown;
-	executionStarted: boolean;
+	cwd: string;
+	expanded: boolean;
 	isError: boolean;
-	invalidate?: () => void;
-};
+	invalidate(): void;
+}
 
-type GlyphState = "muted" | "accent" | "running" | "success" | "error" | "warning" | "mdHeading" | "toolTitle";
+interface RowState {
+	head?: RowHead;
+	view?: RowView;
+	timer?: ReturnType<typeof setInterval>;
+}
 
 interface ConfigFile {
 	mode?: unknown;
 }
 
-interface RowState {
-	call?: Text;
-	startedAt?: number;
+/** Wall-clock span of one execution, recorded from pi's tool events so restored rows carry none. */
+interface Execution {
+	startedAt: number;
 	endedAt?: number;
-	interval?: ReturnType<typeof setInterval>;
-	glyphState?: GlyphState;
+}
+
+/** State shared by every row of one extension instance. */
+interface Shared {
+	runs: ExploreRuns;
+	executions: Map<string, Execution>;
 }
 
 const CONFIG_PATH = join(getAgentDir(), "tool-activity-renderer.json");
@@ -51,10 +65,7 @@ const DEFAULT_MODE: ToolRenderMode = "default";
 const EDIT_COLLAPSED_DIFF_LINES = 12;
 const WRITE_COLLAPSED_DIFF_LINES = 12;
 const FAILURE_PREVIEW_LINES = 5;
-const COLLAPSED_COMMAND_CHARS = 72;
-const COLLAPSED_PATTERN_CHARS = 72;
-const COLLAPSED_PATH_CHARS = 80;
-const TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const RUNNING_TAIL_LINES = 2;
 
 const toolCache = new Map<string, BuiltInTools>();
 
@@ -78,7 +89,7 @@ function getBuiltInTools(cwd: string): BuiltInTools {
 	return tools;
 }
 
-function getTemplateTool<Name extends BuiltInToolName>(name: Name): BuiltInTools[Name] {
+function getTemplateTool<Name extends ToolKind>(name: Name): BuiltInTools[Name] {
 	return getBuiltInTools(process.cwd())[name];
 }
 
@@ -96,8 +107,9 @@ function writeMode(mode: ToolRenderMode): void {
 	writeFileSync(CONFIG_PATH, `${JSON.stringify({ mode }, null, 2)}\n`, "utf8");
 }
 
-function shortenPath(path: string | undefined): string {
-	if (!path) return "...";
+// ─── arguments ────────────────────────────────────────────────────────────────
+
+function shortenPath(path: string): string {
 	const home = homedir();
 	if (path === home) return "~";
 	if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
@@ -112,27 +124,10 @@ function normalizePathForLink(path: string): string {
 	return path;
 }
 
-function resolvePathForLink(path: string, cwd: string): string {
-	const normalizedPath = normalizePathForLink(path);
+function fileHref(rawPath: string, cwd: string): string {
+	const normalizedPath = normalizePathForLink(rawPath);
 	const normalizedCwd = normalizePathForLink(cwd);
-	return isAbsolute(normalizedPath) ? resolvePath(normalizedPath) : resolvePath(normalizedCwd, normalizedPath);
-}
-
-function linkPath(styledText: string, rawPath: string, cwd: string): string {
-	if (!getCapabilities().hyperlinks) return styledText;
-	return hyperlink(styledText, pathToFileURL(resolvePathForLink(rawPath, cwd)).href);
-}
-
-function pathArg(value: unknown): string | null | undefined {
-	if (typeof value === "string") return value;
-	if (value === undefined || value === null) return undefined;
-	return null;
-}
-
-function renderToolPath(path: string | null | undefined, theme: ThemeLike, cwd: string): string {
-	if (path === null) return theme.fg("error", "[invalid arg]");
-	if (!path) return theme.fg("toolOutput", "...");
-	return linkPath(theme.fg("accent", shortenPath(path)), path, cwd);
+	return pathToFileURL(isAbsolute(normalizedPath) ? resolvePath(normalizedPath) : resolvePath(normalizedCwd, normalizedPath)).href;
 }
 
 function stringArg(value: unknown): string | undefined {
@@ -143,11 +138,90 @@ function numberArg(value: unknown): number | undefined {
 	return typeof value === "number" ? value : undefined;
 }
 
-function getText(result: Pick<ToolResult, "content">): string {
-	return result.content
-		.filter((part) => part.type === "text")
-		.map((part) => part.text ?? "")
+/** A path as target parts: the directory quiet, the file name bright, both linked to the file. */
+function pathTarget(value: unknown, cwd: string): TargetPart[] {
+	if (value === undefined || value === null) return [{ text: "…", role: "secondary" }];
+	if (typeof value !== "string") return [{ text: "[invalid arg]", role: "invalid" }];
+	const shown = shortenPath(value);
+	const href = fileHref(value, cwd);
+	const slash = shown.lastIndexOf("/", shown.length - 2);
+	if (slash < 0) return [{ text: shown, role: "primary", href }];
+	return [
+		{ text: shown.slice(0, slash + 1), role: "secondary", href, elidable: true },
+		{ text: shown.slice(slash + 1), role: "primary", href },
+	];
+}
+
+function readRange(args: Record<string, unknown>): string {
+	const offset = numberArg(args.offset);
+	const limit = numberArg(args.limit);
+	if (offset === undefined && limit === undefined) return "";
+	const start = offset ?? 1;
+	return limit === undefined ? `:${start}` : `:${start}-${start + limit - 1}`;
+}
+
+function targetFor(kind: ToolKind, args: Record<string, unknown>, cwd: string): TargetPart[] {
+	switch (kind) {
+		case "read": {
+			const range = readRange(args);
+			return [...pathTarget(args.file_path ?? args.path, cwd), ...(range ? [{ text: range, role: "secondary" as const }] : [])];
+		}
+		case "edit":
+		case "write":
+			return pathTarget(args.file_path ?? args.path, cwd);
+		case "ls":
+			return pathTarget(args.path ?? ".", cwd);
+		case "bash": {
+			const command = (stringArg(args.command) ?? "…").replace(/\s*\n\s*/g, " ⏎ ");
+			const timeout = numberArg(args.timeout);
+			return [
+				{ text: "$ ", role: "secondary" },
+				{ text: command, role: "primary" },
+				...(timeout === undefined ? [] : [{ text: `  timeout ${timeout}s`, role: "secondary" as const }]),
+			];
+		}
+		case "grep":
+		case "find": {
+			const flags = [stringArg(args.glob), args.ignoreCase === true ? "-i" : undefined, args.literal === true ? "literal" : undefined].filter(Boolean);
+			return [
+				{ text: stringArg(args.pattern) ?? "…", role: "primary" },
+				{ text: `  in ${shortenPath(stringArg(args.path) ?? ".")}`, role: "secondary" },
+				...(flags.length ? [{ text: `  ${flags.join(" ")}`, role: "secondary" as const }] : []),
+			];
+		}
+	}
+}
+
+// ─── results ──────────────────────────────────────────────────────────────────
+
+// Escape sequences: CSI; OSC (BEL- or ST-terminated); DCS/SOS/PM/APC strings; then every other
+// ESC form (intermediates plus a final byte, e.g. `ESC ( B`, `ESC =`, `ESC 7`).
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_X][^\x1b]*\x1b\\|\x1b[\x20-\x2f]*[\x30-\x7e]/g;
+// Control characters other than tab and newline; all single code units, so surrogate pairs survive.
+const CONTROL = /[\x00-\x08\x0B-\x1F\x7F]/g;
+
+/**
+ * Tool output as plain text a terminal row can hold: escape sequences and control characters
+ * removed, and each `\r`-redrawn progress line reduced to what a terminal would finally show.
+ */
+function plainOutput(text: string): string {
+	return text
+		.replace(ANSI, "")
+		.split("\n")
+		.map((line) => {
+			const trimmed = line.replace(/\r+$/, "");
+			return trimmed.slice(trimmed.lastIndexOf("\r") + 1).replace(/\t/g, "  ").replace(CONTROL, "");
+		})
 		.join("\n");
+}
+
+function getText(result: Pick<ToolResult, "content">): string {
+	return plainOutput(
+		result.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text ?? "")
+			.join("\n"),
+	);
 }
 
 function nonEmptyLines(text: string): string[] {
@@ -155,8 +229,8 @@ function nonEmptyLines(text: string): string[] {
 	return text.split("\n").filter((line) => line.trim().length > 0);
 }
 
-function countLines(text: string): number {
-	return nonEmptyLines(text).length;
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+	return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
 function countSearchResults(toolName: "grep" | "find" | "ls", text: string): number {
@@ -164,284 +238,13 @@ function countSearchResults(toolName: "grep" | "find" | "ls", text: string): num
 	if (toolName === "grep" && trimmed === "No matches found") return 0;
 	if (toolName === "find" && trimmed === "No files found matching pattern") return 0;
 	if (toolName === "ls" && trimmed === "(empty directory)") return 0;
-	return countLines(text);
-}
-
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-	return `${count} ${count === 1 ? singular : pluralForm}`;
+	return nonEmptyLines(text).length;
 }
 
 function searchResultLabel(toolName: "grep" | "find" | "ls", count: number): string {
 	if (toolName === "grep") return plural(count, "match", "matches");
 	if (toolName === "find") return plural(count, "file");
 	return plural(count, "entry", "entries");
-}
-
-function formatDuration(ms: number | undefined): string | undefined {
-	if (ms === undefined || !Number.isFinite(ms)) return undefined;
-	return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function truncateMiddle(text: string, maxLength: number): string {
-	if (text.length <= maxLength) return text;
-	if (maxLength <= 3) return text.slice(0, maxLength);
-	return `${text.slice(0, maxLength - 3)}...`;
-}
-
-function collapsedText(text: string, expanded: boolean, maxLength: number): string {
-	return expanded ? text : truncateMiddle(text, maxLength);
-}
-
-function firstMeaningfulLine(text: string): string {
-	return nonEmptyLines(text)[0] ?? text.trim().split("\n")[0] ?? "";
-}
-
-function lastMeaningfulLines(text: string, limit: number): string[] {
-	return nonEmptyLines(text).slice(-limit);
-}
-
-function detailPrefix(theme: ThemeLike): string {
-	return theme.fg("dim", "   │ ");
-}
-
-function indentLines(lines: string[], theme: ThemeLike): string {
-	return lines.map((line) => `${detailPrefix(theme)}${theme.fg("dim", line)}`).join("\n");
-}
-
-function outputBlock(text: string, theme: ThemeLike): string {
-	return text.split("\n").map((line) => `${detailPrefix(theme)}${theme.fg("toolOutput", line)}`).join("\n");
-}
-
-interface ThemeLike {
-	fg(color: string, text: string): string;
-	bg(color: string, text: string): string;
-	bold(text: string): string;
-}
-
-function formatFileChangeHeader(action: "Create" | "Update", path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
-	const displayPath = renderToolPath(path, theme, cwd);
-	const nameColor = state === "error" ? "error" : state === "success" ? "success" : action === "Create" ? "warning" : "mdHeading";
-	return `${toolGlyph(theme, state)} ${theme.fg(nameColor, theme.bold(action))}${theme.fg("text", "(")}${displayPath}${theme.fg("text", ")")}`;
-}
-
-function formatEditHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
-	return formatFileChangeHeader("Update", path, theme, state, cwd);
-}
-
-function formatWriteHeader(path: string | undefined, theme: ThemeLike, state: GlyphState, cwd: string): string {
-	return formatFileChangeHeader("Create", path, theme, state, cwd);
-}
-
-function parseDiffLine(line: string): { prefix: string; lineNumber: string; content: string } | undefined {
-	const match = line.match(/^([+\-\s])(\s*\d*)\s(.*)$/);
-	if (!match) return undefined;
-	return { prefix: match[1] ?? " ", lineNumber: match[2] ?? "", content: match[3] ?? "" };
-}
-
-class ClaudeStyleDiff extends Container {
-	constructor(
-		private readonly summary: string,
-		private readonly diffLines: string[],
-		private readonly hiddenCount: number,
-		private readonly expanded: boolean,
-		private readonly theme: ThemeLike,
-	) {
-		super();
-	}
-
-	render(width: number): string[] {
-		const contentWidth = Math.max(1, width - 5);
-		const detailLine = (text: string) => toolDetail(this.theme, truncateToWidth(text, contentWidth));
-		const lines = [detailLine(this.summary)];
-		for (const rawLine of this.diffLines) {
-			const parsed = parseDiffLine(rawLine);
-			if (!parsed) {
-				lines.push(`${detailPrefix(this.theme)}${this.theme.fg("toolDiffContext", truncateToWidth(rawLine, contentWidth))}`);
-				continue;
-			}
-
-			const gutter = `${parsed.lineNumber.padStart(4)} ${parsed.prefix}`;
-			const content = truncateToWidth(parsed.content, Math.max(1, contentWidth - gutter.length - 1));
-			const color = parsed.prefix === "+" ? "toolDiffAdded" : parsed.prefix === "-" ? "toolDiffRemoved" : "toolDiffContext";
-			const rendered = `${this.theme.fg(color, gutter)} ${this.theme.fg(color, content)}`;
-
-			if (parsed.prefix === "+") {
-				lines.push(`${detailPrefix(this.theme)}${this.theme.bg("toolSuccessBg", rendered)}`);
-			} else if (parsed.prefix === "-") {
-				lines.push(`${detailPrefix(this.theme)}${this.theme.bg("toolErrorBg", rendered)}`);
-			} else {
-				lines.push(`${detailPrefix(this.theme)}${rendered}`);
-			}
-		}
-		if (this.hiddenCount > 0 && !this.expanded) {
-			lines.push(detailLine(`... ${plural(this.hiddenCount, "more diff line")} (${keyHint("app.tools.expand", "to expand")})`));
-		}
-		return lines.map((line) => truncateToWidth(line, width));
-	}
-
-	invalidate(): void {}
-}
-
-function toolGlyph(theme: ThemeLike, state: GlyphState): string {
-	if (state === "running") {
-		const frames = ["◐", "◓", "◑", "◒"];
-		const frame = frames[Math.floor(Date.now() / 250) % frames.length] ?? "◌";
-		return theme.fg("warning", frame);
-	}
-	if (state === "success") return theme.fg("success", "●");
-	if (state === "error") return theme.fg("error", "✕");
-	return theme.fg(state, "●");
-}
-
-function toolName(theme: ThemeLike, color: string, name: string): string {
-	return theme.fg(color, theme.bold(name));
-}
-
-function toolMeta(theme: ThemeLike, text: string): string {
-	return theme.fg("dim", text);
-}
-
-function toolDetail(theme: ThemeLike, text: string): string {
-	return `${detailPrefix(theme)}${theme.fg("muted", text)}`;
-}
-
-function getRowState(context: RenderContext): RowState {
-	return context.state;
-}
-
-function getStoredCallText(context: Pick<RenderContext, "state">): Text {
-	const state = context.state;
-	if (state.call) return state.call;
-	state.call = new Text("", 0, 0);
-	return state.call;
-}
-
-function getCallText(context: RenderContext): Text {
-	const state = getRowState(context);
-	if (context.lastComponent instanceof Text) {
-		state.call = context.lastComponent;
-		return context.lastComponent;
-	}
-	return getStoredCallText(context);
-}
-
-function emptyText(): Text {
-	return new Text("", 0, 0);
-}
-
-function emptyContainer(): Container {
-	return new Container();
-}
-
-function setStarted(context: RenderContext): void {
-	const state = getRowState(context);
-	if (context.executionStarted && state.startedAt === undefined) {
-		state.startedAt = Date.now();
-		state.endedAt = undefined;
-	}
-	if (context.executionStarted && state.endedAt === undefined && state.interval === undefined && context.invalidate) {
-		state.interval = setInterval(() => context.invalidate?.(), 250);
-	}
-}
-
-function setEnded(context: RenderContext, isPartial: boolean): void {
-	const state = getRowState(context);
-	if (!isPartial && state.startedAt !== undefined && state.endedAt === undefined) {
-		state.endedAt = Date.now();
-	}
-	if (!isPartial && state.interval !== undefined) {
-		clearInterval(state.interval);
-		state.interval = undefined;
-	}
-}
-
-function elapsedSuffix(context: RenderContext): string | undefined {
-	const state = getRowState(context);
-	if (state.startedAt === undefined) return undefined;
-	return formatDuration((state.endedAt ?? Date.now()) - state.startedAt);
-}
-
-function currentGlyphState(context: RenderContext, pending: GlyphState): GlyphState {
-	return context.state.glyphState ?? (context.executionStarted ? "running" : pending);
-}
-
-function settleGlyphState(context: RenderContext, isError: boolean): GlyphState {
-	const next = isError ? "error" : "success";
-	context.state.glyphState = next;
-	return next;
-}
-
-function renderStatus(theme: ThemeLike, ok: boolean, label: string): string {
-	return ok ? theme.fg("success", `✓ ${label}`) : theme.fg("error", `✗ ${label}`);
-}
-
-function getReadRange(args: Record<string, unknown>): string {
-	const offset = numberArg(args.offset);
-	const limit = numberArg(args.limit);
-	if (offset === undefined && limit === undefined) return "";
-	const start = offset ?? 1;
-	const end = limit === undefined ? undefined : start + limit - 1;
-	return end === undefined ? `:${start}` : `:${start}-${end}`;
-}
-
-function formatReadCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state: GlyphState = "muted"): string {
-	const path = renderToolPath(pathArg(args.file_path ?? args.path), theme, cwd);
-	return `${toolGlyph(theme, state)} ${toolName(theme, state === "error" ? "error" : "muted", "read")} ${path}${theme.fg("warning", getReadRange(args))}`;
-}
-
-function formatBashCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "running", expanded = false): string {
-	const command = collapsedText(stringArg(args.command) ?? "...", expanded, COLLAPSED_COMMAND_CHARS);
-	const timeout = numberArg(args.timeout);
-	const timeoutSuffix = timeout === undefined ? "" : toolMeta(theme, ` (timeout ${timeout}s)`);
-	const nameColor = state === "error" ? "error" : state === "success" ? "success" : "toolTitle";
-	return `${toolGlyph(theme, state)} ${toolName(theme, nameColor, "bash")} ${theme.fg("accent", "$")} ${theme.fg("toolOutput", command)}${timeoutSuffix}`;
-}
-
-function formatPathCall(toolNameValue: BuiltInToolName, path: string | undefined, theme: ThemeLike, state?: GlyphState, expanded = false): string {
-	const defaultColor = toolNameValue === "write" ? "warning" : toolNameValue === "edit" ? "mdHeading" : "muted";
-	const glyphState = state ?? defaultColor;
-	const nameColor = glyphState === "success" ? "success" : glyphState === "error" ? "error" : defaultColor;
-	const displayPath = collapsedText(shortenPath(path), expanded, COLLAPSED_PATH_CHARS);
-	return `${toolGlyph(theme, glyphState)} ${toolName(theme, nameColor, toolNameValue)} ${theme.fg("accent", displayPath)}`;
-}
-
-function formatGrepCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "running", expanded = false): string {
-	const pattern = collapsedText(stringArg(args.pattern) ?? "...", expanded, COLLAPSED_PATTERN_CHARS);
-	const path = collapsedText(shortenPath(stringArg(args.path) ?? "."), expanded, COLLAPSED_PATH_CHARS);
-	const glob = stringArg(args.glob);
-	const ignoreCase = args.ignoreCase === true ? toolMeta(theme, " -i") : "";
-	const literal = args.literal === true ? toolMeta(theme, " literal") : "";
-	const globText = glob ? toolMeta(theme, ` (${collapsedText(glob, expanded, COLLAPSED_PATTERN_CHARS)})`) : "";
-	const nameColor = state === "error" ? "error" : state === "success" ? "success" : "toolTitle";
-	return `${toolGlyph(theme, state)} ${toolName(theme, nameColor, "grep")} ${theme.fg("accent", `/${pattern}/`)}${theme.fg("muted", ` in ${path}`)}${globText}${ignoreCase}${literal}`;
-}
-
-function formatFindCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "running", expanded = false): string {
-	const pattern = collapsedText(stringArg(args.pattern) ?? "...", expanded, COLLAPSED_PATTERN_CHARS);
-	const path = collapsedText(shortenPath(stringArg(args.path) ?? "."), expanded, COLLAPSED_PATH_CHARS);
-	const nameColor = state === "error" ? "error" : state === "success" ? "success" : "toolTitle";
-	return `${toolGlyph(theme, state)} ${toolName(theme, nameColor, "find")} ${theme.fg("accent", pattern)}${theme.fg("muted", ` in ${path}`)}`;
-}
-
-function formatLsCall(args: Record<string, unknown>, theme: ThemeLike, state: GlyphState = "running", expanded = false): string {
-	const nameColor = state === "error" ? "error" : state === "success" ? "success" : "muted";
-	const path = collapsedText(shortenPath(stringArg(args.path) ?? "."), expanded, COLLAPSED_PATH_CHARS);
-	return `${toolGlyph(theme, state)} ${toolName(theme, nameColor, "ls")} ${theme.fg("accent", path)}`;
-}
-
-function formatWriteCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state?: GlyphState): string {
-	return formatWriteHeader(stringArg(args.file_path ?? args.path), theme, state ?? "running", cwd);
-}
-
-function buildWriteDiffLines(content: string): string[] {
-	if (!content) return [];
-	const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-	const width = String(lines.length).length;
-	return lines.map((line, index) => `+${String(index + 1).padStart(width)} ${line}`);
-}
-
-function formatEditCall(args: Record<string, unknown>, theme: ThemeLike, cwd: string, state?: GlyphState): string {
-	return formatEditHeader(stringArg(args.file_path ?? args.path), theme, state ?? "running", cwd);
 }
 
 function hasImage(result: ToolResult): boolean {
@@ -452,16 +255,259 @@ function hasTruncation(details: unknown): boolean {
 	return typeof details === "object" && details !== null && "truncation" in details && Boolean((details as { truncation?: unknown }).truncation);
 }
 
-function registerDefaultTool(pi: ExtensionAPI, name: BuiltInToolName): void {
-	const template = getTemplateTool(name) as AnyToolDefinition;
-	const {
-		execute: _execute,
-		renderCall: _renderCall,
-		renderResult: _renderResult,
-		renderShell: _renderShell,
-		...metadata
-	} = template;
+const BASH_TRAILER = /\n\nCommand (exited|timed out|aborted).*$/s;
 
+function bashFailure(output: string): MetaPart {
+	const code = output.match(/Command exited with code (\d+)/)?.[1];
+	if (code) return { text: `exit ${code}`, role: "error" };
+	if (/Command timed out/.test(output)) return { text: "timed out", role: "error" };
+	if (/Command aborted/.test(output)) return { text: "aborted", role: "error" };
+	return { text: "failed", role: "error" };
+}
+
+function failed(head: RowHead, message: string): void {
+	head.outcome = "error";
+	head.meta = [{ text: "failed", role: "error" }];
+	head.detail = [message];
+	head.detailTone = "error";
+}
+
+/** The full output under an expanded row. */
+function outputBlock(text: string, theme: ThemeLike): Component {
+	const color = tones(theme).dim;
+	return new Text(text.split("\n").map((line) => `   ${paint(theme, line, color)}`).join("\n"), 0, 0);
+}
+
+function buildWriteDiffLines(content: string): string[] {
+	if (!content) return [];
+	const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+	const width = String(lines.length).length;
+	return lines.map((line, index) => `+${String(index + 1).padStart(width)} ${line}`);
+}
+
+function moreLinesHint(hidden: number): string | undefined {
+	return hidden > 0 ? `… ${plural(hidden, "more line")} (${keyHint("app.tools.expand", "to expand")})` : undefined;
+}
+
+const emptyComponent: Component = { render: () => [], invalidate() {} };
+
+// ─── rows ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The component a tool row's call slot returns. It draws at render time from the row's latest head,
+ * so fades and shimmer advance on every frame, and it asks the run registry whether to draw itself,
+ * its whole exploratory run, or nothing.
+ */
+class RowView implements Component {
+	theme: ThemeLike | undefined;
+
+	constructor(
+		private readonly toolCallId: string,
+		private readonly state: RowState,
+		private readonly shared: Shared,
+	) {}
+
+	render(width: number): string[] {
+		const head = this.state.head;
+		const theme = this.theme;
+		if (!head || !theme) return [];
+		const now = clock.now();
+		const role = this.shared.runs.role(this.toolCallId);
+		if (role.kind === "follower") return [];
+		if (role.kind === "solo") return renderRow(head, theme, width, now);
+		if (role.complete && role.members.every((member) => member.outcome === "success")) {
+			return [renderFoldedRun(role.members, theme, width, now, keyHint("app.tools.expand", "to expand"))];
+		}
+		return role.members.flatMap((member) => renderRow(member, theme, width, now));
+	}
+
+	invalidate(): void {}
+}
+
+/** Start a fresh head for this render pass, keeping timings from the tool events. */
+function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: RenderContext, shared: Shared): RowView {
+	const state = context.state;
+	const execution = shared.executions.get(context.toolCallId);
+	const head: RowHead = {
+		kind,
+		outcome: execution ? "running" : "pending",
+		target: targetFor(kind, (args ?? {}) as Record<string, unknown>, context.cwd),
+		meta: [],
+		startedAt: execution?.startedAt,
+		endedAt: undefined,
+		detail: [],
+		detailTone: "output",
+		expanded: context.expanded,
+	};
+	state.head = head;
+	state.view ??= new RowView(context.toolCallId, state, shared);
+	state.view.theme = theme;
+	shared.runs.report(context.toolCallId, head);
+	animate(context, head);
+	return state.view;
+}
+
+/** The head `beginRow` started this pass; pi always renders the call before the result. */
+function currentHead(context: RenderContext): RowHead {
+	const head = context.state.head;
+	if (!head) throw new Error(`tool-activity-renderer: result rendered before call for ${context.toolCallId}`);
+	return head;
+}
+
+/** Settle the head for a final result: outcome, end time, and whether the result view is expanded. */
+function settle(context: RenderContext, shared: Shared, expanded: boolean): RowHead {
+	const head = currentHead(context);
+	const execution = shared.executions.get(context.toolCallId);
+	if (execution && execution.endedAt === undefined) execution.endedAt = clock.now();
+	head.outcome = context.isError ? "error" : "success";
+	head.endedAt = execution?.endedAt;
+	head.expanded = expanded;
+	animate(context, head);
+	return head;
+}
+
+/** Keep redrawing a row while it is live or fading; stop the moment it settles. */
+function animate(context: RenderContext, head: RowHead): void {
+	const state = context.state;
+	const needsFrames = () => {
+		const latest = state.head ?? head;
+		return (isLive(latest.outcome) && latest.startedAt !== undefined) || isFading(latest, clock.now());
+	};
+	if (!needsFrames()) {
+		if (state.timer) clearInterval(state.timer);
+		state.timer = undefined;
+		return;
+	}
+	if (state.timer) return;
+	state.timer = setInterval(() => {
+		if (needsFrames()) {
+			context.invalidate();
+			return;
+		}
+		clearInterval(state.timer);
+		state.timer = undefined;
+	}, FRAME_MS);
+	// A redraw timer must never be what keeps a process alive.
+	state.timer.unref?.();
+}
+
+type RenderCall = NonNullable<AnyToolDefinition["renderCall"]>;
+type RenderResult = NonNullable<AnyToolDefinition["renderResult"]>;
+
+/** How one tool fills in its row. The registration settles the head before `done`/`failed` run. */
+interface ResultHandlers {
+	/** A streaming update while the tool runs. */
+	partial?(result: ToolResult, head: RowHead): void;
+	/** The final, successful result: set the meta, return what goes under the row. */
+	done(result: ToolResult, head: RowHead, expanded: boolean, theme: ThemeLike, context: RenderContext): Component;
+	/** The final, failed result. Defaults to the first output line as the error detail. */
+	failed?(result: ToolResult, head: RowHead, expanded: boolean, theme: ThemeLike): Component;
+}
+
+function registerGraphiteTool(pi: ExtensionAPI, kind: ToolKind, shared: Shared, handlers: ResultHandlers): void {
+	const template = getTemplateTool(kind) as AnyToolDefinition;
+	const renderCall: RenderCall = (args, theme, context) => beginRow(kind, args, theme, context, shared);
+	const result: RenderResult = (toolResult, { expanded, isPartial }, theme, context) => {
+		const typed = toolResult as ToolResult;
+		if (isPartial) {
+			handlers.partial?.(typed, currentHead(context));
+			return emptyComponent;
+		}
+		const head = settle(context, shared, expanded);
+		if (!context.isError) return handlers.done(typed, head, expanded, theme, context);
+		if (handlers.failed) return handlers.failed(typed, head, expanded, theme);
+		failed(head, nonEmptyLines(getText(typed))[0] ?? `${kind} failed`);
+		return emptyComponent;
+	};
+	pi.registerTool({
+		...template,
+		renderShell: "self",
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			const tool = getBuiltInTools(ctx.cwd)[kind] as AnyToolDefinition;
+			return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+		},
+		renderCall,
+		renderResult: result,
+	} as AnyToolDefinition);
+}
+
+function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
+	registerGraphiteTool(pi, "read", shared, {
+		done(result, head, expanded, theme) {
+			const text = getText(result);
+			if (hasImage(result)) {
+				head.meta = [{ text: "image", role: "success" }];
+				return emptyComponent;
+			}
+			head.meta = [{ text: plural(nonEmptyLines(text).length, "line"), role: "result" }];
+			if (hasTruncation(result.details)) head.meta.push({ text: "⚠ truncated", role: "warning" });
+			return expanded && text ? outputBlock(text, theme) : emptyComponent;
+		},
+	});
+
+	const bashBody = (result: ToolResult) => getText(result).replace(BASH_TRAILER, "");
+	const bashOutput = (result: ToolResult, expanded: boolean, theme: ThemeLike) => {
+		const output = getText(result);
+		return expanded && output.trim() ? outputBlock(output, theme) : emptyComponent;
+	};
+	registerGraphiteTool(pi, "bash", shared, {
+		partial(result, head) {
+			head.detail = nonEmptyLines(bashBody(result)).slice(-RUNNING_TAIL_LINES);
+		},
+		done(result, head, expanded, theme) {
+			const lineCount = nonEmptyLines(bashBody(result)).length;
+			head.meta = [{ text: lineCount === 0 ? "no output" : plural(lineCount, "line"), role: "result" }];
+			return bashOutput(result, expanded, theme);
+		},
+		failed(result, head, expanded, theme) {
+			head.meta = [bashFailure(getText(result))];
+			if (!expanded) head.detail = nonEmptyLines(bashBody(result)).slice(-FAILURE_PREVIEW_LINES);
+			return bashOutput(result, expanded, theme);
+		},
+	});
+
+	registerGraphiteTool(pi, "edit", shared, {
+		done(result, head, expanded, theme) {
+			const typed = result as AgentToolResult<EditToolDetails | undefined>;
+			const diff = typed.details?.diff;
+			if (!diff) {
+				head.meta = [{ text: "applied", role: "result" }];
+				return emptyComponent;
+			}
+			const diffLines = diff.split("\n").filter((line) => line.length > 0);
+			head.meta = [
+				{ text: `+${diffLines.filter((line) => line.startsWith("+")).length}`, role: "added" },
+				{ text: `−${diffLines.filter((line) => line.startsWith("-")).length}`, role: "removed" },
+			];
+			const visible = expanded ? diffLines : diffLines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
+			return new GraphiteDiff(visible, moreLinesHint(diffLines.length - visible.length), theme);
+		},
+	});
+
+	registerGraphiteTool(pi, "write", shared, {
+		done(_result, head, expanded, theme, context) {
+			const diffLines = buildWriteDiffLines(stringArg((context.args as Record<string, unknown>).content) ?? "");
+			head.meta = [{ text: plural(diffLines.length, "line"), role: "result" }];
+			const visible = expanded ? diffLines : diffLines.slice(0, WRITE_COLLAPSED_DIFF_LINES);
+			return new GraphiteDiff(visible, moreLinesHint(diffLines.length - visible.length), theme);
+		},
+	});
+
+	for (const kind of ["grep", "find", "ls"] as const) {
+		registerGraphiteTool(pi, kind, shared, {
+			done(result, head, expanded, theme) {
+				const output = getText(result);
+				head.meta = [{ text: searchResultLabel(kind, countSearchResults(kind, output)), role: "result" }];
+				if (hasTruncation(result.details)) head.meta.push({ text: "⚠ truncated", role: "warning" });
+				return expanded && output.trim() ? outputBlock(output, theme) : emptyComponent;
+			},
+		});
+	}
+}
+
+function registerDefaultTool(pi: ExtensionAPI, name: ToolKind): void {
+	const template = getTemplateTool(name) as AnyToolDefinition;
+	const { execute: _execute, renderCall: _renderCall, renderResult: _renderResult, renderShell: _renderShell, ...metadata } = template;
 	pi.registerTool({
 		...metadata,
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -471,283 +517,47 @@ function registerDefaultTool(pi: ExtensionAPI, name: BuiltInToolName): void {
 	} as AnyToolDefinition);
 }
 
-function registerReadTool(pi: ExtensionAPI): void {
-	const template = getTemplateTool("read");
-	pi.registerTool({
-		...template,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getBuiltInTools(ctx.cwd).read.execute(toolCallId, params, signal, onUpdate, ctx);
-		},
-		renderCall(args, theme, context) {
-			const rowContext = context as RenderContext;
-			setStarted(rowContext);
-			const call = getCallText(rowContext);
-			call.setText(formatReadCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
-			return call;
-		},
-		renderResult(result, { expanded, isPartial }, theme, context) {
-			const rowContext = context as RenderContext;
-			setEnded(rowContext, isPartial);
-			const typedResult = result as ToolResult;
-			const args = context.args as Record<string, unknown>;
-			const call = getStoredCallText(rowContext);
-			const text = getText(typedResult);
-			const abnormal = context.isError || hasImage(typedResult) || hasTruncation(typedResult.details);
-
-			if (isPartial) {
-				call.setText(`${formatReadCall(args, theme, context.cwd, currentGlyphState(rowContext, "running"))} ${theme.fg("muted", "…")}`);
-				return emptyText();
-			}
-
-			if (context.isError) {
-				const message = firstMeaningfulLine(text) || "read failed";
-				call.setText(`${formatReadCall(args, theme, context.cwd, settleGlyphState(rowContext, true))} ${theme.fg("error", "failed")}`);
-				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
-			}
-
-			const successCall = formatReadCall(args, theme, context.cwd, settleGlyphState(rowContext, false));
-			if (hasImage(typedResult)) {
-				call.setText(`${successCall} ${theme.fg("success", "🖼 image")}`);
-				return emptyText();
-			}
-
-			const lineCount = countLines(text);
-			const warning = abnormal ? theme.fg("warning", " ⚠ truncated") : "";
-			call.setText(`${successCall} ${renderStatus(theme, true, plural(lineCount, "line"))}${warning}`);
-
-			if (!expanded) return emptyText();
-
-			return text ? new Text(outputBlock(text, theme), 0, 0) : emptyText();
-		},
+/** Track execution spans and the exploratory runs of each assistant message, live and on resume. */
+function trackActivity(pi: ExtensionAPI, shared: Shared): void {
+	pi.on("tool_execution_start", (event) => {
+		shared.executions.set(event.toolCallId, { startedAt: clock.now() });
 	});
-}
-
-function registerBashTool(pi: ExtensionAPI): void {
-	const template = getTemplateTool("bash");
-	pi.registerTool({
-		...template,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getBuiltInTools(ctx.cwd).bash.execute(toolCallId, params, signal, onUpdate, ctx);
-		},
-		renderCall(args, theme, context) {
-			setStarted(context as RenderContext);
-			const rowContext = context as RenderContext;
-			const call = getCallText(rowContext);
-			const elapsed = elapsedSuffix(rowContext);
-			const running = rowContext.executionStarted && !elapsed ? theme.fg("muted", " …") : elapsed ? theme.fg("dim", ` · ${elapsed}`) : "";
-			call.setText(`${formatBashCall(args as Record<string, unknown>, theme, currentGlyphState(rowContext, "running"), context.expanded)}${running}`);
-			return call;
-		},
-		renderResult(result, options, theme, context) {
-			const rowContext = context as RenderContext;
-			setEnded(rowContext, options.isPartial);
-			const typedResult = result as ToolResult;
-			const args = context.args as Record<string, unknown>;
-			const output = getText(typedResult);
-			const duration = elapsedSuffix(rowContext);
-			const durationText = duration ? ` · ${duration}` : "";
-			const outputLines = countLines(output.replace(/\n\nCommand (exited|timed out|aborted).*$/s, ""));
-			const lineText = outputLines === 0 ? "no output" : plural(outputLines, "line");
-			const statusLine = context.isError ? firstMeaningfulLine(output).match(/Command .*$/)?.[0] ?? "error" : lineText;
-			const call = getCallText(rowContext);
-			const settledState = settleGlyphState(rowContext, context.isError);
-			call.setText(
-				`${formatBashCall(args, theme, settledState, options.expanded)} ${renderStatus(theme, !context.isError, context.isError ? statusLine : lineText)}${theme.fg("dim", durationText)}`,
-			);
-
-			if (options.isPartial) {
-				return emptyText();
-			}
-
-			if (options.expanded) {
-				return output.trim() ? new Text(outputBlock(output, theme), 0, 0) : emptyText();
-			}
-
-			if (!context.isError) {
-				return emptyText();
-			}
-
-			const previewSource = output.replace(/\n\nCommand .*$/s, "");
-			const preview = lastMeaningfulLines(previewSource, FAILURE_PREVIEW_LINES);
-			return preview.length > 0 ? new Text(indentLines(preview, theme), 0, 0) : emptyText();
-		},
+	pi.on("tool_execution_end", (event) => {
+		const execution = shared.executions.get(event.toolCallId);
+		if (execution && execution.endedAt === undefined) execution.endedAt = clock.now();
 	});
+	pi.on("message_update", (event) => shared.runs.ingest(event.message));
+	pi.on("message_end", (event) => shared.runs.ingest(event.message));
+	const ingestBranch = (_event: unknown, ctx: { sessionManager: { getBranch(): unknown[] } }) => {
+		shared.runs.clear();
+		shared.executions.clear();
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "message") shared.runs.ingest((entry as { message?: unknown }).message);
+		}
+	};
+	pi.on("session_start", ingestBranch);
+	pi.on("session_tree", ingestBranch);
 }
 
-function registerEditTool(pi: ExtensionAPI): void {
-	const template = getTemplateTool("edit");
-	pi.registerTool({
-		...template,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getBuiltInTools(ctx.cwd).edit.execute(toolCallId, params, signal, onUpdate, ctx);
-		},
-		renderCall(args, theme, context) {
-			const rowContext = context as RenderContext;
-			setStarted(rowContext);
-			const call = getCallText(rowContext);
-			call.setText(formatEditCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
-			return call;
-		},
-		renderResult(result, options, theme, context) {
-			const typedResult = result as AgentToolResult<EditToolDetails | undefined>;
-			const args = context.args as Record<string, unknown>;
-			const rowContext = context as RenderContext;
-			setEnded(rowContext, options.isPartial);
-			const call = getCallText(rowContext);
-
-			if (options.isPartial) {
-				call.setText(`${formatEditCall(args, theme, context.cwd, "running")} ${theme.fg("muted", "…")}`);
-				return emptyText();
-			}
-
-			if (context.isError) {
-				const message = firstMeaningfulLine(getText(typedResult as ToolResult)) || "edit failed";
-				call.setText(`${formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, true))} ${theme.fg("error", "failed")}`);
-				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
-			}
-
-			const diff = typedResult.details?.diff;
-			if (!diff) {
-				call.setText(`${formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, false))} ${theme.fg("success", "applied")}`);
-				return emptyText();
-			}
-
-			const diffLines = diff.split("\n").filter((line) => line.length > 0);
-			const additions = diffLines.filter((line) => line.startsWith("+")).length;
-			const removals = diffLines.filter((line) => line.startsWith("-")).length;
-			const visibleDiffLines = options.expanded ? diffLines : diffLines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
-			const hiddenCount = diffLines.length - visibleDiffLines.length;
-			const summary = `${additions === 0 ? "Added 0 lines" : `Added ${plural(additions, "line")}`}, ${removals === 0 ? "removed 0 lines" : `removed ${plural(removals, "line")}`}`;
-			call.setText(formatEditCall(args, theme, context.cwd, settleGlyphState(rowContext, false)));
-			return new ClaudeStyleDiff(summary, visibleDiffLines, hiddenCount, options.expanded, theme);
-		},
-	});
-}
-
-function registerWriteTool(pi: ExtensionAPI): void {
-	const template = getTemplateTool("write");
-	pi.registerTool({
-		...template,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return getBuiltInTools(ctx.cwd).write.execute(toolCallId, params, signal, onUpdate, ctx);
-		},
-		renderCall(args, theme, context) {
-			const rowContext = context as RenderContext;
-			setStarted(rowContext);
-			const call = getCallText(rowContext);
-			call.setText(formatWriteCall(args as Record<string, unknown>, theme, context.cwd, currentGlyphState(rowContext, "running")));
-			return call;
-		},
-		renderResult(result, options, theme, context) {
-			const args = context.args as Record<string, unknown>;
-			const rowContext = context as RenderContext;
-			setEnded(rowContext, options.isPartial);
-			if (options.isPartial) return emptyText();
-			const call = getCallText(rowContext);
-			const content = stringArg(args.content) ?? "";
-			const diffLines = buildWriteDiffLines(content);
-			const lineCount = diffLines.length;
-			const output = getText(result as ToolResult);
-			if (context.isError) {
-				const message = firstMeaningfulLine(output) || "write failed";
-				call.setText(`${formatWriteHeader(stringArg(args.file_path ?? args.path), theme, settleGlyphState(rowContext, true), context.cwd)} ${theme.fg("error", "failed")}`);
-				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
-			}
-			const visibleDiffLines = options.expanded ? diffLines : diffLines.slice(0, WRITE_COLLAPSED_DIFF_LINES);
-			const hiddenCount = diffLines.length - visibleDiffLines.length;
-			const summary = `Added ${plural(lineCount, "line")}, removed 0 lines`;
-			call.setText(`${formatWriteHeader(stringArg(args.file_path ?? args.path), theme, settleGlyphState(rowContext, false), context.cwd)} ${renderStatus(theme, true, plural(lineCount, "line"))}`);
-			return new ClaudeStyleDiff(summary, visibleDiffLines, hiddenCount, options.expanded, theme);
-		},
-	});
-}
-
-function registerSearchLikeTool(pi: ExtensionAPI, name: "grep" | "find" | "ls"): void {
-	const template = getTemplateTool(name) as AnyToolDefinition;
-	pi.registerTool({
-		...template,
-		renderShell: "self",
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const tool = getBuiltInTools(ctx.cwd)[name] as AnyToolDefinition;
-			return tool.execute(toolCallId, params, signal, onUpdate, ctx);
-		},
-		renderCall(args, theme, context) {
-			const rowContext = context as RenderContext;
-			setStarted(rowContext);
-			const call = getCallText(rowContext);
-			const recordArgs = args as Record<string, unknown>;
-			const state: GlyphState = currentGlyphState(rowContext, "running");
-			const text = name === "grep" ? formatGrepCall(recordArgs, theme, state, context.expanded) : name === "find" ? formatFindCall(recordArgs, theme, state, context.expanded) : formatLsCall(recordArgs, theme, state, context.expanded);
-			call.setText(text);
-			return call;
-		},
-		renderResult(result, options, theme, context) {
-			const typedResult = result as ToolResult;
-			const recordArgs = context.args as Record<string, unknown>;
-			const rowContext = context as RenderContext;
-			setEnded(rowContext, options.isPartial);
-			if (options.isPartial) return emptyText();
-			const call = getCallText(rowContext);
-			const resultState: GlyphState = settleGlyphState(rowContext, context.isError);
-			const callText = name === "grep" ? formatGrepCall(recordArgs, theme, resultState, options.expanded) : name === "find" ? formatFindCall(recordArgs, theme, resultState, options.expanded) : formatLsCall(recordArgs, theme, resultState, options.expanded);
-			const output = getText(typedResult);
-			const count = countSearchResults(name, output);
-			const truncated = hasTruncation(typedResult.details) ? theme.fg("warning", " ⚠ truncated") : "";
-
-			if (context.isError) {
-				const message = firstMeaningfulLine(output) || `${name} failed`;
-				call.setText(`${callText} ${theme.fg("error", "failed")}`);
-				return new Text(`${detailPrefix(theme)}${theme.fg("error", message)}`, 0, 0);
-			}
-
-			const countText = searchResultLabel(name, count);
-			const status = count === 0 ? theme.fg("muted", countText) : renderStatus(theme, true, countText);
-			call.setText(`${callText} ${status}${truncated}`);
-			if (!options.expanded) return emptyText();
-
-			return output.trim() ? new Text(outputBlock(output, theme), 0, 0) : emptyText();
-		},
-	} as AnyToolDefinition);
-}
-
-function registerCompactTools(pi: ExtensionAPI): void {
-	registerReadTool(pi);
-	registerBashTool(pi);
-	registerEditTool(pi);
-	registerWriteTool(pi);
-	registerSearchLikeTool(pi, "grep");
-	registerSearchLikeTool(pi, "find");
-	registerSearchLikeTool(pi, "ls");
-}
-
-function registerDefaultTools(pi: ExtensionAPI): void {
-	for (const name of TOOL_NAMES) registerDefaultTool(pi, name);
-}
-
-export default function compactToolRenderer(pi: ExtensionAPI): void {
+export default function toolActivityRenderer(pi: ExtensionAPI): void {
 	let mode = readMode();
 	let overridesRegistered = false;
+	const shared: Shared = { runs: new ExploreRuns(), executions: new Map() };
 
 	function applyMode(nextMode: ToolRenderMode, persist: boolean): void {
 		mode = nextMode;
 		if (persist) writeMode(nextMode);
-
 		if (nextMode === COMPACT_MODE) {
-			registerCompactTools(pi);
+			registerGraphiteTools(pi, shared);
 			overridesRegistered = true;
 			return;
 		}
-
-		if (overridesRegistered) {
-			registerDefaultTools(pi);
-		}
+		if (overridesRegistered) for (const name of TOOL_KINDS) registerDefaultTool(pi, name);
 	}
 
 	applyMode(mode, false);
+	trackActivity(pi, shared);
+	registerWorkingLine(pi);
 
 	pi.registerCommand("tool-render", {
 		description: "Switch built-in tool rendering: /tool-render compact|default",
@@ -757,14 +567,13 @@ export default function compactToolRenderer(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Tool renderer: ${mode}. Usage: /tool-render compact|default`, "info");
 				return;
 			}
-
 			if (requested !== COMPACT_MODE && requested !== DEFAULT_MODE) {
 				ctx.ui.notify(`Unknown tool renderer mode: ${requested}. Use compact or default.`, "warning");
 				return;
 			}
-
 			applyMode(requested, true);
 			ctx.ui.notify(`Tool renderer: ${requested}`, "info");
 		},
 	});
 }
+

@@ -1,8 +1,8 @@
 {
   "name": "@doodledood/pi-tool-activity-renderer",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Compact custom rendering wrappers for Pi built-in file and shell tools.",
+  "description": "Graphite-style rows for Pi's built-in file and shell tools, plus a live working line.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test extensions/*.test.ts"
@@ -17,8 +17,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.99.0",
+    "@earendil-works/pi-tui": ">=0.99.0"
   },
   "license": "MIT",
   "repository": {
@@ -38,5 +38,9 @@
     "config",
     "README.md",
     "package.json"
-  ]
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.0.2",
+    "@earendil-works/pi-tui": "^1.0.2"
+  }
 }
