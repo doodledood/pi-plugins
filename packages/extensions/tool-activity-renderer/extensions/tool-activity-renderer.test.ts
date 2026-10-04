@@ -515,14 +515,17 @@ test("edits draw a diff whose changed words carry a stronger tint, with +/− in
 
 function recordingUi() {
 	const calls: Array<{ method: "indicator" | "message"; value: unknown }> = [];
+	const rawMessages: string[] = [];
 	return {
 		calls,
+		rawMessages,
 		ui: {
 			theme,
 			setWorkingIndicator(options?: unknown) {
 				calls.push({ method: "indicator", value: options });
 			},
 			setWorkingMessage(message?: string) {
+				if (message !== undefined) rawMessages.push(message);
 				calls.push({ method: "message", value: message === undefined ? undefined : stripTerminalSequences(message) });
 			},
 		},
@@ -743,7 +746,7 @@ test("a running command's tail shows what the terminal would: no escape codes, c
 	assert.deepEqual(rendered.slice(1).map((line) => stripTerminalSequences(line)), ["   start", "    100  100k"]);
 	assert.ok(!rendered.join("").includes("\r"));
 	row.partial("a\tb\r\n\x1b(Bc\x1b[m\x1b=\x1b7d\r\n");
-	assert.deepEqual(at(200, () => row.plain(80)).slice(1), ["   a  b", "   cd"], "tabs expand, CRLF endings survive, every escape form goes");
+	assert.deepEqual(at(200, () => row.plain(80)).slice(1), ["   a   b", "   cd"], "tabs expand, CRLF endings survive, every escape form goes");
 	row.stop();
 
 	const failing = new Row(createHarness(), "bash", "f", { command: "make" });
@@ -826,4 +829,140 @@ test("durations round before choosing the unit", () => {
 	assert.equal(formatDuration(59_940), "59.9s");
 	assert.equal(formatDuration(59_960), "1m 00s");
 	assert.equal(formatDuration(61_500), "1m 01s");
+});
+
+// ─── review round 3 ───────────────────────────────────────────────────────────
+
+test("detail lines under a row never exceed the width: long error output and long running tails", () => {
+	setHyperlinks(false);
+	for (const width of [60, 100, 200]) {
+		const harness = createHarness();
+		const failing = new Row(harness, "bash", `f${width}`, { command: "make" });
+		at(0, () => failing.start());
+		at(100, () => failing.finish(`${"x".repeat(300)}\n\nCommand exited with code 1`, { isError: true }));
+		const running = new Row(harness, "bash", `r${width}`, { command: "make" });
+		at(0, () => running.start());
+		running.partial("y".repeat(300));
+		const read = new Row(harness, "read", `e${width}`, { path: "a.ts" });
+		at(0, () => read.start());
+		at(100, () => read.finish(`ENOENT ${"z".repeat(300)}`, { isError: true }));
+		for (const row of [failing, running, read]) {
+			for (const line of at(200, () => row.render(width))) assert.ok(visibleWidth(line) <= width, `fits ${width}: ${stripTerminalSequences(line).slice(0, 40)}…`);
+			row.stop();
+		}
+	}
+});
+
+function strongSpans(line: string, bg: string, ink: string): string {
+	const strong = hex(mixColors(parseColor(TOKENS[bg]!), parseColor(TOKENS[ink]!), 0.28));
+	const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(strong.slice(i, i + 2), 16));
+	return [...line.matchAll(new RegExp(`\\x1b\\[48;2;${r};${g};${b}m(?:\\x1b\\[[0-9;]*m)*([^\\x1b]*)`, "g"))].map((m) => m[1]).join("");
+}
+
+test("multi-line replacements pair line by line; an unpaired line gets no emphasis", () => {
+	setHyperlinks(false);
+	const pairs = new Row(createHarness(), "edit", "p", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 a = 1\n- 2 b = 2\n+ 1 a = 10\n+ 2 b = 20" } }).render(80);
+	assert.equal(strongSpans(pairs[1] ?? "", "toolErrorBg", "toolDiffRemoved"), "1");
+	assert.equal(strongSpans(pairs[2] ?? "", "toolErrorBg", "toolDiffRemoved"), "2");
+	assert.equal(strongSpans(pairs[3] ?? "", "toolSuccessBg", "toolDiffAdded"), "10");
+	assert.equal(strongSpans(pairs[4] ?? "", "toolSuccessBg", "toolDiffAdded"), "20");
+
+	const uneven = new Row(createHarness(), "edit", "u", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 a = 1\n- 2 b = 2\n+ 1 a = 3" } }).render(80);
+	assert.equal(strongSpans(uneven[1] ?? "", "toolErrorBg", "toolDiffRemoved"), "1");
+	assert.equal(strongSpans(uneven[2] ?? "", "toolErrorBg", "toolDiffRemoved"), "", "the unpaired removed line has no strong tint");
+	assert.equal(strongSpans(uneven[3] ?? "", "toolSuccessBg", "toolDiffAdded"), "3");
+});
+
+test("a row whose component pi dropped mid-run stops redrawing once its tool ends", () => {
+	setHyperlinks(false);
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const orphan = new Row(harness, "bash", "o", { command: "sleep 1" });
+		at(0, () => orphan.start());
+		at(0, () => orphan.render(80));
+		at(100, () => mock.timers.tick(100));
+		assert.equal(orphan.context.invalidations, 1, "redraws while the tool runs");
+		harness.emit("tool_execution_end", { toolCallId: "o", toolName: "bash", isError: false });
+		at(200, () => mock.timers.tick(100));
+		at(300, () => mock.timers.tick(100));
+		assert.equal(orphan.context.invalidations, 1, "no redraws after the execution ended");
+		assert.equal(orphan.context.state.timer, undefined);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("the working line shimmers its label, reads Working for tool-call streaming and between turns", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, rawMessages, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const lastMessage = () => calls.filter((c) => c.method === "message").at(-1)?.value;
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "thinking_delta" } });
+		at(300, () => mock.timers.tick(100));
+		const first = rawMessages.at(-1) ?? "";
+		at(1_000, () => mock.timers.tick(100));
+		const second = rawMessages.at(-1) ?? "";
+		const label = (raw: string) => raw.slice(0, raw.lastIndexOf("Thinking") + "Thinking".length + 12);
+		assert.equal(stripTerminalSequences(first).split("  ")[0], "Thinking");
+		assert.notEqual(label(first), label(second), "the label's colors move");
+
+		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "toolcall_delta" } });
+		at(1_100, () => mock.timers.tick(100));
+		assert.equal(lastMessage(), "Working  1.1s");
+
+		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "text_delta" } });
+		at(1_200, () => mock.timers.tick(100));
+		assert.equal(lastMessage(), "Writing  1.2s");
+		harness.emit("message_end", { message: { role: "assistant", content: [] } });
+		at(1_300, () => mock.timers.tick(100));
+		assert.equal(lastMessage(), "Working  1.3s", "a finished reply no longer reads as Writing");
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("the finished glyph recedes with its row, and a live-finished folded run recedes too", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "read", "g", { path: "a.ts" });
+	at(0, () => row.start());
+	at(500, () => row.finish("x"));
+	assert.notEqual(fgAt(at(800, () => row.render(80))[0] ?? "", "●"), fgAt(at(3_000, () => row.render(80))[0] ?? "", "●"));
+	row.stop();
+
+	const { rows } = runFixture();
+	at(0, () => rows.r1.start());
+	at(200, () => rows.g1.start());
+	at(100, () => rows.r1.finish("one"));
+	at(300, () => rows.g1.finish("a:1"));
+	const fresh = at(400, () => {
+		rows.g1.render();
+		return rows.r1.render()[0] ?? "";
+	});
+	const settled = at(3_000, () => rows.r1.render()[0] ?? "");
+	assert.match(stripTerminalSequences(fresh), /0\.3s$/, "the fold spans the whole run, first start to last end");
+	assert.notEqual(fgAt(fresh, "Explored"), fgAt(settled, "Explored"));
+	for (const r of Object.values(rows)) r.stop();
+});
+
+test("session_tree re-reads the branch: the new branch's runs fold", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	harness.emit("message_end", { message: message(["x1", "read"]) });
+	harness.emit("session_tree", {}, { sessionManager: { getBranch: () => [{ type: "message", message: message(["t1", "read"], ["t2", "ls"]) }] } });
+	const t1 = new Row(harness, "read", "t1", { path: "a.ts" }).restore("x");
+	const t2 = new Row(harness, "ls", "t2", { path: "." }).restore("a");
+	t1.render();
+	assert.deepEqual(t2.plain(), []);
+	assert.match(t1.plain()[0] ?? "", /^ ● Explored\s+1 file · 1 listing/);
+});
+
+test("an expanded bash failure shows its output once, in the output block", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "bash", "x", { command: "npm test" }).restore("1 failing\n\nCommand exited with code 1", { isError: true }).expand();
+	assert.equal(row.plain(80).filter((line) => line.includes("1 failing")).length, 1);
 });

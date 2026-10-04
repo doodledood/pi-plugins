@@ -1,6 +1,7 @@
 import type { Color, Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { blend, cellText, paint, type ThemeLike, tones } from "./palette.ts";
+import { blend, paint, type ThemeLike, tones } from "./palette.ts";
+import { cellText } from "./text.ts";
 
 interface DiffLine {
 	sign: "+" | "-" | " ";

@@ -2,7 +2,7 @@
 
 A calm dark Pi TUI theme. Brightness carries the hierarchy and color only means state: one blue accent, soft success/error/warning colors, low-saturation diff bands, and a subtle band behind your own messages.
 
-It pairs with [`tool-activity-renderer`](../../extensions/tool-activity-renderer), which draws tool rows from the active theme's tokens. Finished rows fade from `text` toward `muted`, and diffs tint with `toolSuccessBg` and `toolErrorBg`.
+It pairs with [`tool-activity-renderer`](../../extensions/tool-activity-renderer), which draws tool rows from the active theme's tokens. Finished rows recede from `text` toward `muted`, and diffs tint with `toolSuccessBg` and `toolErrorBg`.
 
 Pi themes cannot set the terminal background, so Graphite assumes a dark terminal background (it was tuned against `#0f0f11`).
 

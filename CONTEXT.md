@@ -13,7 +13,7 @@ The visual direction the tool activity renderer and the `graphite` theme share: 
 _Avoid_: Calm mode, dark mode.
 
 **Recede**:
-A finished tool row's fade from full brightness to the muted tones over about two seconds after it lands; failures never recede and restored rows start receded.
+A finished tool row's shift from full brightness to the muted tones over about two seconds after it lands; failures never recede and restored rows start receded.
 _Avoid_: Dim-out, fade when the timed, success-only behavior is meant.
 
 **Exploratory run**:

@@ -19,6 +19,7 @@ import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
+import { cellLines } from "./tool-activity-renderer/text.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
 
 type ToolRenderMode = "compact" | "default";
@@ -194,29 +195,8 @@ function targetFor(kind: ToolKind, args: Record<string, unknown>, cwd: string): 
 
 // ─── results ──────────────────────────────────────────────────────────────────
 
-// Escape sequences: CSI; OSC (BEL- or ST-terminated); DCS/SOS/PM/APC strings; then every other
-// ESC form (intermediates plus a final byte, e.g. `ESC ( B`, `ESC =`, `ESC 7`).
-const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_X][^\x1b]*\x1b\\|\x1b[\x20-\x2f]*[\x30-\x7e]/g;
-// Control characters other than tab and newline; all single code units, so surrogate pairs survive.
-const CONTROL = /[\x00-\x08\x0B-\x1F\x7F]/g;
-
-/**
- * Tool output as plain text a terminal row can hold: escape sequences and control characters
- * removed, and each `\r`-redrawn progress line reduced to what a terminal would finally show.
- */
-function plainOutput(text: string): string {
-	return text
-		.replace(ANSI, "")
-		.split("\n")
-		.map((line) => {
-			const trimmed = line.replace(/\r+$/, "");
-			return trimmed.slice(trimmed.lastIndexOf("\r") + 1).replace(/\t/g, "  ").replace(CONTROL, "");
-		})
-		.join("\n");
-}
-
 function getText(result: Pick<ToolResult, "content">): string {
-	return plainOutput(
+	return cellLines(
 		result.content
 			.filter((part) => part.type === "text")
 			.map((part) => part.text ?? "")
@@ -265,7 +245,7 @@ function bashFailure(output: string): MetaPart {
 	return { text: "failed", role: "error" };
 }
 
-function failed(head: RowHead, message: string): void {
+function markFailed(head: RowHead, message: string): void {
 	head.outcome = "error";
 	head.meta = [{ text: "failed", role: "error" }];
 	head.detail = [message];
@@ -330,7 +310,8 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	const execution = shared.executions.get(context.toolCallId);
 	const head: RowHead = {
 		kind,
-		outcome: execution ? "running" : "pending",
+		// An ended execution whose result this row never received stays quiet rather than running.
+		outcome: execution && execution.endedAt === undefined ? "running" : "pending",
 		target: targetFor(kind, (args ?? {}) as Record<string, unknown>, context.cwd),
 		meta: [],
 		startedAt: execution?.startedAt,
@@ -343,7 +324,7 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
 	shared.runs.report(context.toolCallId, head);
-	animate(context, head);
+	animate(context, head, shared);
 	return state.view;
 }
 
@@ -362,16 +343,21 @@ function settle(context: RenderContext, shared: Shared, expanded: boolean): RowH
 	head.outcome = context.isError ? "error" : "success";
 	head.endedAt = execution?.endedAt;
 	head.expanded = expanded;
-	animate(context, head);
+	animate(context, head, shared);
 	return head;
 }
 
-/** Keep redrawing a row while it is live or fading; stop the moment it settles. */
-function animate(context: RenderContext, head: RowHead): void {
+/**
+ * Keep redrawing a row while its tool runs or it recedes; stop the moment it settles. "Runs" is read
+ * from the execution record, not the row: pi can drop a running row's component and give the result
+ * to a rebuilt one, and the dropped row must not keep redrawing (and re-reporting) forever.
+ */
+function animate(context: RenderContext, head: RowHead, shared: Shared): void {
 	const state = context.state;
 	const needsFrames = () => {
 		const latest = state.head ?? head;
-		return (isLive(latest.outcome) && latest.startedAt !== undefined) || isFading(latest, clock.now());
+		const running = isLive(latest.outcome) && shared.executions.get(context.toolCallId)?.endedAt === undefined;
+		return (running && latest.startedAt !== undefined) || isFading(latest, clock.now());
 	};
 	if (!needsFrames()) {
 		if (state.timer) clearInterval(state.timer);
@@ -416,7 +402,7 @@ function registerGraphiteTool(pi: ExtensionAPI, kind: ToolKind, shared: Shared, 
 		const head = settle(context, shared, expanded);
 		if (!context.isError) return handlers.done(typed, head, expanded, theme, context);
 		if (handlers.failed) return handlers.failed(typed, head, expanded, theme);
-		failed(head, nonEmptyLines(getText(typed))[0] ?? `${kind} failed`);
+		markFailed(head, nonEmptyLines(getText(typed))[0] ?? `${kind} failed`);
 		return emptyComponent;
 	};
 	pi.registerTool({

@@ -18,7 +18,7 @@ Graphite-style rows for Pi's built-in tools (`read`, `grep`, `find`, `ls`, `bash
 ## What it draws
 
 - **Rows.** Each row shows a state glyph, a verb, the target, and a right-aligned result column with the duration. When a path does not fit, its leading directories collapse to `…/` before the file name is touched. While a tool runs, the glyph breathes and a highlight sweeps across the present-tense verb (Reading, Searching, Running). When the tool lands, the verb turns past tense (Read, Searched, Ran) and the result appears: lines, matches, files, entries, `+A −R`, `exit N`.
-- **Temporal depth.** A finished row starts bright and fades to the muted tones over about two seconds. Failures stay bright. Rows restored from session history render already faded.
+- **Temporal depth.** A finished row starts bright and recedes to the muted tones over about two seconds. Failures stay bright. Rows restored from session history render already receded.
 - **Exploratory runs.** Two or more consecutive `read`/`grep`/`find`/`ls` calls from one assistant message draw as one packed block, with no blank lines between rows. Once they all succeed, they fold into one `Explored …` line. A failure keeps the run unfolded with the error shown. `ctrl+o` (expand) shows every row on its own with its output.
 - **Diffs.** `edit` and `write` results draw as tinted bands under the row. When a removed line pairs with an added line, only the span that changed gets the stronger tint. Collapsed diffs show the first 12 lines, then a `… N more lines` expand hint.
 - **Working line.** While pi works, the indicator above the editor is a breathing dot, followed by what pi is doing now (Thinking, Reading, Running, Writing; Working for other tools) and the run's elapsed time.
@@ -35,7 +35,7 @@ This package typechecks and tests against Pi 1.0.2 through its own `devDependenc
 
 ## Cost
 
-Running and fading rows redraw every 100 ms until they settle. In Pi's default fullscreen TUI mode that only repaints what is on screen. In `tuiMode: "regular"`, a row that scrolls above the viewport while it is still animating makes Pi redraw the whole screen.
+Running and receding rows redraw every 100 ms until they settle. In Pi's default fullscreen TUI mode that only repaints what is on screen. In `tuiMode: "regular"`, a row that scrolls above the viewport while it is still animating makes Pi redraw the whole screen.
 
 ## Install
 

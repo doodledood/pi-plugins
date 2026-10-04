@@ -67,6 +67,11 @@ export function registerWorkingLine(pi: ExtensionAPI): void {
 		else if (type.startsWith("toolcall")) phase = "Working";
 	});
 
+	// Between turns of one run (steering, follow-ups) pi waits on the next response: plain work again.
+	pi.on("message_end", (event) => {
+		if ((event.message as { role?: unknown }).role === "assistant") phase = "Working";
+	});
+
 	pi.on("tool_execution_start", (event) => {
 		liveTools.set(event.toolCallId, toolActivity(event.toolName));
 	});

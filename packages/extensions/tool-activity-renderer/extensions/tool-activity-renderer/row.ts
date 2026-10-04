@@ -1,5 +1,6 @@
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { blend, breathe, cellText, easeOut, formatDuration, paint, shimmer, type ThemeLike, tones } from "./palette.ts";
+import { blend, breathe, easeOut, formatDuration, paint, shimmer, type ThemeLike, tones } from "./palette.ts";
+import { cellText } from "./text.ts";
 
 export type ToolKind = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
 
