@@ -30,10 +30,19 @@ function toolCallBlocks(message: unknown): ToolCallBlock[] {
  * read/grep/find/ls calls in one assistant message (pi shows a message's tool rows in content order, so
  * the run is contiguous on screen). Its first row draws the whole run; the rest render nothing.
  */
+/** What a run reads a member's head from: the member's row state. */
+export interface RowSource {
+	readonly head?: RowHead;
+}
+
 export class ExploreRuns {
 	/** toolCallId → the ordered ids of its run. Only runs of two or more are recorded. */
 	private readonly runOf = new Map<string, readonly string[]>();
-	private readonly heads = new Map<string, RowHead>();
+	/**
+	 * toolCallId → the row state that speaks for it. Heads are read through the owner, so a leader
+	 * always draws its members' latest heads, and render passes from other surfaces can't overwrite them.
+	 */
+	private readonly owners = new Map<string, RowSource>();
 	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
 	private readonly unpacked = new Set<string>();
 
@@ -66,9 +75,23 @@ export class ExploreRuns {
 		this.unpacked.add(leaderId);
 	}
 
-	/** Every row reports its latest head so the run's leader can draw it. */
-	report(toolCallId: string, head: RowHead): void {
-		this.heads.set(toolCallId, head);
+	/** The first row state to report an id owns it until another claims it. */
+	report(toolCallId: string, source: RowSource): void {
+		if (!this.owners.has(toolCallId)) this.owners.set(toolCallId, source);
+	}
+
+	owns(toolCallId: string, source: RowSource): boolean {
+		const owner = this.owners.get(toolCallId);
+		return owner === undefined || owner === source;
+	}
+
+	/** Hand an id to a row state that has shown it is live (see RowView.render). */
+	claim(toolCallId: string, source: RowSource): void {
+		this.owners.set(toolCallId, source);
+	}
+
+	private head(toolCallId: string): RowHead | undefined {
+		return this.owners.get(toolCallId)?.head;
 	}
 
 	/**
@@ -77,8 +100,8 @@ export class ExploreRuns {
 	 */
 	role(toolCallId: string): RunRole {
 		const run = this.runOf.get(toolCallId);
-		if (!run || !this.heads.has(toolCallId)) return { kind: "solo" };
-		const heads = run.map((id) => this.heads.get(id));
+		if (!run || !this.head(toolCallId)) return { kind: "solo" };
+		const heads = run.map((id) => this.head(id));
 		if (this.unpacked.has(run[0] ?? "") || heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
 		// A follower hides only once its leader exists to draw it.
 		if (run[0] !== toolCallId) return heads[0] ? { kind: "follower" } : { kind: "solo" };

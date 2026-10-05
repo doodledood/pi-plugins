@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-tool-activity-renderer",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "type": "module",
   "description": "Graphite-style rows for Pi's built-in file and shell tools, plus a live working line.",
   "scripts": {

@@ -295,6 +295,7 @@ const emptyComponent: Component = { render: () => [], invalidate() {} };
  */
 class RowView implements Component {
 	theme: ThemeLike | undefined;
+	private renders = 0;
 
 	constructor(
 		private readonly toolCallId: string,
@@ -307,7 +308,16 @@ class RowView implements Component {
 		const theme = this.theme;
 		if (!head || !theme) return [];
 		const now = clock.now();
-		const role = this.shared.runs.role(this.toolCallId);
+		const runs = this.shared.runs;
+		this.renders += 1;
+		if (!runs.owns(this.toolCallId, this.state)) {
+			// Another state already speaks for this tool call. pi's TUI draws a row on every frame, so a
+			// second render means this is a live row (pi rebuilt the chat) and takes over. A one-shot
+			// render, like /export's, draws only itself and leaves the live transcript's runs alone.
+			if (this.renders < 2) return renderRow(head, theme, width, now);
+			runs.claim(this.toolCallId, this.state);
+		}
+		const role = runs.role(this.toolCallId);
 		if (role.kind === "follower") return [];
 		if (role.kind === "solo") return renderRow(head, theme, width, now);
 		if (role.complete && role.members.every((member) => member.outcome === "success")) {
@@ -338,10 +348,12 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	const execution = shared.executions.get(context.toolCallId);
 	// An ended execution whose result this row never received stays quiet rather than running.
 	const running = execution !== undefined && execution.endedAt === undefined;
+	const argRecord = (args ?? {}) as Record<string, unknown>;
+	const target = targetFor(kind, argRecord, context.cwd);
 	const head: RowHead = {
 		kind,
 		outcome: running ? "running" : "pending",
-		target: targetFor(kind, (args ?? {}) as Record<string, unknown>, context.cwd),
+		target,
 		meta: [],
 		startedAt: running ? execution.startedAt : undefined,
 		endedAt: undefined,
@@ -349,11 +361,12 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 		detailTone: "output",
 		expanded: context.expanded,
 		standalone: false,
+		fullTarget: kind === "bash" ? `$ ${stringArg(argRecord.command) ?? "…"}` : target.map((part) => part.text).join(""),
 	};
 	state.head = head;
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
-	shared.runs.report(context.toolCallId, head);
+	shared.runs.report(context.toolCallId, state);
 	animate(context, head, shared);
 	return state.view;
 }

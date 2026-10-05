@@ -1,4 +1,4 @@
-import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { getCapabilities, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { blend, breathe, easeOut, formatDuration, paint, shimmer, type ThemeLike, tones } from "./palette.ts";
 import { cellText } from "./text.ts";
 
@@ -36,6 +36,8 @@ export interface RowHead {
 	expanded: boolean;
 	/** Carries content pi draws outside the row (an image), so it can't be packed into a run. */
 	standalone: boolean;
+	/** The whole argument as the user would want to audit it (a bash command keeps its line breaks). */
+	fullTarget: string;
 }
 
 const VERBS: Record<ToolKind, readonly [present: string, past: string]> = {
@@ -162,13 +164,26 @@ function meta(head: RowHead, theme: ThemeLike, now: number, k: number): string {
 }
 
 /** One row: ` ● Verb      target ……… result  0.3s`, the result column right-aligned to `width`. */
-function renderHeadLine(head: RowHead, theme: ThemeLike, width: number, now: number, column: number | undefined): string {
+function renderHeadLine(head: RowHead, theme: ThemeLike, width: number, now: number, column: number | undefined): { line: string; cut: boolean } {
 	const k = recession(head, now);
 	const prefix = ` ${glyph(head, theme, now, k)} ${verb(head, theme, now, k, column)}`;
 	const right = meta(head, theme, now, k);
 	const cells = head.target.map((part) => ({ ...part, text: cellText(part.text) }));
-	const parts = fitTarget(cells, leftBudget(right, width) - visibleWidth(prefix));
-	return alignRight(prefix + target(parts, theme, k), right, width);
+	const budget = leftBudget(right, width) - visibleWidth(prefix);
+	const parts = fitTarget(cells, budget);
+	const cut = cells.reduce((sum, part) => sum + visibleWidth(part.text), 0) > budget;
+	return { line: alignRight(prefix + target(parts, theme, k), right, width), cut };
+}
+
+/** Under an expanded row whose head had to shorten its target: the whole argument, wrapped. */
+function fullTargetLines(head: RowHead, theme: ThemeLike, width: number): string[] {
+	const color = tones(theme).dim;
+	const inner = Math.max(1, width - 3);
+	return head.fullTarget
+		.split("\n")
+		.map(cellText)
+		.flatMap((line) => (line ? wrapTextWithAnsi(line, inner) : [""]))
+		.map((line) => truncateToWidth(`   ${paint(theme, line, color)}`, width, "…"));
 }
 
 /** The narrowest width at which a row still carries its right-hand column. */
@@ -240,7 +255,9 @@ function renderDetailLines(head: RowHead, theme: ThemeLike, width: number): stri
 
 /** One row; `column` lines its target up with the rest of a packed run. */
 export function renderRow(head: RowHead, theme: ThemeLike, width: number, now: number, column?: number): string[] {
-	return [renderHeadLine(head, theme, width, now, column), ...renderDetailLines(head, theme, width)];
+	const { line, cut } = renderHeadLine(head, theme, width, now, column);
+	const full = head.expanded && (cut || head.fullTarget.includes("\n")) ? fullTargetLines(head, theme, width) : [];
+	return [line, ...full, ...renderDetailLines(head, theme, width)];
 }
 
 /** What each exploratory kind counts as in the folded summary. This table defines which tools are exploratory. */
