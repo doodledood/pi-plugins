@@ -58,10 +58,11 @@ test("expanded view shows every exploratory row on its own with its output", () 
 	const { rows } = runFixture();
 	rows.r1.restore("one\ntwo").expand();
 	rows.g1.restore("a:1").expand();
-	const r1 = rows.r1.plain().map((line) => line.trimEnd());
-	assert.match(r1[0] ?? "", /^ ● Read\s/);
-	assert.deepEqual(r1.slice(1), ["   one", "   two"]);
-	assert.match(rows.g1.plain()[0] ?? "", /^ ● Searched\s/);
+	const [r1, g1] = drawFrames([rows.r1, rows.g1]).map((lines) => lines.map((line) => line.trimEnd()));
+	assert.match(r1?.[0] ?? "", /^ ● Read\s/);
+	assert.deepEqual(r1?.slice(1), ["   one", "   two"]);
+	assert.match(g1?.[0] ?? "", /^ ● Searched\s/);
+	assert.deepEqual(g1?.slice(1), ["   a:1"]);
 });
 
 test("rows pi draws before session_start (resume, reload) fold once the branch is read", () => {
@@ -116,8 +117,7 @@ test("expanding one member of a run turns every member back into its own row, wi
 	const { rows } = runFixture();
 	rows.r1.restore("one");
 	rows.g1.restore("a:1").expand();
-	const r1 = rows.r1.plain();
-	const g1 = rows.g1.plain();
+	const [r1 = [], g1 = []] = drawFrames([rows.r1, rows.g1]);
 	assert.equal(r1.length, 1);
 	assert.match(r1[0] ?? "", /^ ● Read\s/);
 	assert.match(g1[0] ?? "", /^ ● Searched\s/);
@@ -178,9 +178,10 @@ test("an image read keeps its run unpacked, so the image stays under its own row
 	harness.emit("message_end", { message: message(["i1", "read"], ["i2", "read"]) });
 	const text = new Row(harness, "read", "i1", { path: "a.ts" }).restore("x");
 	const image = new Row(harness, "read", "i2", { path: "shot.png" }).restore("Read image", { image: true });
-	assert.match(text.plain()[0] ?? "", /^ ● Read\s+a\.ts/);
-	assert.equal(text.plain().length, 1);
-	assert.match(image.plain()[0] ?? "", /^ ● Read\s+shot\.png.*image$/);
+	const [textLines = [], imageLines = []] = drawFrames([text, image]);
+	assert.match(textLines[0] ?? "", /^ ● Read\s+a\.ts/);
+	assert.equal(textLines.length, 1);
+	assert.match(imageLines[0] ?? "", /^ ● Read\s+shot\.png.*image$/);
 });
 
 test("clicking a folded run opens it into rows that each expand on their own", () => {
