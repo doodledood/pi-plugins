@@ -129,10 +129,16 @@ function verb(head: RowHead, theme: ThemeLike, now: number, k: number, column: n
 	const t = tones(theme);
 	const word = shownVerb(head);
 	const pad = " ".repeat(column === undefined ? VERB_GAP : Math.max(VERB_GAP, column - word.length));
-	if (head.outcome === "running") return shimmer(theme, word, t.muted, t.text, now) + pad;
-	if (head.outcome === "pending") return paint(theme, word, t.muted) + pad;
-	if (head.outcome === "error") return paint(theme, word, t.error) + pad;
-	return paint(theme, word, blend(t.soft, t.muted, k)) + pad;
+	switch (head.outcome) {
+		case "running":
+			return shimmer(theme, word, t.muted, t.text, now) + pad;
+		case "pending":
+			return paint(theme, word, t.muted) + pad;
+		case "error":
+			return paint(theme, word, t.error) + pad;
+		case "success":
+			return paint(theme, word, blend(t.soft, t.muted, k)) + pad;
+	}
 }
 
 function target(parts: readonly TargetPart[], theme: ThemeLike, k: number): string {

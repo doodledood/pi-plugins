@@ -1,8 +1,8 @@
 /** Exploratory runs: packing, folding, unpacking on click, branch re-reads. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { TOKENS, createHarness, Row, at, setHyperlinks, fgAt, hex, message, runFixture } from "./test-harness.ts";
+import { parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { TOKENS, createHarness, drawFrames, Row, at, setHyperlinks, fgAt, hex, message, runFixture } from "./test-harness.ts";
 
 test("consecutive exploratory calls pack under their first row while running", () => {
 	const { rows } = runFixture();
@@ -10,10 +10,7 @@ test("consecutive exploratory calls pack under their first row while running", (
 		rows.r1.start();
 		rows.g1.start();
 	});
-	// pi renders a message's rows in content order, so the leader reports before its followers draw.
-	at(100, () => rows.r1.render());
-	const g1 = at(100, () => rows.g1.plain());
-	const r1 = at(100, () => rows.r1.plain());
+	const [r1, g1] = at(100, () => drawFrames([rows.r1, rows.g1]));
 	assert.deepEqual(g1, [], "the follower draws nothing — its leader draws it");
 	assert.equal(r1.length, 2, "the leader draws both rows, with no blank line between them");
 	assert.match(r1[0] ?? "", /^ ● Reading\s+src\/a\.ts/);
@@ -87,10 +84,8 @@ test("runs restored from session history fold the same way", () => {
 	const r1 = new Row(harness, "read", "r1", { path: "a.ts" }).restore("x");
 	const r2 = new Row(harness, "read", "r2", { path: "b.ts" }).restore("y");
 	const l1 = new Row(harness, "ls", "l1", { path: "." }).restore("a");
-	r1.render();
-	r2.render();
-	assert.deepEqual(l1.plain(), []);
-	const folded = r1.plain();
+	const [folded, hidden, hiddenToo] = drawFrames([r1, r2, l1]);
+	assert.deepEqual([hidden, hiddenToo], [[], []]);
 	assert.equal(folded.length, 1);
 	assert.match(folded[0] ?? "", /^ ● Explored\s+2 files · 1 listing/);
 });
@@ -159,9 +154,9 @@ test("session_tree re-reads the branch: the new branch's runs fold", () => {
 	harness.emit("session_tree", {}, { sessionManager: { getBranch: () => [{ type: "message", message: message(["t1", "read"], ["t2", "ls"]) }] } });
 	const t1 = new Row(harness, "read", "t1", { path: "a.ts" }).restore("x");
 	const t2 = new Row(harness, "ls", "t2", { path: "." }).restore("a");
-	t1.render();
-	assert.deepEqual(t2.plain(), []);
-	assert.match(t1.plain()[0] ?? "", /^ ● Explored\s+1 file · 1 listing/);
+	const [leader, follower] = drawFrames([t1, t2]);
+	assert.deepEqual(follower, []);
+	assert.match(leader[0] ?? "", /^ ● Explored\s+1 file · 1 listing/);
 });
 
 test("a branch switch forgets execution timings: a re-rendered row settles without a duration", () => {
@@ -257,9 +252,9 @@ test("exploratory calls in different assistant messages stay ordinary rows, and 
 	harness.emit("message_update", { message: message(["s1", "read"], ["s2", "grep"]), assistantMessageEvent: { type: "toolcall_delta" } });
 	const s1 = new Row(harness, "read", "s1", { path: "c.ts" }).restore("z");
 	const s2 = new Row(harness, "grep", "s2", { pattern: "q" }).restore("c:1");
-	s1.render();
-	assert.deepEqual(s2.plain(), [], "the streamed second call joins the first call's run");
-	assert.match(s1.plain()[0] ?? "", /^ ● Explored\s+1 file · 1 search/);
+	const [leader, follower] = drawFrames([s1, s2]);
+	assert.deepEqual(follower, [], "the streamed second call joins the first call's run");
+	assert.match(leader[0] ?? "", /^ ● Explored\s+1 file · 1 search/);
 });
 
 test("an export pass draws each row settled, on its own, without unfolding the live run", () => {
@@ -302,7 +297,7 @@ test("a chat rebuilt while its tools ran takes the run over: the rebuilt rows fo
 	const rebuilt = { r1: new Row(harness, "read", "r1", { path: "src/a.ts" }), g1: new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }) };
 	rebuilt.r1.restore("a");
 	rebuilt.g1.restore("x");
-	const first = at(3_000, () => [...rebuilt.r1.firstFrame(), ...rebuilt.g1.firstFrame()]);
+	const first = at(3_000, () => [...rebuilt.r1.drawFrame(), ...rebuilt.g1.drawFrame()]);
 	assert.equal(first.filter((line) => line.startsWith(" ●")).length, 2, "the first frame draws each rebuilt row settled, on its own");
 	assert.ok(first.every((line) => !/Reading|Searching/.test(line)));
 	at(3_000, () => [rebuilt.r1.plain(), rebuilt.g1.plain()]);
@@ -325,4 +320,68 @@ test("an export of searches this session never drew still shows each one settled
 	const follower = new Row(harness, "find", "x2", { pattern: "*.ts", path: "src" }).restore("nope", { isError: true }).exportRender();
 	assert.match(leader.collapsed[0] ?? "", /^ ● Searched {2}a/, "a run's leader exports as its own settled row");
 	assert.match(follower.collapsed[0] ?? "", /^ ✕ Found {2}\*\.ts/, "and so does a follower, with its failure");
+});
+
+test("a restored run drawn top to bottom never drops a member, and asks for the frames it needs to fold", async () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	harness.emit("session_start", { reason: "reload" }, { sessionManager: { getBranch: () => [{ type: "message", message: message(["q1", "read"], ["q2", "read"], ["q3", "grep"]) }] } });
+	const rows = [
+		new Row(harness, "read", "q1", { path: "a.ts" }).restore("x"),
+		new Row(harness, "read", "q2", { path: "b.ts" }).restore("y"),
+		new Row(harness, "grep", "q3", { pattern: "needle" }).restore("a.ts:1: needle"),
+	];
+	const shown = (frame: string[][]) => frame.flat().join("\n");
+	for (let frame = 1; frame <= 2; frame++) {
+		const text = shown(drawFrames(rows, 1));
+		for (const name of ["a.ts", "b.ts", "needle"]) assert.ok(text.includes(name) || text.includes("Explored"), `frame ${frame} shows ${name}:\n${text}`);
+	}
+	await Promise.resolve();
+	assert.ok(rows.every((row) => row.context.invalidations > 0), "each row asked pi for its next frame itself");
+	const [folded, ...hidden] = drawFrames(rows, 1);
+	assert.match(folded[0] ?? "", /^ ● Explored {2}2 files · 1 search/);
+	assert.deepEqual(hidden, [[], []]);
+});
+
+test("a run with a finished member and one still running or waiting stays unfolded", () => {
+	const { rows } = runFixture();
+	at(0, () => {
+		rows.r1.start();
+		rows.g1.start();
+	});
+	at(100, () => rows.r1.finish("a"));
+	const [parallel] = at(150, () => drawFrames([rows.r1, rows.g1]));
+	assert.equal(parallel.length, 2, parallel.join("\n"));
+	assert.match(parallel[0] ?? "", /^ ● Read +src\/a\.ts/);
+	assert.match(parallel[1] ?? "", /^ ● Searching {2}needle/);
+	for (const row of Object.values(rows)) row.stop();
+
+	const sequential = runFixture().rows;
+	at(0, () => sequential.r1.start());
+	at(100, () => sequential.r1.finish("a"));
+	const [leader] = at(150, () => drawFrames([sequential.r1, sequential.g1]));
+	assert.equal(leader.length, 2, "a member still waiting to start keeps the run unfolded");
+	assert.match(leader[1] ?? "", /^ ● Searching/);
+	for (const row of Object.values(sequential)) row.stop();
+});
+
+test("the folded Explored line fits narrow widths and keeps its duration when there is room", () => {
+	const harness = createHarness();
+	setHyperlinks(false);
+	harness.emit("message_end", { message: message(["n1", "read"], ["n2", "read"], ["n3", "read"], ["n4", "grep"]) });
+	const rows = [
+		new Row(harness, "read", "n1", { path: "a.ts" }),
+		new Row(harness, "read", "n2", { path: "b.ts" }),
+		new Row(harness, "read", "n3", { path: "c.ts" }),
+		new Row(harness, "grep", "n4", { pattern: "x" }),
+	];
+	at(0, () => rows.forEach((row) => row.start()));
+	at(300, () => rows.forEach((row) => row.finish("a")));
+	for (const width of [30, 40, 60]) {
+		const [folded] = at(5_000, () => drawFrames(rows, 3, width));
+		assert.ok(folded[0]?.includes("Explored"), folded.join("\n"));
+		assert.ok(folded.every((line) => visibleWidth(line) <= width), `${width}: ${JSON.stringify(folded)}`);
+		if (width === 60) assert.match(folded[0] ?? "", /0\.3s$/);
+	}
+	rows.forEach((row) => row.stop());
 });

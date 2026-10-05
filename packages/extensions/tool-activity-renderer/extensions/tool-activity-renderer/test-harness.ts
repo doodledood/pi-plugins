@@ -150,14 +150,14 @@ export class Row {
 	/**
 	 * Lines this row contributes to the transcript at `width`: the call slot, then the result slot.
 	 * pi's TUI draws a live row on every frame, so the first render also draws the frame before it,
-	 * the way a row that has been on screen has; `firstFrame` draws a row's very first frame alone.
+	 * the way a row that has been on screen has; `drawFrame` draws exactly one frame (see drawFrames).
 	 */
 	render(width = 120): string[] {
 		if (!this.mounted) this.frame(width);
 		return this.frame(width);
 	}
 
-	firstFrame(width = 120): string[] {
+	drawFrame(width = 120): string[] {
 		return this.frame(width).map((line) => stripTerminalSequences(line));
 	}
 
@@ -209,6 +209,16 @@ export class Row {
 		const timer = this.context.state.timer as ReturnType<typeof setInterval> | undefined;
 		if (timer) clearInterval(timer);
 	}
+}
+
+/**
+ * Draw `count` frames of the transcript the way pi's TUI does: every row, top to bottom, each frame.
+ * Returns each row's plain lines from the last frame.
+ */
+export function drawFrames(rows: readonly Row[], count = 3, width = 120): string[][] {
+	let last: string[][] = [];
+	for (let frame = 0; frame < count; frame++) last = rows.map((row) => row.drawFrame(width));
+	return last;
 }
 
 export function at<T>(now: number, run: () => T): T {

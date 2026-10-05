@@ -295,6 +295,8 @@ const emptyComponent: Component = { render: () => [], invalidate() {} };
  */
 class RowView implements Component {
 	theme: ThemeLike | undefined;
+	/** Ask pi for another frame (the row's `invalidate`; a no-op in /export). */
+	requestFrame: () => void = () => {};
 	private renders = 0;
 
 	constructor(
@@ -315,12 +317,15 @@ class RowView implements Component {
 			// takes the tool call over (from nobody, or from the state of a chat pi has since rebuilt).
 			// Until then the result slot draws the row (see OneShotAware): a one-shot render like
 			// /export's draws the call before the result exists, so the call can't know how it ended.
+			// Each step asks for the next frame itself, so a rebuilt or restored run settles without input.
+			queueMicrotask(this.requestFrame);
 			if (this.renders < 2) return [];
 			runs.claim(this.toolCallId, this.state);
 		}
 		const role = runs.role(this.toolCallId);
 		if (role.kind === "follower") return [];
 		if (role.kind === "solo") return renderRow(head, theme, width, now);
+		runs.drew(this.toolCallId, role.ids);
 		if (role.complete && role.members.every((member) => member.outcome === "success")) {
 			return [renderFoldedRun(role.members, theme, width, now, expandHint())];
 		}
@@ -392,6 +397,7 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	state.head = head;
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
+	state.view.requestFrame = () => context.invalidate();
 	animate(context, head, shared);
 	return state.view;
 }

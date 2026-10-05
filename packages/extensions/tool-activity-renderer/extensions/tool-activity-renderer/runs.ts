@@ -4,9 +4,9 @@ import { isExploreKind, type RowHead } from "./row.ts";
  * How one tool row should draw itself relative to the exploratory run it belongs to.
  * - solo: draw itself as an ordinary row.
  * - leader: draw the whole run — every member packed without blank lines, or one folded line.
- * - follower: draw nothing; the leader already drew this row.
+ * - follower: draw nothing; the leader drew this row on its latest render.
  */
-type RunRole = { kind: "solo" } | { kind: "leader"; members: RowHead[]; complete: boolean } | { kind: "follower" };
+type RunRole = { kind: "solo" } | { kind: "leader"; ids: string[]; members: RowHead[]; complete: boolean } | { kind: "follower" };
 
 interface ToolCallBlock {
 	type: "toolCall";
@@ -43,6 +43,8 @@ export class ExploreRuns {
 	 * always draws its members' latest heads, and one-shot render passes (/export) never become owners.
 	 */
 	private readonly owners = new Map<string, RowSource>();
+	/** Members their leader drew on its latest render; only these hide as followers. */
+	private readonly drawn = new Set<string>();
 	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
 	private readonly unpacked = new Set<string>();
 
@@ -68,6 +70,13 @@ export class ExploreRuns {
 	clearRuns(): void {
 		this.runOf.clear();
 		this.unpacked.clear();
+		this.drawn.clear();
+	}
+
+	/** The leader just drew these members of its run (see role). */
+	drew(leaderId: string, ids: readonly string[]): void {
+		for (const id of this.runOf.get(leaderId) ?? []) this.drawn.delete(id);
+		for (const id of ids) this.drawn.add(id);
 	}
 
 	/** Open the run led by `leaderId` into ordinary rows. */
@@ -97,9 +106,11 @@ export class ExploreRuns {
 		if (!run || !this.head(toolCallId)) return { kind: "solo" };
 		const heads = run.map((id) => this.head(id));
 		if (this.unpacked.has(run[0] ?? "") || heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
-		// A follower hides only once its leader exists to draw it.
-		if (run[0] !== toolCallId) return heads[0] ? { kind: "follower" } : { kind: "solo" };
+		// A follower hides only once its leader has drawn it. pi draws rows top to bottom, so a member
+		// that becomes live after its leader drew this frame draws itself until the next one.
+		if (run[0] !== toolCallId) return this.drawn.has(toolCallId) ? { kind: "follower" } : { kind: "solo" };
+		const ids = run.filter((_, index) => heads[index] !== undefined);
 		const members = heads.filter((head): head is RowHead => head !== undefined);
-		return { kind: "leader", members, complete: members.length === run.length };
+		return { kind: "leader", ids, members, complete: members.length === run.length };
 	}
 }
