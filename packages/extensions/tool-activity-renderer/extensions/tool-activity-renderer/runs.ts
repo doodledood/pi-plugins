@@ -8,6 +8,9 @@ import { isExploreKind, type RowHead } from "./row.ts";
  */
 type RunRole = { kind: "solo" } | { kind: "leader"; ids: string[]; members: RowHead[]; complete: boolean } | { kind: "follower" };
 
+/** What a row's call slot draws this frame: nothing, its own row, or its whole run. */
+export type CallDraw = { kind: "none" } | { kind: "row" } | { kind: "run"; members: RowHead[]; complete: boolean };
+
 interface ToolCallBlock {
 	type: "toolCall";
 	id: string;
@@ -27,6 +30,8 @@ function toolCallBlocks(message: unknown): ToolCallBlock[] {
 /** What a run reads a member's head from: the member's row state. */
 export interface RowSource {
 	readonly head?: RowHead;
+	/** Ask pi for another frame (the row's `invalidate`; a no-op in /export). */
+	readonly requestFrame?: () => void;
 }
 
 /**
@@ -52,6 +57,40 @@ export class ExploreRuns {
 	private readonly drawn = new Map<string, RowSource>();
 	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
 	private readonly unpacked = new Set<string>();
+	/** How many frames each not-yet-owning state has drawn its call slot. */
+	private readonly frames = new WeakMap<RowSource, number>();
+
+	/**
+	 * The one place that decides who draws a tool call's head line each frame. It relies on pi's
+	 * order: every row's renderCall (which reports) runs before a frame is drawn; the frame draws rows
+	 * top to bottom, each row's call slot before its result slot, once per frame; /export draws each
+	 * call slot exactly once. Under that order each head is drawn once per frame, by exactly one of:
+	 * its call slot (callSlot), its result slot (resultSlotDrawsHead), or its run's leader.
+	 *
+	 * A state proves it is live by drawing a second frame, and then owns its tool call (from nobody,
+	 * or from the state of a chat pi has since rebuilt). Until then the result slot draws the settled
+	 * row, since a one-shot render draws the call before the result exists, and each frame asks for
+	 * the next so a restored or rebuilt run settles without input.
+	 */
+	callSlot(toolCallId: string, source: RowSource): CallDraw {
+		if (!this.owns(toolCallId, source)) {
+			const frames = (this.frames.get(source) ?? 0) + 1;
+			this.frames.set(source, frames);
+			if (source.requestFrame) queueMicrotask(source.requestFrame);
+			if (frames < 2) return { kind: "none" };
+			this.owners.set(toolCallId, source);
+		}
+		const role = this.role(toolCallId);
+		if (role.kind === "follower") return { kind: "none" };
+		if (role.kind === "solo") return { kind: "row" };
+		this.drew(toolCallId, role.ids);
+		return { kind: "run", members: role.members, complete: role.complete };
+	}
+
+	/** Whether this state's result slot draws its head line this frame (see callSlot). */
+	resultSlotDrawsHead(toolCallId: string, source: RowSource): boolean {
+		return !this.owns(toolCallId, source) && this.drawn.get(toolCallId) !== source;
+	}
 
 	/** Record the runs in an assistant message. Safe to call repeatedly as the message streams. */
 	ingest(message: unknown): void {
@@ -84,7 +123,7 @@ export class ExploreRuns {
 	/** Let go of row states for tool calls outside these messages, e.g. the rows a compaction dropped from the chat. */
 	retainOwners(messages: readonly unknown[]): void {
 		const kept = new Set(messages.flatMap((message) => toolCallBlocks(message).map((block) => block.id)));
-		for (const map of [this.owners, this.candidates]) for (const id of map.keys()) if (!kept.has(id)) map.delete(id);
+		for (const map of [this.owners, this.candidates, this.drawn]) for (const id of map.keys()) if (!kept.has(id)) map.delete(id);
 	}
 
 	/** A row state started a render pass for this tool call (see candidates). */
@@ -93,7 +132,7 @@ export class ExploreRuns {
 	}
 
 	/** The leader just drew these members of its run (see role). */
-	drew(leaderId: string, ids: readonly string[]): void {
+	private drew(leaderId: string, ids: readonly string[]): void {
 		for (const id of this.runOf.get(leaderId) ?? []) this.drawn.delete(id);
 		for (const id of ids) {
 			const source = this.source(id);
@@ -101,10 +140,7 @@ export class ExploreRuns {
 		}
 	}
 
-	/** Whether the leader's latest render drew this very state, so the state must not draw itself too. */
-	drewState(toolCallId: string, source: RowSource): boolean {
-		return this.drawn.get(toolCallId) === source;
-	}
+
 
 	/** Open the run led by `leaderId` into ordinary rows. */
 	unpack(leaderId: string): void {
@@ -115,7 +151,7 @@ export class ExploreRuns {
 		return this.owners.get(toolCallId) === source;
 	}
 
-	/** Hand an id to a row state that has shown it is live (see RowView.render); the newest live state wins. */
+	/** Hand an id to a row state directly; rows claim through callSlot. */
 	claim(toolCallId: string, source: RowSource): void {
 		this.owners.set(toolCallId, source);
 	}

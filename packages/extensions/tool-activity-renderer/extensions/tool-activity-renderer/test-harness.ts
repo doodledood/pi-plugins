@@ -178,6 +178,12 @@ export class Row {
 		this.components = result ? [call, result] : [call];
 	}
 
+	/** Update the row and draw only its result slot. */
+	resultSlot(width = 120): string[] {
+		this.update();
+		return (this.components[1]?.render(width) ?? []).map((line) => stripTerminalSequences(line));
+	}
+
 	/** Draw the components from the last update, as one TUI frame does. */
 	paint(width = 120): string[] {
 		this.mounted = true;

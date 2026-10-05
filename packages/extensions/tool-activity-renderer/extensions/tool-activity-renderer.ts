@@ -40,6 +40,7 @@ interface RenderContext {
 
 interface RowState {
 	head?: RowHead;
+	requestFrame?: () => void;
 	view?: RowView;
 	timer?: ReturnType<typeof setInterval>;
 }
@@ -295,10 +296,6 @@ const emptyComponent: Component = { render: () => [], invalidate() {} };
  */
 class RowView implements Component {
 	theme: ThemeLike | undefined;
-	/** Ask pi for another frame (the row's `invalidate`; a no-op in /export). */
-	requestFrame: () => void = () => {};
-	private renders = 0;
-
 	constructor(
 		private readonly toolCallId: string,
 		private readonly state: RowState,
@@ -310,27 +307,14 @@ class RowView implements Component {
 		const theme = this.theme;
 		if (!head || !theme) return [];
 		const now = clock.now();
-		const runs = this.shared.runs;
-		this.renders += 1;
-		if (!runs.owns(this.toolCallId, this.state)) {
-			// pi's TUI draws a row on every frame, so a second render proves this state is live, and it
-			// takes the tool call over (from nobody, or from the state of a chat pi has since rebuilt).
-			// Until then the result slot draws the row (see OneShotAware): a one-shot render like
-			// /export's draws the call before the result exists, so the call can't know how it ended.
-			// Each step asks for the next frame itself, so a rebuilt or restored run settles without input.
-			queueMicrotask(this.requestFrame);
-			if (this.renders < 2) return [];
-			runs.claim(this.toolCallId, this.state);
+		const draw = this.shared.runs.callSlot(this.toolCallId, this.state);
+		if (draw.kind === "none") return [];
+		if (draw.kind === "row") return renderRow(head, theme, width, now);
+		if (draw.complete && draw.members.every((member) => member.outcome === "success")) {
+			return [renderFoldedRun(draw.members, theme, width, now, expandHint())];
 		}
-		const role = runs.role(this.toolCallId);
-		if (role.kind === "follower") return [];
-		if (role.kind === "solo") return renderRow(head, theme, width, now);
-		runs.drew(this.toolCallId, role.ids);
-		if (role.complete && role.members.every((member) => member.outcome === "success")) {
-			return [renderFoldedRun(role.members, theme, width, now, expandHint())];
-		}
-		const column = runColumn(role.members);
-		return role.members.flatMap((member) => renderRow(member, theme, width, now, column));
+		const column = runColumn(draw.members);
+		return draw.members.flatMap((member) => renderRow(member, theme, width, now, column));
 	}
 
 	/**
@@ -349,10 +333,8 @@ class RowView implements Component {
 }
 
 /**
- * Wraps a row's result component. Once the row's state owns its tool call (a live row from its second
- * frame on), it draws the result as is, under the call slot's head line. Before that it draws the
- * settled head line itself, so a one-shot render (/export, which draws the call before the result)
- * still shows how the row ended, and a row's first frame matches the frames after it.
+ * Wraps a row's result component, and draws the row's settled head line above it when
+ * ExploreRuns.resultSlotDrawsHead says no other slot draws it this frame.
  */
 class OneShotAware implements Component {
 	constructor(
@@ -364,9 +346,7 @@ class OneShotAware implements Component {
 	render(width: number): string[] {
 		const { state, toolCallId } = this.context;
 		const theme = state.view?.theme;
-		const runs = this.shared.runs;
-		// A live run's leader may already draw this state (from its candidate); then only the result shows.
-		if (runs.owns(toolCallId, state) || runs.drewState(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
+		if (!this.shared.runs.resultSlotDrawsHead(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
 		return [...renderRow(state.head, theme, width, clock.now()), ...this.inner.render(width)];
 	}
 
@@ -399,7 +379,7 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	state.head = head;
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
-	state.view.requestFrame = () => context.invalidate();
+	state.requestFrame = () => context.invalidate();
 	shared.runs.report(context.toolCallId, state);
 	animate(context, head, shared);
 	return state.view;

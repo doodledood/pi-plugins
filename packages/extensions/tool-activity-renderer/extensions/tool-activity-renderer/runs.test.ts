@@ -1,7 +1,7 @@
 /** Exploratory runs: packing, folding, unpacking on click, branch re-reads. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { mixColors, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { RowHead } from "./row.ts";
 import { ExploreRuns } from "./runs.ts";
 import { TOKENS, createHarness, drawFrames, Row, at, setHyperlinks, fgAt, hex, message, runFixture } from "./test-harness.ts";
@@ -414,11 +414,73 @@ test("a compaction lets go of the rows it dropped from the chat and keeps the re
 	assert.ok(!runs.owns("old", dropped), "a row the compaction dropped is released");
 	assert.ok(runs.owns("new", kept), "a row still in the kept context stays");
 
-	// The extension wires this to session_compact, reading the context pi redraws the chat from.
+});
+
+test("session_compact releases the rows it dropped, keeps the rest, and leaves clicked-open runs open", () => {
+	setHyperlinks(false);
 	const harness = createHarness();
-	let readContext = 0;
-	harness.emit("session_compact", {}, { sessionManager: { buildContextEntries: () => (readContext++, []) } });
-	assert.equal(readContext, 1, "a compaction re-reads the kept context");
+	const dropped = message(["old", "read"]);
+	const kept = message(["u1", "read"], ["u2", "read"]);
+	harness.emit("session_start", { reason: "startup" }, { sessionManager: { getBranch: () => [dropped, kept].map((m) => ({ type: "message", message: m })) } });
+	const old = new Row(harness, "read", "old", { path: "old.ts" }).restore("x");
+	const u1 = new Row(harness, "read", "u1", { path: "a.ts" }).restore("a");
+	const u2 = new Row(harness, "read", "u2", { path: "b.ts" }).restore("b");
+	drawFrames([old, u1, u2]);
+	u1.click();
+	assert.deepEqual(old.resultSlot(), [], "while owned, the row's head is drawn by its call slot");
+	harness.emit("session_compact", {}, { sessionManager: { buildContextEntries: () => [{ type: "compaction" }, { type: "message", message: kept }] } });
+	assert.match(old.resultSlot()[0] ?? "", /^ ● Read {2}old\.ts/, "the dropped row no longer owns its call");
+	assert.deepEqual(u1.resultSlot(), [], "a kept row still owns its own");
+	assert.match(drawFrames([u1, u2], 1)[0]?.[0] ?? "", /^ ● Read {2}a\.ts/, "the run the user opened stays open");
+});
+
+test("each head is drawn by exactly one slot per frame: restored runs, members joining a live run", () => {
+	const runs = new ExploreRuns();
+	runs.readBranch([message(["l", "read"], ["f", "read"], ["g", "grep"])]);
+	const state = (outcome: RowHead["outcome"]) => ({ head: { outcome, expanded: false, standalone: false } as RowHead });
+	const sources = new Map([["l", state("success")], ["f", state("success")]]);
+	const frame = () => {
+		for (const [id, source] of sources) runs.report(id, source);
+		const drawers = new Map<string, number>();
+		const count = (id: string) => drawers.set(id, (drawers.get(id) ?? 0) + 1);
+		for (const [id, source] of sources) {
+			const call = runs.callSlot(id, source);
+			if (call.kind === "row") count(id);
+			if (call.kind === "run") for (const member of call.members) count([...sources].find(([, s]) => s.head === member)?.[0] ?? "?");
+			if (runs.resultSlotDrawsHead(id, source)) count(id);
+		}
+		return Object.fromEntries(drawers);
+	};
+	assert.deepEqual(frame(), { l: 1, f: 1 }, "frame 1");
+	assert.deepEqual(frame(), { l: 1, f: 1 }, "frame 2");
+	sources.set("g", state("running"));
+	for (let n = 3; n <= 5; n++) assert.deepEqual(frame(), { l: 1, f: 1, g: 1 }, `frame ${n}: the new member is drawn once from its first frame`);
+});
+
+test("a compaction also forgets which states a leader drew", () => {
+	const runs = new ExploreRuns();
+	runs.readBranch([message(["l", "read"], ["f", "read"])]);
+	const leader = { head: { outcome: "success", expanded: false, standalone: false } as RowHead };
+	const follower = { head: { outcome: "running", expanded: false, standalone: false } as RowHead };
+	runs.claim("l", leader);
+	runs.report("f", follower);
+	runs.callSlot("l", leader);
+	assert.ok(!runs.resultSlotDrawsHead("f", follower), "the leader drew the follower's state");
+	runs.retainOwners([]);
+	assert.ok(runs.resultSlotDrawsHead("f", follower), "after release nothing remembers drawing it");
+});
+
+test("a folded run restored from history is settled: receded tones and no duration", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	harness.emit("session_start", { reason: "resume" }, { sessionManager: { getBranch: () => [{ type: "message", message: message(["h1", "read"], ["h2", "read"]) }] } });
+	const h1 = new Row(harness, "read", "h1", { path: "a.ts" }).restore("x");
+	const h2 = new Row(harness, "read", "h2", { path: "b.ts" }).restore("y");
+	drawFrames([h1, h2]);
+	const line = h1.render()[0] ?? "";
+	assert.match(stripTerminalSequences(line).trimEnd(), /^ ● Explored {2}2 files {3}ctrl\+o to expand$/, "no duration on a restored fold");
+	assert.equal(fgAt(line, "Explored"), hex(parseColor(TOKENS.muted!)), "the label is receded");
+	assert.equal(fgAt(line, "2 files"), hex(mixColors(parseColor(TOKENS.text!), parseColor(TOKENS.muted!), 0.35, "srgb")), "the counts are soft");
 });
 
 test("a member that starts while its run is on screen joins the run on its very first frame", () => {
