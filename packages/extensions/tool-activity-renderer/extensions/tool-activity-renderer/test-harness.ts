@@ -166,6 +166,23 @@ export class Row {
 		return component.handleMouse?.({ type, button, x: 2, y: 0, screenX: 2, screenY: 0, width: 80, height: 1 });
 	}
 
+	/**
+	 * Render the way pi's HTML export does: fresh state per tool call, the call drawn once before the
+	 * result exists, then the collapsed and expanded results. Returns each surface's plain lines.
+	 */
+	exportRender(width = 120): { call: string[]; collapsed: string[]; expanded: string[] } {
+		const tool = this.harness.tools.get(this.toolName);
+		assert.ok(tool && this.result, "export renders a finished tool");
+		const context = { ...this.context, state: {}, executionStarted: true, isPartial: true, isError: false, expanded: false };
+		const plain = (component: Component) => component.render(width).map((line) => stripTerminalSequences(line));
+		const call = plain(tool.renderCall(context.args, theme, context));
+		const content = { content: this.result.content, details: this.result.details };
+		const settled = { ...context, isPartial: false, isError: this.result.isError };
+		const collapsed = plain(tool.renderResult(content, { expanded: false, isPartial: false }, theme, settled));
+		const expanded = plain(tool.renderResult(content, { expanded: true, isPartial: false }, theme, { ...settled, expanded: true }));
+		return { call, collapsed, expanded };
+	}
+
 	plain(width = 120): string[] {
 		return this.render(width).map((line) => stripTerminalSequences(line));
 	}

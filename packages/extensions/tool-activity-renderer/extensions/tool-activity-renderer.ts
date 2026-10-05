@@ -312,9 +312,10 @@ class RowView implements Component {
 		this.renders += 1;
 		if (!runs.owns(this.toolCallId, this.state)) {
 			// Another state already speaks for this tool call. pi's TUI draws a row on every frame, so a
-			// second render means this is a live row (pi rebuilt the chat) and takes over. A one-shot
-			// render, like /export's, draws only itself and leaves the live transcript's runs alone.
-			if (this.renders < 2) return renderRow(head, theme, width, now);
+			// second render means this is a live row (pi rebuilt the chat) and takes over. Until then the
+			// result slot draws the row (see OneShotAware): a one-shot render like /export's draws the
+			// call before the result exists, so the call can't know how the row ended.
+			if (this.renders < 2) return [];
 			runs.claim(this.toolCallId, this.state);
 		}
 		const role = runs.role(this.toolCallId);
@@ -340,6 +341,31 @@ class RowView implements Component {
 	}
 
 	invalidate(): void {}
+}
+
+/**
+ * Wraps a row's result component. While the row's state owns its tool call (every live row), it draws
+ * the result as is, under the call slot's head line. A state that doesn't own it yet draws the settled
+ * head line itself, so a one-shot render (/export, which draws the call before the result) still shows
+ * how the row ended, and a rebuilt chat's first frame matches the frames after it.
+ */
+class OneShotAware implements Component {
+	constructor(
+		private readonly inner: Component,
+		private readonly context: RenderContext,
+		private readonly shared: Shared,
+	) {}
+
+	render(width: number): string[] {
+		const { state, toolCallId } = this.context;
+		const theme = state.view?.theme;
+		if (this.shared.runs.owns(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
+		return [...renderRow(state.head, theme, width, clock.now()), ...this.inner.render(width)];
+	}
+
+	invalidate(): void {
+		this.inner.invalidate();
+	}
 }
 
 /** Start a fresh head for this render pass, keeping timings from the tool events. */
@@ -437,7 +463,8 @@ interface ResultHandlers {
 function registerGraphiteTool(pi: ExtensionAPI, kind: ToolKind, shared: Shared, handlers: ResultHandlers): void {
 	const template = getTemplateTool(kind) as AnyToolDefinition;
 	const renderCall: RenderCall = (args, theme, context) => beginRow(kind, args, theme, context, shared);
-	const result: RenderResult = (toolResult, { expanded, isPartial }, theme, context) => {
+	const result: RenderResult = (toolResult, options, theme, context) => new OneShotAware(resultBody(toolResult, options, theme, context), context, shared);
+	const resultBody: RenderResult = (toolResult, { expanded, isPartial }, theme, context) => {
 		const typed = toolResult as ToolResult;
 		if (isPartial) {
 			handlers.partial?.(typed, currentHead(context));

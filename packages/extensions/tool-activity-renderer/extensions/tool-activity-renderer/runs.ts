@@ -24,17 +24,17 @@ function toolCallBlocks(message: unknown): ToolCallBlock[] {
 	);
 }
 
+/** What a run reads a member's head from: the member's row state. */
+export interface RowSource {
+	readonly head?: RowHead;
+}
+
 /**
  * Pi draws every tool row as its own component with a blank line above it, so rows can only pack
  * together if one of them draws its siblings. An exploratory run is a maximal sequence of consecutive
  * read/grep/find/ls calls in one assistant message (pi shows a message's tool rows in content order, so
  * the run is contiguous on screen). Its first row draws the whole run; the rest render nothing.
  */
-/** What a run reads a member's head from: the member's row state. */
-export interface RowSource {
-	readonly head?: RowHead;
-}
-
 export class ExploreRuns {
 	/** toolCallId → the ordered ids of its run. Only runs of two or more are recorded. */
 	private readonly runOf = new Map<string, readonly string[]>();

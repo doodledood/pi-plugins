@@ -261,7 +261,7 @@ test("exploratory calls in different assistant messages stay ordinary rows, and 
 	assert.match(s1.plain()[0] ?? "", /^ ● Explored\s+1 file · 1 search/);
 });
 
-test("an export pass renders each row once on its own state without unfolding the live run", () => {
+test("an export pass draws each row settled, on its own, without unfolding the live run", () => {
 	const { harness, rows } = runFixture();
 	at(0, () => {
 		rows.r1.start();
@@ -269,40 +269,43 @@ test("an export pass renders each row once on its own state without unfolding th
 	});
 	at(100, () => {
 		rows.r1.finish("a");
-		rows.g1.finish("src/a.ts:1: needle");
+		rows.g1.finish("boom", { isError: true });
 	});
 	at(3_000, () => [rows.r1.plain(), rows.g1.plain()]);
 	const before = at(3_000, () => [...rows.r1.plain(), ...rows.g1.plain()]);
-	assert.match(before[0] ?? "", /Explored/);
 
-	// /export builds fresh state for the same tool-call ids and renders each component once.
-	const exported = { r1: new Row(harness, "read", "r1", { path: "src/a.ts" }), g1: new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }) };
-	exported.r1.restore("a");
-	exported.g1.restore("src/a.ts:1: needle");
-	assert.match(exported.g1.plain()[0] ?? "", /Searched {2}needle/, "the exported follower draws itself");
+	// pi's export draws the call before the result exists, on fresh state for the same ids.
+	const read = at(3_000, () => new Row(harness, "read", "r1", { path: "src/a.ts" }).restore("a").exportRender());
+	assert.deepEqual(read.call, [], "the call can't know the outcome yet, so it draws nothing");
+	assert.match(read.collapsed[0] ?? "", /^ ● Read {2}src\/a\.ts +1 line/, "the result draws the settled row");
+	const grep = at(3_000, () => new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }).restore("boom", { isError: true }).exportRender());
+	assert.match(grep.collapsed[0] ?? "", /^ ✕ Searched {2}needle/, "a failed search exports as failed");
+	assert.ok(grep.collapsed.some((line) => line.includes("boom")), "with its error");
 
-	const after = at(3_000, () => [...rows.r1.plain(), ...rows.g1.plain()]);
-	assert.deepEqual(after, before, "the live run still folds into one line");
+	assert.deepEqual(at(3_000, () => [...rows.r1.plain(), ...rows.g1.plain()]), before, "the live rows are unchanged");
 	for (const row of Object.values(rows)) row.stop();
 });
 
-test("a rebuilt chat's rows take over the run once pi redraws them, and the run folds again", () => {
+test("a chat rebuilt while its tools ran takes the run over: the rebuilt rows fold once they finish", () => {
 	const { harness, rows } = runFixture();
 	at(0, () => {
 		rows.r1.start();
 		rows.g1.start();
 	});
-	at(100, () => {
-		rows.r1.finish("a");
-		rows.g1.finish("x");
+	at(100, () => [rows.r1.plain(), rows.g1.plain()]);
+	// The old rows froze while running; pi rebuilt the chat and the results arrived on the new rows.
+	at(200, () => {
+		harness.emit("tool_execution_end", { toolCallId: "r1", toolName: "read", isError: false });
+		harness.emit("tool_execution_end", { toolCallId: "g1", toolName: "grep", isError: false });
 	});
-	at(3_000, () => [rows.r1.plain(), rows.g1.plain()]);
-	// pi rebuilt the chat (e.g. after /compact): fresh row state for the same tool-call ids.
 	const rebuilt = { r1: new Row(harness, "read", "r1", { path: "src/a.ts" }), g1: new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }) };
 	rebuilt.r1.restore("a");
 	rebuilt.g1.restore("x");
-	for (let frame = 0; frame < 2; frame++) at(3_000, () => [rebuilt.r1.plain(), rebuilt.g1.plain()]);
-	assert.match(at(3_000, () => rebuilt.r1.plain())[0] ?? "", /Explored/, "the rebuilt leader folds the run");
-	assert.deepEqual(at(3_000, () => rebuilt.g1.plain()), [], "the rebuilt follower hides under it");
-	for (const row of Object.values(rows)) row.stop();
+	const first = at(3_000, () => [...rebuilt.r1.plain(), ...rebuilt.g1.plain()]);
+	assert.equal(first.filter((line) => line.startsWith(" ●")).length, 2, "the first frame draws each rebuilt row settled, on its own");
+	assert.ok(first.every((line) => !/Reading|Searching/.test(line)));
+	at(3_000, () => [rebuilt.r1.plain(), rebuilt.g1.plain()]);
+	assert.match(at(3_000, () => rebuilt.r1.plain())[0] ?? "", /^ ● Explored {2}1 file · 1 search/, "then the rebuilt leader folds the run");
+	assert.deepEqual(at(3_000, () => rebuilt.g1.plain()), [], "and the follower hides under it");
+	for (const row of [...Object.values(rows), ...Object.values(rebuilt)]) row.stop();
 });

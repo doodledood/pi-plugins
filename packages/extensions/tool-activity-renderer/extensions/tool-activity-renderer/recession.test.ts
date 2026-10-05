@@ -231,3 +231,20 @@ test("a settled row lands on the specified tones: directory dim, file name soft,
 	assert.equal(fgAt(settled, "2 lines"), hex(parseColor(TOKENS.dim!)), "the result settles dim");
 	row.stop();
 });
+
+test("a row waiting for its tool, or restored without a result, starts no redraw timer", () => {
+	setHyperlinks(false);
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const waiting = new Row(createHarness(), "read", "w1", { path: "src/a.ts" });
+		const orphan = new Row(createHarness(), "read", "w2", { path: "src/b.ts" });
+		at(0, () => [waiting.render(), orphan.render()]);
+		at(1_000, () => mock.timers.tick(1_000));
+		for (const row of [waiting, orphan]) {
+			assert.equal(row.context.state.timer, undefined, `${row.id} has no timer`);
+			assert.equal(row.context.invalidations, 0, `${row.id} never redraws itself`);
+		}
+	} finally {
+		mock.timers.reset();
+	}
+});
