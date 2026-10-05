@@ -17,7 +17,7 @@ import {
 import { type Component, Text, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
-import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
+import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, runColumn, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
 import { cellLines } from "./tool-activity-renderer/text.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
@@ -313,7 +313,8 @@ class RowView implements Component {
 		if (role.complete && role.members.every((member) => member.outcome === "success")) {
 			return [renderFoldedRun(role.members, theme, width, now, expandHint())];
 		}
-		return role.members.flatMap((member) => renderRow(member, theme, width, now));
+		const column = runColumn(role.members);
+		return role.members.flatMap((member) => renderRow(member, theme, width, now, column));
 	}
 
 	/**

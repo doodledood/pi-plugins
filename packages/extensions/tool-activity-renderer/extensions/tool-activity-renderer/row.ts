@@ -59,7 +59,8 @@ export function presentVerb(kind: ToolKind): string {
 	return VERBS[kind][0];
 }
 
-const VERB_COLUMN = 10;
+/** Space between a row's verb and its target. Only a packed run lines its targets up in a shared column. */
+const VERB_GAP = 2;
 /** How long a finished row stays at full brightness before it starts to recede, and how long the recede takes. */
 const RECEDE_DELAY_MS = 400;
 const RECEDE_MS = 1500;
@@ -111,15 +112,25 @@ function glyph(head: Pick<RowHead, "outcome" | "endedAt">, theme: ThemeLike, now
 	}
 }
 
-function verb(head: RowHead, theme: ThemeLike, now: number, k: number): string {
-	const t = tones(theme);
+/** The verb a row shows now: present tense while it waits or runs, past tense once it lands. */
+function shownVerb(head: Pick<RowHead, "kind" | "outcome">): string {
 	const [present, past] = VERBS[head.kind];
-	const pad = " ".repeat(Math.max(1, VERB_COLUMN - present.length));
-	const padPast = " ".repeat(Math.max(1, VERB_COLUMN - past.length));
-	if (head.outcome === "running") return shimmer(theme, present, t.muted, t.text, now) + pad;
-	if (head.outcome === "pending") return paint(theme, present, t.muted) + pad;
-	if (head.outcome === "error") return paint(theme, past, t.error) + padPast;
-	return paint(theme, past, blend(t.soft, t.muted, k)) + padPast;
+	return isLive(head.outcome) ? present : past;
+}
+
+/** The target column a packed run shares, so its members' targets line up under each other. */
+export function runColumn(members: readonly Pick<RowHead, "kind" | "outcome">[]): number {
+	return Math.max(...members.map((member) => shownVerb(member).length)) + VERB_GAP;
+}
+
+function verb(head: RowHead, theme: ThemeLike, now: number, k: number, column: number | undefined): string {
+	const t = tones(theme);
+	const word = shownVerb(head);
+	const pad = " ".repeat(column === undefined ? VERB_GAP : Math.max(VERB_GAP, column - word.length));
+	if (head.outcome === "running") return shimmer(theme, word, t.muted, t.text, now) + pad;
+	if (head.outcome === "pending") return paint(theme, word, t.muted) + pad;
+	if (head.outcome === "error") return paint(theme, word, t.error) + pad;
+	return paint(theme, word, blend(t.soft, t.muted, k)) + pad;
 }
 
 function target(parts: readonly TargetPart[], theme: ThemeLike, k: number): string {
@@ -151,9 +162,9 @@ function meta(head: RowHead, theme: ThemeLike, now: number, k: number): string {
 }
 
 /** One row: ` ● Verb      target ……… result  0.3s`, the result column right-aligned to `width`. */
-function renderHeadLine(head: RowHead, theme: ThemeLike, width: number, now: number): string {
+function renderHeadLine(head: RowHead, theme: ThemeLike, width: number, now: number, column: number | undefined): string {
 	const k = recession(head, now);
-	const prefix = ` ${glyph(head, theme, now, k)} ${verb(head, theme, now, k)}`;
+	const prefix = ` ${glyph(head, theme, now, k)} ${verb(head, theme, now, k, column)}`;
 	const right = meta(head, theme, now, k);
 	const cells = head.target.map((part) => ({ ...part, text: cellText(part.text) }));
 	const parts = fitTarget(cells, leftBudget(right, width) - visibleWidth(prefix));
@@ -227,8 +238,9 @@ function renderDetailLines(head: RowHead, theme: ThemeLike, width: number): stri
 	return head.detail.map((line) => truncateToWidth(`   ${paint(theme, line, color)}`, width, "…"));
 }
 
-export function renderRow(head: RowHead, theme: ThemeLike, width: number, now: number): string[] {
-	return [renderHeadLine(head, theme, width, now), ...renderDetailLines(head, theme, width)];
+/** One row; `column` lines its target up with the rest of a packed run. */
+export function renderRow(head: RowHead, theme: ThemeLike, width: number, now: number, column?: number): string[] {
+	return [renderHeadLine(head, theme, width, now, column), ...renderDetailLines(head, theme, width)];
 }
 
 /** What each exploratory kind counts as in the folded summary. This table defines which tools are exploratory. */
@@ -267,7 +279,7 @@ export function renderFoldedRun(members: readonly RowHead[], theme: ThemeLike, w
 	const body = [...counts]
 		.map(([one, { many, count }]) => paint(theme, `${count} ${count === 1 ? one : many}`, blend(t.text, t.soft, k)))
 		.join(paint(theme, " · ", t.dim));
-	const label = paint(theme, "Explored", blend(t.soft, t.muted, k)) + " ".repeat(VERB_COLUMN - "Explored".length);
+	const label = paint(theme, "Explored", blend(t.soft, t.muted, k)) + " ".repeat(VERB_GAP);
 	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${expandHint}`, t.faint)}`;
 	const time = duration({ startedAt, endedAt }, now);
 	const right = time ? paint(theme, time, t.dim) : "";

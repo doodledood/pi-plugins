@@ -1219,3 +1219,28 @@ test("an emoji change that shares its low surrogate is not split either", () => 
 	const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 	for (const line of raw) assert.ok(!lone.test(line), JSON.stringify(line));
 });
+
+// ─── spacing ──────────────────────────────────────────────────────────────────
+
+test("a single row puts its target two spaces after the verb, in either tense", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "bash", "sp", { command: "npm test" });
+	at(0, () => row.start());
+	assert.match(at(100, () => row.plain(80))[0] ?? "", /^ ● Running {2}\$ npm test/);
+	at(200, () => row.finish("ok"));
+	assert.match(at(300, () => row.plain(80))[0] ?? "", /^ ● Ran {2}\$ npm test/);
+	row.stop();
+});
+
+test("a packed run lines its targets up in one column", () => {
+	const { rows } = runFixture();
+	at(0, () => {
+		rows.r1.start();
+		rows.g1.start();
+	});
+	at(100, () => rows.g1.render());
+	const [read, search] = at(100, () => rows.r1.plain());
+	assert.equal(read?.indexOf("src/a.ts"), search?.indexOf("needle"), `${read}\n${search}`);
+	assert.match(search ?? "", /^ ● Searching {2}needle/, "the longest verb keeps the two-space gap");
+	for (const row of Object.values(rows)) row.stop();
+});

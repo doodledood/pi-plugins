@@ -5,19 +5,19 @@ Graphite-style rows for Pi's built-in tools (`read`, `grep`, `find`, `ls`, `bash
 ```text
  ● Explored  3 files · 1 search   ctrl+o to expand                        1.2s
 
- ● Edited    packages/app/src/footer.ts                             +1  −1  0.3s
+ ● Edited  packages/app/src/footer.ts                               +1  −1  0.3s
    181   const costStr = formatTreeCost(runtime.cost);
    182 − const cacheSignal = cacheStats.visible ? format(cacheStats) : undefined;
    182 + const cacheSignal = cacheStats.visible ? format(cacheStats, { latest: true }) : undefined;
 
- ● Running   $ npm test -w simple-statusline                                 1.4s
+ ● Running  $ npm test -w simple-statusline                                 1.4s
    ✔ renders the session rate
    ✔ renders the latest-turn rate
 ```
 
 ## What it draws
 
-- **Rows.** Each row shows a state glyph, a verb, the target, and a right-aligned result column with the duration. When a path does not fit, its leading directories collapse to `…/` before the file name is touched. While a tool runs, the glyph breathes and a highlight sweeps across the present-tense verb (Reading, Searching, Running). When the tool lands, the verb turns past tense (Read, Searched, Ran) and the result appears: lines, matches, files, entries, `+A −R`, `exit N`.
+- **Rows.** Each row shows a state glyph, a verb, the target, and a right-aligned result column with the duration. When a path does not fit, its leading directories collapse to `…/` before the file name is touched. The target sits two spaces after the verb; rows in a packed run share one column so their targets line up. While a tool runs, the glyph breathes and a highlight sweeps across the present-tense verb (Reading, Searching, Running). When the tool lands, the verb turns past tense (Read, Searched, Ran) and the result appears: lines, matches, files, entries, `+A −R`, `exit N`.
 - **Temporal depth.** A finished row starts bright and recedes to the muted tones over about two seconds. Failures stay bright. Rows restored from session history render already receded.
 - **Exploratory runs.** Two or more consecutive `read`/`grep`/`find`/`ls` calls from one assistant message draw as one packed block, with no blank lines between rows. Once they all succeed, they fold into one `Explored …` line. A run that includes an image read stays as ordinary rows, so the image sits under its own row. Clicking a packed or folded run opens it into ordinary rows, each then expandable on its own. A failure keeps the run unfolded with the error shown. `ctrl+o` (expand) shows every row on its own with its output.
 - **Diffs.** `edit` and `write` results draw as tinted bands under the row. When a removed line pairs with an added line, only the span that changed gets the stronger tint. Collapsed diffs show the first 12 lines, then a `… N more lines` expand hint.
