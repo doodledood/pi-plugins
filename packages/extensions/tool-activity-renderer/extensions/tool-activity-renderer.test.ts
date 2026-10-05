@@ -156,11 +156,11 @@ class Row {
 	}
 
 	/** A left click on this row's call component, the way pi's MouseRegion forwards it. */
-	click(): unknown {
+	click(type = "click", button = "left"): unknown {
 		const tool = this.harness.tools.get(this.toolName);
 		assert.ok(tool);
 		const component = tool.renderCall(this.context.args, theme, this.context) as Component & { handleMouse?(event: unknown): unknown };
-		return component.handleMouse?.({ type: "click", button: "left", x: 2, y: 0, screenX: 2, screenY: 0, width: 80, height: 1 });
+		return component.handleMouse?.({ type, button, x: 2, y: 0, screenX: 2, screenY: 0, width: 80, height: 1 });
 	}
 
 	plain(width = 120): string[] {
@@ -552,6 +552,7 @@ test("the working line names the current activity with elapsed time, then hands 
 		at(0, () => harness.emit("agent_start", {}, ctx));
 		const indicator = calls.find((c) => c.method === "indicator")?.value as { frames: string[]; intervalMs: number };
 		assert.equal(indicator.frames.length, 10, "one breath of the dot");
+		assert.equal(indicator.intervalMs, 120, "ten frames across a 1.2s breath");
 		assert.ok(indicator.frames.every((frame) => stripTerminalSequences(frame) === "●"));
 		assert.equal(lastMessage(), "Working  0.0s");
 
@@ -1001,7 +1002,8 @@ test("expand hints draw in one quiet tone, whatever styling pi's key hint carrie
 	const h1 = new Row(harness, "read", "h1", { path: "a.ts" }).restore("x");
 	new Row(harness, "read", "h2", { path: "b.ts" }).restore("y").render();
 	const line = h1.render(100)[0] ?? "";
-	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("to expand")));
+	// Everything after the run's body: the key and its words must share one tone.
+	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("to expand") - 8));
 	const colors = new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]));
 	assert.equal(colors.size, 1, `one tone across the hint: ${JSON.stringify(hint)}`);
 });
@@ -1172,4 +1174,48 @@ test("clicking a folded run opens it into rows that each expand on their own", (
 	assert.equal(rows.r1.plain().length, 1, "the leader draws only itself, still collapsed");
 	assert.match(rows.g1.plain()[0] ?? "", /^ ● Searched\s/, "the follower draws its own clickable row");
 	assert.equal(rows.g1.click(), undefined, "a plain row leaves the click to pi, which expands it");
+});
+
+// ─── review round 7 ───────────────────────────────────────────────────────────
+
+test("only a left click opens a folded run: wheel, press, move and right clicks pass through", () => {
+	const { rows } = runFixture();
+	rows.r1.restore("one");
+	rows.g1.restore("a:1");
+	rows.g1.render();
+	for (const [type, button] of [["wheel", "none"], ["press", "left"], ["move", "none"], ["click", "right"]] as const) {
+		assert.equal(rows.r1.click(type, button), undefined, `${type}/${button} is not handled`);
+		assert.match(rows.r1.plain()[0] ?? "", /Explored/, `${type}/${button} leaves the run folded`);
+	}
+	assert.deepEqual(rows.r1.click(), { handled: true });
+});
+
+test("a branch re-read folds runs again even after one was clicked open", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	const branch = { sessionManager: { getBranch: () => [{ type: "message", message: message(["c1", "read"], ["c2", "read"]) }] } };
+	harness.emit("session_start", { reason: "resume" }, branch);
+	const c1 = new Row(harness, "read", "c1", { path: "a.ts" }).restore("x");
+	new Row(harness, "read", "c2", { path: "b.ts" }).restore("y").render();
+	c1.click();
+	assert.match(c1.plain()[0] ?? "", /^ ● Read\s/);
+	harness.emit("session_tree", {}, branch);
+	assert.match(c1.plain()[0] ?? "", /Explored/);
+});
+
+test("a landing row flashes its glyph at full text before it settles", () => {
+	setHyperlinks(false);
+	const row = new Row(createHarness(), "read", "l", { path: "a.ts" });
+	at(0, () => row.start());
+	at(500, () => row.finish("x"));
+	assert.equal(fgAt(at(600, () => row.render(80))[0] ?? "", "●"), hex(parseColor(TOKENS.text!)));
+	assert.notEqual(fgAt(at(800, () => row.render(80))[0] ?? "", "●"), hex(parseColor(TOKENS.text!)));
+	row.stop();
+});
+
+test("an emoji change that shares its low surrogate is not split either", () => {
+	setHyperlinks(false);
+	const raw = new Row(createHarness(), "edit", "s", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 x \u{1F600} y\n+ 1 x \u{1F200} y" } }).render(80);
+	const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+	for (const line of raw) assert.ok(!lone.test(line), JSON.stringify(line));
 });
