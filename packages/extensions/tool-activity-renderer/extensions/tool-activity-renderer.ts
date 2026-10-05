@@ -14,7 +14,7 @@ import {
 	getAgentDir,
 	keyText,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Text } from "@earendil-works/pi-tui";
+import { type Component, Text, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
@@ -235,13 +235,17 @@ function hasTruncation(details: unknown): boolean {
 	return typeof details === "object" && details !== null && "truncation" in details && Boolean((details as { truncation?: unknown }).truncation);
 }
 
-const BASH_TRAILER = /\n\nCommand (exited|timed out|aborted).*$/s;
+/**
+ * pi's status line, which it appends last to a bash result (after a blank line when there is output).
+ * Anchored to the end so a command that prints the same words itself can't be mistaken for it.
+ */
+const BASH_TRAILER = /(?:^|\n\n)Command (exited with code (\d+)|timed out|aborted)[^\n]*\n?$/;
 
 function bashFailure(output: string): MetaPart {
-	const code = output.match(/Command exited with code (\d+)/)?.[1];
-	if (code) return { text: `exit ${code}`, role: "error" };
-	if (/Command timed out/.test(output)) return { text: "timed out", role: "error" };
-	if (/Command aborted/.test(output)) return { text: "aborted", role: "error" };
+	const status = output.match(BASH_TRAILER);
+	if (status?.[2]) return { text: `exit ${status[2]}`, role: "error" };
+	if (status?.[1] === "timed out") return { text: "timed out", role: "error" };
+	if (status?.[1] === "aborted") return { text: "aborted", role: "error" };
 	return { text: "failed", role: "error" };
 }
 
@@ -310,6 +314,18 @@ class RowView implements Component {
 			return [renderFoldedRun(role.members, theme, width, now, expandHint())];
 		}
 		return role.members.flatMap((member) => renderRow(member, theme, width, now));
+	}
+
+	/**
+	 * A click on a packed or folded run opens it into ordinary rows, each then expandable on its own.
+	 * pi would otherwise expand only this first row, whichever line was clicked, since one component
+	 * draws the whole run and an extension can't toggle another row's expansion.
+	 */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		if (this.shared.runs.role(this.toolCallId).kind !== "leader") return undefined;
+		this.shared.runs.unpack(this.toolCallId);
+		return { handled: true };
 	}
 
 	invalidate(): void {}

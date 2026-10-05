@@ -34,6 +34,8 @@ export class ExploreRuns {
 	/** toolCallId → the ordered ids of its run. Only runs of two or more are recorded. */
 	private readonly runOf = new Map<string, readonly string[]>();
 	private readonly heads = new Map<string, RowHead>();
+	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
+	private readonly unpacked = new Set<string>();
 
 	/** Record the runs in an assistant message. Safe to call repeatedly as the message streams. */
 	ingest(message: unknown): void {
@@ -56,6 +58,12 @@ export class ExploreRuns {
 	 */
 	clearRuns(): void {
 		this.runOf.clear();
+		this.unpacked.clear();
+	}
+
+	/** Open the run led by `leaderId` into ordinary rows. */
+	unpack(leaderId: string): void {
+		this.unpacked.add(leaderId);
 	}
 
 	/** Every row reports its latest head so the run's leader can draw it. */
@@ -71,7 +79,7 @@ export class ExploreRuns {
 		const run = this.runOf.get(toolCallId);
 		if (!run || !this.heads.has(toolCallId)) return { kind: "solo" };
 		const heads = run.map((id) => this.heads.get(id));
-		if (heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
+		if (this.unpacked.has(run[0] ?? "") || heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
 		// A follower hides only once its leader exists to draw it.
 		if (run[0] !== toolCallId) return heads[0] ? { kind: "follower" } : { kind: "solo" };
 		const members = heads.filter((head): head is RowHead => head !== undefined);

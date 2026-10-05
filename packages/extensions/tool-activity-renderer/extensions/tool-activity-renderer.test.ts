@@ -155,6 +155,14 @@ class Row {
 		return [...call.render(width), ...(result?.render(width) ?? [])];
 	}
 
+	/** A left click on this row's call component, the way pi's MouseRegion forwards it. */
+	click(): unknown {
+		const tool = this.harness.tools.get(this.toolName);
+		assert.ok(tool);
+		const component = tool.renderCall(this.context.args, theme, this.context) as Component & { handleMouse?(event: unknown): unknown };
+		return component.handleMouse?.({ type: "click", button: "left", x: 2, y: 0, screenX: 2, screenY: 0, width: 80, height: 1 });
+	}
+
 	plain(width = 120): string[] {
 		return this.render(width).map((line) => stripTerminalSequences(line));
 	}
@@ -1120,4 +1128,48 @@ test("a result that arrives without tool_execution_end (aborted message) still s
 	} finally {
 		mock.timers.reset();
 	}
+});
+
+// ─── review round 6 ───────────────────────────────────────────────────────────
+
+test("edit meta counts additions and removals separately", () => {
+	setHyperlinks(false);
+	const h = createHarness();
+	assert.match(new Row(h, "edit", "a1", { path: "a.ts" }).restore("ok", { details: { diff: "  1 keep\n- 2 a\n+ 2 b\n+ 3 c" } }).plain(100)[0] ?? "", /\+2 {2}−1$/);
+	assert.match(new Row(h, "edit", "a2", { path: "a.ts" }).restore("ok", { details: { diff: "  1 keep\n+ 2 new\n+ 3 new\n+ 4 new" } }).plain(100)[0] ?? "", /\+3 {2}−0$/);
+});
+
+test("diff bands fill the row width", () => {
+	setHyperlinks(false);
+	const lines = new Row(createHarness(), "edit", "f", { path: "a.ts" }).restore("ok", { details: { diff: "- 1 a = 1\n+ 1 a = 2" } }).render(80);
+	for (const line of lines.slice(1)) {
+		assert.equal(visibleWidth(line), 80);
+		assert.match(line, /\x1b\[48;2;\d+;\d+;\d+m {2,}/, "trailing cells carry the band");
+	}
+});
+
+test("bash status comes from pi's final status line, not from output that repeats its words", () => {
+	setHyperlinks(false);
+	const h = createHarness();
+	const echo = new Row(h, "bash", "e", { command: "x" }).restore("Command exited with code 2\n\nCommand exited with code 1", { isError: true }).plain(100);
+	assert.match(echo[0] ?? "", /exit 1$/);
+	const log = "build log\n\nCommand exited with code 2\nmore output\nlast error line\n\nCommand timed out after 5 seconds";
+	const timed = new Row(h, "bash", "t", { command: "x" }).restore(log, { isError: true }).plain(100);
+	assert.match(timed[0] ?? "", /timed out$/);
+	assert.deepEqual(timed.slice(-2), ["   more output", "   last error line"]);
+	const bare = new Row(h, "bash", "b", { command: "false" }).restore("Command exited with code 1", { isError: true }).plain(100);
+	assert.deepEqual(bare.slice(1), [], "a bare status is not repeated as detail");
+});
+
+test("clicking a folded run opens it into rows that each expand on their own", () => {
+	const { rows } = runFixture();
+	rows.r1.restore("one");
+	rows.g1.restore("a:1");
+	rows.g1.render();
+	assert.match(rows.r1.plain()[0] ?? "", /Explored/);
+	assert.deepEqual(rows.r1.click(), { handled: true });
+	assert.match(rows.r1.plain()[0] ?? "", /^ ● Read\s/);
+	assert.equal(rows.r1.plain().length, 1, "the leader draws only itself, still collapsed");
+	assert.match(rows.g1.plain()[0] ?? "", /^ ● Searched\s/, "the follower draws its own clickable row");
+	assert.equal(rows.g1.click(), undefined, "a plain row leaves the click to pi, which expands it");
 });
