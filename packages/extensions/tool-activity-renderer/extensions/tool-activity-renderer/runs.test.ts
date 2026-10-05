@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { RowHead } from "./row.ts";
 import { ExploreRuns } from "./runs.ts";
 import { TOKENS, createHarness, drawFrames, Row, at, setHyperlinks, fgAt, hex, message, runFixture } from "./test-harness.ts";
 
@@ -324,7 +325,7 @@ test("an export of searches this session never drew still shows each one settled
 	assert.match(follower.collapsed[0] ?? "", /^ ✕ Found {2}\*\.ts/, "and so does a follower, with its failure");
 });
 
-test("a restored run drawn top to bottom never drops a member, and asks for the frames it needs to fold", async () => {
+test("a restored run drawn top to bottom never drops or splits a member, and folds on its second frame", async () => {
 	setHyperlinks(false);
 	const harness = createHarness();
 	harness.emit("session_start", { reason: "reload" }, { sessionManager: { getBranch: () => [{ type: "message", message: message(["q1", "read"], ["q2", "read"], ["q3", "grep"]) }] } });
@@ -337,13 +338,14 @@ test("a restored run drawn top to bottom never drops a member, and asks for the 
 	const heads = (frame: string[][]) => frame.map((lines) => lines.map((line) => line.split(/ {3,}/)[0]));
 	const separate = [[" ● Read  a.ts"], [" ● Read  b.ts"], [" ● Searched  needle  in ."]];
 	assert.deepEqual(heads(drawFrames(rows, 1)), separate, "frame 1: each row draws itself, settled");
-	assert.deepEqual(heads(drawFrames(rows, 1)), separate, "frame 2: rows that became live after the leader drew still draw themselves");
 	await Promise.resolve();
 	assert.ok(rows.every((row) => row.context.invalidations > 0), "each row asked pi for its next frame itself");
-	const [folded = [], ...hidden] = drawFrames(rows, 1);
-	assert.equal(folded.length, 1);
-	assert.match(folded[0] ?? "", /^ ● Explored {2}2 files · 1 search/, "frame 3: the run folds");
-	assert.deepEqual(hidden, [[], []]);
+	for (let frame = 2; frame <= 3; frame++) {
+		const [folded = [], ...hidden] = drawFrames(rows, 1);
+		assert.equal(folded.length, 1, `frame ${frame}: ${JSON.stringify(folded)}`);
+		assert.match(folded[0] ?? "", /^ ● Explored {2}2 files · 1 search/, `frame ${frame}: the run is folded, every member counted`);
+		assert.deepEqual(hidden, [[], []], `frame ${frame}: no member draws apart from it`);
+	}
 });
 
 test("a run with a finished member and one still running or waiting stays unfolded", () => {
@@ -417,4 +419,42 @@ test("a compaction lets go of the rows it dropped from the chat and keeps the re
 	let readContext = 0;
 	harness.emit("session_compact", {}, { sessionManager: { buildContextEntries: () => (readContext++, []) } });
 	assert.equal(readContext, 1, "a compaction re-reads the kept context");
+});
+
+test("a member that starts while its run is on screen joins the run on its very first frame", () => {
+	const { rows } = runFixture();
+	at(0, () => rows.r1.start());
+	at(50, () => drawFrames([rows.r1], 3));
+	// The grep starts: pi creates its row and draws the transcript top to bottom.
+	at(100, () => rows.g1.start());
+	for (let frame = 1; frame <= 3; frame++) {
+		const [leader = [], follower = []] = at(100 + frame * 16, () => drawFrames([rows.r1, rows.g1], 1));
+		assert.equal(leader.length, 2, `frame ${frame}: the leader draws both members, no blank line: ${JSON.stringify(leader)}`);
+		assert.match(leader[1] ?? "", /^ ● Searching +needle/, `frame ${frame}`);
+		assert.deepEqual(follower, [], `frame ${frame}: the new member never draws apart`);
+	}
+	for (const row of Object.values(rows)) row.stop();
+});
+
+test("a finished member restored under a live leader is drawn once, by the leader", () => {
+	const { harness, rows } = runFixture();
+	rows.r1.restore("a");
+	at(0, () => drawFrames([rows.r1], 3));
+	const rebuilt = new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }).restore("x");
+	const [leader = [], follower = []] = at(0, () => drawFrames([rows.r1, rebuilt], 1));
+	assert.equal([...leader, ...follower].filter((line) => line.includes("needle") || line.includes("search")).length, 1, JSON.stringify([leader, follower]));
+	assert.deepEqual(follower, []);
+});
+
+test("candidate states are drawn into their run and released with it", () => {
+	const runs = new ExploreRuns();
+	const head = { expanded: false, standalone: false } as RowHead;
+	runs.readBranch([message(["l", "read"], ["f", "read"])]);
+	runs.claim("l", { head });
+	runs.report("f", { head });
+	const before = runs.role("l");
+	assert.equal(before.kind === "leader" && before.members.length, 2, "the leader draws a member that has only reported");
+	runs.retainOwners([message(["l", "read"])]);
+	const after = runs.role("l");
+	assert.equal(after.kind === "leader" && after.members.length, 1, "a released candidate is no longer drawn or held");
 });

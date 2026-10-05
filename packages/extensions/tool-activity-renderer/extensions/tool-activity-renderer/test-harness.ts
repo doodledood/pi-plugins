@@ -150,7 +150,8 @@ export class Row {
 	/**
 	 * Lines this row contributes to the transcript at `width`: the call slot, then the result slot.
 	 * pi's TUI draws a live row on every frame, so the first render also draws the frame before it,
-	 * the way a row that has been on screen has; `drawFrame` draws exactly one frame (see drawFrames).
+	 * the way a row that has been on screen has; `drawFrame` updates and draws exactly one frame, and
+	 * drawFrames draws whole transcript frames in pi's order (update every row, then paint top to bottom).
 	 */
 	render(width = 120): string[] {
 		if (!this.mounted) this.frame(width);
@@ -162,9 +163,10 @@ export class Row {
 	}
 
 	private mounted = false;
+	private components: Component[] = [];
 
-	private frame(width: number): string[] {
-		this.mounted = true;
+	/** pi's updateDisplay: on each tool event the row rebuilds its call and result components. */
+	update(): void {
 		const tool = this.harness.tools.get(this.toolName);
 		assert.ok(tool, `${this.toolName} should be registered`);
 		this.context.isError = this.result?.isError ?? false;
@@ -173,7 +175,18 @@ export class Row {
 		const result = this.result
 			? tool.renderResult({ content: this.result.content, details: this.result.details }, { expanded: this.context.expanded, isPartial: this.result.partial }, theme, this.context)
 			: undefined;
-		return [...call.render(width), ...(result?.render(width) ?? [])];
+		this.components = result ? [call, result] : [call];
+	}
+
+	/** Draw the components from the last update, as one TUI frame does. */
+	paint(width = 120): string[] {
+		this.mounted = true;
+		return this.components.flatMap((component) => component.render(width));
+	}
+
+	private frame(width: number): string[] {
+		this.update();
+		return this.paint(width);
 	}
 
 	/** A left click on this row's call component, the way pi's MouseRegion forwards it. */
@@ -217,7 +230,11 @@ export class Row {
  */
 export function drawFrames(rows: readonly Row[], count = 3, width = 120): string[][] {
 	let last: string[][] = [];
-	for (let frame = 0; frame < count; frame++) last = rows.map((row) => row.drawFrame(width));
+	for (let frame = 0; frame < count; frame++) {
+		// Tool events update every row before pi draws the frame top to bottom.
+		for (const row of rows) row.update();
+		last = rows.map((row) => row.paint(width).map((line) => stripTerminalSequences(line)));
+	}
 	return last;
 }
 

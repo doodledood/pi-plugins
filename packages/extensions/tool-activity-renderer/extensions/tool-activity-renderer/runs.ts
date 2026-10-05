@@ -43,8 +43,13 @@ export class ExploreRuns {
 	 * always draws its members' latest heads, and one-shot render passes (/export) never become owners.
 	 */
 	private readonly owners = new Map<string, RowSource>();
-	/** Members their leader drew on its latest render; only these hide as followers. */
-	private readonly drawn = new Set<string>();
+	/**
+	 * toolCallId → the row state that reported it most recently. A leader draws a member from its
+	 * candidate until the member's own row owns it, so a member is part of its run from its first frame.
+	 */
+	private readonly candidates = new Map<string, RowSource>();
+	/** Members their leader drew on its latest render, with the state it drew; only these hide as followers. */
+	private readonly drawn = new Map<string, RowSource>();
 	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
 	private readonly unpacked = new Set<string>();
 
@@ -79,13 +84,26 @@ export class ExploreRuns {
 	/** Let go of row states for tool calls outside these messages, e.g. the rows a compaction dropped from the chat. */
 	retainOwners(messages: readonly unknown[]): void {
 		const kept = new Set(messages.flatMap((message) => toolCallBlocks(message).map((block) => block.id)));
-		for (const id of this.owners.keys()) if (!kept.has(id)) this.owners.delete(id);
+		for (const map of [this.owners, this.candidates]) for (const id of map.keys()) if (!kept.has(id)) map.delete(id);
+	}
+
+	/** A row state started a render pass for this tool call (see candidates). */
+	report(toolCallId: string, source: RowSource): void {
+		this.candidates.set(toolCallId, source);
 	}
 
 	/** The leader just drew these members of its run (see role). */
 	drew(leaderId: string, ids: readonly string[]): void {
 		for (const id of this.runOf.get(leaderId) ?? []) this.drawn.delete(id);
-		for (const id of ids) this.drawn.add(id);
+		for (const id of ids) {
+			const source = this.source(id);
+			if (source) this.drawn.set(id, source);
+		}
+	}
+
+	/** Whether the leader's latest render drew this very state, so the state must not draw itself too. */
+	drewState(toolCallId: string, source: RowSource): boolean {
+		return this.drawn.get(toolCallId) === source;
 	}
 
 	/** Open the run led by `leaderId` into ordinary rows. */
@@ -102,8 +120,12 @@ export class ExploreRuns {
 		this.owners.set(toolCallId, source);
 	}
 
+	private source(toolCallId: string): RowSource | undefined {
+		return this.owners.get(toolCallId) ?? this.candidates.get(toolCallId);
+	}
+
 	private head(toolCallId: string): RowHead | undefined {
-		return this.owners.get(toolCallId)?.head;
+		return this.source(toolCallId)?.head;
 	}
 
 	/**
@@ -115,8 +137,8 @@ export class ExploreRuns {
 		if (!run || !this.head(toolCallId)) return { kind: "solo" };
 		const heads = run.map((id) => this.head(id));
 		if (this.unpacked.has(run[0] ?? "") || heads.some((head) => head?.expanded || head?.standalone)) return { kind: "solo" };
-		// A follower hides only once its leader has drawn it. pi draws rows top to bottom, so a member
-		// that becomes live after its leader drew this frame draws itself until the next one.
+		// A follower hides only once its leader has drawn it. The leader draws a member from its candidate
+		// state before the member's own row is live, so a running member never stands apart from its run.
 		if (run[0] !== toolCallId) return this.drawn.has(toolCallId) ? { kind: "follower" } : { kind: "solo" };
 		const ids = run.filter((_, index) => heads[index] !== undefined);
 		const members = heads.filter((head): head is RowHead => head !== undefined);

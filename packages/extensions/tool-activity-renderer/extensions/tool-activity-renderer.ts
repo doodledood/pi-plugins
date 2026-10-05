@@ -364,7 +364,9 @@ class OneShotAware implements Component {
 	render(width: number): string[] {
 		const { state, toolCallId } = this.context;
 		const theme = state.view?.theme;
-		if (this.shared.runs.owns(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
+		const runs = this.shared.runs;
+		// A live run's leader may already draw this state (from its candidate); then only the result shows.
+		if (runs.owns(toolCallId, state) || runs.drewState(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
 		return [...renderRow(state.head, theme, width, clock.now()), ...this.inner.render(width)];
 	}
 
@@ -398,6 +400,7 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
 	state.view.requestFrame = () => context.invalidate();
+	shared.runs.report(context.toolCallId, state);
 	animate(context, head, shared);
 	return state.view;
 }
