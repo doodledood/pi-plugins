@@ -115,7 +115,7 @@ test("the collapsed diff's expand hint is one quiet tone", () => {
 	setHyperlinks(false);
 	const diff = Array.from({ length: 15 }, (_, i) => `+ ${i + 1} line ${i + 1}`).join("\n");
 	const hint = new Row(createHarness(), "edit", "e", { path: "a.ts" }).restore("ok", { details: { diff } }).render(100).at(-1) ?? "";
-	assert.match(stripTerminalSequences(hint), /… 3 more lines/);
+	assert.match(stripTerminalSequences(hint), /… 3 more lines \(ctrl\+o to expand\)/);
 	assert.deepEqual([...new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]))].length, 1);
 });
 

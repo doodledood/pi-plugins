@@ -39,8 +39,8 @@ export class ExploreRuns {
 	/** toolCallId → the ordered ids of its run. Only runs of two or more are recorded. */
 	private readonly runOf = new Map<string, readonly string[]>();
 	/**
-	 * toolCallId → the row state that speaks for it. Heads are read through the owner, so a leader
-	 * always draws its members' latest heads, and render passes from other surfaces can't overwrite them.
+	 * toolCallId → the live row state that speaks for it. Heads are read through the owner, so a leader
+	 * always draws its members' latest heads, and one-shot render passes (/export) never become owners.
 	 */
 	private readonly owners = new Map<string, RowSource>();
 	/** Leader ids of runs the user clicked open; they draw as ordinary rows from then on. */
@@ -75,17 +75,11 @@ export class ExploreRuns {
 		this.unpacked.add(leaderId);
 	}
 
-	/** The first row state to report an id owns it until another claims it. */
-	report(toolCallId: string, source: RowSource): void {
-		if (!this.owners.has(toolCallId)) this.owners.set(toolCallId, source);
-	}
-
 	owns(toolCallId: string, source: RowSource): boolean {
-		const owner = this.owners.get(toolCallId);
-		return owner === undefined || owner === source;
+		return this.owners.get(toolCallId) === source;
 	}
 
-	/** Hand an id to a row state that has shown it is live (see RowView.render). */
+	/** Hand an id to a row state that has shown it is live (see RowView.render); the newest live state wins. */
 	claim(toolCallId: string, source: RowSource): void {
 		this.owners.set(toolCallId, source);
 	}

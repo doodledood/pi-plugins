@@ -220,6 +220,7 @@ test("a branch re-read folds runs again even after one was clicked open", () => 
 	harness.emit("session_start", { reason: "resume" }, branch);
 	const c1 = new Row(harness, "read", "c1", { path: "a.ts" }).restore("x");
 	new Row(harness, "read", "c2", { path: "b.ts" }).restore("y").render();
+	assert.match(c1.plain()[0] ?? "", /Explored/);
 	c1.click();
 	assert.match(c1.plain()[0] ?? "", /^ ● Read\s/);
 	harness.emit("session_tree", {}, branch);
@@ -301,11 +302,27 @@ test("a chat rebuilt while its tools ran takes the run over: the rebuilt rows fo
 	const rebuilt = { r1: new Row(harness, "read", "r1", { path: "src/a.ts" }), g1: new Row(harness, "grep", "g1", { pattern: "needle", path: "src" }) };
 	rebuilt.r1.restore("a");
 	rebuilt.g1.restore("x");
-	const first = at(3_000, () => [...rebuilt.r1.plain(), ...rebuilt.g1.plain()]);
+	const first = at(3_000, () => [...rebuilt.r1.firstFrame(), ...rebuilt.g1.firstFrame()]);
 	assert.equal(first.filter((line) => line.startsWith(" ●")).length, 2, "the first frame draws each rebuilt row settled, on its own");
 	assert.ok(first.every((line) => !/Reading|Searching/.test(line)));
 	at(3_000, () => [rebuilt.r1.plain(), rebuilt.g1.plain()]);
 	assert.match(at(3_000, () => rebuilt.r1.plain())[0] ?? "", /^ ● Explored {2}1 file · 1 search/, "then the rebuilt leader folds the run");
 	assert.deepEqual(at(3_000, () => rebuilt.g1.plain()), [], "and the follower hides under it");
 	for (const row of [...Object.values(rows), ...Object.values(rebuilt)]) row.stop();
+});
+
+test("an export of searches this session never drew still shows each one settled, failures included", () => {
+	setHyperlinks(false);
+	const harness = createHarness();
+	// A run from before a compaction, or on a branch the user never opened: known, but never drawn.
+	harness.emit("message_end", { message: message(["x1", "grep"], ["x2", "find"]) });
+	harness.emit("message_end", { message: message(["x3", "grep"]) });
+	const lone = new Row(harness, "grep", "x3", { pattern: "needle", path: "src" }).restore("boom", { isError: true }).exportRender();
+	assert.deepEqual(lone.call, []);
+	assert.match(lone.collapsed[0] ?? "", /^ ✕ Searched {2}needle/);
+	assert.ok(lone.collapsed.some((line) => line.includes("boom")), "the error is kept");
+	const leader = new Row(harness, "grep", "x1", { pattern: "a", path: "src" }).restore("src/a.ts:1: a").exportRender();
+	const follower = new Row(harness, "find", "x2", { pattern: "*.ts", path: "src" }).restore("nope", { isError: true }).exportRender();
+	assert.match(leader.collapsed[0] ?? "", /^ ● Searched {2}a/, "a run's leader exports as its own settled row");
+	assert.match(follower.collapsed[0] ?? "", /^ ✕ Found {2}\*\.ts/, "and so does a follower, with its failure");
 });

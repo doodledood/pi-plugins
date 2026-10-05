@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ThemeStyle } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { type Color, colorToHex, mixColors, parseColor, setCapabilities, stripTerminalSequences, styleText } from "@earendil-works/pi-tui";
+import { type Color, colorToHex, KeybindingsManager, mixColors, parseColor, setCapabilities, setKeybindings, stripTerminalSequences, styleText } from "@earendil-works/pi-tui";
 
 const agentDir = mkdtempSync(join(tmpdir(), "pi-tool-renderer-test-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 initTheme("dark");
+// pi installs its app keybindings at startup; expand hints name the key bound here.
+setKeybindings(new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" } }));
 
 export const { default: registerExtension } = await import("../tool-activity-renderer.ts");
 
@@ -145,8 +147,24 @@ export class Row {
 		return this;
 	}
 
-	/** Lines this row contributes to the transcript at `width`: the call slot, then the result slot. */
+	/**
+	 * Lines this row contributes to the transcript at `width`: the call slot, then the result slot.
+	 * pi's TUI draws a live row on every frame, so the first render also draws the frame before it,
+	 * the way a row that has been on screen has; `firstFrame` draws a row's very first frame alone.
+	 */
 	render(width = 120): string[] {
+		if (!this.mounted) this.frame(width);
+		return this.frame(width);
+	}
+
+	firstFrame(width = 120): string[] {
+		return this.frame(width).map((line) => stripTerminalSequences(line));
+	}
+
+	private mounted = false;
+
+	private frame(width: number): string[] {
+		this.mounted = true;
 		const tool = this.harness.tools.get(this.toolName);
 		assert.ok(tool, `${this.toolName} should be registered`);
 		this.context.isError = this.result?.isError ?? false;

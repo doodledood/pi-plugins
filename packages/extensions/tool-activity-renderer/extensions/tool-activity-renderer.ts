@@ -311,10 +311,10 @@ class RowView implements Component {
 		const runs = this.shared.runs;
 		this.renders += 1;
 		if (!runs.owns(this.toolCallId, this.state)) {
-			// Another state already speaks for this tool call. pi's TUI draws a row on every frame, so a
-			// second render means this is a live row (pi rebuilt the chat) and takes over. Until then the
-			// result slot draws the row (see OneShotAware): a one-shot render like /export's draws the
-			// call before the result exists, so the call can't know how the row ended.
+			// pi's TUI draws a row on every frame, so a second render proves this state is live, and it
+			// takes the tool call over (from nobody, or from the state of a chat pi has since rebuilt).
+			// Until then the result slot draws the row (see OneShotAware): a one-shot render like
+			// /export's draws the call before the result exists, so the call can't know how it ended.
 			if (this.renders < 2) return [];
 			runs.claim(this.toolCallId, this.state);
 		}
@@ -344,10 +344,10 @@ class RowView implements Component {
 }
 
 /**
- * Wraps a row's result component. While the row's state owns its tool call (every live row), it draws
- * the result as is, under the call slot's head line. A state that doesn't own it yet draws the settled
- * head line itself, so a one-shot render (/export, which draws the call before the result) still shows
- * how the row ended, and a rebuilt chat's first frame matches the frames after it.
+ * Wraps a row's result component. Once the row's state owns its tool call (a live row from its second
+ * frame on), it draws the result as is, under the call slot's head line. Before that it draws the
+ * settled head line itself, so a one-shot render (/export, which draws the call before the result)
+ * still shows how the row ended, and a row's first frame matches the frames after it.
  */
 class OneShotAware implements Component {
 	constructor(
@@ -392,7 +392,6 @@ function beginRow(kind: ToolKind, args: unknown, theme: ThemeLike, context: Rend
 	state.head = head;
 	state.view ??= new RowView(context.toolCallId, state, shared);
 	state.view.theme = theme;
-	shared.runs.report(context.toolCallId, state);
 	animate(context, head, shared);
 	return state.view;
 }

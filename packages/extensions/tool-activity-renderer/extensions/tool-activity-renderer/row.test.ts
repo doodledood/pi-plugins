@@ -176,8 +176,9 @@ test("expand hints draw in one quiet tone, whatever styling pi's key hint carrie
 	const h1 = new Row(harness, "read", "h1", { path: "a.ts" }).restore("x");
 	new Row(harness, "read", "h2", { path: "b.ts" }).restore("y").render();
 	const line = h1.render(100)[0] ?? "";
-	// Everything after the run's body: the key and its words must share one tone.
-	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("to expand") - 8));
+	assert.match(stripTerminalSequences(line), /2 files {3}ctrl\+o to expand/, "the hint names the expand key");
+	// From the color that starts the key to the end of the words: one tone.
+	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("ctrl+o")), line.indexOf("to expand") + "to expand".length);
 	const colors = new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]));
 	assert.equal(colors.size, 1, `one tone across the hint: ${JSON.stringify(hint)}`);
 });
