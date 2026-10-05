@@ -256,10 +256,10 @@ function markFailed(head: RowHead, message: string): void {
 	head.detailTone = "error";
 }
 
-/** The full output under an expanded row. */
+/** The full output under an expanded row. A trailing newline ends the last line rather than adding a blank one. */
 function outputBlock(text: string, theme: ThemeLike): Component {
 	const color = tones(theme).dim;
-	return new Text(text.split("\n").map((line) => `   ${paint(theme, line, color)}`).join("\n"), 0, 0);
+	return new Text(text.replace(/\r?\n$/, "").split("\n").map((line) => `   ${paint(theme, line, color)}`).join("\n"), 0, 0);
 }
 
 function buildWriteDiffLines(content: string): string[] {

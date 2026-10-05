@@ -255,3 +255,9 @@ test("a long grep pattern and a deep path are shown whole when expanded", () => 
 	const read = new Row(createHarness(), "read", "rp", { path }).restore("x");
 	assert.ok(read.expand().plain(60).join("").replace(/\s+/g, "").includes(path));
 });
+
+test("expanded output that ends with a newline adds no blank line under it", () => {
+	setHyperlinks(false);
+	const lines = new Row(createHarness(), "read", "nl", { path: "src/a.ts" }).restore("one\ntwo\n").expand().plain(80);
+	assert.deepEqual(lines.slice(1).map((line) => line.trimEnd()), ["   one", "   two"]);
+});
