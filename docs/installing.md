@@ -73,6 +73,7 @@ pi install /path/to/pi-plugins/packages/extensions/btw
 pi install /path/to/pi-plugins/packages/extensions/goal-controller
 pi install /path/to/pi-plugins/packages/extensions/hq
 pi install /path/to/pi-plugins/packages/extensions/panel
+pi install /path/to/pi-plugins/packages/extensions/widget-dock
 pi install /path/to/pi-plugins/packages/themes/deep-focus-pi
 pi install /path/to/pi-plugins/packages/themes/graphite
 ```

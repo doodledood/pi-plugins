@@ -24,6 +24,10 @@ _Avoid_: Burst, group when the one-message, consecutive-call rule is meant.
 The indicator above the editor while pi works: a breathing dot, the current activity (Thinking, Reading, Running, Writing), and the run's elapsed time.
 _Avoid_: Spinner, loader.
 
+**Widget dock**:
+The widget-dock extension's single line above the editor that stands in for the todo and subagent widgets, summarizing them until `alt+w` opens them in full.
+_Avoid_: Sidebar, side panel (pi has no side-by-side layout).
+
 **Compact tool rendering**:
 The tool activity renderer's default mode, drawing Graphite rows that hide routine output unless the row is expanded or something abnormal happens.
 _Avoid_: Compact mode when the renderer context is unclear.

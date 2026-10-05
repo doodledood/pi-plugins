@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.43.20",
+  "version": "0.44.0",
   "private": true,
   "type": "module",
   "description": "Aviram's portable Pi setup, extensions, and themes.",
@@ -27,6 +27,7 @@
       "./packages/extensions/simple-statusline/extensions/simple-statusline.ts",
       "./packages/extensions/skill-argument-hints/extensions/skill-argument-hints.ts",
       "./packages/extensions/tool-activity-renderer/extensions/tool-activity-renderer.ts",
+      "./packages/extensions/widget-dock/extensions/widget-dock.ts",
       "./packages/extensions/openai-max-output-floor/extensions/openai-max-output-floor.ts",
       "./packages/extensions/openai-tts/extensions/openai-tts/index.ts",
       "./packages/extensions/cache-optimization/extensions/cache-optimization.ts",
@@ -38,9 +39,9 @@
     ]
   },
   "scripts": {
-    "test": "npm run test:mouse-overlays && npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-gpt-fast-toggle && npm run test --workspace @doodledood/pi-hq && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-panel && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer",
+    "test": "npm run test:mouse-overlays && npm run test --workspace @doodledood/pi-advisor-consult && npm run test --workspace @doodledood/pi-btw && npm run test --workspace @doodledood/pi-cache-optimization && npm run test --workspace @doodledood/pi-goal-controller && npm run test --workspace @doodledood/pi-gpt-fast-toggle && npm run test --workspace @doodledood/pi-hq && npm run test --workspace @doodledood/pi-mcp-tool-loadout && npm run test --workspace @doodledood/pi-model-aliases && npm run test --workspace @doodledood/pi-openai-max-output-floor && npm run test --workspace @doodledood/pi-openai-tts && npm run test --workspace @doodledood/pi-panel && npm run test --workspace @doodledood/pi-simple-statusline && npm run test --workspace @doodledood/pi-tool-activity-renderer && npm run test --workspace @doodledood/pi-widget-dock",
     "test:mouse-overlays": "tsx --test scripts/mouse-overlay-integration.test.ts",
-    "typecheck": "npm run typecheck --workspace @doodledood/pi-advisor-consult && npm run typecheck --workspace @doodledood/pi-btw && npm run typecheck --workspace @doodledood/pi-cache-optimization && npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-gpt-fast-toggle && npm run typecheck --workspace @doodledood/pi-hq && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-openai-max-output-floor && npm run typecheck --workspace @doodledood/pi-openai-tts && npm run typecheck --workspace @doodledood/pi-panel && npm run typecheck --workspace @doodledood/pi-simple-statusline && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer",
+    "typecheck": "npm run typecheck --workspace @doodledood/pi-advisor-consult && npm run typecheck --workspace @doodledood/pi-btw && npm run typecheck --workspace @doodledood/pi-cache-optimization && npm run typecheck --workspace @doodledood/pi-goal-controller && npm run typecheck --workspace @doodledood/pi-gpt-fast-toggle && npm run typecheck --workspace @doodledood/pi-hq && npm run typecheck --workspace @doodledood/pi-mcp-tool-loadout && npm run typecheck --workspace @doodledood/pi-model-aliases && npm run typecheck --workspace @doodledood/pi-openai-max-output-floor && npm run typecheck --workspace @doodledood/pi-openai-tts && npm run typecheck --workspace @doodledood/pi-panel && npm run typecheck --workspace @doodledood/pi-simple-statusline && npm run typecheck --workspace @doodledood/pi-tool-activity-renderer && npm run typecheck --workspace @doodledood/pi-widget-dock",
     "verify:structure": "node --test scripts/*.test.mjs && node scripts/verify-structure.mjs",
     "sync:doctrine": "node scripts/sync-doctrine.mjs",
     "sync:doctrine:check": "node scripts/sync-doctrine.mjs --check",

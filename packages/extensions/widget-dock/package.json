@@ -1,0 +1,45 @@
+{
+  "name": "@doodledood/pi-widget-dock",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Fold Pi's todo and subagent widgets above the editor into one summary line you can expand.",
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/widget-dock.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test 'extensions/**/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.99.0",
+    "@earendil-works/pi-tui": ">=0.99.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.0.2",
+    "@earendil-works/pi-tui": "^1.0.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/widget-dock"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/widget-dock#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json"
+  ]
+}

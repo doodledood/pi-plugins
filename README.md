@@ -288,6 +288,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `simple-statusline` — compact Pi footer/statusline, including whole-session-tree cost (this session plus every run it spawned) and the `/cost` breakdown.
 - `skill-argument-hints` — argument hints for skill commands.
 - `tool-activity-renderer` — Graphite-style rows for the built-in tools: present-tense shimmer while a tool runs, past tense and a right-aligned result when it lands, finished rows fading back, exploratory runs folding into one "Explored …" line, word-level diff emphasis, and a live working line above the editor.
+- `widget-dock` — folds the todo and subagent widgets above the editor into one summary line; `alt+w` expands them.
 
 ### Themes
 
