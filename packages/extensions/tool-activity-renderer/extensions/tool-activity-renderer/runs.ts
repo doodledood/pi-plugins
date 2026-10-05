@@ -64,13 +64,20 @@ export class ExploreRuns {
 	}
 
 	/**
-	 * Forget every recorded run before a branch is re-read. Heads stay: on /resume and /reload pi draws
-	 * the rows before it fires session_start, so the heads they reported are already current.
+	 * Re-read the runs from a branch's messages (session start, branch switch). Owners stay for tool
+	 * calls still on the branch: on /resume and /reload pi draws the rows before it fires session_start,
+	 * so they are already current. The rest belong to a chat pi has dropped and are let go.
 	 */
-	clearRuns(): void {
+	readBranch(messages: Iterable<unknown>): void {
 		this.runOf.clear();
 		this.unpacked.clear();
 		this.drawn.clear();
+		const onBranch = new Set<string>();
+		for (const message of messages) {
+			this.ingest(message);
+			for (const block of toolCallBlocks(message)) onBranch.add(block.id);
+		}
+		for (const id of this.owners.keys()) if (!onBranch.has(id)) this.owners.delete(id);
 	}
 
 	/** The leader just drew these members of its run (see role). */

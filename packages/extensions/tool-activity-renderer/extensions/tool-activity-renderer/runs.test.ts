@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { ExploreRuns } from "./runs.ts";
 import { TOKENS, createHarness, drawFrames, Row, at, setHyperlinks, fgAt, hex, message, runFixture } from "./test-harness.ts";
 
 test("consecutive exploratory calls pack under their first row while running", () => {
@@ -332,15 +333,16 @@ test("a restored run drawn top to bottom never drops a member, and asks for the 
 		new Row(harness, "read", "q2", { path: "b.ts" }).restore("y"),
 		new Row(harness, "grep", "q3", { pattern: "needle" }).restore("a.ts:1: needle"),
 	];
-	const shown = (frame: string[][]) => frame.flat().join("\n");
-	for (let frame = 1; frame <= 2; frame++) {
-		const text = shown(drawFrames(rows, 1));
-		for (const name of ["a.ts", "b.ts", "needle"]) assert.ok(text.includes(name) || text.includes("Explored"), `frame ${frame} shows ${name}:\n${text}`);
-	}
+	// Each row's head without its right-aligned result column.
+	const heads = (frame: string[][]) => frame.map((lines) => lines.map((line) => line.split(/ {3,}/)[0]));
+	const separate = [[" ● Read  a.ts"], [" ● Read  b.ts"], [" ● Searched  needle  in ."]];
+	assert.deepEqual(heads(drawFrames(rows, 1)), separate, "frame 1: each row draws itself, settled");
+	assert.deepEqual(heads(drawFrames(rows, 1)), separate, "frame 2: rows that became live after the leader drew still draw themselves");
 	await Promise.resolve();
 	assert.ok(rows.every((row) => row.context.invalidations > 0), "each row asked pi for its next frame itself");
-	const [folded, ...hidden] = drawFrames(rows, 1);
-	assert.match(folded[0] ?? "", /^ ● Explored {2}2 files · 1 search/);
+	const [folded = [], ...hidden] = drawFrames(rows, 1);
+	assert.equal(folded.length, 1);
+	assert.match(folded[0] ?? "", /^ ● Explored {2}2 files · 1 search/, "frame 3: the run folds");
 	assert.deepEqual(hidden, [[], []]);
 });
 
@@ -385,4 +387,17 @@ test("the folded Explored line fits narrow widths and keeps its duration when th
 		if (width === 60) assert.match(folded[0] ?? "", /0\.3s$/);
 	}
 	rows.forEach((row) => row.stop());
+});
+
+test("re-reading a branch lets go of row states for tool calls no longer on it", () => {
+	const runs = new ExploreRuns();
+	const kept = { head: undefined };
+	const dropped = { head: undefined };
+	runs.claim("on", kept);
+	runs.claim("off", dropped);
+	runs.readBranch([message(["on", "read"])]);
+	assert.ok(runs.owns("on", kept), "a tool call still on the branch keeps its row");
+	assert.ok(!runs.owns("off", dropped), "one from a dropped chat is released");
+	runs.readBranch([]);
+	assert.ok(!runs.owns("on", kept), "a new, empty session releases everything");
 });

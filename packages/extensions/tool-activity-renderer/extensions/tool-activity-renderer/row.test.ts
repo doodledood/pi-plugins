@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { createHarness, Row, at, setHyperlinks, CASES, message } from "./test-harness.ts";
+import { parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { CASES, TOKENS, at, createHarness, fgAt, hex, message, Row, setHyperlinks } from "./test-harness.ts";
 
 test("read, edit and write keep long file path suffixes when the row has room", () => {
 	setHyperlinks(false);
@@ -261,4 +261,20 @@ test("expanded output that ends with a newline adds no blank line under it", () 
 	setHyperlinks(false);
 	const lines = new Row(createHarness(), "read", "nl", { path: "src/a.ts" }).restore("one\ntwo\n").expand().plain(80);
 	assert.deepEqual(lines.slice(1).map((line) => line.trimEnd()), ["   one", "   two"]);
+});
+
+test("a failure draws its cross, verb, result and error in the error color", () => {
+	setHyperlinks(false);
+	const error = hex(parseColor(TOKENS.error!));
+	const read = new Row(createHarness(), "read", "fe", { path: "missing.ts" });
+	at(0, () => read.start());
+	at(100, () => read.finish("ENOENT: no such file", { isError: true }));
+	const [head = "", detail = ""] = at(200, () => read.render(80));
+	assert.equal(fgAt(head, "✕"), error, "the cross");
+	assert.equal(fgAt(head, "Read"), error, "the verb");
+	assert.equal(fgAt(head, "failed"), error, "the result");
+	assert.equal(fgAt(detail, "ENOENT"), error, "the error underneath");
+	const bash = new Row(createHarness(), "bash", "fb", { command: "npm test" }).restore("1 failing\n\nCommand exited with code 1", { isError: true });
+	assert.equal(fgAt(bash.render(80)[0] ?? "", "exit 1"), error, "a command's exit code");
+	read.stop();
 });
