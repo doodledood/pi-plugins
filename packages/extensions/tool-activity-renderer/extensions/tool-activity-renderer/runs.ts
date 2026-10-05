@@ -68,16 +68,18 @@ export class ExploreRuns {
 	 * calls still on the branch: on /resume and /reload pi draws the rows before it fires session_start,
 	 * so they are already current. The rest belong to a chat pi has dropped and are let go.
 	 */
-	readBranch(messages: Iterable<unknown>): void {
+	readBranch(messages: readonly unknown[]): void {
 		this.runOf.clear();
 		this.unpacked.clear();
 		this.drawn.clear();
-		const onBranch = new Set<string>();
-		for (const message of messages) {
-			this.ingest(message);
-			for (const block of toolCallBlocks(message)) onBranch.add(block.id);
-		}
-		for (const id of this.owners.keys()) if (!onBranch.has(id)) this.owners.delete(id);
+		for (const message of messages) this.ingest(message);
+		this.retainOwners(messages);
+	}
+
+	/** Let go of row states for tool calls outside these messages, e.g. the rows a compaction dropped from the chat. */
+	retainOwners(messages: readonly unknown[]): void {
+		const kept = new Set(messages.flatMap((message) => toolCallBlocks(message).map((block) => block.id)));
+		for (const id of this.owners.keys()) if (!kept.has(id)) this.owners.delete(id);
 	}
 
 	/** The leader just drew these members of its run (see role). */

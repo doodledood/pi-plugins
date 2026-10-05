@@ -590,17 +590,18 @@ function trackActivity(pi: ExtensionAPI, shared: Shared): void {
 	});
 	pi.on("message_update", (event) => shared.runs.ingest(event.message));
 	pi.on("message_end", (event) => shared.runs.ingest(event.message));
+	const messagesOf = (entries: readonly unknown[]) =>
+		entries
+			.filter((entry) => typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "message")
+			.map((entry) => (entry as { message?: unknown }).message);
 	const ingestBranch = (_event: unknown, ctx: { sessionManager: { getBranch(): unknown[] } }) => {
 		shared.executions.clear();
-		shared.runs.readBranch(
-			ctx.sessionManager
-				.getBranch()
-				.filter((entry) => typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "message")
-				.map((entry) => (entry as { message?: unknown }).message),
-		);
+		shared.runs.readBranch(messagesOf(ctx.sessionManager.getBranch()));
 	};
 	pi.on("session_start", ingestBranch);
 	pi.on("session_tree", ingestBranch);
+	// A compaction redraws the chat from the kept context only; the rows it dropped are never drawn again.
+	pi.on("session_compact", (_event, ctx) => shared.runs.retainOwners(messagesOf(ctx.sessionManager.buildContextEntries())));
 }
 
 export default function toolActivityRenderer(pi: ExtensionAPI): void {

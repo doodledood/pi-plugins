@@ -401,3 +401,20 @@ test("re-reading a branch lets go of row states for tool calls no longer on it",
 	runs.readBranch([]);
 	assert.ok(!runs.owns("on", kept), "a new, empty session releases everything");
 });
+
+test("a compaction lets go of the rows it dropped from the chat and keeps the rest", () => {
+	const runs = new ExploreRuns();
+	const dropped = { head: undefined };
+	const kept = { head: undefined };
+	runs.claim("old", dropped);
+	runs.claim("new", kept);
+	runs.retainOwners([message(["new", "read"])]);
+	assert.ok(!runs.owns("old", dropped), "a row the compaction dropped is released");
+	assert.ok(runs.owns("new", kept), "a row still in the kept context stays");
+
+	// The extension wires this to session_compact, reading the context pi redraws the chat from.
+	const harness = createHarness();
+	let readContext = 0;
+	harness.emit("session_compact", {}, { sessionManager: { buildContextEntries: () => (readContext++, []) } });
+	assert.equal(readContext, 1, "a compaction re-reads the kept context");
+});

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-plugins",
-  "version": "0.43.16",
+  "version": "0.43.17",
   "private": true,
   "type": "module",
   "description": "Aviram's portable Pi setup, extensions, and themes.",
