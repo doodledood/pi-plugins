@@ -158,8 +158,8 @@ if (setupAdvisor) {
 const expectedSetupAliases = new Map([
   ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-6.1-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
-  ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
-  ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
+  ["gpt-5.6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
+  ["gpt-6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-sonnet-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
