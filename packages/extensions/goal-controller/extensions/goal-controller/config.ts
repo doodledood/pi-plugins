@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_TRUSTED_CHECKER_MODEL_BOOTSTRAP_PACKAGES } from "./checker-model-bootstrap.ts";
-import type { CheckerTrustedModelBootstrapPackage, GoalControllerConfig } from "./types.ts";
+import { isThinkingLevel, type CheckerTrustedModelBootstrapPackage, type GoalControllerConfig } from "./types.ts";
 
 const DEFAULT_CHECKER_TIMEOUT_MS = 300_000;
 const DEFAULT_NO_TOOL_CONTINUATION_LIMIT = 3;
@@ -144,9 +144,7 @@ function thinkingOrDefault(
   warnings: string[],
 ): GoalControllerConfig["checker"]["thinking"] {
   if (value === undefined || value === null) return defaultValue;
-  if (value === "inherit" || value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") {
-    return value;
-  }
+  if (value === "inherit" || isThinkingLevel(value)) return value;
   warnings.push(field);
   return defaultValue;
 }

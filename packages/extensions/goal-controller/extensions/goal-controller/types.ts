@@ -1,4 +1,18 @@
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+type PiThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+
+// Pi's own union is the source of truth for which thinking levels exist. `satisfies` rejects a level Pi
+// does not know, and the assertion below stops typechecking when Pi gains a level this list lacks, so the
+// list cannot silently go stale (a missing level would otherwise be rejected at runtime, or lose its styling).
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly PiThinkingLevel[];
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+type AssertNoneMissing<T extends never> = T;
+export type PiLevelsAreAllListed = AssertNoneMissing<Exclude<PiThinkingLevel, ThinkingLevel>>;
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
 
 export type GoalStatus = "active" | "checking" | "waiting_for_user" | "paused" | "blocked" | "budget_limited" | "complete" | "cleared";
 export type CheckerMode = "llm";

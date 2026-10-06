@@ -146,3 +146,11 @@ test("normalizeConfig leaves headers undefined when every value is dropped", () 
     console.warn = originalWarn;
   }
 });
+
+test("normalizeConfig keeps a thinkingLevelMap entry for every Pi thinking level, including max", () => {
+  const map = { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const config = normalizeConfig({
+    aliases: [{ provider: "openai", id: "gpt-6-astra", thinkingLevelMap: map }],
+  });
+  assert.deepEqual(config.aliases[0]?.thinkingLevelMap, map, "no level is silently dropped from alias config");
+});

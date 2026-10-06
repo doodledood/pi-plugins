@@ -121,6 +121,20 @@ test("footer shows the cumulative session cache rate, not the latest turn's rate
   assert.doesNotMatch(line, /cache 49%!/, "no break flag when the latest turn hit cache");
 });
 
+test("every Pi thinking level, including max, is drawn in its own thinking tone", () => {
+  for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+    const harness = createHarness([]);
+    harness.handlers.get("thinking_level_select")!({ level }, harness.ctx);
+    const line = renderFooter(harness);
+    assert.match(line, new RegExp(`\\b${level}\\b`));
+    const tone = `thinking${level[0]!.toUpperCase()}${level.slice(1)}`;
+    assert.ok(
+      harness.themeCalls.some((call) => call.tone === tone && call.text === level),
+      `${level} is drawn with the ${tone} tone`,
+    );
+  }
+});
+
 test("footer computes context percent against the model window without a compact hint below threshold", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = 200_000;

@@ -7,6 +7,7 @@
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
 // live in the cache-optimization extension.
 
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   computeSessionCacheStats,
@@ -40,7 +41,8 @@ const COMPACT_HINT_THRESHOLD_PERCENT = 50;
  */
 const COST_REFRESH_INTERVAL_MS = 1_500;
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+// Pi's own union, so a level Pi adds makes thinkingColor's exhaustive switch stop compiling.
+type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type RuntimeState = {
   thinkingLevel: ThinkingLevel;
   turnCount: number;
@@ -328,6 +330,8 @@ function thinkingColor(level: ThinkingLevel): string {
       return "thinkingHigh";
     case "xhigh":
       return "thinkingXhigh";
+    case "max":
+      return "thinkingMax";
   }
 }
 

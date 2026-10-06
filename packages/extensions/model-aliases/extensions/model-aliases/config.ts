@@ -1,8 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
 export type ModelInputType = "text" | "image";
-export type ThinkingLevelName = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevelName = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+
+// A Record, so a level Pi adds fails typechecking here instead of being silently dropped from alias config.
+const THINKING_LEVEL_NAMES: Record<ThinkingLevelName, true> = { off: true, minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
 
 export interface ModelAliasCost {
   input: number;
@@ -204,7 +208,7 @@ function numberValue(value: unknown): number | undefined {
 function thinkingLevelMapValue(value: unknown): Partial<Record<ThinkingLevelName, string | null>> | undefined {
   if (!isPlainObject(value)) return undefined;
   const out: Partial<Record<ThinkingLevelName, string | null>> = {};
-  for (const key of ["off", "minimal", "low", "medium", "high", "xhigh"] as const) {
+  for (const key of Object.keys(THINKING_LEVEL_NAMES) as ThinkingLevelName[]) {
     const item = value[key];
     if (typeof item === "string" || item === null) out[key] = item;
   }

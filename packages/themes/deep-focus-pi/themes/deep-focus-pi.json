@@ -84,6 +84,7 @@
     "thinkingMedium": "blueSoft",
     "thinkingHigh": "magentaSoft",
     "thinkingXhigh": "magenta",
+    "thinkingMax": "fg",
     "bashMode": "green"
   },
   "export": {

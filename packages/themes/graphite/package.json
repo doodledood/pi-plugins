@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-theme-graphite",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Graphite: a calm dark Pi TUI theme where brightness carries hierarchy and color only means state.",
   "keywords": [
