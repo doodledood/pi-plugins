@@ -152,6 +152,8 @@ The setup makes `anthropic/claude-opus-5-5-full` the default at high thinking, s
 
 [`setup/configs/goal-controller.config.json`](setup/configs/goal-controller.config.json) pins Aviram's goal checker to `openai/gpt-6-luna` at `medium`, regardless of the active session model. This is a setup-specific override; the goal-controller package still defaults both checker fields to `inherit`.
 
+[`setup/configs/advisor-consult.json`](setup/configs/advisor-consult.json) sets the advisor to `openai/gpt-6-astra` at `max`, so it comes from a different model family than the Opus sessions that call it. The setup config overrides only model and thinking; the advisor-consult package default stays Fable 5.1 at `xhigh`, and the config is read on every consult, so editing it needs no reload.
+
 The installed `@gotgenes/pi-subagents` package hardcodes its built-in `Explore` agent to Claude Haiku. [`setup/agents/Explore.md`](setup/agents/Explore.md) is the portable same-name override: it keeps Explore read-only, uses `openai/gpt-5.6-luna` with medium thinking, and asks for conclusion-first, evidence-backed findings.
 
 The setup installs these package sources:

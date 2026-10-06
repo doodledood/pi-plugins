@@ -136,6 +136,20 @@ if (setupGoalController) {
     errors.push("setup/configs/goal-controller.config.json: checker override must contain only model and thinking");
   }
 }
+const setupAdvisor = readJson(join(root, "setup", "configs", "advisor-consult.json"));
+if (setupAdvisor) {
+  if (setupAdvisor.defaultModel !== "openai/gpt-6-astra") {
+    errors.push("setup/configs/advisor-consult.json: defaultModel must be openai/gpt-6-astra");
+  }
+  if (setupAdvisor.defaultThinking !== "max") {
+    errors.push("setup/configs/advisor-consult.json: defaultThinking must be max");
+  }
+  if (JSON.stringify(Object.keys(setupAdvisor).sort()) !== JSON.stringify(["defaultModel", "defaultThinking"])) {
+    errors.push("setup/configs/advisor-consult.json: setup override must contain only defaultModel and defaultThinking");
+  }
+} else {
+  errors.push("setup/configs/advisor-consult.json: missing");
+}
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 // Opus 5.5 is a plan/execute pair: claude-opus-5-5 is the 300K execution window and claude-opus-5-5-full

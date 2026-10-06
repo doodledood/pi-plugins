@@ -36,6 +36,16 @@ test("loadConfig merges valid overrides", () => {
   assert.deepEqual(loaded.config.excludedTools, ["goal", "subagent"]);
 });
 
+test("loadConfig accepts the max thinking level Pi supports above xhigh", () => {
+  const path = tmpConfig();
+  writeFileSync(path, JSON.stringify({ defaultModel: "openai/gpt-6-astra", defaultThinking: "max" }));
+  const loaded = loadConfig(path);
+  assert.equal(loaded.warning, undefined);
+  assert.equal(loaded.config.defaultModel, "openai/gpt-6-astra");
+  assert.equal(loaded.config.defaultThinking, "max");
+  assert.equal(loaded.config.defaultTimeoutMs, DEFAULT_CONFIG.defaultTimeoutMs, "unset fields keep package defaults");
+});
+
 test("loadConfig falls back safely on invalid JSON", () => {
   const path = tmpConfig();
   writeFileSync(path, "not json");

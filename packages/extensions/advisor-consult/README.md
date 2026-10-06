@@ -46,7 +46,7 @@ After updating an installed Git package with `pi update git:github.com/doodledoo
 advisor_consult({
   query: string,            // required: a context-rich neutral advisory brief
   model?: string,           // optional: Pi model pattern, or "inherit"
-  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
   timeout_ms?: number,      // optional: clamped to configured bounds
 })
 ```
@@ -106,13 +106,15 @@ Optional config at `~/.pi/agent/advisor-consult.json` (see `config/advisor-consu
 | Field | Default | Meaning |
 |---|---|---|
 | `defaultModel` | `anthropic/claude-fable-5-1` | Preferred advisor model (Pi `--model` pattern). `"inherit"` uses the parent's model. |
-| `defaultThinking` | `xhigh` | Advisor reasoning effort (Pi-native names only). |
+| `defaultThinking` | `xhigh` | Advisor reasoning effort (Pi-native names only, up to `max` where the advisor model supports it). |
 | `defaultTimeoutMs` | `600000` | Default subprocess timeout (10 min). |
 | `minTimeoutMs` | `30000` | Lower bound for a per-call `timeout_ms`. |
 | `maxTimeoutMs` | `1800000` | Upper bound for a per-call `timeout_ms`. |
 | `excludedTools` | `["goal","subagent","get_subagent_result","steer_subagent"]` | Extra tools denied to the advisor, on top of the always-on hard denylist. |
 
 ### Model default and portability
+
+Aviram's portable setup keeps its own choice in `setup/configs/advisor-consult.json` (`openai/gpt-6-astra` at `max`) so this package default never has to change for one setup.
 
 The package default prefers a **Fable-family** model because advisor calls are high-leverage and warrant top capability. If that model is not available/enabled in your environment, set `defaultModel` to one you have (or `"inherit"`). When the requested model is not the one the subprocess actually ran on, the result surfaces that mismatch so the advice is never silently produced by a weaker model.
 
