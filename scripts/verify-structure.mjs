@@ -15,7 +15,7 @@ const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
   "anthropic/claude-opus-5-5-full:high",
   "openai/gpt-6-astra:medium",
-  "openai/gpt-6-sol:high",
+  "openai/gpt-6.1-sol:high",
   "anthropic/claude-fable-5-1:max",
   "anthropic/claude-sonnet-5-5:xhigh",
 ];
@@ -157,7 +157,7 @@ if (setupAdvisor) {
 // duplicate of it, kept only because Pi continues a session whose model id has vanished on the default model.
 const expectedSetupAliases = new Map([
   ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
-  ["gpt-6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-6.1-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
