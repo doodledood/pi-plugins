@@ -49,7 +49,7 @@ Rules:
 - Budget or time limits are not completion.
 - Prefer a false negative over a false positive.
 
-Return ONLY valid JSON with this shape:
+Return ONLY strict JSON — double-quoted keys and strings, no trailing commas, no comments, and no text before or after the object — with this shape:
 {
   "decision": "complete|continue|waiting_for_user|blocked",
   "complete": boolean,

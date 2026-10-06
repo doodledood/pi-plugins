@@ -31,11 +31,24 @@ class CheckerFailure extends Error {
   public override readonly name = "CheckerFailure";
 }
 
-type VerdictValidationCode = "not-json" | "missing-decision" | "conflicting-fields" | "insufficient-proof";
+type VerdictValidationCode = "not-json" | "malformed-json" | "missing-decision" | "conflicting-fields" | "insufficient-proof";
 
 class VerdictValidationError extends Error {
   public override readonly name = "VerdictValidationError";
-  public constructor(public readonly code: VerdictValidationCode, message: string) {
+  /** Where a malformed verdict broke, as a line number only — never transcript text. */
+  public constructor(public readonly code: VerdictValidationCode, message: string, public readonly line?: number) {
+    super(message);
+  }
+}
+
+// A verdict that is wrong only in how it is written, not in what it says: the checker never
+// produced a usable object, so another audit is the remedy. Semantic rejections (conflicting
+// fields, complete without proof) are verdicts the checker meant, and are never re-asked.
+const FORMAT_FAILURE_CODES: ReadonlySet<VerdictValidationCode> = new Set(["not-json", "malformed-json", "missing-decision"]);
+const MAX_VERDICT_ATTEMPTS = 2;
+
+class InvalidVerdictFailure extends CheckerFailure {
+  public constructor(message: string, public readonly retryable: boolean) {
     super(message);
   }
 }
@@ -47,6 +60,23 @@ export class PiSubprocessCheckerRunner implements CheckerRunner {
     const prompt = buildCheckerPrompt(input.goal, input.context);
     const effectiveModel = resolveModelPattern(input.config.checker.model, input.model);
     const args = checkerArgs(input, prompt, effectiveModel);
+    // A failed check pauses the goal, so one badly formatted answer must not end an autonomous
+    // run. Only a format failure is re-asked, once; provider, process, and stream failures,
+    // and every semantic rejection, surface immediately.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.attempt(input, args, effectiveModel);
+      } catch (error) {
+        if (!(error instanceof InvalidVerdictFailure)) throw error;
+        if (error.retryable && attempt < MAX_VERDICT_ATTEMPTS && !input.signal?.aborted) continue;
+        throw attempt > 1
+          ? new CheckerFailure(`${error.message}\nAttempts: ${attempt} (a format-invalid verdict is re-asked once).`)
+          : error;
+      }
+    }
+  }
+
+  private async attempt(input: CheckerRunInput, args: string[], effectiveModel: string | undefined): Promise<CheckerVerdict> {
     const startedAt = Date.now();
     let result: ExecResult;
     try {
@@ -73,11 +103,11 @@ export class PiSubprocessCheckerRunner implements CheckerRunner {
     try {
       return parseCheckerVerdict(finalText);
     } catch (error) {
-      throw new CheckerFailure([
+      throw new InvalidVerdictFailure([
         "Goal checker returned an invalid verdict.",
         checkerConfigSummary(input.config, effectiveModel),
         `Verdict classification: ${classifyVerdictFailure(error)}`,
-      ].join("\n"));
+      ].join("\n"), !(error instanceof VerdictValidationError) || FORMAT_FAILURE_CODES.has(error.code));
     }
   }
 }
@@ -154,6 +184,9 @@ function classifyExecutionFailure(message: string): string {
 function classifyVerdictFailure(error: unknown): string {
   if (!(error instanceof VerdictValidationError)) return "The checker verdict failed schema validation.";
   if (error.code === "not-json") return "The checker response was not a JSON verdict object.";
+  if (error.code === "malformed-json") {
+    return `The checker verdict was malformed JSON${error.line === undefined ? "" : ` (syntax error near line ${error.line})`}.`;
+  }
   if (error.code === "missing-decision") return "The checker verdict omitted a recognized decision.";
   if (error.code === "conflicting-fields") return "The checker verdict contained conflicting decision fields.";
   return "The completion verdict did not contain sufficient consistent proof.";
@@ -497,7 +530,7 @@ function containsCheckerVerdict(text: string): boolean {
 }
 
 export function parseCheckerVerdict(text: string): CheckerVerdict {
-  const parsed = safeJsonParse(extractJsonObject(text));
+  const parsed = parseVerdictJson(text);
   if (!isRecord(parsed)) throw new VerdictValidationError("not-json", `checker did not return a JSON object: ${text.slice(0, 300)}`);
 
   const decision = checkerDecision(parsed.decision);
@@ -528,6 +561,62 @@ export function parseCheckerVerdict(text: string): CheckerVerdict {
     unmetRequirements: stringArray(parsed.unmetRequirements),
     requirements: requirementVerdicts,
   };
+}
+
+// Strict JSON first. Models writing a long verdict by hand sometimes leave a trailing comma
+// before a closing brace or bracket; that cannot change what the verdict says, so it is the one
+// slip tolerated. Anything else that fails to parse is reported as malformed, never repaired.
+function parseVerdictJson(text: string): unknown {
+  const body = extractJsonObject(text);
+  let strictError: unknown;
+  try {
+    return JSON.parse(body) as unknown;
+  } catch (error) {
+    strictError = error;
+  }
+  // Without an opening brace the checker answered in prose rather than botching an object.
+  if (!body.startsWith("{")) return undefined;
+  const withoutTrailingCommas = stripTrailingCommas(body);
+  if (withoutTrailingCommas !== body) {
+    try {
+      return JSON.parse(withoutTrailingCommas) as unknown;
+    } catch (error) {
+      strictError = error;
+    }
+  }
+  throw new VerdictValidationError("malformed-json", "checker verdict was not valid JSON", syntaxErrorLine(strictError, withoutTrailingCommas));
+}
+
+// Deleting a comma never moves a line, so a line number found in the repaired text is also
+// the line in the original.
+function syntaxErrorLine(error: unknown, text: string): number | undefined {
+  const position = /position (\d+)/u.exec(error instanceof Error ? error.message : "")?.[1];
+  if (position === undefined) return undefined;
+  return text.slice(0, Number(position)).split("\n").length;
+}
+
+function stripTrailingCommas(text: string): string {
+  let out = "";
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (quoted) {
+      out += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === ",") {
+      let next = index + 1;
+      while (next < text.length && /\s/u.test(text[next] as string)) next += 1;
+      if (text[next] === "}" || text[next] === "]") continue;
+    }
+    out += char;
+  }
+  return out;
 }
 
 function extractJsonObject(text: string): string {

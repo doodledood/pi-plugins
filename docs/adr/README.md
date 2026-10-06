@@ -17,3 +17,4 @@
 | 2026-08-03 | [enforce the dual-window alias boundary before provider requests](20260803-enforce-dual-window-alias-boundary.md) | Accepted |
 | 2026-08-20 | [Split the coding conventions out of setup/AGENTS.md](20260820-split-coding-conventions-from-setup-agents.md) | Accepted |
 | 2026-09-23 | [Validate only the goal checker's verdict path in Pi's JSON stream](20260923-validate-only-the-checker-verdict-path.md) | Accepted |
+| 2026-10-06 | [Tolerate trailing commas and re-ask once when a goal checker's verdict is badly formatted](20261006-re-ask-format-invalid-checker-verdicts-once.md) | Accepted |

@@ -131,6 +131,62 @@ test("parseCheckerVerdict preserves waiting_for_user decision", () => {
   assert.equal(verdict.blocked, false);
 });
 
+const COMPLETE_VERDICT = {
+  decision: "complete",
+  complete: true,
+  reason: "all requirements proven",
+  evidence: ["fake evidence"],
+  requirements: [{ requirement: "fake requirement", status: "satisfied", evidence: "fake evidence" }],
+};
+
+/** What a checker run prints when its final assistant message says `text`. */
+function finalMessageStdout(text: string): string {
+  return settledJsonl(JSON.stringify({ type: "message_end", message: jsonAssistantMessage([{ type: "text", text }]) }));
+}
+
+/** A runner whose successive subprocess runs each answer with the next text; counts the runs. */
+function runnerAnswering(...texts: string[]): { runner: PiSubprocessCheckerRunner; runs: () => number } {
+  let runs = 0;
+  const runner = new PiSubprocessCheckerRunner({
+    async exec() {
+      const text = texts[Math.min(runs, texts.length - 1)] as string;
+      runs += 1;
+      return { stdout: finalMessageStdout(text), stderr: "", code: 0, killed: false };
+    },
+  });
+  return { runner, runs: () => runs };
+}
+
+test("parseCheckerVerdict tolerates the trailing commas models leave in a long hand-written verdict", () => {
+  const withTrailingCommas = `{
+    "decision": "complete",
+    "complete": true,
+    "reason": "done, with a comma-brace inside a string: ,}",
+    "evidence": ["a", "b",],
+    "requirements": [
+      {"requirement": "r", "status": "satisfied", "evidence": "e",},
+    ],
+  }`;
+  const verdict = parseCheckerVerdict(withTrailingCommas);
+  assert.equal(verdict.decision, "complete");
+  assert.equal(verdict.reason, "done, with a comma-brace inside a string: ,}", "string contents are never rewritten");
+  assert.deepEqual(verdict.evidence, ["a", "b"]);
+  assert.equal(verdict.requirements?.[0]?.evidence, "e");
+});
+
+test("parseCheckerVerdict reports any other syntax error as malformed JSON with a line, not as prose", () => {
+  assert.throws(
+    () => parseCheckerVerdict('{\n  "decision": "complete",\n  "complete": true\n  "reason": "missing comma"\n}'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as { code?: string }).code, "malformed-json");
+      assert.equal((error as { line?: number }).line, 4);
+      assert.doesNotMatch(error.message, /missing comma/u, "the diagnostic never echoes checker text");
+      return true;
+    },
+  );
+});
+
 test("parseCheckerVerdict throws on non-json output", () => {
   assert.throws(() => parseCheckerVerdict("looks done to me"), /checker did not return/iu);
 });
@@ -451,6 +507,78 @@ test("PiSubprocessCheckerRunner does not let an earlier tool-turn verdict overri
       return true;
     },
   );
+});
+
+test("PiSubprocessCheckerRunner accepts the verdict a trailing comma used to turn into a goal pause", async () => {
+  const { runner, runs } = runnerAnswering(`${JSON.stringify(COMPLETE_VERDICT).slice(0, -1)},}`);
+  const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(verdict.decision, "complete");
+  assert.equal(runs(), 1, "a tolerated slip needs no second audit");
+});
+
+test("PiSubprocessCheckerRunner re-asks once when the first answer was prose, then uses the verdict", async () => {
+  const { runner, runs } = runnerAnswering("## Audit result\n\nLooks complete to me.", JSON.stringify(COMPLETE_VERDICT));
+  const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
+  assert.equal(verdict.decision, "complete");
+  assert.equal(runs(), 2);
+});
+
+test("PiSubprocessCheckerRunner re-asks once when the answer is malformed JSON or omits the decision", async () => {
+  for (const bad of ['{"decision": "complete" "complete": true}', '{"verdict": "INCOMPLETE", "confidence": "high"}']) {
+    const { runner, runs } = runnerAnswering(bad, JSON.stringify({ ...COMPLETE_VERDICT, decision: "continue", complete: false, evidence: undefined, requirements: undefined }));
+    assert.equal((await runCheckerVerdict(runner, DEFAULT_CONFIG)).decision, "continue");
+    assert.equal(runs(), 2);
+  }
+});
+
+test("PiSubprocessCheckerRunner fails loudly, naming the attempts and the cause, when both answers are invalid", async () => {
+  const { runner, runs } = runnerAnswering("Investigation complete.", '{"decision": "complete",\n "complete": true\n "reason": "x"}');
+  await assert.rejects(
+    () => runCheckerVerdict(runner, DEFAULT_CONFIG),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /returned an invalid verdict/iu);
+      assert.match(error.message, /malformed JSON \(syntax error near line 3\)/iu, "reports the last attempt's cause");
+      assert.match(error.message, /Attempts: 2/u);
+      return true;
+    },
+  );
+  assert.equal(runs(), 2, "never a third audit");
+});
+
+test("PiSubprocessCheckerRunner never re-asks a semantic rejection, only a format failure", async () => {
+  for (const verdict of [
+    { ...COMPLETE_VERDICT, complete: false },
+    { ...COMPLETE_VERDICT, evidence: [] },
+  ]) {
+    const { runner, runs } = runnerAnswering(JSON.stringify(verdict), JSON.stringify(COMPLETE_VERDICT));
+    await assert.rejects(() => runCheckerVerdict(runner, DEFAULT_CONFIG), /returned an invalid verdict/iu);
+    assert.equal(runs(), 1, "a verdict the checker meant is not asked again until it says something else");
+  }
+});
+
+test("PiSubprocessCheckerRunner does not re-ask after a process failure or an abort", async () => {
+  let runs = 0;
+  const failing = new PiSubprocessCheckerRunner({
+    async exec() {
+      runs += 1;
+      return { stdout: "", stderr: "boom", code: 1, killed: false };
+    },
+  });
+  await assert.rejects(() => runCheckerVerdict(failing, DEFAULT_CONFIG), /exited with code 1/iu);
+  assert.equal(runs, 1);
+
+  const controller = new AbortController();
+  let abortedRuns = 0;
+  const aborted = new PiSubprocessCheckerRunner({
+    async exec() {
+      abortedRuns += 1;
+      controller.abort();
+      return { stdout: finalMessageStdout("prose, not a verdict"), stderr: "", code: 0, killed: false };
+    },
+  });
+  await assert.rejects(() => runCheckerVerdict(aborted, DEFAULT_CONFIG, { signal: controller.signal }), /invalid verdict/iu);
+  assert.equal(abortedRuns, 1, "an aborted run is not retried");
 });
 
 test("PiSubprocessCheckerRunner classifies and redacts invalid verdict text", async () => {
@@ -1566,7 +1694,7 @@ async function captureCheckerArgs(config: GoalControllerConfig, overrides: Parti
 async function runCheckerVerdict(
   runner: PiSubprocessCheckerRunner,
   config: GoalControllerConfig,
-  overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel">> = {},
+  overrides: Partial<Pick<CheckerRunInput, "checkerModelBootstrapPaths" | "model" | "thinkingLevel" | "signal">> = {},
 ) {
   return runner.run({
     goal: createGoal("fake goal", config, 0),
