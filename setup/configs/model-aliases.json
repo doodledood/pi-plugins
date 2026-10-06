@@ -48,9 +48,10 @@
     {
       "provider": "anthropic",
       "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5 (300K)",
       "targetProvider": "anthropic",
       "targetModel": "claude-opus-5-5",
-      "contextWindow": 500000,
+      "contextWindow": 300000,
       "targetContextWindow": 1000000
     },
     {
@@ -58,7 +59,7 @@
       "id": "claude-fable-5-1",
       "targetProvider": "anthropic",
       "targetModel": "claude-fable-5-1",
-      "contextWindow": 500000,
+      "contextWindow": 1000000,
       "targetContextWindow": 1000000
     },
     {

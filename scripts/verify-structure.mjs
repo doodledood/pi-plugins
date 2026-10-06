@@ -13,6 +13,7 @@ const expectedSetupAgents = ["Explore"];
 const expectedSetupSkills = ["deletion-pass", "telegram"];
 const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
+  "anthropic/claude-opus-5-5-full:high",
   "openai/gpt-6-astra:medium",
   "openai/gpt-6-sol:high",
   "anthropic/claude-fable-5-1:max",
@@ -137,13 +138,16 @@ if (setupGoalController) {
 }
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
+// Opus 5.5 is a plan/execute pair: claude-opus-5-5 is the 300K execution window and claude-opus-5-5-full
+// the unrestricted planning window. Fable 5.1 is unrestricted; claude-fable-5-1-full is now an exact
+// duplicate of it, kept only because Pi continues a session whose model id has vanished on the default model.
 const expectedSetupAliases = new Map([
   ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-6-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
-  ["claude-opus-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
-  ["claude-fable-5-1", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-1", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-sonnet-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
   ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
