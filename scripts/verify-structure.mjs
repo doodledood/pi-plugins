@@ -106,7 +106,7 @@ if (installedSettings && localSettings) {
   );
   for (const [label, settings] of [["installed", installedSettings], ["local", localSettings]]) {
     if (settings.defaultProvider !== "anthropic") errors.push(`setup ${label} settings: defaultProvider must be anthropic`);
-    if (settings.defaultModel !== "claude-opus-5-5") errors.push(`setup ${label} settings: defaultModel must be claude-opus-5-5`);
+    if (settings.defaultModel !== "claude-opus-5-5-full") errors.push(`setup ${label} settings: defaultModel must be claude-opus-5-5-full`);
     if (settings.defaultThinkingLevel !== "high") errors.push(`setup ${label} settings: defaultThinkingLevel must be high`);
     if (settings["pi-image-gen"]?.defaultModel !== "gpt-image-2.5-sunburst") {
       errors.push(`setup ${label} settings: pi-image-gen.defaultModel must be gpt-image-2.5-sunburst`);
@@ -148,7 +148,7 @@ const expectedSetupAliases = new Map([
   ["gpt-6-luna", { contextWindow: 240000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1", { contextWindow: 1000000, targetContextWindow: 1000000 }],
-  ["claude-sonnet-5-5", { contextWindow: 500000, targetContextWindow: 1000000 }],
+  ["claude-sonnet-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
 ]);

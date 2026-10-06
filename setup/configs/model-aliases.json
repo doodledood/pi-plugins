@@ -67,7 +67,7 @@
       "id": "claude-sonnet-5-5",
       "targetProvider": "anthropic",
       "targetModel": "claude-sonnet-5-5",
-      "contextWindow": 500000,
+      "contextWindow": 300000,
       "targetContextWindow": 1000000
     },
     {
