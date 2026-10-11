@@ -68,8 +68,22 @@ These rules govern handing work out, not work already assigned to you.
 - Prefer `trash` over `rm` for recoverable removal.
 - Copy and move files with shell `cp` and `mv` rather than reading and rewriting them.
 - Before building, check for an existing project, library, or platform. Build custom when available options do not fit or I ask for it.
-- What you see in my files, messages, and calendar stays with me.
+- What you see in my files, messages, and calendar stays with me. Anything that identifies me, such as my email address, name or accounts, reaches no one outside (no person, company or service, whether by request, message or anything published) without my explicit permission for that recipient, unless I have already given it. Ask me in the task and with a **Needs me** alert. A subagent asks the agent that launched it instead; put this rule in every subagent's brief.
 - For prompts, skills, agents, or AGENTS/CLAUDE files, load the prompt-engineering skill before proposing or making changes.
+
+## Phone notifications
+
+Use the user-level `telegram` skill, when configured, to send me one-way phone notifications. This is standing permission to message my configured private chat for these events:
+
+- **Needs me:** work cannot proceed without my decision, approval, credentials or manual action, or an unresolved failure needs my attention. Send the concrete ask and your recommendation after completing independent work; alert promptly when delay matters.
+- **Merged:** a pull request has actually merged. Include what changed and its URL; combine related merges from one task into one notification.
+- **Done:** a regular task has fully completed with a useful result, including its required verification and delivery. Include the result and where to find it.
+
+Scheduled automations are the exception: I rarely read their reports, so a run alerts once when it finds anything off or has a suggestion for me, optional ones included, and stays quiet when healthy or nothing has changed since its last alert. Routine transient retries do not warrant separate alerts.
+
+Keep notifications short and actionable, with enough task context to recognize them on my phone. Combine completion and merge into one alert when they are the same outcome. Skip routine progress, intermediate steps, quick conversational answers and repeated alerts for an unchanged blocker. Only the coordinating agent sends an alert for shared work. My task-specific notification instructions override these defaults.
+
+Use the skill's delivery and retry rules. Keep secrets and sensitive detail out of notification text; link to the private task or artifact instead. If delivery fails, report it in the task without repeatedly retrying or holding up completed work. Telegram is an alert channel; the task remains the place for the full report and my reply.
 
 ## Scheduled tasks
 
@@ -79,10 +93,16 @@ When changing a scheduled task's instructions, edit its referenced prompt file. 
 
 Treat friction as a defect: repeated manual steps, consistently wrong defaults, ignored warnings, and workarounds need attention even when nothing has failed. Fix the layer producing the problem.
 
-Read and follow `CODING_CONVENTIONS.md` beside this file for design, verification, commits, and pull requests. Its rules apply to every project and every system, including configurations, schedules, and workflows.
+When a quality is slow to judge, consider a proxy metric to hill-climb on, as frame time serves speed: a number, deterministic or stochastic, that tends to move with what you want, for frames, prose, processes or anything else. Improve the metric alongside the work by checking it against examples judged by eye, and keep both beside the code. Metrics are hints: inspect the result before keeping a change, skip a metric that would be contrived, and adapt or drop one as the work shows what matters.
+
+Read and follow `~/.agents/CODING_CONVENTIONS.md` for design, verification, commits, and pull requests. Its rules apply to every project and every system, including configurations, schedules, and workflows.
 
 ## Aviram's second brain
 
-When `~/code/second-brain` exists, use it for my durable facts, decisions, and strategy. Before work touching my life, decisions, or strategy, read `ME.md` and `kb/INDEX.md` there and follow their pointers into the topic articles.
+When `~/code/second-brain` exists, use it for my durable knowledge across tools. Its `.claude/KB.md`, **Persistence Boundaries**, governs when to query and what to capture. For work whose answer depends on prior personal or project context, read `ME.md` and `kb/INDEX.md` there and follow their pointers into the topic articles.
 
-Capture durable facts that surface in any task, including decisions, corrections, and changed constraints, through its `kb-capture` skill, on a branch and by pull request; never commit directly to its main. A project's own instructions govern that project's work. The second brain provides context, not a replacement working directory. This section does not apply when the clone is absent.
+Capture qualifying lasting knowledge through its `kb-capture` skill, on a branch and by pull request; assistant recall alone is not KB capture. Never commit directly to its main. A project's own instructions govern that project's work. The second brain provides context, not a replacement working directory. This section does not apply when the clone is absent.
+
+## Taste
+
+- Prefer the option with the lowest personal legal exposure and lowest recurring cost — I operate my products alone, under my own name; flip when it would block a product's core promise or a decision I have already made.

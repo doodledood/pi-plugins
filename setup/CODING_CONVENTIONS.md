@@ -13,6 +13,7 @@ In any domain — code, process, tooling, docs, prompts — prefer the design th
 - A rule that lives as a sentence someone must remember is a check waiting to be written — when a convention can be enforced by a type, lint, test, or CI gate, propose the enforcement. Price it like any machinery: worth building where failure is expensive or the surface is shared, not on a solo surface already verified locally.
 - A new dependency is a recurring cost, not a one-time one — prefer the standard library or what the repo already uses, and justify any addition.
 - Favor locality: keep what changes together in one place, so a change, a fix, or a check is made once rather than at every site. Work that has to be repeated across many sites points to a missing seam — close it when the work already passes through those sites, and propose it separately when it reaches beyond them. Clean the touched area enough for a durable fix either way.
+- Unused is off. When a change removes or narrows something, delete what it leaves unused — code, config, flags, tests, docs, and mentions of the removed concept — rather than keeping or explaining it; keep an unused part only when the user explicitly asks for it. Leftovers mislead the next session about what is live.
 
 ## What counts as verified
 
