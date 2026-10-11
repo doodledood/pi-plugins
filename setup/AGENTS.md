@@ -97,12 +97,6 @@ When a quality is slow to judge, consider a proxy metric to hill-climb on, as fr
 
 Read and follow `~/.agents/CODING_CONVENTIONS.md` for design, verification, commits, and pull requests. Its rules apply to every project and every system, including configurations, schedules, and workflows.
 
-## Aviram's second brain
+## Personal rules
 
-When `~/code/second-brain` exists, use it for my durable knowledge across tools. Its `.claude/KB.md`, **Persistence Boundaries**, governs when to query and what to capture. For work whose answer depends on prior personal or project context, read `ME.md` and `kb/INDEX.md` there and follow their pointers into the topic articles.
-
-Capture qualifying lasting knowledge through its `kb-capture` skill, on a branch and by pull request; assistant recall alone is not KB capture. Never commit directly to its main. A project's own instructions govern that project's work. The second brain provides context, not a replacement working directory. This section does not apply when the clone is absent.
-
-## Taste
-
-- Prefer the option with the lowest personal legal exposure and lowest recurring cost — I operate my products alone, under my own name; flip when it would block a product's core promise or a decision I have already made.
+Read and follow `~/.agents/PERSONAL.md`, when present, before starting work. It holds the owner's rules that are kept out of this published file.
