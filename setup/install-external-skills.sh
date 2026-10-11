@@ -7,6 +7,7 @@ exec npx --yes skills add emilkowalski/skills \
   --skill \
   emil-design-eng \
   animate \
+  animation-performance \
   review-animations \
   improve-animations \
   find-animation-opportunities \
