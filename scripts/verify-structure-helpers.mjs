@@ -25,3 +25,21 @@ export function validateLocalSettings({
   }
   return errors;
 }
+
+/**
+ * The root AGENTS.md embeds setup/CODING_CONVENTIONS.md as its "## Coding Conventions"
+ * section, with every heading demoted one level. Returns an error when the two differ.
+ */
+export function validateEmbeddedConventions({ agentsText, conventionsText }) {
+  const marker = "## Coding Conventions\n";
+  const start = agentsText.indexOf(marker);
+  if (start === -1) return ["AGENTS.md: missing '## Coding Conventions' section"];
+  const rest = agentsText.slice(start);
+  const next = rest.slice(marker.length).search(/^## /m);
+  const section = next === -1 ? rest : rest.slice(0, marker.length + next);
+  const expected = conventionsText.replace(/^(#+ )/gm, "#$1");
+  if (section.trimEnd() !== expected.trimEnd()) {
+    return ["AGENTS.md: '## Coding Conventions' section must match setup/CODING_CONVENTIONS.md (headings demoted one level)"];
+  }
+  return [];
+}
