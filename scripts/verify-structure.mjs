@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { validateLocalSettings } from "./verify-structure-helpers.mjs";
+import { validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const root = process.cwd();
 const errors = [];
@@ -212,6 +212,13 @@ if (existsSync(setupAgentsFile) && !readFileSync(setupAgentsFile, "utf8").includ
 }
 if (existsSync(setupConventions) && !readFileSync(setupConventions, "utf8").startsWith("# Coding Conventions\n")) {
   errors.push("setup/CODING_CONVENTIONS.md: must open with '# Coding Conventions' — repo syncs anchor on that title");
+}
+// This repo's own AGENTS.md embeds the conventions as a section; a hand-kept copy drifts.
+if (existsSync(setupConventions)) {
+  errors.push(...validateEmbeddedConventions({
+    agentsText: readFileSync(join(root, "AGENTS.md"), "utf8"),
+    conventionsText: readFileSync(setupConventions, "utf8"),
+  }));
 }
 const readme = readFileSync(join(root, "README.md"), "utf8");
 const replicationSources = [
