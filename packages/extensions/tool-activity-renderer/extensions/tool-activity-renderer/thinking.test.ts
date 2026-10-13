@@ -212,15 +212,15 @@ describe("quiet thinking", () => {
 
 	it("keeps moving past blocks the budget cut short, even when a call's output does not change", () => {
 		const stuck = (tag: string) => Array.from({ length: 200 }, (_, i) => `- ${tag} ${i} uses $HOME/x and \`${tag}_${i}\``).join("\n");
+		const easy = Array.from({ length: 150 }, (_, i) => `Then read \`moved_${i}.ts\` carefully.`).join("\n");
 		// Pi calls again with the same text on every reply delta, e.g. after a resize left no block cached.
-		const text = `${stuck("p")}\n\n${stuck("q")}\n\nThen open \`b.ts\`.`;
-		const outputs = [1, 2, 3, 4].map(() => flattenThinkingCode(text, 100));
+		const text = `${stuck("first")}\n\n${stuck("second")}\n\n${easy}\n\nDone.`;
+		const outputs = [1, 2, 3].map(() => flattenThinkingCode(text, 100));
 		assert.equal(outputs[0], outputs[1], "the second call settles the second stuck block, which changes nothing it shows");
-		assert.ok(outputs[3]!.endsWith("Then open b\\.ts."), "a later call still reaches the span after both");
+		assert.ok(!outputs[2]!.includes("`moved_"), "the third call still reaches the block after both");
 	});
 
-	it("settles afresh a block the budget ran out on partway, once the blocks before it are cached", () => {
-		// The hard block leaves some budget, less than the easy block's first check costs.
+	it("settles afresh a block left enough budget to render but not to check, once the blocks before it are cached", () => {
 		const hard = Array.from({ length: 12 }, (_, i) => `- item ${i} uses $HOME/x and \`starved_${i}\``).join("\n");
 		const easy = Array.from({ length: 400 }, (_, i) => `Then read \`file_${i}.ts\` and \`other_${i}.ts\` carefully.`).join(" ");
 		const text = `${hard}\n\n${easy}\n\nDone \`x.ts\`.`;
@@ -229,12 +229,12 @@ describe("quiet thinking", () => {
 		assert.equal(stillCode(), 0, "the next call gives the easy block the whole budget");
 	});
 
-	it("settles afresh a block reached with less budget left than its first check costs", () => {
+	it("settles afresh a block left too little budget to render at all, once the blocks before it are cached", () => {
 		const hard = (b: number) => Array.from({ length: 12 }, (_, i) => `- item ${b}.${i} uses $HOME/x and \`entry_${b}_${i}\``).join("\n");
 		const easy = Array.from({ length: 200 }, (_, i) => `Then read \`file_${i}.ts\` and \`other_${i}.ts\` carefully.`).join(" ");
 		const text = `${[0, 1, 2, 3].map(hard).join("\n\n")}\n\n${easy}\n\nDone \`x.ts\`.`;
 		const stillCode = () => (flattenThinkingCode(text, 100).match(/`file_\d+\.ts`/g) ?? []).length;
-		assert.ok(stillCode() > 0, "the hard blocks leave less budget than the easy block's first check");
+		assert.ok(stillCode() > 0, "the hard blocks leave less budget than one render of the easy block");
 		assert.equal(stillCode(), 0, "the next call gives the easy block the whole budget");
 	});
 
@@ -247,6 +247,15 @@ describe("quiet thinking", () => {
 			flattenThinkingCode(`Streaming thinking ${i} about \`prefix_${i}.ts\``, 100);
 		}
 		assert.equal(drawn, 0, "each re-render finds it, however many streaming prefixes came after it");
+	});
+
+	it("moves on past a construct spanning blocks whose whole-text check the budget cut short", () => {
+		const steps = Array.from({ length: 40 }, (_, i) => `Step ${i} reads \`file_${i}.ts\` and then \`other_${i}.ts\` before it moves on to the next one.`);
+		// Math across blank lines: the blockwise result differs from the whole, so the whole text is settled.
+		const text = [...steps.slice(0, 20), "$$\n\n`a_b`\n\n$$", ...steps.slice(20)].join("\n\n");
+		const stillCode = () => (flattenThinkingCode(text, 100).match(/`file_\d+\.ts`/g) ?? []).length;
+		assert.ok(stillCode() > 0, "the first call runs out settling the whole text");
+		assert.equal(stillCode(), 0, "the next call is not taken as final");
 	});
 
 	it("re-renders every finished thinking run of a message for free, not only the last one", () => {

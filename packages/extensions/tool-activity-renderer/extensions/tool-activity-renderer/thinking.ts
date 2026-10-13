@@ -131,21 +131,29 @@ const RENDER_BUDGET = 50_000;
 /**
  * The spans whose rewrite leaves pi's render of `source` unchanged. All spans are tried at once, then in
  * halves, so one awkward span costs a few extra renders and the rest still flatten. `complete` is false
- * when the budget ran out first: the spans not yet tried are left out, as if they had failed.
+ * when the budget ran out first, which also marks the call as cut short: the spans not yet tried are left
+ * out, as if they had failed.
  */
-function settle(source: string, spans: readonly Span[], at: Widths, budget: { left: number }): { kept: Span[]; complete: boolean } {
+function settle(source: string, spans: readonly Span[], at: Widths, budget: Pick<Budget, "left" | "cutShort">): { kept: Span[]; complete: boolean } {
+	/** Charges one render of `source`, or marks the call cut short when there is not enough left. */
+	const afford = () => {
+		if (budget.left < source.length) {
+			budget.cutShort = true;
+			return false;
+		}
+		budget.left -= source.length;
+		return true;
+	};
 	if (!spans.length) return { kept: [], complete: true };
-	if (budget.left < source.length) return { kept: [], complete: false };
-	budget.left -= source.length;
+	if (!afford()) return { kept: [], complete: false };
 	const target = rendered(source, at);
 	const accepted = new Set<Span>();
 	let complete = true;
 	const accept = (group: readonly Span[]) => {
-		if (budget.left < source.length) {
+		if (!afford()) {
 			complete = false;
 			return;
 		}
-		budget.left -= source.length;
 		const trial = spans.filter((span) => accepted.has(span) || group.includes(span));
 		if (rendered(rewrite(source, trial), at) === target) {
 			for (const span of group) accepted.add(span);
@@ -197,8 +205,8 @@ const SETTLED_BLOCKS_KEPT = 4096;
 
 /**
  * One call's budget: what it may still spend on renders, whether it ran out before some spans were
- * tried, how many blocks it has settled so far, and how many of those it kept in `settledBlocks`. Only
- * settling spends the budget, so the first block a call settles always has all of it.
+ * tried, how many blocks it has started settling, and how many it kept in `settledBlocks`. Only settling
+ * spends the budget, so the first block a call starts settling always has all of it.
  */
 interface Budget {
 	left: number;
@@ -217,11 +225,10 @@ function flattenBlock(block: string, width: number, budget: Budget, remember: bo
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
 	if (known !== undefined) return known;
-	const hadWholeBudget = budget.blocksSettled++ === 0;
+	const firstToSettle = budget.blocksSettled++ === 0;
 	const { kept, complete } = settle(block, spans, widths(block, width), budget);
 	const flat = rewrite(block, kept);
-	if (!complete) budget.cutShort = true;
-	if (!remember || (!complete && !hadWholeBudget)) return flat;
+	if (!remember || (!complete && !firstToSettle)) return flat;
 	if (settledBlocks.size >= SETTLED_BLOCKS_KEPT) settledBlocks.delete(settledBlocks.keys().next().value!);
 	settledBlocks.set(key, flat);
 	budget.newlySettled += 1;
@@ -284,9 +291,7 @@ function flattenSpans(source: string, spans: readonly Span[], width: number, bud
 	const parts = blocks(source);
 	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index < parts.length - 1)).join("");
 	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
-	const { kept, complete } = settle(source, spans, at, budget);
-	if (!complete) budget.cutShort = true;
-	return rewrite(source, kept);
+	return rewrite(source, settle(source, spans, at, budget).kept);
 }
 
 /**
