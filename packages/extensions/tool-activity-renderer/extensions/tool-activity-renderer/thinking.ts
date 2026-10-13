@@ -189,14 +189,24 @@ const settledBlocks = new Map<string, string>();
 /** Enough settled blocks for every paragraph of a long session's thinking at a couple of widths. */
 const SETTLED_BLOCKS_KEPT = 4096;
 
-/** `remember` is false for the text's last block, which keeps growing while thinking streams: caching each prefix would fill the cache with entries that never hit. */
-function flattenBlock(block: string, width: number, budget: { left: number }, remember: boolean): string {
+/**
+ * The text's last block, kept apart in a single slot. While thinking streams it grows on every update,
+ * and caching each prefix would fill `settledBlocks` with entries that never hit; once thinking ends it
+ * stops changing, while pi re-renders the message on every reply and tool-call delta, so it must hit.
+ */
+let lastBlock: { key: string; flat: string } | undefined;
+
+/** `last` marks the text's last block, which goes to `lastBlock` instead of `settledBlocks`. */
+function flattenBlock(block: string, width: number, budget: { left: number }, last: boolean): string {
 	const key = `${width}\n${block}`;
-	const known = settledBlocks.get(key);
+	const known = last ? (lastBlock?.key === key ? lastBlock.flat : undefined) : settledBlocks.get(key);
 	if (known !== undefined) return known;
 	if (budget.left < 0) return block;
 	const flat = rewrite(block, settle(block, codeSpans(block), widths(block, width), budget));
-	if (!remember) return flat;
+	if (last) {
+		lastBlock = { key, flat };
+		return flat;
+	}
 	if (settledBlocks.size >= SETTLED_BLOCKS_KEPT) settledBlocks.delete(settledBlocks.keys().next().value!);
 	settledBlocks.set(key, flat);
 	return flat;
@@ -222,7 +232,7 @@ export function flattenThinkingCode(source: string, width = 200): string {
 	if (rendered(all, at) === target) return all;
 	const budget = { left: RENDER_BUDGET };
 	const parts = blocks(source);
-	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index < parts.length - 1)).join("");
+	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index === parts.length - 1)).join("");
 	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
 	return budget.left < 0 ? source : rewrite(source, settle(source, spans, at, budget));
 }

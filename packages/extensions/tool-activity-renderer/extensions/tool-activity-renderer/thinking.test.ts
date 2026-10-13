@@ -187,6 +187,19 @@ describe("quiet thinking", () => {
 		assert.ok(flattenThinkingCode(text, 100).endsWith("Then open b\\.ts."));
 	});
 
+	it("settles a finished last block once, however often pi re-renders the message after it", () => {
+		// One block (no blank line) whose spans fail the all-at-once check: `$HOME` opens math beside them.
+		const steps = Array.from({ length: 12 }, (_, i) => `- step ${i} reads $HOME and calls \`fn_${i}()\``).join("\n");
+		const text = `Plan:\n\n${steps}`;
+		flattenThinkingCode(text, 100);
+		const again = drawnBy(() => {
+			for (let i = 0; i < 5; i++) flattenThinkingCode(text, 100);
+		});
+		const first = drawnBy(() => flattenThinkingCode(`${text} `, 100));
+		// A repeat still pays the whole-text checks (about half a fresh call here), never the block's settling.
+		assert.ok(again / 5 < first * 0.75, `each repeat drew ${again / 5} characters, one fresh settle ${first}`);
+	});
+
 	it("bounds the work for a block full of spans that cannot flatten", () => {
 		// Each item's lone $ opens pending math that pi prints raw, so every span in this one block fails.
 		const list = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
