@@ -79,11 +79,11 @@
 
     "thinkingOff": "faint",
     "thinkingMinimal": "#4a4a52",
-    "thinkingLow": "#5d6f86",
-    "thinkingMedium": "#6f8fb3",
-    "thinkingHigh": "accent",
-    "thinkingXhigh": "accentSoft",
-    "thinkingMax": "text",
+    "thinkingLow": "#56657a",
+    "thinkingMedium": "#6a7f9c",
+    "thinkingHigh": "#7896bd",
+    "thinkingXhigh": "accent",
+    "thinkingMax": "accentSoft",
     "bashMode": "green"
   },
   "export": {

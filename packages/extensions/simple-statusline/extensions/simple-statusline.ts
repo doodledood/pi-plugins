@@ -193,7 +193,8 @@ function renderMainLine(
   const rightPlain = rightTokens.join(sep);
 
   // Left cluster: quiet identity. π marker identifies the pi harness at a glance;
-  // it glows while pi thinks and dims when idle.
+  // it glows while pi thinks and dims when idle. The project name stays muted: it never
+  // changes during a session, so at full text brightness it would outshine the reply.
   const marker = "π ";
   const minGap = 3;
   let leftBudget = width - visibleLength(rightPlain) - minGap - visibleLength(marker);
@@ -211,7 +212,7 @@ function renderMainLine(
 
   const left =
     color(theme, runtime.active ? "accent" : "dim", marker) +
-    shownProject +
+    color(theme, "muted", shownProject) +
     (shownBranch ? color(theme, "dim", `  ${shownBranch}`) : "");
   const right = [
     modelSignal.colored,

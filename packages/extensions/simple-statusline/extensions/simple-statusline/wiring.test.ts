@@ -145,6 +145,13 @@ test("footer computes context percent against the model window without a compact
   assert.doesNotMatch(line, /compact at boundary/);
 });
 
+test("footer keeps its identity quiet: project name muted, branch dim", () => {
+  const harness = createHarness([]);
+  renderFooter(harness);
+  assert.ok(harness.themeCalls.some((call) => call.tone === "muted" && call.text === "project"), "the project name is muted, never full text");
+  assert.ok(harness.themeCalls.some((call) => call.tone === "dim" && call.text === "  main"), "the branch sits a step below it");
+});
+
 test("footer draws a thin context meter: filled cells in the context tone, the empty track in borderMuted", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = 200_000;
