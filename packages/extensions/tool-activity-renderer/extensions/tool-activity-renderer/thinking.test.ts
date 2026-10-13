@@ -180,10 +180,9 @@ describe("quiet thinking", () => {
 		assert.ok(flattenThinkingCode(text, 100).includes("See late\\.ts here."));
 	});
 
-	it("moves past a block the budget cut short on the next update", () => {
+	it("spends what a block it cut short left over on the smaller blocks after it", () => {
 		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
 		const text = `${stuck}\n\nThen open \`b.ts\`.`;
-		assert.ok(flattenThinkingCode(text, 100).endsWith("Then open `b.ts`."), "the first update spends its budget on the stuck block");
 		assert.ok(flattenThinkingCode(text, 100).endsWith("Then open b\\.ts."));
 	});
 
@@ -228,6 +227,26 @@ describe("quiet thinking", () => {
 		const stillCode = () => (flattenThinkingCode(text, 100).match(/`file_\d+\.ts`/g) ?? []).length;
 		assert.ok(stillCode() > 0, "the first call spends most of its budget on the hard block");
 		assert.equal(stillCode(), 0, "the next call gives the easy block the whole budget");
+	});
+
+	it("settles afresh a block reached with less budget left than its first check costs", () => {
+		const hard = (b: number) => Array.from({ length: 12 }, (_, i) => `- item ${b}.${i} uses $HOME/x and \`entry_${b}_${i}\``).join("\n");
+		const easy = Array.from({ length: 200 }, (_, i) => `Then read \`file_${i}.ts\` and \`other_${i}.ts\` carefully.`).join(" ");
+		const text = `${[0, 1, 2, 3].map(hard).join("\n\n")}\n\n${easy}\n\nDone \`x.ts\`.`;
+		const stillCode = () => (flattenThinkingCode(text, 100).match(/`file_\d+\.ts`/g) ?? []).length;
+		assert.ok(stillCode() > 0, "the hard blocks leave less budget than the easy block's first check");
+		assert.equal(stillCode(), 0, "the next call gives the easy block the whole budget");
+	});
+
+	it("keeps a finished text that is re-rendered often, while newer texts come and go", () => {
+		const finished = "Finished thinking about `kept.ts` and `also.ts`.";
+		flattenThinkingCode(finished, 100);
+		let drawn = 0;
+		for (let i = 0; i < 40; i++) {
+			drawn += drawnBy(() => flattenThinkingCode(finished, 100));
+			flattenThinkingCode(`Streaming thinking ${i} about \`prefix_${i}.ts\``, 100);
+		}
+		assert.equal(drawn, 0, "each re-render finds it, however many streaming prefixes came after it");
 	});
 
 	it("re-renders every finished thinking run of a message for free, not only the last one", () => {

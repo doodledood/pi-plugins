@@ -130,17 +130,22 @@ const RENDER_BUDGET = 50_000;
 
 /**
  * The spans whose rewrite leaves pi's render of `source` unchanged. All spans are tried at once, then in
- * halves, so one awkward span costs a few extra renders and the rest still flatten.
+ * halves, so one awkward span costs a few extra renders and the rest still flatten. `complete` is false
+ * when the budget ran out first: the spans not yet tried are left out, as if they had failed.
  */
-function settle(source: string, spans: readonly Span[], at: Widths, budget: { left: number }): Span[] {
-	if (!spans.length) return [];
+function settle(source: string, spans: readonly Span[], at: Widths, budget: { left: number }): { kept: Span[]; complete: boolean } {
+	if (!spans.length) return { kept: [], complete: true };
+	if (budget.left < source.length) return { kept: [], complete: false };
 	budget.left -= source.length;
-	if (budget.left < 0) return [];
 	const target = rendered(source, at);
 	const accepted = new Set<Span>();
+	let complete = true;
 	const accept = (group: readonly Span[]) => {
+		if (budget.left < source.length) {
+			complete = false;
+			return;
+		}
 		budget.left -= source.length;
-		if (budget.left < 0) return;
 		const trial = spans.filter((span) => accepted.has(span) || group.includes(span));
 		if (rendered(rewrite(source, trial), at) === target) {
 			for (const span of group) accepted.add(span);
@@ -152,7 +157,7 @@ function settle(source: string, spans: readonly Span[], at: Widths, budget: { le
 		accept(group.slice(half));
 	};
 	accept(spans);
-	return spans.filter((span) => accepted.has(span));
+	return { kept: spans.filter((span) => accepted.has(span)), complete };
 }
 
 /** `source` cut at each blank line outside a fenced code block. */
@@ -183,31 +188,40 @@ function blocks(source: string): string[] {
  * the whole text, but only its last block is new. A block the budget cut short is kept too, with its
  * undecided spans left as code, so the next update moves on to the blocks after it instead of spending
  * its budget on the same block again, but only when it had the whole budget to itself: one cut short on
- * what earlier blocks left over is settled afresh once they are cached. The last block is never kept:
- * see `flattenedTexts`.
+ * what earlier blocks left over is settled afresh once they are cached.
  */
 const settledBlocks = new Map<string, string>();
 
 /** Enough settled blocks for every paragraph of a long session's thinking at a couple of widths. */
 const SETTLED_BLOCKS_KEPT = 4096;
 
-/** What one call may still spend on renders, and how many blocks it settled into `settledBlocks`. */
+/**
+ * One call's budget: what it may still spend on renders, whether it ran out before some spans were
+ * tried, how many blocks it has settled so far, and how many of those it kept in `settledBlocks`. Only
+ * settling spends the budget, so the first block a call settles always has all of it.
+ */
 interface Budget {
 	left: number;
+	cutShort: boolean;
+	blocksSettled: number;
 	newlySettled: number;
 }
 
-/** `remember` is false for the text's last block. */
+/**
+ * `remember` is false for the text's last block: while thinking streams it grows on every update, and
+ * each prefix would be an entry that never hits.
+ */
 function flattenBlock(block: string, width: number, budget: Budget, remember: boolean): string {
 	const spans = codeSpans(block);
 	if (!spans.length) return block;
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
 	if (known !== undefined) return known;
-	if (budget.left < 0) return block;
-	const startedWith = budget.left;
-	const flat = rewrite(block, settle(block, spans, widths(block, width), budget));
-	if (!remember || (budget.left < 0 && startedWith < RENDER_BUDGET)) return flat;
+	const hadWholeBudget = budget.blocksSettled++ === 0;
+	const { kept, complete } = settle(block, spans, widths(block, width), budget);
+	const flat = rewrite(block, kept);
+	if (!complete) budget.cutShort = true;
+	if (!remember || (!complete && !hadWholeBudget)) return flat;
 	if (settledBlocks.size >= SETTLED_BLOCKS_KEPT) settledBlocks.delete(settledBlocks.keys().next().value!);
 	settledBlocks.set(key, flat);
 	budget.newlySettled += 1;
@@ -235,10 +249,10 @@ export function flattenThinkingCode(source: string, width = 200): string {
 		flattenedTexts.set(key, known);
 		return known.flat;
 	}
-	const budget: Budget = { left: RENDER_BUDGET, newlySettled: 0 };
+	const budget: Budget = { left: RENDER_BUDGET, cutShort: false, blocksSettled: 0, newlySettled: 0 };
 	const flat = flattenSpans(source, spans, width, budget);
 	const tries = (known?.tries ?? 0) + 1;
-	const final = budget.left >= 0 || budget.newlySettled === 0 || tries >= TRIES_KEPT_GOING;
+	const final = !budget.cutShort || budget.newlySettled === 0 || tries >= TRIES_KEPT_GOING;
 	if (flattenedTexts.size >= FLATTENED_TEXTS_KEPT) flattenedTexts.delete(flattenedTexts.keys().next().value!);
 	flattenedTexts.set(key, { flat, final, tries });
 	return flat;
@@ -256,7 +270,7 @@ export function flattenThinkingCode(source: string, width = 200): string {
  */
 const flattenedTexts = new Map<string, { flat: string; final: boolean; tries: number }>();
 
-/** Every thinking run of the messages pi re-renders together, with room for the streaming one. */
+/** Every thinking run of a message, which pi re-renders together on each update, and then some. */
 const FLATTENED_TEXTS_KEPT = 16;
 
 /** Calls on one unchanged text before its result counts as final however much is left undecided. */
@@ -270,7 +284,9 @@ function flattenSpans(source: string, spans: readonly Span[], width: number, bud
 	const parts = blocks(source);
 	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index < parts.length - 1)).join("");
 	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
-	return rewrite(source, settle(source, spans, at, budget));
+	const { kept, complete } = settle(source, spans, at, budget);
+	if (!complete) budget.cutShort = true;
+	return rewrite(source, kept);
 }
 
 /**
