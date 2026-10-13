@@ -126,7 +126,9 @@ test("the dock draws nothing while its widgets draw nothing, so the hint never o
 	assert.deepEqual(plain(DOCK_WIDGET_KEY), [], "expanded: still nothing");
 	dock.toggle();
 	lines = ["some todo wording the summary can't read"];
-	assert.match(plain(DOCK_WIDGET_KEY)[0] ?? "", /alt\+w to expand$/, "content the summary can't name still gets the hint");
+	const [line = ""] = plain(DOCK_WIDGET_KEY);
+	assert.match(line, /alt\+w to expand$/, "content the summary can't name still gets the hint");
+	assert.doesNotMatch(line, /Agents/, "an agents widget that draws nothing gets no segment");
 });
 
 test("the dock's words are muted; only live glyphs take the accent", () => {
@@ -153,5 +155,8 @@ test("todo summaries: heading counts and the task in progress", () => {
 	assert.deepEqual(summarizeTodos(TODOS), { active: true, text: "Todos 0/3 · Push, deploy t205986, staging E2E" });
 	assert.deepEqual(summarizeTodos(["○ Todos (3/3)", "└─ ✓ done"]), { active: false, text: "Todos 3/3" });
 	assert.deepEqual(summarizeTodos(["● Todos (0/2)", "├─ ○ later", "└─ ○ after"]), { active: false, text: "Todos 0/2" }, "pending work alone is not live");
+	assert.equal(summarizeTodos(["● Todos (1/3)", "└─ ctrl+shift+t to expand"])?.active, true, "collapsed: rows hidden, the heading decides");
+	assert.equal(summarizeTodos(["● Todos (0/14)", "├─ ○ a", "└─ +3 more (3 pending)"])?.active, true, "a hidden tail may hold the task in progress");
+	assert.equal(summarizeTodos(["○ Todos (3/3)", "└─ +3 more (3 completed)"])?.active, false);
 	assert.equal(summarizeTodos(["something else"]), undefined);
 });

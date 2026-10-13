@@ -56,9 +56,13 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 		?.slice(current.indexOf("◐") + 1)
 		.replace(/\s+\(.*\)\s*$/, "")
 		.trim();
-	// Live only while a task is in progress: the heading's ● also marks a list with pending work, which
-	// is not happening now, and must not light the accent once the turn is over.
-	return { active: current !== undefined, text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };
+	// The heading's ● means pending *or* in progress, and pending work alone is not live, so a visible
+	// ◐ row decides. Only when some rows are hidden (the widget collapsed, or a "+N more" tail) can the
+	// summary not tell, and the heading's ● stands in.
+	const rows = lines.slice(lines.indexOf(heading) + 1);
+	const rowsHidden = rows.some((line) => !/[○◐✓✗]/.test(line));
+	const active = current !== undefined || (rowsHidden && heading.includes("●"));
+	return { active, text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };
 }
 
 /** The docked widgets, drawn as one summary line or, toggled open, as the widgets themselves. */
@@ -70,6 +74,7 @@ export class Dock implements WidgetComponent {
 	private tui: TUI | undefined;
 	private theme: Theme | undefined;
 
+	/** Nothing docked at all: pi drops the dock widget. A dock with widgets that draw nothing is not empty. */
 	get isEmpty(): boolean {
 		return this.contents.size === 0 && this.agentsStatus === undefined;
 	}
@@ -138,8 +143,9 @@ export class Dock implements WidgetComponent {
 		const hint = theme.fg("dim", `${TOGGLE_KEY} to expand`);
 		const segments: string[] = [];
 		const todos = this.components.get("rpiv-todos");
-		if (todos) {
-			const summary = summarizeTodos(plainLines(todos, width));
+		const todoLines = todos ? plainLines(todos, width) : [];
+		if (todoLines.length > 0) {
+			const summary = summarizeTodos(todoLines);
 			if (summary) segments.push(`${theme.fg(summary.active ? "accent" : "dim", summary.active ? "●" : "○")} ${theme.fg("muted", summary.text)}`);
 		}
 		const agents = this.components.get("agents");
@@ -150,7 +156,7 @@ export class Dock implements WidgetComponent {
 			const text = this.agentsStatus ?? (agentLines[0] ?? "Agents").replace(/^\W+/, "");
 			segments.push(`${theme.fg(running ? "accent" : "dim", glyph ?? "○")} ${theme.fg("muted", text)}`);
 		}
-		if (segments.length === 0 && ![...this.components.values()].some((component) => plainLines(component, width).length > 0)) return undefined;
+		if (segments.length === 0 && todoLines.length === 0) return undefined;
 		const left = ` ${segments.join("   ")}`;
 		const room = width - visibleWidth(hint) - 3;
 		if (room < 10) return truncateToWidth(left, width, "…");

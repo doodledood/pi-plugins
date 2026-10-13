@@ -124,6 +124,13 @@ describe("quiet thinking", () => {
 		assert.equal(flattenThinkingCode(table, 200), table.replaceAll("`a_b`", "a\\_b"));
 	});
 
+	it("flattens a span that ends at the wrap column, whatever word follows it", () => {
+		// pi carries the space after styled text onto the next line, but not after plain text.
+		assert.equal(flattenThinkingCode("aaaa bbbb `cccc` d", 14), "aaaa bbbb cccc d");
+		assert.equal(flattenThinkingCode("aaaa bbbb `cccc` dd", 14), "aaaa bbbb cccc dd");
+		assert.equal(flattenThinkingCode("aaaa bbbb `cccc`", 14), "aaaa bbbb cccc");
+	});
+
 	it("bounds the work for a block full of spans that cannot flatten", () => {
 		// Each item's lone $ opens pending math that pi prints raw, so every span in this one block fails.
 		const list = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");

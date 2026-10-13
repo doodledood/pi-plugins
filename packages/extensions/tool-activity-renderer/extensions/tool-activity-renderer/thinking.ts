@@ -88,9 +88,17 @@ const PROBE = new Proxy({} as MarkdownTheme, {
 });
 const SGR = /\x1b\[[0-9;]*m/g;
 
-/** What pi's own Markdown renderer shows for thinking `source` at `width`: its text, line breaks and links. */
+/**
+ * What pi's own Markdown renderer shows for thinking `source` at `width`: its text, line breaks and links.
+ * Spaces at a line's edges don't count: at a soft wrap pi carries the space after a styled span onto the
+ * next line (` dd`) but drops it after plain text (`dd`), so a span ending at the wrap column would
+ * otherwise never pass, and whether it receded would depend on the terminal's width.
+ */
 function rendered(source: string, width: number): string {
-	return new Markdown(source, 0, 0, PROBE, { italic: true }).render(width).join("\n").replace(SGR, "");
+	return new Markdown(source, 0, 0, PROBE, { italic: true })
+		.render(width)
+		.map((line) => line.replace(SGR, "").trimEnd().replace(/^ /, ""))
+		.join("\n");
 }
 
 /**
