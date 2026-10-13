@@ -37,7 +37,7 @@ This package typechecks and tests against Pi 1.0.2 through its own `devDependenc
 
 ## Cost
 
-Running and receding rows redraw every 100 ms until they settle. In Pi's default fullscreen TUI mode that only repaints what is on screen. In `tuiMode: "regular"`, a row that scrolls above the viewport while it is still animating makes Pi redraw the whole screen.
+All live motion (the working line's dot and highlight, running rows, receding rows) shares one 30-frames-a-second clock, so it moves smoothly and in step, one repaint per frame. The clock stops once every row has settled and pi is idle. Before this, each animation ran on its own 10-frames-a-second timer, and out of step they already forced about 26 repaints a second, so the smoother motion costs about the same CPU. In Pi's default fullscreen TUI mode that only repaints what is on screen. In `tuiMode: "regular"`, a row that scrolls above the viewport while it is still animating makes Pi redraw the whole screen.
 
 ## Install
 

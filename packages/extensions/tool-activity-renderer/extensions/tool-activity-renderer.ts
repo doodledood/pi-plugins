@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Text, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
-import { clock, FRAME_MS, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
+import { clock, onFrame, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, runColumn, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
 import { cellLines } from "./tool-activity-renderer/text.ts";
@@ -43,7 +43,8 @@ interface RowState {
 	head?: RowHead;
 	requestFrame?: () => void;
 	view?: RowView;
-	timer?: ReturnType<typeof setInterval>;
+	/** Stops this row's redraws; set while the row runs or recedes. */
+	stopFrames?: () => void;
 }
 
 interface ConfigFile {
@@ -419,21 +420,19 @@ function animate(context: RenderContext, head: RowHead, shared: Shared): void {
 		return (running && latest.startedAt !== undefined) || isFading(latest, clock.now());
 	};
 	if (!needsFrames()) {
-		if (state.timer) clearInterval(state.timer);
-		state.timer = undefined;
+		state.stopFrames?.();
+		state.stopFrames = undefined;
 		return;
 	}
-	if (state.timer) return;
-	state.timer = setInterval(() => {
+	if (state.stopFrames) return;
+	state.stopFrames = onFrame(() => {
 		if (needsFrames()) {
 			context.invalidate();
 			return;
 		}
-		clearInterval(state.timer);
-		state.timer = undefined;
-	}, FRAME_MS);
-	// A redraw timer must never be what keeps a process alive.
-	state.timer.unref?.();
+		state.stopFrames?.();
+		state.stopFrames = undefined;
+	});
 }
 
 type RenderCall = NonNullable<AnyToolDefinition["renderCall"]>;

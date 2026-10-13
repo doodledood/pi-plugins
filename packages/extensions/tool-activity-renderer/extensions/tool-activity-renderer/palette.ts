@@ -13,8 +13,36 @@ export interface ThemeLike {
 /** Injectable clock so fades and shimmer can be tested at fixed instants. */
 export const clock = { now: (): number => Date.now() };
 
-/** Redraw cadence while a row is live or fading — fast enough for the shimmer to read as motion. */
-export const FRAME_MS = 100;
+/**
+ * Redraw cadence while anything is live or fading: 30 frames a second, so a breathing color and a
+ * sweeping highlight read as continuous motion instead of visible steps. pi's TUI draws at most 60.
+ */
+export const FRAME_MS = 33;
+
+const frameListeners = new Set<() => void>();
+let frameTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * Call `draw` on every frame until the returned function is called. All live motion shares this one
+ * clock, so the working line, the dot and every live row advance together in one TUI render per frame
+ * instead of each timer requesting its own, out of step with the others.
+ */
+export function onFrame(draw: () => void): () => void {
+	frameListeners.add(draw);
+	if (!frameTimer) {
+		frameTimer = setInterval(() => {
+			for (const listener of [...frameListeners]) listener();
+		}, FRAME_MS);
+		// A redraw timer must never be what keeps a process alive.
+		frameTimer.unref?.();
+	}
+	return () => {
+		frameListeners.delete(draw);
+		if (frameListeners.size || !frameTimer) return;
+		clearInterval(frameTimer);
+		frameTimer = undefined;
+	};
+}
 
 function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value));

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { createHarness, at, message, recordingUi } from "./test-harness.ts";
+import { createHarness, at, FRAME_MS, fgAt, message, recordingUi } from "./test-harness.ts";
 
 test("the working line resets when the session shuts down mid-run, and a second run replaces the first", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
@@ -25,7 +25,7 @@ test("the working line resets when the session shuts down mid-run, and a second 
 		// A leaked interval would draw again once the next run sets a UI: exactly one draw per frame.
 		at(2_000, () => harness.emit("agent_start", {}, ctx));
 		const before = calls.filter((c) => c.method === "message").length;
-		at(2_100, () => mock.timers.tick(100));
+		at(2_100, () => mock.timers.tick(FRAME_MS));
 		assert.equal(calls.filter((c) => c.method === "message").length - before, 1, "one timer, one draw per frame");
 		harness.emit("agent_end", { messages: [] }, ctx);
 	} finally {
@@ -42,28 +42,27 @@ test("the working line names the current activity with elapsed time, then hands 
 		const lastMessage = () => calls.filter((c) => c.method === "message").at(-1)?.value;
 
 		at(0, () => harness.emit("agent_start", {}, ctx));
-		const indicator = calls.find((c) => c.method === "indicator")?.value as { frames: string[]; intervalMs: number };
-		assert.equal(indicator.frames.length, 10, "one breath of the dot");
-		assert.equal(indicator.intervalMs, 120, "ten frames across a 1.2s breath");
-		assert.ok(indicator.frames.every((frame) => stripTerminalSequences(frame) === "●"));
+		const indicator = calls.find((c) => c.method === "indicator")?.value as { frames: string[]; intervalMs?: number };
+		assert.equal(indicator.frames.length, 1, "one frame at a time, so pi runs no timer of its own");
+		assert.equal(stripTerminalSequences(indicator.frames[0] ?? ""), "●");
 		assert.equal(lastMessage(), "Working  0.0s");
 
 		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "thinking_delta" } });
-		at(1_200, () => mock.timers.tick(100));
+		at(1_200, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Thinking  1.2s");
 
 		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "read", args: {} });
-		at(1_500, () => mock.timers.tick(100));
+		at(1_500, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Reading  1.5s");
 
 		harness.emit("tool_execution_start", { toolCallId: "t2", toolName: "subagent", args: {} });
-		at(1_600, () => mock.timers.tick(100));
+		at(1_600, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Working  1.6s", "a tool the renderer doesn't know reads as plain work");
 
 		harness.emit("tool_execution_end", { toolCallId: "t2" });
 		harness.emit("tool_execution_end", { toolCallId: "t1" });
 		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "text_delta" } });
-		at(2_000, () => mock.timers.tick(100));
+		at(2_000, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Writing  2.0s");
 
 		harness.emit("agent_end", { messages: [] }, ctx);
@@ -79,13 +78,22 @@ test("the working line names the current activity with elapsed time, then hands 
 	}
 });
 
-test("the breathing dot changes color across its frames", () => {
-	const harness = createHarness();
-	const { calls, ui } = recordingUi();
-	harness.emit("agent_start", {}, { hasUI: true, ui });
-	const { frames } = calls.find((c) => c.method === "indicator")?.value as { frames: string[] };
-	assert.ok(new Set(frames).size > 1, "frames differ in color");
-	harness.emit("agent_end", { messages: [] }, { hasUI: true, ui });
+test("the breathing dot changes color on every frame, from the run's start", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		at(0, () => harness.emit("agent_start", {}, { hasUI: true, ui }));
+		const dots = [0, 1, 2, 3].map((frame) => {
+			at(frame * FRAME_MS, () => frame && mock.timers.tick(FRAME_MS));
+			const { frames } = calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] };
+			return fgAt(frames[0] ?? "", "●");
+		});
+		assert.equal(new Set(dots).size, dots.length, `each frame moves the dot: ${dots.join(" ")}`);
+		harness.emit("agent_end", { messages: [] }, { hasUI: true, ui });
+	} finally {
+		mock.timers.reset();
+	}
 });
 
 test("the working line stays out of the way without a UI", () => {
@@ -105,23 +113,23 @@ test("the working line shimmers its label, reads Working for tool-call streaming
 		const lastMessage = () => calls.filter((c) => c.method === "message").at(-1)?.value;
 		at(0, () => harness.emit("agent_start", {}, ctx));
 		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "thinking_delta" } });
-		at(300, () => mock.timers.tick(100));
+		at(300, () => mock.timers.tick(FRAME_MS));
 		const first = rawMessages.at(-1) ?? "";
-		at(1_000, () => mock.timers.tick(100));
+		at(1_000, () => mock.timers.tick(FRAME_MS));
 		const second = rawMessages.at(-1) ?? "";
 		const label = (raw: string) => raw.slice(0, raw.lastIndexOf("Thinking") + "Thinking".length + 12);
 		assert.equal(stripTerminalSequences(first).split("  ")[0], "Thinking");
 		assert.notEqual(label(first), label(second), "the label's colors move");
 
 		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "toolcall_delta" } });
-		at(1_100, () => mock.timers.tick(100));
+		at(1_100, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Working  1.1s");
 
 		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "text_delta" } });
-		at(1_200, () => mock.timers.tick(100));
+		at(1_200, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Writing  1.2s");
 		harness.emit("message_end", { message: { role: "assistant", content: [] } });
-		at(1_300, () => mock.timers.tick(100));
+		at(1_300, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Working  1.3s", "a finished reply no longer reads as Writing");
 		harness.emit("agent_end", { messages: [] }, ctx);
 	} finally {

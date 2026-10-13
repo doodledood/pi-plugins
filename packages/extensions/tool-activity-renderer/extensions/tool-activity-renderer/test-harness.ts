@@ -15,7 +15,7 @@ setKeybindings(new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl
 
 export const { default: registerExtension } = await import("../tool-activity-renderer.ts");
 
-export const { clock, formatDuration } = await import("./palette.ts");
+export const { clock, FRAME_MS, formatDuration } = await import("./palette.ts");
 
 export type Component = { render(width: number): string[] };
 
@@ -229,8 +229,8 @@ export class Row {
 	}
 
 	stop(): void {
-		const timer = this.context.state.timer as ReturnType<typeof setInterval> | undefined;
-		if (timer) clearInterval(timer);
+		(this.context.state.stopFrames as (() => void) | undefined)?.();
+		this.context.state.stopFrames = undefined;
 	}
 }
 

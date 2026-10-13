@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { mock, test } from "node:test";
 import { mixColors, parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { clock, formatDuration, TOKENS, createHarness, Row, at, setHyperlinks, fgAt, hex, message, recordingUi } from "./test-harness.ts";
+import { clock, FRAME_MS, formatDuration, TOKENS, createHarness, Row, at, setHyperlinks, fgAt, hex, message, recordingUi } from "./test-harness.ts";
 
 test("a finished row recedes from bright to muted, then stops redrawing", () => {
 	setHyperlinks(false);
@@ -25,7 +25,7 @@ test("a finished row recedes from bright to muted, then stops redrawing", () => 
 		const settled = row.context.invalidations;
 		at(5_000, () => mock.timers.tick(1_000));
 		assert.equal(row.context.invalidations, settled, "no redraws once the row has settled");
-		assert.equal(row.context.state.timer, undefined, "the row's timer is cleared");
+		assert.equal(row.context.state.stopFrames, undefined, "the row's timer is cleared");
 	} finally {
 		mock.timers.reset();
 	}
@@ -38,7 +38,7 @@ test("rows restored from history render already settled, without timings or time
 	const line = restored.render(100)[0] ?? "";
 	assert.equal(fgAt(line, "Read"), hex(parseColor(TOKENS.muted!)));
 	assert.match(stripTerminalSequences(line), /1 line$/);
-	assert.equal(restored.context.state.timer, undefined);
+	assert.equal(restored.context.state.stopFrames, undefined);
 });
 
 test("failed rows never recede", () => {
@@ -62,7 +62,7 @@ test("the live verb shimmers: same text, moving color", () => {
 	const verb = (line: string) => line.slice(line.indexOf("●") + 1, line.indexOf("a.ts"));
 	assert.notEqual(verb(a), verb(b), "the verb's colors move");
 	assert.notEqual(fgAt(at(0, () => row.render(80))[0] ?? "", "●"), fgAt(at(600, () => row.render(80))[0] ?? "", "●"), "the live glyph breathes");
-	assert.ok(row.context.state.timer, "a running row redraws on a timer");
+	assert.ok(row.context.state.stopFrames, "a running row redraws on a timer");
 	row.stop();
 });
 
@@ -82,21 +82,21 @@ test("a finished row keeps redrawing on a frame timer while it fades, and a runn
 		const row = new Row(createHarness(), "read", "r", { path: "src/a.ts" });
 		at(0, () => row.start());
 		at(0, () => row.render(100));
-		at(100, () => mock.timers.tick(100));
-		assert.equal(row.context.invalidations, 1, "a running row redraws within one 100ms frame");
+		at(100, () => mock.timers.tick(FRAME_MS));
+		assert.equal(row.context.invalidations, 1, "a running row redraws within one frame");
 
 		at(500, () => row.finish("x"));
 		at(600, () => row.render(100));
 		const before = row.context.invalidations;
-		at(700, () => mock.timers.tick(100));
+		at(700, () => mock.timers.tick(FRAME_MS));
 		assert.equal(row.context.invalidations, before + 1, "the fade redraws on the next frame");
-		at(1_500, () => mock.timers.tick(100));
+		at(1_500, () => mock.timers.tick(FRAME_MS));
 		assert.equal(row.context.invalidations, before + 2, "still fading at 1.5s");
-		at(2_500, () => mock.timers.tick(100));
+		at(2_500, () => mock.timers.tick(FRAME_MS));
 		const settled = row.context.invalidations;
-		at(3_000, () => mock.timers.tick(100));
+		at(3_000, () => mock.timers.tick(FRAME_MS));
 		assert.equal(row.context.invalidations, settled, "no redraws after the fade ends");
-		assert.equal(row.context.state.timer, undefined);
+		assert.equal(row.context.state.stopFrames, undefined);
 	} finally {
 		mock.timers.reset();
 	}
@@ -137,13 +137,13 @@ test("a row whose component pi dropped mid-run stops redrawing once its tool end
 		const orphan = new Row(harness, "bash", "o", { command: "sleep 1" });
 		at(0, () => orphan.start());
 		at(0, () => orphan.render(80));
-		at(100, () => mock.timers.tick(100));
+		at(100, () => mock.timers.tick(FRAME_MS));
 		assert.equal(orphan.context.invalidations, 1, "redraws while the tool runs");
 		harness.emit("tool_execution_end", { toolCallId: "o", toolName: "bash", isError: false });
-		at(200, () => mock.timers.tick(100));
-		at(300, () => mock.timers.tick(100));
+		at(200, () => mock.timers.tick(FRAME_MS));
+		at(300, () => mock.timers.tick(FRAME_MS));
 		assert.equal(orphan.context.invalidations, 1, "no redraws after the execution ended");
-		assert.equal(orphan.context.state.timer, undefined);
+		assert.equal(orphan.context.state.stopFrames, undefined);
 	} finally {
 		mock.timers.reset();
 	}
@@ -190,7 +190,7 @@ test("a result that arrives without tool_execution_end (aborted message) still s
 		row.restore("Operation aborted", { isError: true });
 		assert.match(at(300, () => row.plain(80))[0] ?? "", /^ ✕ Read\s+a\.ts\s+failed {2}0\.3s$/);
 		assert.match(at(900, () => row.plain(80))[0] ?? "", /failed {2}0\.3s$/, "the duration is fixed when the result lands, not a running clock");
-		assert.equal(row.context.state.timer, undefined, "not running");
+		assert.equal(row.context.state.stopFrames, undefined, "not running");
 
 		const { calls, ui } = recordingUi();
 		const ctx = { hasUI: true, ui };
@@ -241,7 +241,7 @@ test("a row waiting for its tool, or restored without a result, starts no redraw
 		at(0, () => [waiting.render(), orphan.render()]);
 		at(1_000, () => mock.timers.tick(1_000));
 		for (const row of [waiting, orphan]) {
-			assert.equal(row.context.state.timer, undefined, `${row.id} has no timer`);
+			assert.equal(row.context.state.stopFrames, undefined, `${row.id} has no timer`);
 			assert.equal(row.context.invalidations, 0, `${row.id} never redraws itself`);
 		}
 	} finally {
