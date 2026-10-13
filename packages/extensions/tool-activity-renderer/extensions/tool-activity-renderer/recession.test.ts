@@ -75,7 +75,7 @@ test("work that finished in under a tenth of a second reads <0.1s, not 0.0s", ()
 	row.stop();
 });
 
-test("a finished row keeps redrawing on a frame timer while it fades, and a running row redraws every frame", () => {
+test("a finished row keeps redrawing on the frame clock while it fades, and a running row redraws every frame", () => {
 	setHyperlinks(false);
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {
@@ -232,7 +232,7 @@ test("a settled row lands on the specified tones: directory dim, file name soft,
 	row.stop();
 });
 
-test("a row waiting for its tool, or restored without a result, starts no redraw timer", () => {
+test("a row waiting for its tool, or restored without a result, starts no redraws", () => {
 	setHyperlinks(false);
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {

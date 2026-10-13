@@ -200,6 +200,16 @@ describe("quiet thinking", () => {
 		assert.equal(again, 0, "an unchanged text is not checked again");
 	});
 
+	it("while thinking streams, only the growing last block is settled again", () => {
+		// Earlier blocks whose spans fail the all-at-once check: `$HOME` opens math beside them.
+		const hard = (n: number) => Array.from({ length: 6 }, (_, i) => `- ${n}.${i} reads $HOME and calls \`fn_${n}_${i}()\``).join("\n");
+		const earlier = `${hard(1)}\n\n${hard(2)}\n\n${hard(3)}\n\nThen \`tail.ts\``;
+		flattenThinkingCode(earlier, 100);
+		const update = drawnBy(() => flattenThinkingCode(`${earlier} grows`, 100));
+		const fresh = drawnBy(() => flattenThinkingCode(`${hard(4)}\n\n${hard(5)}\n\n${hard(6)}\n\nThen \`tail.ts\` grows`, 100));
+		assert.ok(update < fresh / 2, `an update drew ${update} characters, a fresh text ${fresh}`);
+	});
+
 	it("bounds the work for a block full of spans that cannot flatten", () => {
 		// Each item's lone $ opens pending math that pi prints raw, so every span in this one block fails.
 		const list = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");

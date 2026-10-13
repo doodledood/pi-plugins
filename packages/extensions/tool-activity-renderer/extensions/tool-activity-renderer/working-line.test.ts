@@ -127,7 +127,10 @@ test("once the tool ends, the dot eases back into its breath, and the next run s
 		at(1_833, () => mock.timers.tick(FRAME_MS));
 		assert.notEqual(dot(), dim, "one frame after, it is on its way back");
 		assert.notEqual(dot(), fullBreath(1_833), "not there in one jump");
+		at(1_920, () => mock.timers.tick(FRAME_MS)); // half of the 240 ms rise
+		assert.notEqual(dot(), fullBreath(1_920), "still rising halfway");
 		at(1_800 + 240, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), fullBreath(2_040), "risen in full, at the same pace it settled");
 		at(3_000, () => mock.timers.tick(FRAME_MS)); // 2.5 breaths in: the top
 		assert.equal(dot(), accent, "breathing again");
 
@@ -138,6 +141,13 @@ test("once the tool ends, the dot eases back into its breath, and the next run s
 		at(10_000, () => harness.emit("agent_start", {}, ctx));
 		at(10_033, () => mock.timers.tick(FRAME_MS));
 		assert.equal(dot(), fullBreath(33), "the full breath from the first frame, not easing up from rest");
+		harness.emit("agent_end", { messages: [] }, ctx);
+
+		// A run that opens with a tool settles from its own start, not from the last run's last frame.
+		at(20_000, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "t3", toolName: "bash", args: {} });
+		at(20_033, () => mock.timers.tick(FRAME_MS));
+		assert.notEqual(dot(), dim, "one frame into the run, still settling");
 		harness.emit("agent_end", { messages: [] }, ctx);
 	} finally {
 		mock.timers.reset();

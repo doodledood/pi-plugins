@@ -25,7 +25,7 @@ export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boole
 	let stopFrames: (() => void) | undefined;
 	let startedAt = 0;
 	let phase = "Working";
-	/** How much of its breath the dot shows: 1 while the line names an activity, easing to 0 while it gives way. */
+	/** How much of its breath the dot shows: easing to 0 while the line gives way, back to 1 when it names an activity again. */
 	let swell = 1;
 	let drawnAt = 0;
 	/** Running tools by call id, by name. */
@@ -72,7 +72,6 @@ export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boole
 		if (!ctx.hasUI) return;
 		ui = ctx.ui;
 		startedAt = clock.now();
-		drawnAt = startedAt;
 		swell = 1;
 		phase = "Working";
 		draw();

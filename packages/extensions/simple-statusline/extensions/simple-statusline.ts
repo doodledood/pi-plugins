@@ -1,7 +1,8 @@
 // simple-statusline.ts — local custom Pi footer for Aviram.
 // Design goal: ambient, low-hierarchy footer. No emoji, no tool activity.
-// Left side is quiet location context, π marker included: the working line above the
-// editor already says pi is busy, so the footer does not say it again. Right side carries model/context/cache/cost —
+// Left side is quiet location context, π marker included: the working line above
+// the editor already says pi is busy, so the footer does not say it again.
+// Right side carries model/context/cache/cost —
 // grayscale at rest, color only under pressure (context ≥50% compact-boundary hint,
 // ≥90% error; cache turns warning + "!" when the latest turn broke the prompt cache).
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
@@ -187,8 +188,9 @@ function renderMainLine(
   const rightPlain = rightTokens.join(sep);
 
   // Left cluster: quiet identity. π marker identifies the pi harness at a glance and
-  // stays dim: whether pi is busy is the working line's to say, once. The project name stays muted: it never
-  // changes during a session, so at full text brightness it would outshine the reply.
+  // stays dim: whether pi is busy is the working line's to say, once. The project
+  // name stays muted: it never changes during a session, so at full text brightness
+  // it would outshine the reply.
   const marker = "π ";
   const minGap = 3;
   let leftBudget = width - visibleLength(rightPlain) - minGap - visibleLength(marker);
