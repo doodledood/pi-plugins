@@ -172,6 +172,14 @@ describe("quiet thinking", () => {
 		assert.ok(veryLong < 3 * long, `rendered ${veryLong} characters with a 200,000-character line, ${long} with a 3,000-character one`);
 	});
 
+	it("spends none of its budget on paragraphs without code", () => {
+		// A fence keeps the all-at-once rewrite from passing, so blocks settle one by one.
+		const prose = Array.from({ length: 60 }, (_, i) => `Paragraph ${i} ${"plain words ".repeat(80)}`).join("\n\n");
+		const text = `${prose}\n\nSee \`late.ts\` here.\n\n\`\`\`\nconst s = \`x\${y}\`;\n\`\`\``;
+		assert.ok(prose.length > 50_000);
+		assert.ok(flattenThinkingCode(text, 100).includes("See late\\.ts here."));
+	});
+
 	it("moves past a block the budget cut short on the next update", () => {
 		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
 		const text = `${stuck}\n\nThen open \`b.ts\`.`;
