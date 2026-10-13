@@ -46,15 +46,16 @@ function plainLines(component: Component, width: number): string[] {
 		.filter((line) => line.trim() !== "");
 }
 
-/** rpiv-todo's row glyphs for an open task: pending ○ and in progress ◐ (its `overlayStatusGlyph`). */
-const OPEN_TASK = /[○◐]/;
+/** A task row of rpiv-todo's widget and its status glyph (its `overlayStatusGlyph`): `├─ ◐ subject`. */
+const TASK_ROW = /^\s*[├└]─ ([○◐✓✗]) /;
 
 /** ` Todos 1/3 · Push, deploy …` from the todo widget's heading and its task in progress. */
 export function summarizeTodos(lines: readonly string[]): { active: boolean; text: string } | undefined {
 	const heading = lines.find((line) => /Todos \(\d+\/\d+\)/.test(line));
 	if (!heading) return undefined;
 	const [, done, total] = /Todos \((\d+)\/(\d+)\)/.exec(heading) ?? [];
-	const current = lines.find((line) => line.includes("◐"));
+	const rows = lines.slice(lines.indexOf(heading) + 1).map((line) => ({ line, glyph: TASK_ROW.exec(line)?.[1] }));
+	const current = rows.find((row) => row.glyph === "◐")?.line;
 	const task = current
 		?.slice(current.indexOf("◐") + 1)
 		.replace(/\s+\(.*\)\s*$/, "")
@@ -62,7 +63,7 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 	// The heading's ● means pending *or* in progress, and pending work alone is not live, so a visible
 	// ◐ row decides. Only when some open tasks are not shown as rows (the widget collapsed, or cut off
 	// under a "+N more" tail) can the summary not tell, and the heading's ● stands in.
-	const openRows = lines.slice(lines.indexOf(heading) + 1).filter((line) => OPEN_TASK.test(line)).length;
+	const openRows = rows.filter((row) => row.glyph === "○" || row.glyph === "◐").length;
 	const openHidden = openRows < Number(total) - Number(done);
 	const active = current !== undefined || (openHidden && heading.includes("●"));
 	return { active, text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };

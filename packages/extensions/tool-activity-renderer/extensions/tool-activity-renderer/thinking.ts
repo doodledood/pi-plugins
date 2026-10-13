@@ -92,8 +92,10 @@ const SGR = /\x1b\[[0-9;]*m/g;
 type Widths = { width: number; unwrapped: number };
 
 function widths(source: string, width: number): Widths {
-	// A rendered line is never longer than its paragraph's source, give or take a list or table border.
-	const longest = Math.max(...source.split(/\n[ \t]*\n/).map((paragraph) => paragraph.length));
+	// Pi keeps each source line break, so no rendered line outgrows the longest source line by more than
+	// a list, quote or table border; wide characters or tabs could, which only makes the check stricter.
+	// Sizing by line, not paragraph, matters: pi pads every rendered line to the full width.
+	const longest = Math.max(...source.split("\n").map((line) => line.length));
 	return { width, unwrapped: Math.max(width, longest + 64) };
 }
 
@@ -113,8 +115,7 @@ function rendered(source: string, at: Widths): string {
 }
 
 /**
- * How much source text one call may check while narrowing down spans that fail, a few milliseconds of
- * rendering. Pi re-runs the transformer on every streamed update, so a block full of failing spans must
+ * How much source text one call may check while narrowing down spans that fail. Pi re-runs the transformer on every streamed update, so a block full of failing spans must
  * not stall the UI; past the budget the spans still undecided keep their code color.
  */
 const RENDER_BUDGET = 50_000;
@@ -191,7 +192,7 @@ function flattenBlock(block: string, width: number, budget: { left: number }): s
  * A span is rewritten only when pi's renderer then shows the text as before, character for character
  * and link for link, both at `width` and where nothing wraps (see `rendered`). That one check is what keeps code blocks, links, math,
  * emphasis and tables from changing, however the span sits among them. The common case, where every span
- * flattens cleanly, costs two renders. Otherwise spans are settled block by block, one render of the
+ * flattens cleanly, costs four renders: the original and the rewrite, each in both views. Otherwise spans are settled block by block, one render of the
  * whole confirms the result, and if a construct reaching across blocks makes it differ, the spans are
  * settled against the whole text.
  */

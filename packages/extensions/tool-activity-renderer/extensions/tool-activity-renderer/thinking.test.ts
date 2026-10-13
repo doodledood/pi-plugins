@@ -107,6 +107,7 @@ describe("quiet thinking", () => {
 			"[foo `[` bar](http://u)",
 			"*`[`* foo](http://u)",
 			"![`a_b`](u)",
+			"- item\n`  two` x", // the list continuation's indent would shrink
 		];
 		// Links must be caught by the check itself, not by the URL a hyperlink-capable terminal adds.
 		for (const hyperlinks of [false, true]) {
@@ -132,6 +133,25 @@ describe("quiet thinking", () => {
 		// The carried space takes room, so the rest of the paragraph wraps differently; that is still the same text.
 		const reflowed = "The file `foo.ts` and then `bar.ts` mention something long enough to wrap a few times across `baz.ts` lines here.";
 		assert.equal(flattenThinkingCode(reflowed, 15), reflowed.replaceAll("`", "").replaceAll(".ts", "\\.ts"));
+	});
+
+	it("renders in proportion to the text, even for long thinking with no blank lines", () => {
+		// pi pads every rendered line to the render width, so the check's width where nothing wraps must
+		// follow the longest line, not the whole run of lines between blank lines.
+		const text = Array.from({ length: 1000 }, (_, i) => `Step ${i}: look at \`file${i}.ts\` again.`).join("\n");
+		const render = Markdown.prototype.render;
+		let drawn = 0;
+		Markdown.prototype.render = function (this: Markdown, width: number) {
+			const lines = render.call(this, width);
+			for (const line of lines) drawn += line.length;
+			return lines;
+		};
+		try {
+			assert.equal(flattenThinkingCode(text, 100), text.replaceAll("`", "").replaceAll(".ts", "\\.ts"));
+		} finally {
+			Markdown.prototype.render = render;
+		}
+		assert.ok(drawn < 20 * text.length, `rendered ${drawn} characters for ${text.length} of thinking`);
 	});
 
 	it("bounds the work for a block full of spans that cannot flatten", () => {
