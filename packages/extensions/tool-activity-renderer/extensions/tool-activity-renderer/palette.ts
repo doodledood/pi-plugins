@@ -31,7 +31,8 @@ export function onFrame(draw: () => void): () => void {
 	frameListeners.add(draw);
 	if (!frameTimer) {
 		frameTimer = setInterval(() => {
-			for (const listener of [...frameListeners]) listener();
+			// A copy, so a listener may stop itself; the check skips one that another listener stopped this frame.
+			for (const listener of [...frameListeners]) if (frameListeners.has(listener)) listener();
 		}, FRAME_MS);
 		// A redraw timer must never be what keeps a process alive.
 		frameTimer.unref?.();
@@ -42,6 +43,21 @@ export function onFrame(draw: () => void): () => void {
 		clearInterval(frameTimer);
 		frameTimer = undefined;
 	};
+}
+
+/** Whether the frame clock is running. */
+export function framesRunning(): boolean {
+	return frameTimer !== undefined;
+}
+
+/**
+ * Drop every frame listener and stop the clock. For tests: a test that fails mid-animation leaves its
+ * listener behind, and with it a timer from mocked time that would never fire for the tests after it.
+ */
+export function resetFrames(): void {
+	frameListeners.clear();
+	if (frameTimer) clearInterval(frameTimer);
+	frameTimer = undefined;
 }
 
 function clamp01(value: number): number {
@@ -85,7 +101,7 @@ export function tones(theme: ThemeLike) {
 }
 
 /** One full breath of a live glyph. */
-export const BREATH_PERIOD_MS = 1200;
+const BREATH_PERIOD_MS = 1200;
 
 /** A color oscillating between two tones — the live glyph's slow breath. */
 export function breathe(from: Color, to: Color, now: number, periodMs = BREATH_PERIOD_MS): Color {

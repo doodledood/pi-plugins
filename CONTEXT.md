@@ -21,7 +21,7 @@ Two or more consecutive read/grep/find/ls calls in one assistant message, drawn 
 _Avoid_: Burst, group when the one-message, consecutive-call rule is meant.
 
 **Working line**:
-The indicator above the editor while pi works: a breathing dot, the current activity (Thinking, Reading, Running, Writing), and the run's elapsed time.
+The indicator above the editor while pi works: a breathing dot, the current activity (Thinking, Reading, Running, Writing), and the run's elapsed time. While a tool row of the renderer is live, the row carries the activity and the line keeps only a resting dot and the time.
 _Avoid_: Spinner, loader.
 
 **Widget dock**:

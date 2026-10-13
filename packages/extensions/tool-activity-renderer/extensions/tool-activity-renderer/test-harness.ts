@@ -1,6 +1,7 @@
 /** Shared harness for the renderer tests: a fake pi host, a fixed clock, and a Row driver that goes through renderCall/renderResult. */
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import { afterEach } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, MarkdownTransformer, ThemeStyle } from "@earendil-works/pi-coding-agent";
@@ -15,7 +16,8 @@ setKeybindings(new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl
 
 export const { default: registerExtension } = await import("../tool-activity-renderer.ts");
 
-export const { clock, FRAME_MS, formatDuration } = await import("./palette.ts");
+export const { clock, FRAME_MS, formatDuration, framesRunning, resetFrames } = await import("./palette.ts");
+afterEach(() => resetFrames());
 
 export type Component = { render(width: number): string[] };
 
@@ -66,15 +68,20 @@ export const theme = {
 	style: (text: string, options: ThemeStyle) => styleText(text, options as { fg?: Color; bg?: Color }, "truecolor"),
 };
 
+type CapturedCommand = { handler(args: string, ctx: unknown): unknown };
+
 export function createHarness() {
 	const tools = new Map<string, CapturedTool>();
 	const handlers = new Map<string, Handler[]>();
 	const transformers: MarkdownTransformer[] = [];
+	const commands = new Map<string, CapturedCommand>();
 	registerExtension({
 		registerTool(tool: CapturedTool) {
 			tools.set(tool.name, tool);
 		},
-		registerCommand() {},
+		registerCommand(name: string, command: CapturedCommand) {
+			commands.set(name, command);
+		},
 		registerMarkdownTransformer(transformer: MarkdownTransformer) {
 			transformers.push(transformer);
 		},
@@ -85,7 +92,7 @@ export function createHarness() {
 	const emit = (event: string, payload: Record<string, unknown>, ctx: unknown = {}) => {
 		for (const handler of handlers.get(event) ?? []) handler({ type: event, ...payload }, ctx);
 	};
-	return { tools, emit, transformers };
+	return { tools, emit, transformers, commands };
 }
 
 export type Harness = ReturnType<typeof createHarness>;

@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { createHarness, at, FRAME_MS, fgAt, message, recordingUi } from "./test-harness.ts";
+import { createHarness, at, FRAME_MS, fgAt, framesRunning, hex, message, recordingUi, TOKENS } from "./test-harness.ts";
+import { parseColor } from "@earendil-works/pi-tui";
 
 test("the working line resets when the session shuts down mid-run, and a second run replaces the first", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
@@ -22,7 +23,7 @@ test("the working line resets when the session shuts down mid-run, and a second 
 		mock.timers.tick(1_000);
 		assert.equal(calls.length, settled, "no timer survives the shutdown or the replaced run");
 
-		// A leaked interval would draw again once the next run sets a UI: exactly one draw per frame.
+		// A leaked clock subscription from the run before would draw again once the next run sets a UI.
 		at(2_000, () => harness.emit("agent_start", {}, ctx));
 		const before = calls.filter((c) => c.method === "message").length;
 		at(2_100, () => mock.timers.tick(FRAME_MS));
@@ -51,9 +52,14 @@ test("the working line names the current activity with elapsed time, then hands 
 		at(1_200, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Thinking  1.2s");
 
+		// Its compact row breathes and names it right above: the line gives way to the run's time alone.
 		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "read", args: {} });
 		at(1_500, () => mock.timers.tick(FRAME_MS));
-		assert.equal(lastMessage(), "Reading  1.5s");
+		assert.equal(lastMessage(), "1.5s");
+		const dot = () => fgAt((calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] }).frames[0] ?? "", "●");
+		assert.equal(dot(), hex(parseColor(TOKENS.dim!)), "the dot holds still while the row breathes");
+		at(1_550, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), hex(parseColor(TOKENS.dim!)));
 
 		harness.emit("tool_execution_start", { toolCallId: "t2", toolName: "subagent", args: {} });
 		at(1_600, () => mock.timers.tick(FRAME_MS));
@@ -73,6 +79,48 @@ test("the working line names the current activity with elapsed time, then hands 
 		const settled = calls.length;
 		mock.timers.tick(1_000);
 		assert.equal(calls.length, settled, "no updates after the run ends");
+		assert.equal(framesRunning(), false, "the shared frame clock is stopped");
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("the dot settles to rest over a few frames when the line gives way, not in one jump", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const dot = () => fgAt((calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] }).frames[0] ?? "", "●");
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		at(600, () => mock.timers.tick(FRAME_MS)); // the top of the breath
+		assert.equal(dot(), hex(parseColor(TOKENS.accent!)));
+		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
+		at(633, () => mock.timers.tick(FRAME_MS));
+		assert.notEqual(dot(), hex(parseColor(TOKENS.accent!)));
+		assert.notEqual(dot(), hex(parseColor(TOKENS.dim!)), "one frame in, it is still on its way down");
+		at(900, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), hex(parseColor(TOKENS.dim!)));
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("with pi's own tool rendering, the line names the running tool", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		harness.commands.get("tool-render")?.handler("default", { ui: { notify() {} } });
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const lastMessage = () => calls.filter((c) => c.method === "message").at(-1)?.value;
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "read", args: {} });
+		at(500, () => mock.timers.tick(FRAME_MS));
+		assert.equal(lastMessage(), "Reading  0.5s", "no compact row is there to say it");
+		harness.emit("agent_end", { messages: [] }, ctx);
+		harness.commands.get("tool-render")?.handler("compact", { ui: { notify() {} } });
 	} finally {
 		mock.timers.reset();
 	}

@@ -605,7 +605,7 @@ export default function toolActivityRenderer(pi: ExtensionAPI): void {
 
 	applyMode(mode, false);
 	trackActivity(pi, shared);
-	registerWorkingLine(pi);
+	registerWorkingLine(pi, () => mode === COMPACT_MODE);
 	registerQuietThinking(pi);
 
 	pi.registerCommand("tool-render", {
