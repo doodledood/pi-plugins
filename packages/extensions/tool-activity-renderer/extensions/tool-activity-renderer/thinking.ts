@@ -234,7 +234,7 @@ export function flattenThinkingCode(source: string, width = 200): string {
 	const parts = blocks(source);
 	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index === parts.length - 1)).join("");
 	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
-	return budget.left < 0 ? source : rewrite(source, settle(source, spans, at, budget));
+	return rewrite(source, settle(source, spans, at, budget));
 }
 
 /**

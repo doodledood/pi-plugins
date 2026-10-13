@@ -9,6 +9,9 @@ function toolActivity(toolName: string): string {
 	return isToolKind(toolName) ? presentVerb(toolName) : "Working";
 }
 
+/** How long the dot takes to settle to rest when the line gives way, or to rise back into its breath. */
+const SETTLE_MS = 240;
+
 /**
  * The line above the editor while pi works: a breathing dot, then what pi is doing right now —
  * Thinking, Reading, Running, Writing — with a highlight sweeping across it and the run's elapsed time.
@@ -17,10 +20,7 @@ function toolActivity(toolName: string): string {
  * already breathes, shimmers its verb and times itself right above. The line then gives way: the dot
  * holds still and only the run's elapsed time stays, so one live thing on screen says what is running.
  */
-/** How long the dot takes to settle to rest when the line gives way, or to rise back into its breath. */
-const SETTLE_MS = 240;
-
-export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boolean = () => false): void {
+export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boolean): void {
 	let ui: UI | undefined;
 	let stopFrames: (() => void) | undefined;
 	let startedAt = 0;
@@ -45,12 +45,12 @@ export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boole
 		const now = clock.now();
 		const activity = label();
 		const elapsed = paint(ui.theme, formatDuration(now - startedAt), t.dim);
-		// One frame per tick, from the shared clock: pi animates an indicator with several frames on a
-		// timer of its own, which would breathe out of step with the label's highlight.
 		const step = (now - drawnAt) / SETTLE_MS;
 		drawnAt = now;
 		swell = activity === undefined ? Math.max(0, swell - step) : Math.min(1, swell + step);
 		const dot = blend(t.dim, breathe(t.dim, t.accent, now - startedAt), swell);
+		// One frame per tick, from the shared clock: pi animates an indicator with several frames on a
+		// timer of its own, which would breathe out of step with the label's highlight.
 		ui.setWorkingIndicator({ frames: [paint(ui.theme, "●", dot)] });
 		ui.setWorkingMessage(activity === undefined ? elapsed : `${shimmer(ui.theme, activity, t.muted, t.text, now)}  ${elapsed}`);
 	};

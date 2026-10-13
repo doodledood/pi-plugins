@@ -25,7 +25,7 @@ test("a finished row recedes from bright to muted, then stops redrawing", () => 
 		const settled = row.context.invalidations;
 		at(5_000, () => mock.timers.tick(1_000));
 		assert.equal(row.context.invalidations, settled, "no redraws once the row has settled");
-		assert.equal(row.context.state.stopFrames, undefined, "the row's timer is cleared");
+		assert.equal(row.context.state.stopFrames, undefined, "the row leaves the frame clock");
 	} finally {
 		mock.timers.reset();
 	}
@@ -62,7 +62,7 @@ test("the live verb shimmers: same text, moving color", () => {
 	const verb = (line: string) => line.slice(line.indexOf("●") + 1, line.indexOf("a.ts"));
 	assert.notEqual(verb(a), verb(b), "the verb's colors move");
 	assert.notEqual(fgAt(at(0, () => row.render(80))[0] ?? "", "●"), fgAt(at(600, () => row.render(80))[0] ?? "", "●"), "the live glyph breathes");
-	assert.ok(row.context.state.stopFrames, "a running row redraws on a timer");
+	assert.ok(row.context.state.stopFrames, "a running row redraws on the frame clock");
 	row.stop();
 });
 
@@ -241,7 +241,7 @@ test("a row waiting for its tool, or restored without a result, starts no redraw
 		at(0, () => [waiting.render(), orphan.render()]);
 		at(1_000, () => mock.timers.tick(1_000));
 		for (const row of [waiting, orphan]) {
-			assert.equal(row.context.state.stopFrames, undefined, `${row.id} has no timer`);
+			assert.equal(row.context.state.stopFrames, undefined, `${row.id} has left the frame clock`);
 			assert.equal(row.context.invalidations, 0, `${row.id} never redraws itself`);
 		}
 	} finally {

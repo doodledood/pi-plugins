@@ -1,9 +1,9 @@
 /** The working line above the editor. */
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { breathe } from "./palette.ts";
 import { createHarness, at, FRAME_MS, fgAt, framesRunning, hex, message, recordingUi, TOKENS } from "./test-harness.ts";
-import { parseColor } from "@earendil-works/pi-tui";
 
 test("the working line resets when the session shuts down mid-run, and a second run replaces the first", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
@@ -107,6 +107,43 @@ test("the dot settles to rest over a few frames when the line gives way, not in 
 	}
 });
 
+test("once the tool ends, the dot eases back into its breath, and the next run starts breathing", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const dot = () => fgAt((calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] }).frames[0] ?? "", "●");
+		const accent = hex(parseColor(TOKENS.accent!));
+		const dim = hex(parseColor(TOKENS.dim!));
+		const fullBreath = (sinceStart: number) => hex(breathe(parseColor(TOKENS.dim!), parseColor(TOKENS.accent!), sinceStart));
+		at(0, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
+		at(500, () => mock.timers.tick(FRAME_MS));
+		at(1_800, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), dim);
+		harness.emit("tool_execution_end", { toolCallId: "t1" });
+		harness.emit("message_update", { message: {}, assistantMessageEvent: { type: "thinking_delta" } });
+		at(1_833, () => mock.timers.tick(FRAME_MS));
+		assert.notEqual(dot(), dim, "one frame after, it is on its way back");
+		assert.notEqual(dot(), fullBreath(1_833), "not there in one jump");
+		at(1_800 + 240, () => mock.timers.tick(FRAME_MS));
+		at(3_000, () => mock.timers.tick(FRAME_MS)); // 2.5 breaths in: the top
+		assert.equal(dot(), accent, "breathing again");
+
+		// A run that ends while a tool is live leaves the next run breathing from its first frame.
+		harness.emit("tool_execution_start", { toolCallId: "t2", toolName: "bash", args: {} });
+		at(3_500, () => mock.timers.tick(FRAME_MS));
+		harness.emit("agent_end", { messages: [] }, ctx);
+		at(10_000, () => harness.emit("agent_start", {}, ctx));
+		at(10_033, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), fullBreath(33), "the full breath from the first frame, not easing up from rest");
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
 test("with pi's own tool rendering, the line names the running tool", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {
@@ -120,8 +157,9 @@ test("with pi's own tool rendering, the line names the running tool", () => {
 		at(500, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Reading  0.5s", "no compact row is there to say it");
 		harness.emit("agent_end", { messages: [] }, ctx);
-		harness.commands.get("tool-render")?.handler("compact", { ui: { notify() {} } });
 	} finally {
+		// The mode persists: restore it even when an assertion fails, so later harnesses start compact.
+		createHarness().commands.get("tool-render")?.handler("compact", { ui: { notify() {} } });
 		mock.timers.reset();
 	}
 });
@@ -131,12 +169,14 @@ test("the breathing dot changes color on every frame, from the run's start", () 
 	try {
 		const harness = createHarness();
 		const { calls, ui } = recordingUi();
-		at(0, () => harness.emit("agent_start", {}, { hasUI: true, ui }));
+		// Started off the clock's zero, so the breath is timed from the run, not the wall clock.
+		at(1_000, () => harness.emit("agent_start", {}, { hasUI: true, ui }));
 		const dots = [0, 1, 2, 3].map((frame) => {
-			at(frame * FRAME_MS, () => frame && mock.timers.tick(FRAME_MS));
+			at(1_000 + frame * FRAME_MS, () => frame && mock.timers.tick(FRAME_MS));
 			const { frames } = calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] };
 			return fgAt(frames[0] ?? "", "●");
 		});
+		assert.equal(dots[0], hex(parseColor(TOKENS.dim!)), "a run's breath starts at its low point");
 		assert.equal(new Set(dots).size, dots.length, `each frame moves the dot: ${dots.join(" ")}`);
 		harness.emit("agent_end", { messages: [] }, { hasUI: true, ui });
 	} finally {

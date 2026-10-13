@@ -45,7 +45,7 @@ export function onFrame(draw: () => void): () => void {
 	};
 }
 
-/** Whether the frame clock is running. */
+/** Whether the frame clock is running. For tests. */
 export function framesRunning(): boolean {
 	return frameTimer !== undefined;
 }
