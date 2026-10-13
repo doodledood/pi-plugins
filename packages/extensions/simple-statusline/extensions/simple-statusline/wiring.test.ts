@@ -152,6 +152,15 @@ test("footer keeps its identity quiet: project name muted, branch dim", () => {
   assert.ok(harness.themeCalls.some((call) => call.tone === "dim" && call.text === "  main"), "the branch sits a step below it");
 });
 
+test("footer leaves busy to the working line: π stays dim while a turn runs", () => {
+  const harness = createHarness([]);
+  harness.handlers.get("turn_start")!({}, harness.ctx);
+  harness.themeCalls.length = 0;
+  renderFooter(harness);
+  assert.ok(harness.themeCalls.some((call) => call.tone === "dim" && call.text === "π "), "π is dim mid-turn");
+  assert.ok(!harness.themeCalls.some((call) => call.text === "π " && call.tone !== "dim"));
+});
+
 test("footer draws a thin context meter: filled cells in the context tone, the empty track in borderMuted", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = 200_000;

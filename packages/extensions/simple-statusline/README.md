@@ -4,8 +4,8 @@ Aviram's ambient custom Pi footer/statusline.
 
 ## Layout
 
-The left side is quiet identity: the `π` marker (accent while pi works, dim when
-idle), the project name in `muted`, and the git branch in `dim`. These rarely change,
+The left side is quiet identity: the `π` marker in `dim` (whether pi is busy is the
+working line's to say above the editor, so the footer does not repeat it), the project name in `muted`, and the git branch in `dim`. These rarely change,
 so neither name is drawn at full text brightness. The
 right side holds the operational signals: model and thinking level, context,
 cache rate, and cost.

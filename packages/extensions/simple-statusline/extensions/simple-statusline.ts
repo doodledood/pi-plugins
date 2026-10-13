@@ -1,7 +1,7 @@
 // simple-statusline.ts — local custom Pi footer for Aviram.
 // Design goal: ambient, low-hierarchy footer. No emoji, no tool activity.
-// Left side is quiet location context; the π marker glows (accent) while the agent
-// works and rests dim when idle. Right side carries model/context/cache/cost —
+// Left side is quiet location context, π marker included: the working line above the
+// editor already says pi is busy, so the footer does not say it again. Right side carries model/context/cache/cost —
 // grayscale at rest, color only under pressure (context ≥50% compact-boundary hint,
 // ≥90% error; cache turns warning + "!" when the latest turn broke the prompt cache).
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
@@ -46,7 +46,6 @@ type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type RuntimeState = {
   thinkingLevel: ThinkingLevel;
   turnCount: number;
-  active: boolean;
   requestRender?: () => void;
   scanner: SessionTreeScanner;
   cost?: TreeCost;
@@ -61,7 +60,6 @@ export default function simpleStatusline(pi: any) {
   const runtime: RuntimeState = {
     thinkingLevel: "off",
     turnCount: 0,
-    active: false,
     scanner: new SessionTreeScanner(),
     costComputedAt: 0,
   };
@@ -131,7 +129,6 @@ export default function simpleStatusline(pi: any) {
   });
   pi.on("turn_start", () => {
     runtime.turnCount += 1;
-    runtime.active = true;
     refresh();
   });
   pi.on("turn_end", (_event: any, ctx: any) => {
@@ -145,7 +142,6 @@ export default function simpleStatusline(pi: any) {
     refresh();
   });
   pi.on("agent_end", (_event: any, ctx: any) => {
-    runtime.active = false;
     refreshCost(ctx, true);
     refresh();
   });
@@ -192,8 +188,8 @@ function renderMainLine(
   ].filter((t) => t.length > 0);
   const rightPlain = rightTokens.join(sep);
 
-  // Left cluster: quiet identity. π marker identifies the pi harness at a glance;
-  // it glows while pi thinks and dims when idle. The project name stays muted: it never
+  // Left cluster: quiet identity. π marker identifies the pi harness at a glance and
+  // stays dim: whether pi is busy is the working line's to say, once. The project name stays muted: it never
   // changes during a session, so at full text brightness it would outshine the reply.
   const marker = "π ";
   const minGap = 3;
@@ -211,7 +207,7 @@ function renderMainLine(
   const leftPlain = [marker + shownProject, shownBranch].filter((t) => t.trim().length > 0).join("  ");
 
   const left =
-    color(theme, runtime.active ? "accent" : "dim", marker) +
+    color(theme, "dim", marker) +
     color(theme, "muted", shownProject) +
     (shownBranch ? color(theme, "dim", `  ${shownBranch}`) : "");
   const right = [
