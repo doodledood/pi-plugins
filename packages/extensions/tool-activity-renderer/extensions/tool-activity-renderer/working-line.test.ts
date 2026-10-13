@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { breathe } from "./palette.ts";
+import { blend, breathe } from "./palette.ts";
 import { createHarness, at, FRAME_MS, fgAt, framesRunning, hex, message, recordingUi, TOKENS } from "./test-harness.ts";
 
 test("the working line resets when the session shuts down mid-run, and a second run replaces the first", () => {
@@ -99,6 +99,9 @@ test("the dot settles to rest over a few frames when the line gives way, not in 
 		at(633, () => mock.timers.tick(FRAME_MS));
 		assert.notEqual(dot(), hex(parseColor(TOKENS.accent!)));
 		assert.notEqual(dot(), hex(parseColor(TOKENS.dim!)), "one frame in, it is still on its way down");
+		at(720, () => mock.timers.tick(FRAME_MS)); // half of the 240 ms settle, in a straight line
+		const breath = breathe(parseColor(TOKENS.dim!), parseColor(TOKENS.accent!), 720);
+		assert.equal(dot(), hex(blend(parseColor(TOKENS.dim!), breath, 0.5)));
 		at(900, () => mock.timers.tick(FRAME_MS));
 		assert.equal(dot(), hex(parseColor(TOKENS.dim!)));
 		harness.emit("agent_end", { messages: [] }, ctx);
@@ -128,7 +131,8 @@ test("once the tool ends, the dot eases back into its breath, and the next run s
 		assert.notEqual(dot(), dim, "one frame after, it is on its way back");
 		assert.notEqual(dot(), fullBreath(1_833), "not there in one jump");
 		at(1_920, () => mock.timers.tick(FRAME_MS)); // half of the 240 ms rise
-		assert.notEqual(dot(), fullBreath(1_920), "still rising halfway");
+		const breath = breathe(parseColor(TOKENS.dim!), parseColor(TOKENS.accent!), 1_920);
+		assert.equal(dot(), hex(blend(parseColor(TOKENS.dim!), breath, 0.5)), "halfway up, at the pace it settled");
 		at(1_800 + 240, () => mock.timers.tick(FRAME_MS));
 		assert.equal(dot(), fullBreath(2_040), "risen in full, at the same pace it settled");
 		at(3_000, () => mock.timers.tick(FRAME_MS)); // 2.5 breaths in: the top
@@ -190,6 +194,28 @@ test("a wall clock stepping back leaves the dot breathing", () => {
 	}
 });
 
+test("a wall clock stepping back mid-rise holds the dot where it was, rather than snapping it up", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const dot = () => fgAt((calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] }).frames[0] ?? "", "●");
+		const dim = parseColor(TOKENS.dim!);
+		const accent = parseColor(TOKENS.accent!);
+		at(60_000, () => harness.emit("agent_start", {}, ctx));
+		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
+		at(61_000, () => mock.timers.tick(FRAME_MS));
+		harness.emit("tool_execution_end", { toolCallId: "t1" });
+		at(61_120, () => mock.timers.tick(FRAME_MS)); // halfway up
+		at(1_000, () => mock.timers.tick(FRAME_MS)); // the clock steps back a minute
+		assert.equal(dot(), hex(blend(dim, breathe(dim, accent, 1_000 - 60_000), 0.5)));
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
 test("with pi's own tool rendering, the line names the running tool", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {
@@ -202,6 +228,9 @@ test("with pi's own tool rendering, the line names the running tool", () => {
 		harness.emit("tool_execution_start", { toolCallId: "t1", toolName: "read", args: {} });
 		at(500, () => mock.timers.tick(FRAME_MS));
 		assert.equal(lastMessage(), "Reading  0.5s", "no compact row is there to say it");
+		harness.emit("tool_execution_start", { toolCallId: "t2", toolName: "bash", args: {} });
+		at(600, () => mock.timers.tick(FRAME_MS));
+		assert.equal(lastMessage(), "Running  0.6s", "the tool that started last");
 		harness.emit("agent_end", { messages: [] }, ctx);
 	} finally {
 		// The mode persists: restore it even when an assertion fails, so later harnesses start compact.

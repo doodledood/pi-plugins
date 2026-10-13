@@ -185,6 +185,15 @@ test("footer meter stays full, without throwing, when context runs past the wind
   assert.match(renderFooter(harness), /━{10} 240k\/200k/);
 });
 
+test("footer shows pi's own usage as the meter and counts, without the percent beside them", () => {
+  const harness = createHarness([]);
+  harness.ctx.getContextUsage = () => ({ tokens: 98_000, contextWindow: 200_000, percent: 49 });
+
+  const line = renderFooter(harness);
+  assert.match(line, /━{5}─{5} 98k\/200k/);
+  assert.doesNotMatch(line, /%/);
+});
+
 test("footer shows the share as the meter alone, even when no window size is known", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = undefined;
