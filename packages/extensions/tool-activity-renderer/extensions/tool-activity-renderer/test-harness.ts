@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ThemeStyle } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, MarkdownTransformer, ThemeStyle } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Color, colorToHex, KeybindingsManager, mixColors, parseColor, setCapabilities, setKeybindings, stripTerminalSequences, styleText } from "@earendil-works/pi-tui";
 
@@ -69,11 +69,15 @@ export const theme = {
 export function createHarness() {
 	const tools = new Map<string, CapturedTool>();
 	const handlers = new Map<string, Handler[]>();
+	const transformers: MarkdownTransformer[] = [];
 	registerExtension({
 		registerTool(tool: CapturedTool) {
 			tools.set(tool.name, tool);
 		},
 		registerCommand() {},
+		registerMarkdownTransformer(transformer: MarkdownTransformer) {
+			transformers.push(transformer);
+		},
 		on(event: string, handler: Handler) {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 		},
@@ -81,7 +85,7 @@ export function createHarness() {
 	const emit = (event: string, payload: Record<string, unknown>, ctx: unknown = {}) => {
 		for (const handler of handlers.get(event) ?? []) handler({ type: event, ...payload }, ctx);
 	};
-	return { tools, emit };
+	return { tools, emit, transformers };
 }
 
 export type Harness = ReturnType<typeof createHarness>;

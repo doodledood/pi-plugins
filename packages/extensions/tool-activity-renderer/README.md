@@ -1,6 +1,6 @@
 # tool-activity-renderer
 
-Graphite-style rows for Pi's built-in tools (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`), plus a live working line above the editor. Brightness carries the hierarchy: what is happening now is bright, and what already happened recedes.
+Graphite-style rows for Pi's built-in tools (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`), plus a live working line above the editor and quieter reasoning. Brightness carries the hierarchy: what is happening now is bright, what already happened recedes, and the reply stays above the reasoning behind it.
 
 ```text
  ● Explored  3 files · 1 search   ctrl+o to expand                        1.2s
@@ -23,12 +23,13 @@ Graphite-style rows for Pi's built-in tools (`read`, `grep`, `find`, `ls`, `bash
 - **Diffs.** `edit` and `write` results draw as tinted bands under the row. When a removed line pairs with an added line, only the span that changed gets the stronger tint. Collapsed diffs show the first 12 lines, then a `… N more lines` expand hint.
 - **Full arguments.** When a row's head line had to shorten its command, pattern or path, or the command spans several lines, the expanded row shows the whole argument under it.
 - **Working line.** While pi works, the indicator above the editor is a breathing dot, followed by what pi is doing now (Thinking while reasoning; a built-in tool's present-tense verb such as Reading, Searching or Editing while it runs; Writing while the reply streams; Working otherwise) and the run's elapsed time.
+- **Thinking stays beneath the reply.** Inline code in a thinking block (`` `foo.ts` ``) draws as plain text in the block's own italic thinking tone, instead of the bright code color the reply uses, so file names in the reasoning no longer pull the eye away from the answer. Only thinking changes: replies and your own messages keep their code color, and code blocks inside thinking keep theirs. Each rewrite is checked against pi's own Markdown renderer: a span becomes plain text only if the thinking block then shows exactly the same characters and links. Where it would not, for example inside math, next to a link, or at the start of a line with leading spaces, the span keeps its code color. Spans that wrap onto a second line also stay code, and so do any still undecided once a long thinking block has used up the check's small time budget, so the UI never stalls while thinking streams. This is on in both `/tool-render` modes. The thinking tone itself comes from the theme's `thinkingText` token; Graphite sets it one step below the tool-output tone.
 
 Every color comes from the active theme's tokens (`text`, `muted`, `dim`, `borderMuted`, `accent`, `success`, `error`, `warning`, `toolDiff*`, `toolSuccessBg`, `toolErrorBg`), blended through `theme.colors`. That requires Pi 0.99.0 or newer. The [`graphite`](../../themes/graphite) theme is tuned for it.
 
 ## Modes
 
-`/tool-render compact|default` switches between these rows (`compact`, the default) and Pi's built-in tool rendering. The choice persists in `~/.pi/agent/tool-activity-renderer.json`. The working line stays on in both modes.
+`/tool-render compact|default` switches between these rows (`compact`, the default) and Pi's built-in tool rendering. The choice persists in `~/.pi/agent/tool-activity-renderer.json`. The working line and the quieter thinking stay on in both modes.
 
 ## Development
 

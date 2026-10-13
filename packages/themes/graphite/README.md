@@ -4,7 +4,9 @@ A calm dark Pi TUI theme. Brightness carries the hierarchy and color only means 
 
 It pairs with [`tool-activity-renderer`](../../extensions/tool-activity-renderer), which draws tool rows from the active theme's tokens. Finished rows recede: verbs toward `muted`, file names toward a soft `text`/`muted` mix, directories toward `dim`, and diffs tint with `toolSuccessBg` and `toolErrorBg`.
 
-Pi themes cannot set the terminal background, so Graphite assumes a dark terminal background (it was tuned against `#0f0f11`).
+Thinking sits below all of that: `thinkingText` is `#7d7d86`, a step under `muted` (tool output) and well above `dim` (metadata), so the reasoning reads as a quiet layer under the reply and the tool rows. It is the darkest tone that still clears 4.5:1 contrast on a `#141418` background, because thinking is often the only explanation of what the agent is about to do. The renderer also draws inline code inside thinking in that tone instead of the bright code color.
+
+Pi themes cannot set the terminal background or the reply's text color: the reply is drawn in the terminal's own default foreground. Graphite assumes a dark background (it was tuned against `#0f0f11` and `#141418`) and a bright default foreground; on a terminal whose default text is dimmer than about `#cacad0`, finished tool rows would outrank the reply.
 
 ## Install
 

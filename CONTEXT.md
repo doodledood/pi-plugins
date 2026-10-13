@@ -5,7 +5,7 @@ A collection of individually installable Pi extensions and themes maintained in 
 ## Language
 
 **Tool activity renderer**:
-A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows and drives the working line.
+A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows, drives the working line, and keeps thinking blocks beneath the reply by drawing their inline code in the thinking tone.
 _Avoid_: Tool rendering plugin.
 
 **Graphite**:

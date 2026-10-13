@@ -1,8 +1,8 @@
 {
   "name": "@doodledood/pi-tool-activity-renderer",
-  "version": "0.2.20",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Graphite-style rows for Pi's built-in file and shell tools, plus a live working line.",
+  "description": "Graphite-style rows for Pi's built-in file and shell tools, a live working line, and quieter thinking.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test 'extensions/**/*.test.ts'"

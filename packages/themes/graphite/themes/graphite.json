@@ -13,6 +13,7 @@
     "text": "#ececf0",
     "soft": "#c2c2c9",
     "muted": "#8b8b94",
+    "thinking": "#7d7d86",
     "dim": "#5d5d66",
     "faint": "#36363d",
     "accent": "#6cb6ff",
@@ -37,7 +38,7 @@
     "muted": "muted",
     "dim": "dim",
     "text": "text",
-    "thinkingText": "muted",
+    "thinkingText": "thinking",
 
     "selectedBg": "selected",
     "userMessageBg": "panel",
