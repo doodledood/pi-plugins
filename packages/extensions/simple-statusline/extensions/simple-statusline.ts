@@ -55,8 +55,7 @@ type ModelSignal = { plain: string; colored: string };
 type StatusEntry = { key: string; value: string };
 /**
  * The context segment: a thin fill meter, then `used/window`. `meter` is empty when the percent is unknown.
- * The meter already shows the share, so the percent is written out only when no window size is known
- * and the counts cannot show it.
+ * The meter is the share, so the percent is not written out beside it.
  */
 type ContextSignal = { plain: string; meter: string; percent: number | undefined };
 
@@ -370,8 +369,7 @@ function formatContextUsage(usage: any, fallbackContextWindow?: number): Context
   const { filled, empty } = contextMeter(computedPercent);
   const meter = `${filled}${empty}`;
   const hint = computedPercent >= COMPACT_HINT_THRESHOLD_PERCENT ? " · compact at boundary" : "";
-  const share = contextWindow > 0 ? "" : `${computedPercent.toFixed(0)}% `;
-  return { plain: `${meter} ${share}${tokenPair}${hint}`, meter, percent: computedPercent };
+  return { plain: `${meter} ${tokenPair}${hint}`, meter, percent: computedPercent };
 }
 
 function color(theme: any, tone: string, text: string): string {

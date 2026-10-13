@@ -14,8 +14,7 @@ operational signals: model and thinking level, context, cache rate, and cost.
 
 The footer shows context usage as a thin meter of the active model's context
 window, then compact token counts, e.g. `━━━━━───── 98k/200k`. The meter is the
-share, so the percentage is not written out beside it; it appears only when Pi
-reports a percentage but no window size, where the counts cannot show the share.
+share, so the percentage is not written out beside it.
 The meter's filled cells take the context tone (muted at rest, so they read
 above the dim numbers; warning and error as context fills); the empty track uses
 the theme's `borderMuted`. If Pi reports only token usage, the statusline computes the

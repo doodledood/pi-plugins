@@ -200,6 +200,17 @@ describe("quiet thinking", () => {
 		assert.equal(again, 0, "an unchanged text is not checked again");
 	});
 
+	it("a finished text whose last block runs out of budget is not checked again after the next call", () => {
+		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
+		const text = `Plan:\n\n${stuck}`;
+		const first = flattenThinkingCode(text, 100);
+		assert.equal(flattenThinkingCode(text, 100), first, "the second call has nothing left to move on to");
+		const again = drawnBy(() => {
+			for (let i = 0; i < 5; i++) assert.equal(flattenThinkingCode(text, 100), first);
+		});
+		assert.equal(again, 0, "each later call costs nothing");
+	});
+
 	it("while thinking streams, only the growing last block is settled again", () => {
 		// Earlier blocks whose spans fail the all-at-once check: `$HOME` opens math beside them.
 		const hard = (n: number) => Array.from({ length: 6 }, (_, i) => `- ${n}.${i} reads $HOME and calls \`fn_${n}_${i}()\``).join("\n");

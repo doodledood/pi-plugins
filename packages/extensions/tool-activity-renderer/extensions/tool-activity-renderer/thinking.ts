@@ -182,17 +182,14 @@ function blocks(source: string): string[] {
  * Settled blocks by width and text. While thinking streams, every update re-runs the transformer over
  * the whole text, but only its last block is new. A block the budget cut short is kept too, with its
  * undecided spans left as code, so the next update moves on to the blocks after it instead of spending
- * its budget on the same block again.
+ * its budget on the same block again. The last block is the one exception: see `lastText`.
  */
 const settledBlocks = new Map<string, string>();
 
 /** Enough settled blocks for every paragraph of a long session's thinking at a couple of widths. */
 const SETTLED_BLOCKS_KEPT = 4096;
 
-/**
- * `remember` is false for the text's last block: while thinking streams it grows on every update, and
- * caching each prefix would fill the cache with entries that never hit. A finished text hits `lastText`.
- */
+/** `remember` is false for the text's last block, which `lastText` covers instead. */
 function flattenBlock(block: string, width: number, budget: { left: number }, remember: boolean): string {
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
@@ -220,19 +217,24 @@ export function flattenThinkingCode(source: string, width = 200): string {
 	const spans = codeSpans(source);
 	if (!spans.length) return source;
 	const key = `${width}\n${source}`;
-	if (lastText?.key === key) return lastText.flat;
+	if (lastText?.key === key && lastText.final) return lastText.flat;
 	const budget = { left: RENDER_BUDGET };
 	const flat = flattenSpans(source, spans, width, budget);
-	// A text the budget cut short is left to the next call, which moves on past the blocks settled so far.
-	if (budget.left >= 0) lastText = { key, flat };
+	const final = budget.left >= 0 || (lastText?.key === key && lastText.flat === flat);
+	lastText = { key, flat, final };
 	return flat;
 }
 
 /**
- * The last text flattened in full. Once thinking ends its text stops changing, while pi rebuilds the
- * message's Markdown on every reply and tool-call delta after it: those calls must cost nothing.
+ * The last text flattened, and whether that result is final. Once thinking ends its text stops
+ * changing, while pi rebuilds the message's Markdown on every reply and tool-call delta after it: those
+ * calls must cost nothing. Its last block stays out of `settledBlocks`, because while thinking streams
+ * that block grows on every update and each prefix would be an entry that never hits.
+ *
+ * A result the budget cut short is final once a second call, moving on past the blocks settled so far,
+ * comes out the same: nothing is left to progress, and its undecided spans stay code.
  */
-let lastText: { key: string; flat: string } | undefined;
+let lastText: { key: string; flat: string; final: boolean } | undefined;
 
 function flattenSpans(source: string, spans: readonly Span[], width: number, budget: { left: number }): string {
 	const at = widths(source, width);

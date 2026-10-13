@@ -185,12 +185,14 @@ test("footer meter stays full, without throwing, when context runs past the wind
   assert.match(renderFooter(harness), /━{10} 240k\/200k/);
 });
 
-test("footer writes the percent out only when no window size is known to show the share", () => {
+test("footer shows the share as the meter alone, even when no window size is known", () => {
   const harness = createHarness([]);
   harness.ctx.model.contextWindow = undefined;
   harness.ctx.getContextUsage = () => ({ tokens: 80_000, percent: 40 });
 
-  assert.match(renderFooter(harness), /━{4}─{6} 40% 80k\/\?/);
+  const line = renderFooter(harness);
+  assert.match(line, /━{4}─{6} 80k\/\?/);
+  assert.doesNotMatch(line, /%/);
 });
 
 test("footer leaves the meter out when the context percent is unknown", () => {
