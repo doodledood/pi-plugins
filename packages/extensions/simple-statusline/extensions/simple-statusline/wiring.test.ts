@@ -155,7 +155,7 @@ test("footer keeps its identity quiet: project name muted, branch dim", () => {
 
 test("footer leaves busy to the working line: π stays dim while a turn runs", () => {
   const harness = createHarness([]);
-  harness.handlers.get("turn_start")!({}, harness.ctx);
+  for (const event of ["agent_start", "turn_start", "message_update"]) harness.handlers.get(event)?.({}, harness.ctx);
   harness.themeCalls.length = 0;
   renderFooter(harness);
   assert.ok(harness.themeCalls.some((call) => call.tone === "dim" && call.text === "π "), "π is dim mid-turn");

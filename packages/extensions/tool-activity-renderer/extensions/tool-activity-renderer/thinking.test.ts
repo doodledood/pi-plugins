@@ -196,8 +196,8 @@ describe("quiet thinking", () => {
 			for (let i = 0; i < 5; i++) flattenThinkingCode(text, 100);
 		});
 		const first = drawnBy(() => flattenThinkingCode(`${text} `, 100));
-		// A repeat still pays the whole-text checks (about half a fresh call here), never the block's settling.
-		assert.ok(again / 5 < first * 0.75, `each repeat drew ${again / 5} characters, one fresh settle ${first}`);
+		assert.ok(first > 0);
+		assert.equal(again, 0, "an unchanged text is not checked again");
 	});
 
 	it("bounds the work for a block full of spans that cannot flatten", () => {

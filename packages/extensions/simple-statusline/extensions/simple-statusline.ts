@@ -45,7 +45,6 @@ const COST_REFRESH_INTERVAL_MS = 1_500;
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type RuntimeState = {
   thinkingLevel: ThinkingLevel;
-  turnCount: number;
   requestRender?: () => void;
   scanner: SessionTreeScanner;
   cost?: TreeCost;
@@ -63,7 +62,6 @@ type ContextSignal = { plain: string; meter: string; percent: number | undefined
 export default function simpleStatusline(pi: any) {
   const runtime: RuntimeState = {
     thinkingLevel: "off",
-    turnCount: 0,
     scanner: new SessionTreeScanner(),
     costComputedAt: 0,
   };
@@ -129,10 +127,6 @@ export default function simpleStatusline(pi: any) {
   pi.on("model_select", () => refresh());
   pi.on("thinking_level_select", (event: any) => {
     runtime.thinkingLevel = event.level;
-    refresh();
-  });
-  pi.on("turn_start", () => {
-    runtime.turnCount += 1;
     refresh();
   });
   pi.on("turn_end", (_event: any, ctx: any) => {

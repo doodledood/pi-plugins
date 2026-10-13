@@ -31,12 +31,13 @@ export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boole
 	/** Running tools by call id, by name. */
 	const liveTools = new Map<string, string>();
 
-	/** What the line names, or nothing when the running tools' own rows already say it. */
+	/** What the line names: the latest running tool no row of ours names, or nothing when the rows say it all. */
 	const label = (): string | undefined => {
 		const tools = [...liveTools.values()];
 		if (tools.length === 0) return phase;
-		if (rowsShowTools() && tools.every(isToolKind)) return undefined;
-		return toolActivity(tools.at(-1) ?? "");
+		const unnamed = rowsShowTools() ? tools.filter((tool) => !isToolKind(tool)) : tools;
+		const latest = unnamed.at(-1);
+		return latest === undefined ? undefined : toolActivity(latest);
 	};
 
 	const draw = () => {
@@ -45,7 +46,8 @@ export function registerWorkingLine(pi: ExtensionAPI, rowsShowTools: () => boole
 		const now = clock.now();
 		const activity = label();
 		const elapsed = paint(ui.theme, formatDuration(now - startedAt), t.dim);
-		const step = (now - drawnAt) / SETTLE_MS;
+		// A wall clock stepping back must not push the dot past rest or full breath.
+		const step = Math.max(0, now - drawnAt) / SETTLE_MS;
 		drawnAt = now;
 		swell = activity === undefined ? Math.max(0, swell - step) : Math.min(1, swell + step);
 		const dot = blend(t.dim, breathe(t.dim, t.accent, now - startedAt), swell);

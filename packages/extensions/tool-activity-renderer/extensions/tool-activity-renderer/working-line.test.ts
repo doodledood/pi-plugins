@@ -144,6 +144,42 @@ test("once the tool ends, the dot eases back into its breath, and the next run s
 	}
 });
 
+test("beside a built-in tool, the line names the tool no row of ours names, whichever started first", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		for (const order of [["subagent", "bash"], ["bash", "subagent"]]) {
+			const harness = createHarness();
+			const { calls, ui } = recordingUi();
+			const ctx = { hasUI: true, ui };
+			at(0, () => harness.emit("agent_start", {}, ctx));
+			order.forEach((toolName, index) => harness.emit("tool_execution_start", { toolCallId: `t${index}`, toolName, args: {} }));
+			at(500, () => mock.timers.tick(FRAME_MS));
+			assert.equal(calls.filter((c) => c.method === "message").at(-1)?.value, "Working  0.5s", order.join(" then "));
+			harness.emit("agent_end", { messages: [] }, ctx);
+		}
+	} finally {
+		mock.timers.reset();
+	}
+});
+
+test("a wall clock stepping back leaves the dot breathing", () => {
+	mock.timers.enable({ apis: ["setInterval"] });
+	try {
+		const harness = createHarness();
+		const { calls, ui } = recordingUi();
+		const ctx = { hasUI: true, ui };
+		const dot = () => fgAt((calls.filter((c) => c.method === "indicator").at(-1)?.value as { frames: string[] }).frames[0] ?? "", "●");
+		at(60_000, () => harness.emit("agent_start", {}, ctx));
+		at(60_600, () => mock.timers.tick(FRAME_MS));
+		at(600, () => mock.timers.tick(FRAME_MS)); // the clock steps back a minute
+		at(1_800, () => mock.timers.tick(FRAME_MS));
+		assert.equal(dot(), hex(breathe(parseColor(TOKENS.dim!), parseColor(TOKENS.accent!), 1_800 - 60_000)));
+		harness.emit("agent_end", { messages: [] }, ctx);
+	} finally {
+		mock.timers.reset();
+	}
+});
+
 test("with pi's own tool rendering, the line names the running tool", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {
