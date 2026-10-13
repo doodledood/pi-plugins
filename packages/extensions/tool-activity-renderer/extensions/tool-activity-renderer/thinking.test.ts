@@ -129,6 +129,9 @@ describe("quiet thinking", () => {
 		assert.equal(flattenThinkingCode("aaaa bbbb `cccc` d", 14), "aaaa bbbb cccc d");
 		assert.equal(flattenThinkingCode("aaaa bbbb `cccc` dd", 14), "aaaa bbbb cccc dd");
 		assert.equal(flattenThinkingCode("aaaa bbbb `cccc`", 14), "aaaa bbbb cccc");
+		// The carried space takes room, so the rest of the paragraph wraps differently; that is still the same text.
+		const reflowed = "The file `foo.ts` and then `bar.ts` mention something long enough to wrap a few times across `baz.ts` lines here.";
+		assert.equal(flattenThinkingCode(reflowed, 15), reflowed.replaceAll("`", "").replaceAll(".ts", "\\.ts"));
 	});
 
 	it("bounds the work for a block full of spans that cannot flatten", () => {

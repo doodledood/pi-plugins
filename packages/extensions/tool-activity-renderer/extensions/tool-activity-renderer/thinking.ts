@@ -22,7 +22,7 @@ function spanContent(inner: string): string {
 
 /**
  * Candidate code spans: CommonMark backtick runs, an opening run closed by the next run of the same
- * length on the same line. A span that wraps onto the next line stays code; keeping candidates to one
+ * length on the same line. A span broken across a source line stays code; keeping candidates to one
  * line stops a stray backtick from pairing with the opener of a real span below it. This scan knows
  * nothing of code blocks, links or math; a candidate that is not really a plain span is caught by the
  * render check in `flattenThinkingCode` and stays as it is.
@@ -88,21 +88,32 @@ const PROBE = new Proxy({} as MarkdownTheme, {
 });
 const SGR = /\x1b\[[0-9;]*m/g;
 
-/**
- * What pi's own Markdown renderer shows for thinking `source` at `width`: its text, line breaks and links.
- * Spaces at a line's edges don't count: at a soft wrap pi carries the space after a styled span onto the
- * next line (` dd`) but drops it after plain text (`dd`), so a span ending at the wrap column would
- * otherwise never pass, and whether it receded would depend on the terminal's width.
- */
-function rendered(source: string, width: number): string {
-	return new Markdown(source, 0, 0, PROBE, { italic: true })
-		.render(width)
-		.map((line) => line.replace(SGR, "").trimEnd().replace(/^ /, ""))
-		.join("\n");
+/** The width pi draws at, and one wide enough that none of the text's paragraphs wraps. */
+type Widths = { width: number; unwrapped: number };
+
+function widths(source: string, width: number): Widths {
+	// A rendered line is never longer than its paragraph's source, give or take a list or table border.
+	const longest = Math.max(...source.split(/\n[ \t]*\n/).map((paragraph) => paragraph.length));
+	return { width, unwrapped: Math.max(width, longest + 64) };
 }
 
 /**
- * How much text one call may render while narrowing down spans that fail the check, about 7 ms of
+ * What pi's own Markdown renderer shows for thinking `source`, in the two views a rewrite must leave
+ * alone. At the width pi draws at, the visible characters in order: that is where structure depends on
+ * width (a table too wide shows as source) and where links, math and code blocks show, but line breaks
+ * there move spaces around without changing what is shown, because pi carries the space after a style
+ * change across a wrap and flattening changes where styles change. Where nothing wraps, the exact text
+ * with its spacing and line breaks.
+ */
+function rendered(source: string, at: Widths): string {
+	const lines = (width: number) => new Markdown(source, 0, 0, PROBE, { italic: true }).render(width).map((line) => line.replace(SGR, ""));
+	const shown = lines(at.width).join("").replace(/\s+/g, "");
+	const spaced = lines(at.unwrapped).map((line) => line.trimEnd()).join("\n");
+	return `${spaced}\n\0${shown}`;
+}
+
+/**
+ * How much source text one call may check while narrowing down spans that fail, a few milliseconds of
  * rendering. Pi re-runs the transformer on every streamed update, so a block full of failing spans must
  * not stall the UI; past the budget the spans still undecided keep their code color.
  */
@@ -112,15 +123,15 @@ const RENDER_BUDGET = 50_000;
  * The spans whose rewrite leaves pi's render of `source` unchanged. All spans are tried at once, then in
  * halves, so one awkward span costs a few extra renders and the rest still flatten.
  */
-function settle(source: string, spans: readonly Span[], width: number, budget: { left: number }): Span[] {
+function settle(source: string, spans: readonly Span[], at: Widths, budget: { left: number }): Span[] {
 	if (!spans.length || budget.left < 0) return [];
-	const target = rendered(source, width);
+	const target = rendered(source, at);
 	const accepted = new Set<Span>();
 	const accept = (group: readonly Span[]) => {
 		budget.left -= source.length;
 		if (budget.left < 0) return;
 		const trial = spans.filter((span) => accepted.has(span) || group.includes(span));
-		if (rendered(rewrite(source, trial), width) === target) {
+		if (rendered(rewrite(source, trial), at) === target) {
 			for (const span of group) accepted.add(span);
 			return;
 		}
@@ -166,7 +177,7 @@ function flattenBlock(block: string, width: number, budget: { left: number }): s
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
 	if (known !== undefined) return known;
-	const flat = rewrite(block, settle(block, codeSpans(block), width, budget));
+	const flat = rewrite(block, settle(block, codeSpans(block), widths(block, width), budget));
 	if (budget.left < 0) return flat;
 	if (settledBlocks.size >= 512) settledBlocks.clear();
 	settledBlocks.set(key, flat);
@@ -177,8 +188,8 @@ function flattenBlock(block: string, width: number, budget: { left: number }): s
  * Thinking Markdown with its inline code spans turned into plain text, so a span takes the thinking
  * block's own color and italics instead of the bright code color it shares with replies.
  *
- * A span is rewritten only when pi's renderer then shows the text at `width` exactly as before,
- * character for character and link for link. That one check is what keeps code blocks, links, math,
+ * A span is rewritten only when pi's renderer then shows the text as before, character for character
+ * and link for link, both at `width` and where nothing wraps (see `rendered`). That one check is what keeps code blocks, links, math,
  * emphasis and tables from changing, however the span sits among them. The common case, where every span
  * flattens cleanly, costs two renders. Otherwise spans are settled block by block, one render of the
  * whole confirms the result, and if a construct reaching across blocks makes it differ, the spans are
@@ -187,15 +198,16 @@ function flattenBlock(block: string, width: number, budget: { left: number }): s
 export function flattenThinkingCode(source: string, width = 200): string {
 	const spans = codeSpans(source);
 	if (!spans.length) return source;
-	const target = rendered(source, width);
+	const at = widths(source, width);
+	const target = rendered(source, at);
 	const all = rewrite(source, spans);
-	if (rendered(all, width) === target) return all;
+	if (rendered(all, at) === target) return all;
 	const budget = { left: RENDER_BUDGET };
 	const blockwise = blocks(source)
 		.map((block) => flattenBlock(block, width, budget))
 		.join("");
-	if (rendered(blockwise, width) === target) return blockwise;
-	return budget.left < 0 ? source : rewrite(source, settle(source, spans, width, budget));
+	if (rendered(blockwise, at) === target) return blockwise;
+	return budget.left < 0 ? source : rewrite(source, settle(source, spans, at, budget));
 }
 
 /**

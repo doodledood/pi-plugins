@@ -158,5 +158,7 @@ test("todo summaries: heading counts and the task in progress", () => {
 	assert.equal(summarizeTodos(["● Todos (1/3)", "└─ ctrl+shift+t to expand"])?.active, true, "collapsed: rows hidden, the heading decides");
 	assert.equal(summarizeTodos(["● Todos (0/14)", "├─ ○ a", "└─ +3 more (3 pending)"])?.active, true, "a hidden tail may hold the task in progress");
 	assert.equal(summarizeTodos(["○ Todos (3/3)", "└─ +3 more (3 completed)"])?.active, false);
+	assert.equal(summarizeTodos(["● Todos (5/8)", "├─ ○ a", "├─ ○ b", "├─ ○ c", "└─ +5 more (5 completed)"])?.active, false, "only finished rows are hidden: every open task is on show and none is in progress");
+	assert.equal(summarizeTodos(["● Todos (2/14)", "├─ ○ a", "└─ +12 more (2 completed, 10 pending)"])?.active, true);
 	assert.equal(summarizeTodos(["something else"]), undefined);
 });
