@@ -135,10 +135,8 @@ describe("quiet thinking", () => {
 		assert.equal(flattenThinkingCode(reflowed, 15), reflowed.replaceAll("`", "").replaceAll(".ts", "\\.ts"));
 	});
 
-	it("renders in proportion to the text, even for long thinking with no blank lines", () => {
-		// pi pads every rendered line to the render width, so the check's width where nothing wraps must
-		// follow the longest line, not the whole run of lines between blank lines.
-		const text = Array.from({ length: 1000 }, (_, i) => `Step ${i}: look at \`file${i}.ts\` again.`).join("\n");
+	/** How many characters pi's renderer draws while `run` runs. */
+	function drawnBy(run: () => void): number {
 		const render = Markdown.prototype.render;
 		let drawn = 0;
 		Markdown.prototype.render = function (this: Markdown, width: number) {
@@ -147,11 +145,38 @@ describe("quiet thinking", () => {
 			return lines;
 		};
 		try {
-			assert.equal(flattenThinkingCode(text, 100), text.replaceAll("`", "").replaceAll(".ts", "\\.ts"));
+			run();
 		} finally {
 			Markdown.prototype.render = render;
 		}
+		return drawn;
+	}
+	const flattened = (text: string) => text.replaceAll("`", "").replaceAll(".ts", "\\.ts");
+
+	it("renders in proportion to the text, even for long thinking with no blank lines", () => {
+		// pi pads every rendered line to the render width, so the check's width where nothing wraps must
+		// follow the longest line, not the whole run of lines between blank lines.
+		const text = Array.from({ length: 1000 }, (_, i) => `Step ${i}: look at \`file${i}.ts\` again.`).join("\n");
+		const drawn = drawnBy(() => assert.equal(flattenThinkingCode(text, 100), flattened(text)));
 		assert.ok(drawn < 20 * text.length, `rendered ${drawn} characters for ${text.length} of thinking`);
+	});
+
+	it("costs about the same whether one line among many is long or very long", () => {
+		const steps = Array.from({ length: 300 }, (_, i) => `Step ${i}: look at \`file${i}.ts\` again.`).join("\n");
+		const drawnWith = (first: string) => {
+			const text = `${first}\n${steps}`;
+			return drawnBy(() => assert.equal(flattenThinkingCode(text, 100), flattened(text)));
+		};
+		const long = drawnWith("word ".repeat(600));
+		const veryLong = drawnWith("word ".repeat(40_000));
+		assert.ok(veryLong < 3 * long, `rendered ${veryLong} characters with a 200,000-character line, ${long} with a 3,000-character one`);
+	});
+
+	it("moves past a block the budget cut short on the next update", () => {
+		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
+		const text = `${stuck}\n\nThen open \`b.ts\`.`;
+		assert.ok(flattenThinkingCode(text, 100).endsWith("Then open `b.ts`."), "the first update spends its budget on the stuck block");
+		assert.ok(flattenThinkingCode(text, 100).endsWith("Then open b\\.ts."));
 	});
 
 	it("bounds the work for a block full of spans that cannot flatten", () => {

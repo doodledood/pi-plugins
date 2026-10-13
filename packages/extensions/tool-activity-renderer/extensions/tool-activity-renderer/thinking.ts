@@ -88,15 +88,21 @@ const PROBE = new Proxy({} as MarkdownTheme, {
 });
 const SGR = /\x1b\[[0-9;]*m/g;
 
-/** The width pi draws at, and one wide enough that none of the text's paragraphs wraps. */
+/** The width pi draws at, and one wide enough that the text's lines don't wrap. */
 type Widths = { width: number; unwrapped: number };
 
+/**
+ * The widest the no-wrap view renders at. Pi pads every rendered line to the render width, so without a
+ * cap one long line would make every line of the view that long.
+ */
+const UNWRAPPED_CAP = 2048;
+
 function widths(source: string, width: number): Widths {
-	// Pi keeps each source line break, so no rendered line outgrows the longest source line by more than
-	// a list, quote or table border; wide characters or tabs could, which only makes the check stricter.
-	// Sizing by line, not paragraph, matters: pi pads every rendered line to the full width.
+	// Pi keeps each source line break, so a rendered line outgrows its source line only by a list, quote
+	// or table border, or by wide characters, tabs or tagged links. Where a line still wraps, past the
+	// cap or for those reasons, a span next to the wrap stays code: the check only gets stricter.
 	const longest = Math.max(...source.split("\n").map((line) => line.length));
-	return { width, unwrapped: Math.max(width, longest + 64) };
+	return { width, unwrapped: Math.max(width, Math.min(longest + 64, UNWRAPPED_CAP)) };
 }
 
 /**
@@ -115,8 +121,10 @@ function rendered(source: string, at: Widths): string {
 }
 
 /**
- * How much source text one call may check while narrowing down spans that fail. Pi re-runs the transformer on every streamed update, so a block full of failing spans must
- * not stall the UI; past the budget the spans still undecided keep their code color.
+ * How much source text one call may check while narrowing down spans that fail. Pi re-runs the
+ * transformer on every streamed update, so a block full of failing spans must not stall the UI; past the
+ * budget the spans still undecided keep their code color. The few whole-text checks around it each cost
+ * about as much as pi's own render of the text, which pi pays on every update anyway.
  */
 const RENDER_BUDGET = 50_000;
 
@@ -125,6 +133,7 @@ const RENDER_BUDGET = 50_000;
  * halves, so one awkward span costs a few extra renders and the rest still flatten.
  */
 function settle(source: string, spans: readonly Span[], at: Widths, budget: { left: number }): Span[] {
+	budget.left -= source.length;
 	if (!spans.length || budget.left < 0) return [];
 	const target = rendered(source, at);
 	const accepted = new Set<Span>();
@@ -170,17 +179,22 @@ function blocks(source: string): string[] {
 
 /**
  * Settled blocks by width and text. While thinking streams, every update re-runs the transformer over
- * the whole text, but only its last block is new.
+ * the whole text, but only its last block is new. A block the budget cut short is kept too, with its
+ * undecided spans left as code, so the next update moves on to the blocks after it instead of spending
+ * its budget on the same block again.
  */
 const settledBlocks = new Map<string, string>();
+
+/** Enough settled blocks for every paragraph of a long session's thinking at a couple of widths. */
+const SETTLED_BLOCKS_KEPT = 4096;
 
 function flattenBlock(block: string, width: number, budget: { left: number }): string {
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
 	if (known !== undefined) return known;
+	if (budget.left < 0) return block;
 	const flat = rewrite(block, settle(block, codeSpans(block), widths(block, width), budget));
-	if (budget.left < 0) return flat;
-	if (settledBlocks.size >= 512) settledBlocks.clear();
+	if (settledBlocks.size >= SETTLED_BLOCKS_KEPT) settledBlocks.delete(settledBlocks.keys().next().value!);
 	settledBlocks.set(key, flat);
 	return flat;
 }
@@ -190,11 +204,11 @@ function flattenBlock(block: string, width: number, budget: { left: number }): s
  * block's own color and italics instead of the bright code color it shares with replies.
  *
  * A span is rewritten only when pi's renderer then shows the text as before, character for character
- * and link for link, both at `width` and where nothing wraps (see `rendered`). That one check is what keeps code blocks, links, math,
- * emphasis and tables from changing, however the span sits among them. The common case, where every span
- * flattens cleanly, costs four renders: the original and the rewrite, each in both views. Otherwise spans are settled block by block, one render of the
- * whole confirms the result, and if a construct reaching across blocks makes it differ, the spans are
- * settled against the whole text.
+ * and link for link, both at `width` and where nothing wraps (see `rendered`). That one check is what
+ * keeps code blocks, links, math, emphasis and tables from changing, however the span sits among them.
+ * The common case, where every span flattens cleanly, costs two checks: the original and the rewrite.
+ * Otherwise spans are settled block by block, one check of the whole confirms the result, and if a
+ * construct reaching across blocks makes it differ, the spans are settled against the whole text.
  */
 export function flattenThinkingCode(source: string, width = 200): string {
 	const spans = codeSpans(source);
@@ -207,7 +221,7 @@ export function flattenThinkingCode(source: string, width = 200): string {
 	const blockwise = blocks(source)
 		.map((block) => flattenBlock(block, width, budget))
 		.join("");
-	if (rendered(blockwise, at) === target) return blockwise;
+	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
 	return budget.left < 0 ? source : rewrite(source, settle(source, spans, at, budget));
 }
 

@@ -160,5 +160,8 @@ test("todo summaries: heading counts and the task in progress", () => {
 	assert.equal(summarizeTodos(["○ Todos (3/3)", "└─ +3 more (3 completed)"])?.active, false);
 	assert.equal(summarizeTodos(["● Todos (5/8)", "├─ ○ a", "├─ ○ b", "├─ ○ c", "└─ +5 more (5 completed)"])?.active, false, "only finished rows are hidden: every open task is on show and none is in progress");
 	assert.equal(summarizeTodos(["● Todos (2/14)", "├─ ○ a", "└─ +12 more (2 completed, 10 pending)"])?.active, true);
+	// Glyphs inside a subject are text, not status.
+	assert.deepEqual(summarizeTodos(["● Todos (0/2)", "├─ ○ show ◐ in the dock", "└─ ○ b"]), { active: false, text: "Todos 0/2" });
+	assert.equal(summarizeTodos(["● Todos (2/4)", "├─ ✓ draw ○ marks", "├─ ○ a", "└─ +2 more (1 completed, 1 pending)"])?.active, true);
 	assert.equal(summarizeTodos(["something else"]), undefined);
 });
