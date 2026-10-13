@@ -56,7 +56,9 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 		?.slice(current.indexOf("◐") + 1)
 		.replace(/\s+\(.*\)\s*$/, "")
 		.trim();
-	return { active: heading.includes("●"), text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };
+	// Live only while a task is in progress: the heading's ● also marks a list with pending work, which
+	// is not happening now, and must not light the accent once the turn is over.
+	return { active: current !== undefined, text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };
 }
 
 /** The docked widgets, drawn as one summary line or, toggled open, as the widgets themselves. */
@@ -106,7 +108,8 @@ export class Dock implements WidgetComponent {
 		if (this.expanded) {
 			return DOCKED_KEYS.flatMap((key) => this.components.get(key)?.render(width) ?? []).map((line) => truncateToWidth(line, width, "…"));
 		}
-		return [this.summaryLine(theme, width)];
+		const line = this.summaryLine(theme, width);
+		return line === undefined ? [] : [line];
 	}
 
 	invalidate(): void {
@@ -125,22 +128,29 @@ export class Dock implements WidgetComponent {
 		this.components.set(key, Array.isArray(content) ? linesComponent(content) : content(this.tui, this.theme));
 	}
 
-	/** ` ● Todos 1/3 · current task   ⠋ 3 running agents ……… alt+w to expand` */
-	private summaryLine(theme: Theme, width: number): string {
+	/**
+	 * ` ● Todos 1/3 · current task   ⠋ 3 running agents ……… alt+w to expand`, or nothing when no
+	 * docked widget draws anything (a finished todo list, no agents left) — a hint that opens onto
+	 * nothing would mislead. The words stay muted, as quiet as the rest of the chrome: only the
+	 * glyphs light up, in the accent, while something is live.
+	 */
+	private summaryLine(theme: Theme, width: number): string | undefined {
 		const hint = theme.fg("dim", `${TOGGLE_KEY} to expand`);
 		const segments: string[] = [];
 		const todos = this.components.get("rpiv-todos");
 		if (todos) {
 			const summary = summarizeTodos(plainLines(todos, width));
-			if (summary) segments.push(`${theme.fg(summary.active ? "accent" : "dim", summary.active ? "●" : "○")} ${theme.fg("text", summary.text)}`);
+			if (summary) segments.push(`${theme.fg(summary.active ? "accent" : "dim", summary.active ? "●" : "○")} ${theme.fg("muted", summary.text)}`);
 		}
 		const agents = this.components.get("agents");
-		if (agents || this.agentsStatus) {
+		const agentLines = agents ? plainLines(agents, width) : [];
+		if (this.agentsStatus !== undefined || agentLines.length > 0) {
 			const running = this.agentsStatus !== undefined;
 			const glyph = running ? SPINNER[Math.floor(Date.now() / SPINNER_FRAME_MS) % SPINNER.length] : "○";
-			const text = this.agentsStatus ?? (agents ? (plainLines(agents, width)[0] ?? "Agents").replace(/^\W+/, "") : "Agents");
+			const text = this.agentsStatus ?? (agentLines[0] ?? "Agents").replace(/^\W+/, "");
 			segments.push(`${theme.fg(running ? "accent" : "dim", glyph ?? "○")} ${theme.fg("muted", text)}`);
 		}
+		if (segments.length === 0 && ![...this.components.values()].some((component) => plainLines(component, width).length > 0)) return undefined;
 		const left = ` ${segments.join("   ")}`;
 		const room = width - visibleWidth(hint) - 3;
 		if (room < 10) return truncateToWidth(left, width, "…");

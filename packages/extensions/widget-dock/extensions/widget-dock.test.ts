@@ -113,6 +113,36 @@ test("the agents status alone keeps the dock up, and clearing it lets the dock g
 	ui.setStatus("other", "x");
 });
 
+test("the dock draws nothing while its widgets draw nothing, so the hint never opens onto nothing", () => {
+	const { ui, widgets, plain } = fakeUi();
+	const dock = new Dock();
+	installDock(ui, dock);
+	let lines: string[] = [];
+	ui.setWidget("rpiv-todos", () => ({ render: () => lines, invalidate() {} }));
+	ui.setWidget("agents", () => ({ render: () => [], invalidate() {} }));
+	assert.ok(widgets.has(DOCK_WIDGET_KEY));
+	assert.deepEqual(plain(DOCK_WIDGET_KEY), [], "collapsed: no line, no hint");
+	dock.toggle();
+	assert.deepEqual(plain(DOCK_WIDGET_KEY), [], "expanded: still nothing");
+	dock.toggle();
+	lines = ["some todo wording the summary can't read"];
+	assert.match(plain(DOCK_WIDGET_KEY)[0] ?? "", /alt\+w to expand$/, "content the summary can't name still gets the hint");
+});
+
+test("the dock's words are muted; only live glyphs take the accent", () => {
+	const tones: string[] = [];
+	const recording = { fg: (token: string, text: string) => (tones.push(`${token}:${text}`), text) } as unknown as Theme;
+	const dock = new Dock();
+	dock.set("rpiv-todos", TODOS);
+	dock.attach({ requestRender() {} } as unknown as TUI, recording);
+	dock.agentsStatus = "2 running agents";
+	dock.render(120);
+	assert.ok(tones.includes("muted:Todos 0/3 · Push, deploy t205986, staging E2E"), JSON.stringify(tones));
+	assert.ok(tones.includes("muted:2 running agents"));
+	assert.ok(tones.includes("accent:●"));
+	assert.ok(!tones.some((tone) => tone.startsWith("text:")), "nothing on the dock line is drawn at reply brightness");
+});
+
 test("a UI context is routed once", () => {
 	const { ui } = fakeUi();
 	assert.equal(installDock(ui, new Dock()), true);
@@ -122,5 +152,6 @@ test("a UI context is routed once", () => {
 test("todo summaries: heading counts and the task in progress", () => {
 	assert.deepEqual(summarizeTodos(TODOS), { active: true, text: "Todos 0/3 · Push, deploy t205986, staging E2E" });
 	assert.deepEqual(summarizeTodos(["○ Todos (3/3)", "└─ ✓ done"]), { active: false, text: "Todos 3/3" });
+	assert.deepEqual(summarizeTodos(["● Todos (0/2)", "├─ ○ later", "└─ ○ after"]), { active: false, text: "Todos 0/2" }, "pending work alone is not live");
 	assert.equal(summarizeTodos(["something else"]), undefined);
 });

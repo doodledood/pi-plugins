@@ -181,6 +181,7 @@ test("expand hints draw in one quiet tone, whatever styling pi's key hint carrie
 	const hint = line.slice(line.lastIndexOf("\x1b[38;2", line.indexOf("ctrl+o")), line.indexOf("to expand") + "to expand".length);
 	const colors = new Set([...hint.matchAll(/\x1b\[38;2;(\d+;\d+;\d+)m/g)].map((m) => m[1]));
 	assert.equal(colors.size, 1, `one tone across the hint: ${JSON.stringify(hint)}`);
+	assert.equal(fgAt(line, "to expand"), hex(parseColor(TOKENS.dim!)), "dim, the tone of every other expand hint: quiet but legible");
 });
 
 test("result and target variants: applied, no output, no matches, truncated, timeouts, multi-line commands, offset-only ranges", () => {

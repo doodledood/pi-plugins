@@ -303,7 +303,7 @@ export function renderFoldedRun(members: readonly RowHead[], theme: ThemeLike, w
 		.map(([one, { many, count }]) => paint(theme, `${count} ${count === 1 ? one : many}`, blend(t.text, t.soft, k)))
 		.join(paint(theme, " · ", t.dim));
 	const label = paint(theme, "Explored", blend(t.soft, t.muted, k)) + " ".repeat(VERB_GAP);
-	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${expandHint}`, t.faint)}`;
+	const left = ` ${glyph({ outcome: "success", endedAt }, theme, now, k)} ${label}${body}${paint(theme, `   ${expandHint}`, t.dim)}`;
 	const time = duration({ startedAt, endedAt }, now);
 	const right = time ? paint(theme, time, t.dim) : "";
 	return alignRight(left, right, width);

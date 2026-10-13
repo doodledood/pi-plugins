@@ -8,6 +8,8 @@ Folds the todo and subagent widgets above Pi's editor into one summary line, so 
 
 `alt+w` opens the docked widgets in full in the same place; press it again to fold them back.
 
+The line stays as quiet as the rest of the chrome: its words are muted, and only the glyphs take the accent while a todo is in progress or an agent is running. When no docked widget draws anything (a finished todo list, no agents left), the dock draws nothing, so the hint never opens onto an empty space.
+
 ## What it docks
 
 | Widget key | From | Summary on the dock line |
