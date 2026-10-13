@@ -202,7 +202,8 @@ describe("quiet thinking", () => {
 
 	it("a finished text whose last block runs out of budget is not checked again", () => {
 		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
-		const text = `Plan:\n\n${stuck}`;
+		// A heading no other test uses, so no earlier test has settled it already.
+		const text = `Plan for the stuck tail:\n\n${stuck}`;
 		const first = flattenThinkingCode(text, 100);
 		const again = drawnBy(() => {
 			for (let i = 0; i < 5; i++) assert.equal(flattenThinkingCode(text, 100), first);
@@ -217,6 +218,34 @@ describe("quiet thinking", () => {
 		const outputs = [1, 2, 3, 4].map(() => flattenThinkingCode(text, 100));
 		assert.equal(outputs[0], outputs[1], "the second call settles the second stuck block, which changes nothing it shows");
 		assert.ok(outputs[3]!.endsWith("Then open b\\.ts."), "a later call still reaches the span after both");
+	});
+
+	it("settles afresh a block the budget ran out on partway, once the blocks before it are cached", () => {
+		// The hard block leaves some budget, less than the easy block's first check costs.
+		const hard = Array.from({ length: 12 }, (_, i) => `- item ${i} uses $HOME/x and \`starved_${i}\``).join("\n");
+		const easy = Array.from({ length: 400 }, (_, i) => `Then read \`file_${i}.ts\` and \`other_${i}.ts\` carefully.`).join(" ");
+		const text = `${hard}\n\n${easy}\n\nDone \`x.ts\`.`;
+		const stillCode = () => (flattenThinkingCode(text, 100).match(/`file_\d+\.ts`/g) ?? []).length;
+		assert.ok(stillCode() > 0, "the first call spends most of its budget on the hard block");
+		assert.equal(stillCode(), 0, "the next call gives the easy block the whole budget");
+	});
+
+	it("re-renders every finished thinking run of a message for free, not only the last one", () => {
+		const stuck = (tag: string) => `Plan ${tag}:\n\n${Array.from({ length: 200 }, (_, i) => `- ${tag} ${i} uses $HOME/x and \`${tag}_${i}\``).join("\n")}`;
+		const runs = [stuck("first"), stuck("second")];
+		for (let i = 0; i < 2; i++) for (const run of runs) flattenThinkingCode(run, 100);
+		const again = drawnBy(() => {
+			for (let i = 0; i < 3; i++) for (const run of runs) flattenThinkingCode(run, 100);
+		});
+		assert.equal(again, 0, "each reply delta re-renders both runs");
+	});
+
+	it("counts a text's result as final after a few calls, however many blocks are left to settle", () => {
+		const stuck = (tag: string) => Array.from({ length: 200 }, (_, i) => `- ${tag} ${i} uses $HOME/x and \`${tag}_${i}\``).join("\n");
+		const text = `${Array.from({ length: 12 }, (_, i) => stuck(`s${i}`)).join("\n\n")}\n\nThen open \`b.ts\`.`;
+		const drawn = Array.from({ length: 10 }, () => drawnBy(() => flattenThinkingCode(text, 100)));
+		assert.ok(drawn.slice(0, 8).every((n) => n > 0), "each of the first calls settles one more stuck block");
+		assert.deepEqual(drawn.slice(8), [0, 0]);
 	});
 
 	it("while thinking streams, only the growing last block is settled again", () => {
