@@ -190,7 +190,13 @@ const settledBlocks = new Map<string, string>();
 const SETTLED_BLOCKS_KEPT = 4096;
 
 /** `remember` is false for the text's last block, which `lastText` covers instead. */
-function flattenBlock(block: string, width: number, budget: { left: number }, remember: boolean): string {
+/** What one call may still spend on renders, and how many blocks it settled into `settledBlocks`. */
+interface Budget {
+	left: number;
+	newlySettled: number;
+}
+
+function flattenBlock(block: string, width: number, budget: Budget, remember: boolean): string {
 	const key = `${width}\n${block}`;
 	const known = settledBlocks.get(key);
 	if (known !== undefined) return known;
@@ -199,6 +205,7 @@ function flattenBlock(block: string, width: number, budget: { left: number }, re
 	if (!remember) return flat;
 	if (settledBlocks.size >= SETTLED_BLOCKS_KEPT) settledBlocks.delete(settledBlocks.keys().next().value!);
 	settledBlocks.set(key, flat);
+	budget.newlySettled += 1;
 	return flat;
 }
 
@@ -218,9 +225,9 @@ export function flattenThinkingCode(source: string, width = 200): string {
 	if (!spans.length) return source;
 	const key = `${width}\n${source}`;
 	if (lastText?.key === key && lastText.final) return lastText.flat;
-	const budget = { left: RENDER_BUDGET };
+	const budget: Budget = { left: RENDER_BUDGET, newlySettled: 0 };
 	const flat = flattenSpans(source, spans, width, budget);
-	const final = budget.left >= 0 || (lastText?.key === key && lastText.flat === flat);
+	const final = budget.left >= 0 || budget.newlySettled === 0;
 	lastText = { key, flat, final };
 	return flat;
 }
@@ -231,12 +238,13 @@ export function flattenThinkingCode(source: string, width = 200): string {
  * calls must cost nothing. Its last block stays out of `settledBlocks`, because while thinking streams
  * that block grows on every update and each prefix would be an entry that never hits.
  *
- * A result the budget cut short is final once a second call, moving on past the blocks settled so far,
- * comes out the same: nothing is left to progress, and its undecided spans stay code.
+ * A result the budget cut short is final once a call settles no new block: the next call would find the
+ * same blocks cached and repeat it exactly, so nothing is left to progress and its undecided spans stay
+ * code. Until then each call moves on past the blocks settled so far.
  */
 let lastText: { key: string; flat: string; final: boolean } | undefined;
 
-function flattenSpans(source: string, spans: readonly Span[], width: number, budget: { left: number }): string {
+function flattenSpans(source: string, spans: readonly Span[], width: number, budget: Budget): string {
 	const at = widths(source, width);
 	const target = rendered(source, at);
 	const all = rewrite(source, spans);

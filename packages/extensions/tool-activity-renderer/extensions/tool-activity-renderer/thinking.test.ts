@@ -200,15 +200,23 @@ describe("quiet thinking", () => {
 		assert.equal(again, 0, "an unchanged text is not checked again");
 	});
 
-	it("a finished text whose last block runs out of budget is not checked again after the next call", () => {
+	it("a finished text whose last block runs out of budget is not checked again", () => {
 		const stuck = Array.from({ length: 200 }, (_, i) => `- item ${i} uses $HOME/x and \`a_${i}\``).join("\n");
 		const text = `Plan:\n\n${stuck}`;
 		const first = flattenThinkingCode(text, 100);
-		assert.equal(flattenThinkingCode(text, 100), first, "the second call has nothing left to move on to");
 		const again = drawnBy(() => {
 			for (let i = 0; i < 5; i++) assert.equal(flattenThinkingCode(text, 100), first);
 		});
-		assert.equal(again, 0, "each later call costs nothing");
+		assert.equal(again, 0, "the first call settled no block for a later one to move past, so later calls cost nothing");
+	});
+
+	it("keeps moving past blocks the budget cut short, even when a call's output does not change", () => {
+		const stuck = (tag: string) => Array.from({ length: 200 }, (_, i) => `- ${tag} ${i} uses $HOME/x and \`${tag}_${i}\``).join("\n");
+		// Pi calls again with the same text on every reply delta, e.g. after a resize left no block cached.
+		const text = `${stuck("p")}\n\n${stuck("q")}\n\nThen open \`b.ts\`.`;
+		const outputs = [1, 2, 3, 4].map(() => flattenThinkingCode(text, 100));
+		assert.equal(outputs[0], outputs[1], "the second call settles the second stuck block, which changes nothing it shows");
+		assert.ok(outputs[3]!.endsWith("Then open b\\.ts."), "a later call still reaches the span after both");
 	});
 
 	it("while thinking streams, only the growing last block is settled again", () => {

@@ -194,7 +194,7 @@ test("a wall clock stepping back leaves the dot breathing", () => {
 	}
 });
 
-test("a wall clock stepping back mid-rise holds the dot where it was, rather than snapping it up", () => {
+test("a wall clock stepping back mid-rise holds the rise where it was, rather than snapping it up", () => {
 	mock.timers.enable({ apis: ["setInterval"] });
 	try {
 		const harness = createHarness();
