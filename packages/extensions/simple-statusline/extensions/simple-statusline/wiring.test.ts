@@ -141,7 +141,8 @@ test("footer computes context percent against the model window without a compact
   harness.ctx.getContextUsage = () => ({ tokens: 98_000 });
 
   const line = renderFooter(harness);
-  assert.match(line, /49% 98k\/200k/);
+  assert.match(line, /━{5}─{5} 98k\/200k/);
+  assert.doesNotMatch(line, /\d+% 98k/, "the meter shows the share; the percent is not written out beside it");
   assert.doesNotMatch(line, /compact at boundary/);
 });
 
@@ -167,7 +168,7 @@ test("footer draws a thin context meter: filled cells in the context tone, the e
   harness.ctx.getContextUsage = () => ({ tokens: 46_000 });
 
   const line = renderFooter(harness);
-  assert.match(line, /━━─{8} 23% 46k\/200k/);
+  assert.match(line, /━━─{8} 46k\/200k/);
   assert.ok(harness.themeCalls.some((call) => call.tone === "muted" && call.text === "━━"), "filled cells use the quiet context tone");
   assert.ok(harness.themeCalls.some((call) => call.tone === "borderMuted" && call.text === "─".repeat(8)), "empty track recedes");
 
@@ -181,7 +182,15 @@ test("footer meter stays full, without throwing, when context runs past the wind
   harness.ctx.model.contextWindow = 200_000;
   harness.ctx.getContextUsage = () => ({ tokens: 240_000 });
 
-  assert.match(renderFooter(harness), /━{10} 120%/);
+  assert.match(renderFooter(harness), /━{10} 240k\/200k/);
+});
+
+test("footer writes the percent out only when no window size is known to show the share", () => {
+  const harness = createHarness([]);
+  harness.ctx.model.contextWindow = undefined;
+  harness.ctx.getContextUsage = () => ({ tokens: 80_000, percent: 40 });
+
+  assert.match(renderFooter(harness), /━{4}─{6} 40% 80k\/\?/);
 });
 
 test("footer leaves the meter out when the context percent is unknown", () => {
@@ -199,7 +208,7 @@ test("footer shows compact-at-boundary hint and warning tone at the threshold", 
   harness.ctx.getContextUsage = () => ({ tokens: 100_000 });
 
   const line = renderFooter(harness);
-  assert.match(line, /50% 100k\/200k · compact at boundary/);
+  assert.match(line, /━{5}─{5} 100k\/200k · compact at boundary/);
   assert.ok(
     harness.themeCalls.some((call) => call.tone === "warning" && /compact at boundary/.test(call.text)),
     "context segment renders in warning tone once the boundary hint is active",
