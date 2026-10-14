@@ -5,7 +5,7 @@ A collection of individually installable Pi extensions and themes maintained in 
 ## Language
 
 **Tool activity renderer**:
-A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows, drives the working line, and keeps thinking blocks beneath the reply by drawing their inline code in the thinking tone.
+A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows, drives the working line, and keeps thinking and narration beneath the reply by drawing thinking's inline code and all narration in the thinking tone.
 _Avoid_: Tool rendering plugin.
 
 **Graphite**:
@@ -15,6 +15,10 @@ _Avoid_: Calm mode, dark mode.
 **Recede**:
 A finished tool row's shift from full brightness to the muted tones over about two seconds after it lands; failures never recede and restored rows start receded.
 _Avoid_: Dim-out, fade when the timed, success-only behavior is meant.
+
+**Narration**:
+The text of an assistant message that also calls a tool — the running commentary between tool calls. The tool activity renderer draws it in the thinking tone once its tool call is known; the text of a message that calls no tool is the reply and keeps full brightness.
+_Avoid_: Thinking (a thinking block is a separate content type), preamble, status text.
 
 **Exploratory run**:
 Two or more consecutive read/grep/find/ls calls in one assistant message, drawn as one packed block by the run's first row and folded into one "Explored …" line once all succeed. A run with an expanded member, an image read, or one the user clicked open draws as ordinary rows.

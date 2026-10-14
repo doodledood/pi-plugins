@@ -20,7 +20,7 @@ import { clock, onFrame, paint, type ThemeLike, tones } from "./tool-activity-re
 import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, runColumn, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
 import { cellLines } from "./tool-activity-renderer/text.ts";
-import { registerQuietThinking } from "./tool-activity-renderer/thinking.ts";
+import { registerQuietText } from "./tool-activity-renderer/quiet.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
 
 type ToolRenderMode = "compact" | "default";
@@ -606,7 +606,7 @@ export default function toolActivityRenderer(pi: ExtensionAPI): void {
 	applyMode(mode, false);
 	trackActivity(pi, shared);
 	registerWorkingLine(pi, () => mode === COMPACT_MODE);
-	registerQuietThinking(pi);
+	registerQuietText(pi);
 
 	pi.registerCommand("tool-render", {
 		description: "Switch built-in tool rendering: /tool-render compact|default",

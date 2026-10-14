@@ -3,11 +3,12 @@ import { describe, it } from "node:test";
 import type { ExtensionAPI, MarkdownTransformContext, MarkdownTransformer } from "@earendil-works/pi-coding-agent";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { createHarness, setHyperlinks } from "./test-harness.ts";
-import { flattenThinkingCode, registerQuietThinking } from "./thinking.ts";
+import { registerQuietText } from "./quiet.ts";
+import { flattenThinkingCode } from "./thinking.ts";
 
 function registeredTransformer(): MarkdownTransformer {
 	let transformer: MarkdownTransformer | undefined;
-	registerQuietThinking({ registerMarkdownTransformer: (t: MarkdownTransformer) => (transformer = t) } as unknown as ExtensionAPI);
+	registerQuietText({ on() {}, registerMarkdownTransformer: (t: MarkdownTransformer) => (transformer = t) } as unknown as ExtensionAPI);
 	assert.ok(transformer, "a Markdown transformer should be registered");
 	return transformer;
 }

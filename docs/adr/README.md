@@ -18,3 +18,4 @@
 | 2026-08-20 | [Split the coding conventions out of setup/AGENTS.md](20260820-split-coding-conventions-from-setup-agents.md) | Accepted |
 | 2026-09-23 | [Validate only the goal checker's verdict path in Pi's JSON stream](20260923-validate-only-the-checker-verdict-path.md) | Accepted |
 | 2026-10-06 | [Tolerate trailing commas and re-ask once when a goal checker's verdict is badly formatted](20261006-re-ask-format-invalid-checker-verdicts-once.md) | Accepted |
+| 2026-10-14 | [Draw narration in the thinking tone by writing the tone into its Markdown source, checked against pi's renderer](20261014-quiet-narration-through-checked-source-tone.md) | Accepted |

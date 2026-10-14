@@ -1,5 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { type DefaultTextStyle, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 
 /**
  * ASCII punctuation that pi's Markdown could read as syntax once a code span's backticks are gone.
@@ -27,7 +26,7 @@ function spanContent(inner: string): string {
  * nothing of code blocks, links or math; a candidate that is not really a plain span is caught by the
  * render check in `flattenThinkingCode` and stays as it is.
  */
-function codeSpans(source: string): Span[] {
+export function codeSpans(source: string): Span[] {
 	const spans: Span[] = [];
 	let at = 0;
 	while (at < source.length) {
@@ -88,6 +87,15 @@ const PROBE = new Proxy({} as MarkdownTheme, {
 });
 const SGR = /\x1b\[[0-9;]*m/g;
 
+/**
+ * The lines pi's Markdown draws for `source` at `width`, with every style stripped and links tagged:
+ * what the reader sees, character for character. `defaultTextStyle` is the block's own style, as pi
+ * passes it (thinking is italic; a reply has none).
+ */
+export function probeLines(source: string, width: number, defaultTextStyle?: DefaultTextStyle): string[] {
+	return new Markdown(source, 0, 0, PROBE, defaultTextStyle).render(width).map((line) => line.replace(SGR, ""));
+}
+
 /** The width pi draws at, and one wide enough that the text's lines don't wrap. */
 type Widths = { width: number; unwrapped: number };
 
@@ -114,7 +122,7 @@ function widths(source: string, width: number): Widths {
  * with its spacing and line breaks.
  */
 function rendered(source: string, at: Widths): string {
-	const lines = (width: number) => new Markdown(source, 0, 0, PROBE, { italic: true }).render(width).map((line) => line.replace(SGR, ""));
+	const lines = (width: number) => probeLines(source, width, { italic: true });
 	const shown = lines(at.width).join("").replace(/\s+/g, "");
 	const spaced = lines(at.unwrapped).map((line) => line.trimEnd()).join("\n");
 	return `${spaced}\n\0${shown}`;
@@ -169,7 +177,7 @@ function settle(source: string, spans: readonly Span[], at: Widths, budget: Pick
 }
 
 /** `source` cut at each blank line outside a fenced code block. */
-function blocks(source: string): string[] {
+export function blocks(source: string): string[] {
 	const out: string[] = [];
 	let start = 0;
 	let fence: string | undefined;
@@ -292,13 +300,4 @@ function flattenSpans(source: string, spans: readonly Span[], width: number, bud
 	const blockwise = parts.map((block, index) => flattenBlock(block, width, budget, index < parts.length - 1)).join("");
 	if (blockwise !== source && rendered(blockwise, at) === target) return blockwise;
 	return rewrite(source, settle(source, spans, at, budget).kept);
-}
-
-/**
- * Thinking stays beneath the reply: its code spans draw in the thinking tone, not the code color.
- * Pi keeps one Markdown transformer per extension and the last registration wins, so this is the
- * renderer's only call to `registerMarkdownTransformer`; any other rewrite has to compose in here.
- */
-export function registerQuietThinking(pi: ExtensionAPI): void {
-	pi.registerMarkdownTransformer((text, context) => (context.messageType === "assistant-thinking" ? flattenThinkingCode(text, context.availableWidth) : text));
 }
