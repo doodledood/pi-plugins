@@ -49,7 +49,11 @@ function plainLines(component: Component, width: number): string[] {
 /** A task row of rpiv-todo's widget, its status glyph (its `overlayStatusGlyph`) and the rest: `├─ ◐ subject`. */
 const TASK_ROW = /^\s*[├└]─ ([○◐✓✗]) (.*)$/;
 
-/** ` Todos 1/3 · Push, deploy …` from the todo widget's heading and its task in progress. */
+/**
+ * ` Todos 1/3 · Push, deploy …` from the todo widget's heading and its task in progress. rpiv-todo lists
+ * rows by id, so with several tasks in progress (an old one left open) the last ◐ row is the newest and is
+ * the one named, after a count that survives the line's end truncation: ` Todos 4/15 · 2 active · …`.
+ */
 export function summarizeTodos(lines: readonly string[]): { active: boolean; text: string } | undefined {
 	const heading = lines.find((line) => /Todos \(\d+\/\d+\)/.test(line));
 	if (!heading) return undefined;
@@ -58,17 +62,19 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 		const [, glyph, rest] = TASK_ROW.exec(line) ?? [];
 		return { glyph, rest };
 	});
-	const task = rows
-		.find((row) => row.glyph === "◐")
+	const inProgress = rows.filter((row) => row.glyph === "◐");
+	const task = inProgress
+		.at(-1)
 		?.rest?.replace(/\s+\(.*\)\s*$/, "")
 		.trim();
+	const count = inProgress.length > 1 ? ` · ${inProgress.length} active` : "";
 	// The heading's ● means pending *or* in progress, and pending work alone is not live, so a visible
 	// ◐ row decides. Only when some open tasks are not shown as rows (the widget collapsed, or cut off
 	// under a "+N more" tail) can the summary not tell, and the heading's ● stands in.
 	const openRows = rows.filter((row) => row.glyph === "○" || row.glyph === "◐").length;
 	const openHidden = openRows < Number(total) - Number(done);
 	const active = task !== undefined || (openHidden && heading.includes("●"));
-	return { active, text: `Todos ${done}/${total}${task ? ` · ${task}` : ""}` };
+	return { active, text: `Todos ${done}/${total}${count}${task ? ` · ${task}` : ""}` };
 }
 
 /** The docked widgets, drawn as one summary line or, toggled open, as the widgets themselves. */

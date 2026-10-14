@@ -14,7 +14,7 @@ The line stays as quiet as the rest of the chrome: its words are muted, and only
 
 | Widget key | From | Summary on the dock line |
 | --- | --- | --- |
-| `rpiv-todos` | `@juicesharp/rpiv-todo` | done/total and the task in progress |
+| `rpiv-todos` | `@juicesharp/rpiv-todo` | done/total and the task in progress; when several are in progress, how many and the newest (`Todos 4/15 · 2 active · …`) |
 | `agents` | `@gotgenes/pi-subagents` | the running-agent count, with a spinner |
 
 The subagent count (`subagents` status) moves from the footer to the dock line, which saves another row.

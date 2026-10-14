@@ -165,3 +165,18 @@ test("todo summaries: heading counts and the task in progress", () => {
 	assert.equal(summarizeTodos(["● Todos (2/4)", "├─ ✓ draw ○ marks", "├─ ○ a", "└─ +2 more (1 completed, 1 pending)"])?.active, true);
 	assert.equal(summarizeTodos(["something else"]), undefined);
 });
+
+test("todo summaries: with several tasks in progress, the newest is named and the count shown", () => {
+	// rpiv-todo's widget for a real list where an old task was never closed: #1 and #14 are both in progress.
+	const lines = [
+		"● Todos (4/15)",
+		"├─ ◐ Hill-climb round 2 on tuning + held_out_2 + tuning_2/3 (hill-climbing round 2)",
+		"├─ ○ Judge once on held_out_3 (AC-2.8) and AC-2.4 both halves",
+		"├─ ○ Fix final-head review findings (INV-G11–G23)",
+		"├─ ◐ Generate narration, build scenes timed to audio (building scenes timed to narration)",
+		"└─ +5 more (4 completed, 1 pending)",
+	];
+	assert.deepEqual(summarizeTodos(lines), { active: true, text: "Todos 4/15 · 2 active · Generate narration, build scenes timed to audio" });
+	const three = ["● Todos (0/3)", "├─ ◐ a", "├─ ◐ b", "└─ ◐ c"];
+	assert.deepEqual(summarizeTodos(three), { active: true, text: "Todos 0/3 · 3 active · c" });
+});
