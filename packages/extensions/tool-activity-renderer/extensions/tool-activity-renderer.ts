@@ -17,8 +17,9 @@ import {
 import { type Component, Text, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { GraphiteDiff } from "./tool-activity-renderer/diff.ts";
 import { clock, onFrame, paint, type ThemeLike, tones } from "./tool-activity-renderer/palette.ts";
-import { isFading, isLive, type MetaPart, type RowHead, renderFoldedRun, renderRow, runColumn, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
+import { isLive, isStill, type MetaPart, type RowHead, TOOL_KINDS, type TargetPart, type ToolKind } from "./tool-activity-renderer/row.ts";
 import { ExploreRuns } from "./tool-activity-renderer/runs.ts";
+import { paintFoldedRun, paintPackedRun, paintRows, StillDrawing } from "./tool-activity-renderer/still-drawing.ts";
 import { cellLines } from "./tool-activity-renderer/text.ts";
 import { registerQuietText } from "./tool-activity-renderer/quiet.ts";
 import { registerWorkingLine } from "./tool-activity-renderer/working-line.ts";
@@ -294,10 +295,11 @@ const emptyComponent: Component = { render: () => [], invalidate() {} };
 /**
  * The component a tool row's call slot returns. It draws at render time from the row's latest head,
  * so fades and shimmer advance on every frame, and it asks the run registry whether to draw itself,
- * its whole exploratory run, or nothing.
+ * its whole exploratory run, or nothing. Once what it draws is still, it reuses that drawing.
  */
 class RowView implements Component {
 	theme: ThemeLike | undefined;
+	private readonly drawing = new StillDrawing();
 	constructor(
 		private readonly toolCallId: string,
 		private readonly state: RowState,
@@ -309,14 +311,15 @@ class RowView implements Component {
 		const theme = this.theme;
 		if (!head || !theme) return [];
 		const now = clock.now();
+		// Asked every frame, cached or not: the registry decides who draws each head this frame.
 		const draw = this.shared.runs.callSlot(this.toolCallId, this.state);
 		if (draw.kind === "none") return [];
-		if (draw.kind === "row") return renderRow(head, theme, width, now);
-		if (draw.complete && draw.members.every((member) => member.outcome === "success")) {
-			return [renderFoldedRun(draw.members, theme, width, now, expandHint())];
+		if (draw.kind === "row") return this.drawing.draw(paintRows, { heads: [head], theme, width }, now);
+		const heads = draw.members;
+		if (draw.complete && heads.every((member) => member.outcome === "success")) {
+			return this.drawing.draw(paintFoldedRun, { heads, theme, width, hint: expandHint() }, now);
 		}
-		const column = runColumn(draw.members);
-		return draw.members.flatMap((member) => renderRow(member, theme, width, now, column));
+		return this.drawing.draw(paintPackedRun, { heads, theme, width }, now);
 	}
 
 	/**
@@ -331,7 +334,9 @@ class RowView implements Component {
 		return { handled: true };
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.drawing.clear();
+	}
 }
 
 /**
@@ -339,6 +344,7 @@ class RowView implements Component {
  * ExploreRuns.resultSlotDrawsHead says no other slot draws it this frame.
  */
 class OneShotAware implements Component {
+	private readonly drawing = new StillDrawing();
 	constructor(
 		private readonly inner: Component,
 		private readonly context: RenderContext,
@@ -348,11 +354,13 @@ class OneShotAware implements Component {
 	render(width: number): string[] {
 		const { state, toolCallId } = this.context;
 		const theme = state.view?.theme;
-		if (!this.shared.runs.resultSlotDrawsHead(toolCallId, state) || !state.head || !theme) return this.inner.render(width);
-		return [...renderRow(state.head, theme, width, clock.now()), ...this.inner.render(width)];
+		const head = state.head;
+		if (!this.shared.runs.resultSlotDrawsHead(toolCallId, state) || !head || !theme) return this.inner.render(width);
+		return [...this.drawing.draw(paintRows, { heads: [head], theme, width }, clock.now()), ...this.inner.render(width)];
 	}
 
 	invalidate(): void {
+		this.drawing.clear();
 		this.inner.invalidate();
 	}
 }
@@ -416,8 +424,8 @@ function animate(context: RenderContext, head: RowHead, shared: Shared): void {
 	const state = context.state;
 	const needsFrames = () => {
 		const latest = state.head ?? head;
-		const running = isLive(latest.outcome) && shared.executions.get(context.toolCallId)?.endedAt === undefined;
-		return (running && latest.startedAt !== undefined) || isFading(latest, clock.now());
+		const abandoned = isLive(latest.outcome) && shared.executions.get(context.toolCallId)?.endedAt !== undefined;
+		return !abandoned && !isStill(latest, clock.now());
 	};
 	if (!needsFrames()) {
 		state.stopFrames?.();
@@ -487,7 +495,7 @@ function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
 				return emptyComponent;
 			}
 			head.meta = [{ text: plural(nonEmptyLines(text).length, "line"), role: "result" }];
-			if (hasTruncation(result.details)) head.meta.push({ text: "⚠ truncated", role: "warning" });
+			if (hasTruncation(result.details)) head.meta = [...head.meta, { text: "⚠ truncated", role: "warning" }];
 			return expanded && text ? outputBlock(text, theme) : emptyComponent;
 		},
 	});
@@ -543,7 +551,7 @@ function registerGraphiteTools(pi: ExtensionAPI, shared: Shared): void {
 			done(result, head, expanded, theme) {
 				const output = getText(result);
 				head.meta = [{ text: searchResultLabel(kind, countSearchResults(kind, output)), role: "result" }];
-				if (hasTruncation(result.details)) head.meta.push({ text: "⚠ truncated", role: "warning" });
+				if (hasTruncation(result.details)) head.meta = [...head.meta, { text: "⚠ truncated", role: "warning" }];
 				return expanded && output.trim() ? outputBlock(output, theme) : emptyComponent;
 			},
 		});

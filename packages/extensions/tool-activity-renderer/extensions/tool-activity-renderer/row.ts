@@ -7,31 +7,34 @@ export type ToolKind = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "writ
 type Outcome = "pending" | "running" | "success" | "error";
 
 export interface TargetPart {
-	text: string;
+	readonly text: string;
 	/** primary: what the eye should land on; secondary: context such as a directory or scope; invalid: a bad argument. */
-	role: "primary" | "secondary" | "invalid";
+	readonly role: "primary" | "secondary" | "invalid";
 	/** Absolute file URL to hyperlink the part to, when the terminal supports OSC 8. */
-	href?: string;
+	readonly href?: string;
 	/** A directory that may lose its leading segments (`…/tail/`) when the row is too narrow. */
-	elidable?: boolean;
+	readonly elidable?: boolean;
 }
 
 export interface MetaPart {
-	text: string;
-	role: "result" | "added" | "removed" | "success" | "warning" | "error";
+	readonly text: string;
+	readonly role: "result" | "added" | "removed" | "success" | "warning" | "error";
 }
 
-/** Everything a tool row needs to draw its head line and the few detail lines under it. */
+/**
+ * Everything a tool row needs to draw its head line and the few detail lines under it. A drawing is
+ * reused while its head's fields are unchanged (StillDrawing), so lists are replaced, never edited in place.
+ */
 export interface RowHead {
 	kind: ToolKind;
 	outcome: Outcome;
-	target: TargetPart[];
-	meta: MetaPart[];
+	target: readonly TargetPart[];
+	meta: readonly MetaPart[];
 	/** Set only for executions this process watched; rows restored from history carry no timings. */
 	startedAt?: number;
 	endedAt?: number;
 	/** Short lines shown under the head: an error message, or the tail of a running command. */
-	detail: string[];
+	detail: readonly string[];
 	detailTone: "error" | "output";
 	expanded: boolean;
 	/** Carries content pi draws outside the row (an image), so it can't be packed into a run. */
@@ -68,14 +71,27 @@ const RECEDE_DELAY_MS = 400;
 const RECEDE_MS = 1500;
 /** The glyph flashes bright for this long when a row lands. */
 const LAND_FLASH_MS = 240;
+/** How long after landing a successful row's drawing keeps changing: through the flash and the whole recede. */
+const SUCCESS_MOTION_MS = Math.max(LAND_FLASH_MS, RECEDE_DELAY_MS + RECEDE_MS);
 
 export function isLive(outcome: Outcome): boolean {
 	return outcome === "pending" || outcome === "running";
 }
 
-/** True while a finished row is still fading and needs redraws. */
-export function isFading(head: Pick<RowHead, "outcome" | "endedAt">, now: number): boolean {
-	return head.outcome === "success" && head.endedAt !== undefined && now < head.endedAt + RECEDE_DELAY_MS + RECEDE_MS;
+/** True while a successful row is still receding from its landing. Whether a row redraws is isStill's call. */
+function isReceding(head: Pick<RowHead, "outcome" | "endedAt">, now: number): boolean {
+	return head.outcome === "success" && head.endedAt !== undefined && now < head.endedAt + SUCCESS_MOTION_MS;
+}
+
+/**
+ * True once nothing in the row's drawing moves with time: it is not running, no clock ticks in its
+ * duration, and any flash and recede are over. A still row draws the same at every later instant.
+ * The one timing rule for both the frame clock (animate) and reusing a drawing (StillDrawing).
+ */
+export function isStill(head: Pick<RowHead, "outcome" | "startedAt" | "endedAt">, now: number): boolean {
+	if (head.outcome === "running") return false;
+	if (head.startedAt !== undefined && head.endedAt === undefined) return false;
+	return !isReceding(head, now);
 }
 
 /**

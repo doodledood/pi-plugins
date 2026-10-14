@@ -83,6 +83,8 @@ function pairChanges(lines: DiffLine[]): DiffLine[] {
 /** A diff drawn as tinted bands under its tool row, the changed span of each paired line emphasized. */
 export class GraphiteDiff implements Component {
 	private readonly lines: DiffLine[];
+	/** Its inputs are fixed when it is built, so a width's lines never change until pi invalidates it. */
+	private drawn: { width: number; lines: string[] } | undefined;
 
 	/** Pairs changes across every line before keeping the first `shown`, so a cut never orphans a pair. */
 	constructor(
@@ -96,6 +98,11 @@ export class GraphiteDiff implements Component {
 	}
 
 	render(width: number): string[] {
+		if (this.drawn?.width !== width) this.drawn = { width, lines: this.paint(width) };
+		return this.drawn.lines;
+	}
+
+	private paint(width: number): string[] {
 		const t = tones(this.theme);
 		const bands = {
 			"+": { bg: t.addedBg, ink: t.added, text: t.text, gutter: blend(t.added, t.dim, 0.35), marker: "+" },
@@ -124,5 +131,7 @@ export class GraphiteDiff implements Component {
 		return rows.map((row) => truncateToWidth(row, width, "…"));
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.drawn = undefined;
+	}
 }

@@ -19,7 +19,7 @@ export const { default: registerExtension } = await import("../tool-activity-ren
 export const { clock, FRAME_MS, formatDuration, framesRunning, resetFrames } = await import("./palette.ts");
 afterEach(() => resetFrames());
 
-export type Component = { render(width: number): string[] };
+export type Component = { render(width: number): string[]; invalidate?(): void };
 
 export type Handler = (event: any, ctx: any) => unknown;
 
@@ -193,6 +193,11 @@ export class Row {
 	resultSlot(width = 120): string[] {
 		this.update();
 		return (this.components[1]?.render(width) ?? []).map((line) => stripTerminalSequences(line));
+	}
+
+	/** The call and result components from the last update, as pi holds them between updates. */
+	slots(): readonly Component[] {
+		return this.components;
 	}
 
 	/** Draw the components from the last update, as one TUI frame does. */
