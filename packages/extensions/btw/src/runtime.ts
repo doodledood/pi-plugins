@@ -20,7 +20,7 @@ import {
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { selectForkBranch, type ForkSnapshot } from "./fork.ts";
+import { forkEntriesForChild, selectForkBranch, type ForkSnapshot } from "./fork.ts";
 import { deriveChildSessionDir } from "./sidecar.ts";
 import {
   ChildPromptCoordinator,
@@ -30,10 +30,23 @@ import { ChildUIBridge } from "./ui-bridge.ts";
 import { ParentUpdateTracker, type ParentUpdateResult } from "./updates.ts";
 
 export const CHECK_PARENT_UPDATES_TOOL = "check_parent_updates";
+export const SEND_TO_MAIN_TOOL = "send_to_main";
+/**
+ * Parent tools BTW never inherits: BTW is a read-only side conversation, so it
+ * does not get the file-editing tools, and it must not start goal-controller
+ * work of its own (a goal would run autonomous turns inside the aside).
+ */
+export const BTW_WITHHELD_TOOLS: readonly string[] = ["edit", "write", "goal"];
+export const SEND_TO_MAIN_PREFIX = "[Relayed from my BTW side conversation]";
 export const PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE = "btw-parent-update-available";
 export const PARENT_UPDATE_AVAILABLE_MESSAGE = "Newer completed parent context is available. Call check_parent_updates when the answer may depend on parent work completed after this BTW fork.";
 
-const CHILD_APPEND_PROMPT = `BTW is an independent side conversation forked from the parent, possibly mid-work: the history may end inside an unfinished task the parent is still running. Do not continue that task — treat the prior history as context only and address just what the user asks here. BTW messages never update the parent conversation. You share the parent's working directory and requested active tool names; the parent may modify files concurrently, so verify shared state is current before a conflicting write.`;
+export const CHILD_APPEND_PROMPT = `You are in BTW, a read-only side conversation forked from the main session, possibly mid-work, so the user can ask questions and think things through while main keeps working.
+
+- Answer, explain, investigate, and discuss, leaving files, repositories, and outside systems exactly as you found them. Read-only inspection — reading, searching, git log/diff/status, read-only queries — is the whole toolbox. When the user wants a change made, it belongs in the main session; offer to relay it.
+- The history may end inside an unfinished task or carry an active goal. Both belong to the main session and continue there; treat the history as context and address only what the user asks in BTW.
+- Nothing said here reaches main on its own. When the user asks you to tell, send, or relay something to main, call ${SEND_TO_MAIN_TOOL} with a self-contained message in the user's voice — usually the verdict you reached together.
+- Main may be changing files as you read them; re-read before relying on details.`;
 
 export interface ChildRuntimeCallbacks {
   onEvent(event: AgentSessionEvent): void;
@@ -64,6 +77,8 @@ export interface CreateChildRuntimeInput {
   parentIsIdle(): boolean;
   parentUI: ExtensionUIContext;
   parentModelRegistry: ModelRegistry;
+  /** Deliver a message to the parent session as a user message on the user's behalf. */
+  sendToParent(text: string): void;
   /** Optional runtime override for tests; defaults to a fresh ModelRuntime from agentDir files. */
   modelRuntime?: ModelRuntime;
   agentDir?: string;
@@ -95,7 +110,11 @@ export function inheritedRuntimeSpec(snapshot: ForkSnapshot): {
     cwd: snapshot.cwd,
     model: snapshot.model,
     thinkingLevel: snapshot.thinkingLevel,
-    activeToolNames: [...new Set([...snapshot.activeToolNames, CHECK_PARENT_UPDATES_TOOL])],
+    activeToolNames: [...new Set([
+      ...snapshot.activeToolNames.filter((name) => !BTW_WITHHELD_TOOLS.includes(name)),
+      CHECK_PARENT_UPDATES_TOOL,
+      SEND_TO_MAIN_TOOL,
+    ])],
   };
 }
 
@@ -111,7 +130,7 @@ export function serializeFork(snapshot: ForkSnapshot, identity?: { id: string; t
     cwd: snapshot.cwd,
     ...(snapshot.parentSessionFile ? { parentSession: snapshot.parentSessionFile } : {}),
   };
-  return `${[header, ...snapshot.entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+  return `${[header, ...forkEntriesForChild(snapshot.entries)].map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 }
 
 /**
@@ -155,6 +174,30 @@ function createParentUpdateTool(tracker: ParentUpdateTracker, parent: ReadonlyPa
       return {
         content: [{ type: "text", text: result.text }],
         details: result.details,
+      };
+    },
+  });
+}
+
+function createSendToMainTool(sendToParent: (text: string) => void, onSent: (text: string) => void) {
+  return defineTool({
+    name: SEND_TO_MAIN_TOOL,
+    label: "Send to main",
+    description:
+      "Send a message to the main session on the user's behalf, as if the user typed it there. It starts a main turn when main is idle, or queues behind the current main run. Use only when the user asks you to tell, send, or relay something to main.",
+    promptSnippet: "Relay a message to the main session on the user's explicit request",
+    parameters: Type.Object({
+      message: Type.String({ description: "The message for the main session, written as the user would say it." }),
+    }),
+    async execute(_toolCallId, params): Promise<{ content: Array<{ type: "text"; text: string }>; details: { delivered: string } }> {
+      const body = params.message.trim();
+      if (!body) throw new Error("send_to_main needs a non-empty message.");
+      const delivered = `${SEND_TO_MAIN_PREFIX}\n\n${body}`;
+      sendToParent(delivered);
+      onSent(body);
+      return {
+        content: [{ type: "text", text: "Sent to the main session." }],
+        details: { delivered },
       };
     },
   });
@@ -217,6 +260,9 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
     let observedCompletedParentIds = [...snapshot.entryIds];
     const announcedParentHeads = new Set(snapshot.forkLeafId ? [snapshot.forkLeafId] : []);
     const updateTool = createParentUpdateTool(tracker, input.parentSessionManager);
+    const sendToMainTool = createSendToMainTool(input.sendToParent, () => {
+      callbacks.onNotice("Sent to the main session.", "info");
+    });
     const inherited = inheritedRuntimeSpec(snapshot);
     const activeToolNames = inherited.activeToolNames;
     const sessionManager = SessionManager.open(childSessionFile, childSessionDir, inherited.cwd);
@@ -226,7 +272,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
       model: inherited.model,
       thinkingLevel: inherited.thinkingLevel,
       tools: activeToolNames,
-      customTools: [updateTool],
+      customTools: [updateTool, sendToMainTool],
       sessionManager,
       settingsManager,
       modelRuntime,
@@ -309,7 +355,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
 
     let closePromise: Promise<void> | undefined;
     coordinator = new ChildPromptCoordinator({
-      prompt: (text, options) => session!.prompt(text, options),
+      prompt: (text) => session!.prompt(text),
       appendAnnouncement: (announcement) => session!.sendCustomMessage({
         customType: PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE,
         content: PARENT_UPDATE_AVAILABLE_MESSAGE,

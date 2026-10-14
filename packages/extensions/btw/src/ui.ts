@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, JsonObject, JsonValue } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   getMarkdownTheme,
@@ -20,10 +20,11 @@ import {
   type Focusable,
   type OverlayOptions,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { ScreenBounds } from "./mouse.ts";
 
 export type OverlayPhase = "opening" | "ready" | "closing";
 
@@ -137,13 +138,15 @@ function boundedValue(value: unknown, maxBytes: number): unknown {
 function projectArgumentsRecord(
   value: unknown,
   maxBytes = MAX_TOOL_FIELD_BYTES,
-): { value: Record<string, unknown>; omitted: boolean } {
+): { value: JsonObject; omitted: boolean } {
+  // Tool-call arguments are JSON, and boundedValue returns either that JSON
+  // unchanged or a { projection: string } wrapper, so the result stays JSON.
   const projected = boundedValue(value, maxBytes);
   const omitted = projected !== value;
   if (typeof projected === "object" && projected !== null && !Array.isArray(projected)) {
-    return { value: Object.fromEntries(Object.entries(projected)), omitted };
+    return { value: Object.fromEntries(Object.entries(projected)) as JsonObject, omitted };
   }
-  return { value: { projection: projected }, omitted };
+  return { value: { projection: projected as JsonValue }, omitted };
 }
 
 type TailProjection<T> = { block: T; omitted: boolean };
@@ -377,7 +380,6 @@ export class BtwOverlay implements Component, Focusable {
   private scrollFromBottom = 0;
   private lastTranscriptViewport = 8;
   private lastMaxScroll = 0;
-  private screenBounds: ScreenBounds | undefined;
   private disposed = false;
 
   constructor(tui: TUI, theme: Theme, callbacks: BtwOverlayCallbacks) {
@@ -451,10 +453,6 @@ export class BtwOverlay implements Component, Focusable {
   focusEditor(): void {
     this.scrollFromBottom = 0;
     this.requestRender();
-  }
-
-  getScreenBounds(): ScreenBounds | undefined {
-    return this.screenBounds ? { ...this.screenBounds } : undefined;
   }
 
   /** Positive deltas scroll toward older transcript lines; negative deltas return toward the tail. */
@@ -578,6 +576,9 @@ export class BtwOverlay implements Component, Focusable {
       case "auto_retry_end":
         if (!event.success) this.addNotice(event.finalError ?? "Child retry failed.", "error");
         break;
+      case "summarization_retry_scheduled":
+        this.addNotice(`Retrying child summarization ${event.attempt}/${event.maxAttempts}…`, "warning");
+        break;
       case "queue_update":
       case "agent_end":
       case "turn_start":
@@ -585,6 +586,9 @@ export class BtwOverlay implements Component, Focusable {
       case "entry_appended":
       case "session_info_changed":
       case "thinking_level_changed":
+      case "summarization_retry_attempt_start":
+      case "summarization_retry_finished":
+      case "bash_execution_update":
         break;
       default: {
         const exhaustive: never = event;
@@ -696,6 +700,23 @@ export class BtwOverlay implements Component, Focusable {
       return;
     }
     this.callbacks.onSubmit(text);
+  }
+
+  /**
+   * Pi's fullscreen renderer routes mouse events over the pane here. The wheel
+   * scrolls the transcript by Pi's (already accelerated) wheel delta; a click
+   * takes keyboard focus. Press and drag stay unhandled so Pi's screen-level
+   * text selection keeps working over the pane, mirroring Pi's own Editor.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === "wheel") {
+      // Pi: negative wheelDelta scrolls up (toward older lines); scrollBy's
+      // positive delta moves toward older lines.
+      if (event.wheelDelta) this.scrollBy(-event.wheelDelta);
+      return { handled: true };
+    }
+    if (event.type === "click" && event.button === "left") return { focus: true };
+    return undefined;
   }
 
   handleInput(data: string): void {
@@ -834,20 +855,6 @@ export class BtwOverlay implements Component, Focusable {
     lines.push(border("╰") + border("─".repeat(innerWidth)) + border("╯"));
 
     const rendered = lines.map((line) => truncateToWidth(line, panelWidth, ""));
-    const terminalColumns = Math.max(1, this.tui.terminal.columns);
-    const overlayHeight = rendered.length;
-    const left = Math.max(0, terminalColumns - margin.right - panelWidth);
-    const top = Math.max(
-      margin.top,
-      margin.top + Math.floor((availableRows - overlayHeight) / 2),
-    );
-    this.screenBounds = {
-      left: left + 1,
-      top: top + 1,
-      right: Math.min(terminalColumns, left + panelWidth),
-      bottom: Math.min(actualTerminalRows, top + overlayHeight),
-    };
-
     return rendered;
   }
 
@@ -859,7 +866,6 @@ export class BtwOverlay implements Component, Focusable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.screenBounds = undefined;
     this.pendingTools.clear();
     this.transcript.length = 0;
     this.transcriptEstimatedBytes = 0;

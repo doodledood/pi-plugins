@@ -25,6 +25,7 @@ const inMemoryRegistry = () => new ModelRegistry(testModelRuntime);
 import { selectForkBranch, type ForkSnapshot } from "../src/fork.ts";
 import {
   CHECK_PARENT_UPDATES_TOOL,
+  SEND_TO_MAIN_TOOL,
   createChildRuntime,
   filterBtwExtensions,
   missingInheritedToolsNotice,
@@ -131,6 +132,7 @@ export default function (pi) {
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       tempRoot,
@@ -168,7 +170,7 @@ test("child opens without parent tools a fresh load cannot resolve and names the
         forkLeafId: null,
         model,
         thinkingLevel: "off",
-        activeToolNames: ["read", "mcp__stale_server", "write"],
+        activeToolNames: ["read", "mcp__stale_server", "bash"],
         projectTrusted: true,
         systemPromptOptions: { cwd: "/tmp/btw-missing-tool-test" },
         parentSessionFile: undefined,
@@ -177,6 +179,7 @@ test("child opens without parent tools a fresh load cannot resolve and names the
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
@@ -189,7 +192,7 @@ test("child opens without parent tools a fresh load cannot resolve and names the
 
     assert.deepEqual(
       new Set(child.session.getActiveToolNames()),
-      new Set(["read", "write", CHECK_PARENT_UPDATES_TOOL]),
+      new Set(["read", "bash", CHECK_PARENT_UPDATES_TOOL, SEND_TO_MAIN_TOOL]),
     );
     assert.deepEqual(notices, [{ message: missingInheritedToolsNotice(["mcp__stale_server"]), type: "warning" }]);
     assert.match(notices[0]!.message, /mcp__stale_server/);
@@ -227,7 +230,7 @@ export default function (pi) {
         forkLeafId: null,
         model,
         thinkingLevel: "off",
-        activeToolNames: ["read", "write"],
+        activeToolNames: ["read", "bash"],
         projectTrusted: true,
         systemPromptOptions: { cwd: "/tmp/btw-repin-test" },
         parentSessionFile: undefined,
@@ -236,6 +239,7 @@ export default function (pi) {
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
@@ -246,12 +250,12 @@ export default function (pi) {
       },
     });
 
-    // The extension deactivated "write" and the child update tool at session_start, but BTW
+    // The extension deactivated "bash" and the child tools at session_start, but BTW
     // re-pins the inherited set after binding, so every inherited tool stays active and
     // construction does not throw the "could not inherit active tool(s)" safety-net error.
     assert.deepEqual(
       new Set(child.session.getActiveToolNames()),
-      new Set(["read", "write", CHECK_PARENT_UPDATES_TOOL]),
+      new Set(["read", "bash", CHECK_PARENT_UPDATES_TOOL, SEND_TO_MAIN_TOOL]),
     );
     await child.close();
   } finally {
@@ -289,7 +293,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
     forkLeafId: parentEntryId,
     model,
     thinkingLevel: "off",
-    activeToolNames: ["read", "write"],
+    activeToolNames: ["read", "write", "edit", "goal"],
     projectTrusted: true,
     systemPromptOptions: { cwd: "/tmp/btw-runtime-test" },
     parentSessionFile: undefined,
@@ -306,6 +310,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
       parentIsIdle: () => parentIdle,
       parentUI: ui,
       parentModelRegistry: parentRegistry,
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
@@ -318,7 +323,11 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
 
     assert.equal(await pathExists(child.childSessionFile), true);
     assert.equal(child.session.sessionFile, child.childSessionFile);
-    assert.deepEqual(child.session.getActiveToolNames(), ["read", "write", CHECK_PARENT_UPDATES_TOOL]);
+    assert.deepEqual(
+      child.session.getActiveToolNames(),
+      ["read", CHECK_PARENT_UPDATES_TOOL, SEND_TO_MAIN_TOOL],
+      "BTW withholds the parent's edit, write and goal tools",
+    );
     assert.deepEqual(parent.getEntries(), parentEntriesBefore);
 
     const childEntriesBefore = child.session.sessionManager.getEntries();
@@ -564,6 +573,7 @@ test("deterministic child turn streams without touching parent history", async (
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: {
@@ -763,6 +773,7 @@ test("a persisted aside is kept under the parent session so its spend stays coun
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
@@ -785,6 +796,7 @@ test("a persisted aside is kept under the parent session so its spend stays coun
       parentIsIdle: () => true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: inMemoryRegistry(),
+      sendToParent() {},
       modelRuntime: testModelRuntime,
       agentDir,
       callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
@@ -845,6 +857,7 @@ test("construction failure removes only its own aside, never the shared sidecar 
         parentIsIdle: () => true,
         parentUI: { theme: {} } as ExtensionUIContext,
         parentModelRegistry: inMemoryRegistry(),
+        sendToParent() {},
         modelRuntime: testModelRuntime,
         agentDir,
         callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },

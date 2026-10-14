@@ -64,6 +64,40 @@ export function selectForkBranch(
   return [...entries];
 }
 
+/**
+ * The entries a child session file starts from: the parent's conversation, without
+ * the parent's extension runtime state. `custom` entries are extension-private
+ * state that never reaches the model — goal-controller's active goal among them.
+ * Carrying them over makes child extensions restore that state and act on it, so a
+ * parent goal would resume and fire continuation turns inside the aside. Dropping
+ * them leaves every model-visible entry in place; the path is re-chained the way
+ * Pi's createBranchedSession re-chains around dropped labels, and a compaction
+ * whose first kept entry was dropped keeps from the next retained entry instead.
+ */
+export function forkEntriesForChild(entries: readonly SessionEntry[]): SessionEntry[] {
+  const kept: SessionEntry[] = [];
+  const replacementById = new Map<string, string>();
+  const pendingDroppedIds: string[] = [];
+  let parentId: string | null = null;
+  for (const entry of entries) {
+    if (entry.type === "custom") {
+      pendingDroppedIds.push(entry.id);
+      continue;
+    }
+    for (const droppedId of pendingDroppedIds) replacementById.set(droppedId, entry.id);
+    pendingDroppedIds.length = 0;
+    kept.push(entry.type === "compaction"
+      ? {
+        ...entry,
+        parentId,
+        firstKeptEntryId: replacementById.get(entry.firstKeptEntryId) ?? entry.firstKeptEntryId,
+      }
+      : { ...entry, parentId });
+    parentId = entry.id;
+  }
+  return kept;
+}
+
 export function snapshotParent(
   ctx: ExtensionCommandContext,
   model: Model<any> | undefined,

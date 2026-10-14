@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -32,6 +32,8 @@ import {
   createChildRuntime,
   PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE,
   PARENT_UPDATE_AVAILABLE_MESSAGE,
+  SEND_TO_MAIN_PREFIX,
+  SEND_TO_MAIN_TOOL,
   type ChildRuntimeHandle,
 } from "../src/runtime.ts";
 
@@ -44,11 +46,13 @@ const PROVIDER = "btw-integration";
 const API = "btw-integration-api";
 const MODEL_ID = "deterministic";
 const PARENT_OVERLAP_PROMPT = "PARENT_OVERLAP_TURN";
-const CHILD_WRITE_PROMPT = "CHILD_WRITE_TURN";
+const CHILD_READ_PROMPT = "CHILD_READ_TURN";
+const CHILD_RELAY_PROMPT = "CHILD_RELAY_TO_MAIN_TURN";
+const RELAY_BODY = "Verdict from BTW: ship option B.";
 const PARENT_UPDATE_PROMPT = "PARENT_LATER_UPDATE_TURN";
 const CHILD_PULL_PROMPT = "CHILD_PULL_PARENT_UPDATES_TURN";
 const PARENT_UPDATE_TEXT = "PARENT UPDATE TOKEN: alpha-42";
-const SCRATCH_CONTENT = "written by BTW child\n";
+const SCRATCH_CONTENT = "shared workspace file the parent maintains\n";
 
 const usage = {
   input: 1,
@@ -226,16 +230,29 @@ function controlledStream(
       pushText(stream, selectedModel, "parent overlap complete");
       return;
     }
-    if (prompt === CHILD_WRITE_PROMPT) {
-      if (toolResult?.toolName === "write") {
-        pushText(stream, selectedModel, "child write complete");
+    if (prompt === CHILD_READ_PROMPT) {
+      if (toolResult?.toolName === "read") {
+        pushText(stream, selectedModel, `child read complete: ${textOfContent(toolResult.content)}`);
       } else {
         await barrier.arrive("child");
         pushToolCall(stream, selectedModel, {
           type: "toolCall",
-          id: "child-write-call",
-          name: "write",
-          arguments: { path: scratchFile, content: SCRATCH_CONTENT },
+          id: "child-read-call",
+          name: "read",
+          arguments: { path: scratchFile },
+        });
+      }
+      return;
+    }
+    if (prompt === CHILD_RELAY_PROMPT) {
+      if (toolResult?.toolName === SEND_TO_MAIN_TOOL) {
+        pushText(stream, selectedModel, "relayed");
+      } else {
+        pushToolCall(stream, selectedModel, {
+          type: "toolCall",
+          id: "child-relay-call",
+          name: SEND_TO_MAIN_TOOL,
+          arguments: { message: RELAY_BODY },
         });
       }
       return;
@@ -396,6 +413,7 @@ test("a mid-turn fork yields a usable child session and announces the turn's com
       parentIsIdle: () => parentIdle,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: registry,
+      sendToParent() {},
       modelRuntime,
       agentDir,
       callbacks: {
@@ -445,17 +463,19 @@ test("a mid-turn fork yields a usable child session and announces the turn's com
   }
 });
 
-test("parent and BTW child overlap, mutate files, pull updates, isolate history, and clean up", { timeout: 10_000 }, async () => {
+test("parent and BTW child overlap, share the workspace read-only, pull updates, relay to main, isolate history, and clean up", { timeout: 10_000 }, async () => {
   const workspace = await mkdtemp(join(tmpdir(), "btw-integration-workspace-"));
   const agentDir = await mkdtemp(join(tmpdir(), "btw-integration-agent-"));
   const scratchFile = join(workspace, "child-scratch.txt");
   const barrier = new OverlapBarrier();
+  const relayed: string[] = [];
   let parent: AgentSession | undefined;
   let child: ChildRuntimeHandle | undefined;
   let parentRegistry: ModelRegistry | undefined;
   let parentRuntime: ModelRuntime | undefined;
 
   try {
+    await writeFile(scratchFile, SCRATCH_CONTENT, "utf8");
     const parentManager = SessionManager.inMemory(workspace);
     parentManager.appendMessage({ role: "user", content: "summarized parent question", timestamp: 1 });
     parentManager.appendMessage(assistantMessage("summarized parent answer", 2));
@@ -500,7 +520,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       agentDir,
       model,
       thinkingLevel: "off",
-      tools: ["write"],
+      tools: ["read", "write"],
       sessionManager: parentManager,
       settingsManager,
       modelRuntime: parentRuntime,
@@ -522,6 +542,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
       parentIsIdle: () => parent?.isIdle ?? true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: parentRegistry,
+      sendToParent(text) { relayed.push(text); },
       modelRuntime: parentRuntime,
       agentDir,
       callbacks: {
@@ -535,6 +556,8 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
     assert.equal(await pathExists(child.childSessionDir), true);
     assert.equal(parent.getActiveToolNames().includes(CHECK_PARENT_UPDATES_TOOL), false);
     assert.equal(child.session.getActiveToolNames().includes(CHECK_PARENT_UPDATES_TOOL), true);
+    assert.equal(child.session.getActiveToolNames().includes("write"), false, "BTW withholds the parent's write tool");
+    assert.equal(child.session.getActiveToolNames().includes("read"), true);
 
     // Session construction resets Pi's compatibility provider registry. Install
     // the deterministic stream only after both real sessions exist.
@@ -563,7 +586,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
     const parentTurn = parent.prompt(PARENT_OVERLAP_PROMPT).finally(() => {
       parentSettled = true;
     });
-    const childTurn = child.prompt(CHILD_WRITE_PROMPT).finally(() => {
+    const childTurn = child.prompt(CHILD_READ_PROMPT).finally(() => {
       childSettled = true;
     });
 
@@ -601,7 +624,10 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
 
     barrier.release("child");
     await Promise.all([childTurn, queuedChildPull]);
-    assert.equal(await readFile(scratchFile, "utf8"), SCRATCH_CONTENT);
+    assert.ok(
+      child.session.sessionManager.getEntries().some((entry) => entryMessageText(entry).includes(`child read complete: ${SCRATCH_CONTENT}`)),
+      "the child reads the shared workspace",
+    );
     assert.match(
       child.session.getLastAssistantText() ?? "",
       /CHILD PULLED UPDATE/,
@@ -629,23 +655,28 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
 
     await child.prompt(CHILD_PULL_PROMPT);
 
+    const parentEntriesBeforeRelay = parent.sessionManager.getEntries();
+    await child.prompt(CHILD_RELAY_PROMPT);
+    assert.deepEqual(relayed, [`${SEND_TO_MAIN_PREFIX}\n\n${RELAY_BODY}`], "send_to_main hands one user-voiced message to the parent");
+    assert.deepEqual(parent.sessionManager.getEntries(), parentEntriesBeforeRelay, "delivery to main goes only through the parent relay");
+
     const parentEntries = parent.sessionManager.getEntries();
     const childEntries = child.session.sessionManager.getEntries();
     const pulledUpdateResult = findToolResult(childEntries, CHECK_PARENT_UPDATES_TOOL);
 
     assert.ok(parentEntries.some((entry) => entryMessageText(entry).includes(PARENT_UPDATE_TEXT)));
-    assert.equal(parentEntries.some((entry) => entryMessageText(entry).includes(CHILD_WRITE_PROMPT)), false);
+    assert.equal(parentEntries.some((entry) => entryMessageText(entry).includes(CHILD_READ_PROMPT)), false);
     assert.equal(parentEntries.some((entry) => entryMessageText(entry).includes(CHILD_PULL_PROMPT)), false);
-    assert.equal(hasToolCall(parentEntries, "write"), false);
+    assert.equal(hasToolCall(parentEntries, "read"), false);
     assert.equal(hasToolCall(parentEntries, CHECK_PARENT_UPDATES_TOOL), false);
-    assert.equal(hasToolResult(parentEntries, "write"), false);
+    assert.equal(hasToolResult(parentEntries, "read"), false);
     assert.equal(hasToolResult(parentEntries, CHECK_PARENT_UPDATES_TOOL), false);
     assert.equal(parentEntries.some((entry) => entryMessageText(entry).includes("Completed parent updates follow.")), false);
 
-    assert.ok(childEntries.some((entry) => entryMessageText(entry).includes(CHILD_WRITE_PROMPT)));
+    assert.ok(childEntries.some((entry) => entryMessageText(entry).includes(CHILD_READ_PROMPT)));
     assert.ok(childEntries.some((entry) => entryMessageText(entry).includes(CHILD_PULL_PROMPT)));
-    assert.equal(hasToolCall(childEntries, "write"), true);
-    assert.equal(hasToolResult(childEntries, "write"), true);
+    assert.equal(hasToolCall(childEntries, "read"), true);
+    assert.equal(hasToolResult(childEntries, "read"), true);
     assert.equal(hasToolCall(childEntries, CHECK_PARENT_UPDATES_TOOL), true);
     assert.ok(pulledUpdateResult);
     assert.equal(pulledUpdateResult.message.role, "toolResult");
@@ -656,8 +687,7 @@ test("parent and BTW child overlap, mutate files, pull updates, isolate history,
     assert.match(textOfContent(pulledUpdateResult.message.content), /PARENT UPDATE TOKEN: alpha-42/);
     assert.ok(childEntries.some((entry) => entryMessageText(entry).includes(PARENT_UPDATE_TEXT)));
     assert.ok(childEntries.some((entry) => entryMessageText(entry).includes("Completed parent updates follow.")));
-    assert.match(child.session.getLastAssistantText() ?? "", /CHILD PULLED UPDATE/);
-    assert.match(child.session.getLastAssistantText() ?? "", /PARENT UPDATE TOKEN: alpha-42/);
+    assert.ok(childEntries.some((entry) => entryMessageText(entry).includes("CHILD PULLED UPDATE")));
     const consumedAvailabilityEntries = childEntries.filter((entry) =>
       entry.type === "custom_message" && entry.customType === PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE
     );

@@ -76,6 +76,9 @@ function contentText(message: AgentMessage): string {
     case "branchSummary":
     case "compactionSummary":
       return message.summary;
+    case "system":
+      if (typeof message.content === "string") return message.content;
+      return message.content.map((block) => block.text).join("\n");
     default: {
       const exhaustive: never = message;
       return String(exhaustive);
@@ -115,6 +118,8 @@ export function normalizeParentEntry(entry: SessionEntry): string | null {
     case "label":
       return entry.label ? `[parent label] ${entry.label} → ${entry.targetId}` : null;
     case "custom":
+    case "usage":
+    case "context_edit":
       return null;
     default: {
       const exhaustive: never = entry;

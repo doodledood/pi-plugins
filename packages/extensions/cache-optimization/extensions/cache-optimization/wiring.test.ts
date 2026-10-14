@@ -139,52 +139,37 @@ test("/cache labels breaks without a retained fingerprint as entry-correlation o
   assert.match(text, /no fingerprint retained for this turn — predates this process or pruned; entry-correlation only/);
 });
 
-test("session shutdown releases an active cache overlay when the host skips component disposal", async () => {
-  const harness = createHarness([assistantEntry(1_000, 10, 10, 10)]);
-  const writes: string[] = [];
-  harness.ctx.ui.custom = async (factory: any) => {
-    const recording = createRecordingTheme();
-    const tui = { requestRender() {}, terminal: { write: (data: string) => writes.push(data), rows: 40 } };
-    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => {});
-    return undefined;
-  };
-
-  await harness.commands.get("cache")!.handler("", harness.ctx);
-  assert.deepEqual(writes, ["\x1b[?1000h", "\x1b[?1006h"]);
-
-  // Pi resetExtensionUI() can hide the component without invoking dispose().
-  shutdown(harness);
-  assert.deepEqual(writes.slice(-2), ["\x1b[?1006l", "\x1b[?1000l"]);
-
-  harness.ctx.lastOverlay.dispose();
-  assert.equal(writes.length, 4, "late component disposal remains idempotent");
-});
-
-test("/cache overlay supports wheel, page keys, and mouse-mode lifecycle", async () => {
+test("/cache overlay scrolls with Pi's mouse wheel and page keys", async () => {
   const branch: SessionEntryLike[] = [];
   for (let i = 0; i < 80; i++) branch.push(assistantEntry(i, 10, 10, 10));
   const harness = createHarness(branch);
 
   const writes: string[] = [];
+  let closed = 0;
   harness.ctx.ui.custom = async (factory: any) => {
     const recording = createRecordingTheme();
     const tui = { requestRender() {}, terminal: { write: (data: string) => writes.push(data), rows: 40 } };
-    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => {});
+    harness.ctx.lastOverlay = factory(tui, recording.theme, undefined, () => { closed += 1; });
     return undefined;
   };
   await harness.commands.get("cache")!.handler("", harness.ctx);
   const overlay = harness.ctx.lastOverlay;
-
-  assert.ok(writes.some((w) => w.includes("\x1b[?1006h")), "SGR mouse reporting enabled on open");
+  const wheel = (wheelDelta: number) => overlay.handleMouse({
+    type: "wheel", button: "none", x: 1, y: 1, screenX: 1, screenY: 1, width: 78, height: 30,
+    shift: false, alt: false, ctrl: false, wheelDelta,
+  });
 
   const windowOf = (rendered: string[]) => rendered.join("\n").match(/\((\d+)-\d+\/\d+\)/)?.[1];
   assert.equal(windowOf(overlay.render(100)), "1");
 
-  overlay.handleInput("\x1b[<65;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "4");
-  overlay.handleInput("\x1b[<64;10;5M");
-  overlay.handleInput("\x1b[<64;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "1");
+  assert.deepEqual(wheel(3), { handled: true });
+  assert.equal(windowOf(overlay.render(100)), "4", "positive wheel delta scrolls down by Pi's line count");
+  wheel(-6);
+  assert.equal(windowOf(overlay.render(100)), "1", "scrolling clamps at the top");
+  assert.equal(overlay.handleMouse({
+    type: "click", button: "left", x: 1, y: 1, screenX: 1, screenY: 1, width: 78, height: 30,
+    shift: false, alt: false, ctrl: false,
+  }), undefined, "clicks stay with Pi (text selection)");
 
   overlay.handleInput("\x1b[6~");
   const afterPageDown = Number(windowOf(overlay.render(100)));
@@ -192,14 +177,9 @@ test("/cache overlay supports wheel, page keys, and mouse-mode lifecycle", async
   overlay.handleInput("\x1b[5~");
   assert.equal(windowOf(overlay.render(100)), "1");
 
-  overlay.handleInput("\x1b[<0;10;5M");
-  assert.equal(windowOf(overlay.render(100)), "1");
-
   overlay.handleInput("q");
-  assert.ok(writes.some((w) => w.includes("\x1b[?1006l")), "SGR mouse reporting disabled on close");
-  const disableCount = writes.filter((w) => w.includes("\x1b[?1006l")).length;
-  overlay.dispose();
-  assert.equal(writes.filter((w) => w.includes("\x1b[?1006l")).length, disableCount, "dispose after close does not double-disable");
+  assert.equal(closed, 1);
+  assert.deepEqual(writes, [], "the overlay leaves terminal mouse reporting to Pi");
   shutdown(harness);
 });
 

@@ -8,21 +8,25 @@ import {
   type ExtensionCommandContext,
   type ExtensionUIContext,
   type SessionEntry,
-  type TerminalInputHandler,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Container,
   CURSOR_MARKER,
-  TUI as PiTUI,
+  Editor,
+  ScrollView,
+  Text,
+  TuiAltScreen,
   visibleWidth,
+  VStack,
   type Component,
   type KeybindingsManager as TuiKeybindingsManager,
   type OverlayHandle,
   type Terminal,
   type TUI,
+  type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { assertSupportedPiVersion, BtwController, MINIMUM_PI_VERSION } from "../index.ts";
-import { BTW_MOUSE_SEQUENCES } from "../src/mouse.ts";
 import type { ChildRuntimeHandle, CreateChildRuntimeInput } from "../src/runtime.ts";
 import {
   boundedText,
@@ -36,12 +40,12 @@ initTheme("dark", false);
 
 test("runtime version guard accepts the minimum Pi host and newer", () => {
   assert.doesNotThrow(() => assertSupportedPiVersion(MINIMUM_PI_VERSION));
-  assert.doesNotThrow(() => assertSupportedPiVersion("0.80.7"));
-  assert.doesNotThrow(() => assertSupportedPiVersion("0.81.0"));
-  assert.doesNotThrow(() => assertSupportedPiVersion("1.0.0"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("1.0.1"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("1.2.0"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("2.0.0"));
   assert.throws(
-    () => assertSupportedPiVersion("0.80.5"),
-    /requires Pi 0\.80\.6 or newer; running Pi is 0\.80\.5/,
+    () => assertSupportedPiVersion("0.80.8"),
+    /requires Pi 1\.0\.0 or newer; running Pi is 0\.80\.8/,
   );
 });
 
@@ -68,22 +72,31 @@ const plainTheme = {
   strikethrough: (text: string) => text,
 } as Theme;
 
-function fakeTui(rows = 38, columns = 120, writes: string[] = []): TUI {
+function fakeTui(rows = 38, columns = 120): TUI {
   return {
-    terminal: { rows, columns, write: (data: string) => { writes.push(data); } },
+    terminal: { rows, columns, write() {} },
+    children: [],
     requestRender() {},
   } as unknown as TUI;
 }
 
-function realTui(rows = 38, columns = 120): PiTUI {
+type FullscreenHarness = {
+  tui: TuiAltScreen;
+  terminalWrites: string[];
+  input(data: string): void;
+};
+
+function realTui(rows = 38, columns = 120): FullscreenHarness {
+  let onInput: (data: string) => void = () => {};
+  const terminalWrites: string[] = [];
   const terminal = {
     rows,
     columns,
     kittyProtocolActive: false,
-    start() {},
+    start(input: (data: string) => void) { onInput = input; },
     stop() {},
     async drainInput() {},
-    write() {},
+    write(data: string) { terminalWrites.push(data); },
     moveBy() {},
     hideCursor() {},
     showCursor() {},
@@ -92,8 +105,10 @@ function realTui(rows = 38, columns = 120): PiTUI {
     clearScreen() {},
     setTitle() {},
     setProgress() {},
+    setProgramStatus() {},
   } satisfies Terminal;
-  return new PiTUI(terminal);
+  const tui = new TuiAltScreen(terminal);
+  return { tui, terminalWrites, input: (data) => onInput(data) };
 }
 
 function typeText(component: BtwOverlay, text: string): void {
@@ -173,7 +188,7 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
     aborted: false,
     willRetry: false,
   });
-  overlay.handleSessionEvent({ type: "agent_settled" });
+  overlay.handleSessionEvent({ type: "agent_settled", aborted: false });
 
   for (const width of [54, 92]) {
     const lines = overlay.render(width);
@@ -193,22 +208,6 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
     assert.match(screen, /\/main unfocus/);
     assert.match(screen, /\/done close/);
   }
-  assert.deepEqual(overlay.getScreenBounds(), {
-    left: 28,
-    top: 2,
-    right: 119,
-    bottom: 36,
-  });
-
-  Object.assign(tui.terminal, { columns: 100, rows: 30 });
-  overlay.render(52);
-  assert.deepEqual(overlay.getScreenBounds(), {
-    left: 48,
-    top: 2,
-    right: 99,
-    bottom: 29,
-  }, "render records resized right-center geometry");
-
   typeText(overlay, "hello child");
   assert.deepEqual(submitted, ["hello child"]);
   typeText(overlay, "/main");
@@ -265,10 +264,6 @@ test("short terminals retain the multiline editor cursor, controls, border, and 
     assert.ok(screen.includes(CURSOR_MARKER), `${rows}-row editor retains its cursor-bearing viewport`);
     assert.match(screen, /Esc main · click focus · \/done close/);
     assert.match(rendered.at(-1) ?? "", /^╰─+╯$/);
-    const bounds = overlay.getScreenBounds();
-    assert.ok(bounds);
-    assert.ok(bounds!.top >= 1 && bounds!.bottom <= rows);
-    assert.equal(bounds!.bottom - bounds!.top + 1, rendered.length);
   }
 });
 
@@ -429,6 +424,47 @@ test("overlay transcript projection is capped, keeps recent content, and marks o
   assert.match(recentProjection, /projected notice 219/);
 });
 
+function mouse(type: TuiMouseEvent["type"], extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+  return {
+    type,
+    button: type === "wheel" ? "none" : "left",
+    x: 2,
+    y: 2,
+    screenX: 60,
+    screenY: 4,
+    width: 50,
+    height: 20,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    ...extra,
+  };
+}
+
+test("overlay mouse: wheel scrolls by Pi's delta, a click takes focus, press and drag stay with Pi's selection", () => {
+  const overlay = new BtwOverlay(fakeTui(24), plainTheme, {
+    onSubmit() {},
+    onMain() {},
+    onClose() {},
+    onAbort() {},
+  });
+  overlay.attachSession({
+    getToolDefinition: () => undefined,
+    sessionManager: { getCwd: () => "/tmp" },
+  } as unknown as AgentSession);
+  for (let index = 0; index < 30; index += 1) overlay.addNotice(`line ${index}`);
+  overlay.render(60);
+
+  assert.deepEqual(overlay.handleMouse(mouse("wheel", { wheelDelta: -3 })), { handled: true });
+  assert.match(overlay.render(60).join("\n"), /↑ 3 older · PgDn latest/, "negative wheel delta scrolls toward older lines");
+  assert.deepEqual(overlay.handleMouse(mouse("wheel", { wheelDelta: 3 })), { handled: true });
+  assert.doesNotMatch(overlay.render(60).join("\n"), /older · PgDn latest/, "positive wheel delta returns toward the tail");
+  assert.deepEqual(overlay.handleMouse(mouse("click")), { focus: true });
+  assert.equal(overlay.handleMouse(mouse("click", { button: "right" })), undefined);
+  assert.equal(overlay.handleMouse(mouse("press")), undefined);
+  assert.equal(overlay.handleMouse(mouse("drag")), undefined);
+});
+
 test("overlay keyboard scroll and escape distinguish active abort from idle /main", () => {
   let mainCalls = 0;
   let abortCalls = 0;
@@ -444,10 +480,6 @@ test("overlay keyboard scroll and escape distinguish active abort from idle /mai
   } as unknown as AgentSession);
   for (let index = 0; index < 30; index += 1) overlay.addNotice(`line ${index}`);
   overlay.render(60);
-  overlay.scrollBy(3);
-  assert.match(overlay.render(60).join("\n"), /↑ 3 older · PgDn latest/, "public wheel seam scrolls by the requested lines");
-  overlay.scrollBy(-3);
-  assert.doesNotMatch(overlay.render(60).join("\n"), /older · PgDn latest/, "negative deltas return toward the transcript tail");
   overlay.handleInput("\x1b[5~");
   assert.match(overlay.render(60).join("\n"), /↑/);
   overlay.handleInput("\x1b");
@@ -499,13 +531,10 @@ function makeContext(
   } as unknown as ExtensionCommandContext;
 }
 
-function makeUI(options: { failTerminalWrite?: string } = {}): {
+function makeUI(options: { failCustom?: boolean } = {}): {
   ui: ExtensionUIContext;
   focusCount: () => number;
   unfocusCount: () => number;
-  terminalWrites: string[];
-  emitTerminalInput(data: string): ReturnType<TerminalInputHandler>;
-  listenerCount: () => number;
   notifications: Array<{ message: string; type: string | undefined }>;
   input(data: string): void;
   render(width?: number): string[];
@@ -513,15 +542,9 @@ function makeUI(options: { failTerminalWrite?: string } = {}): {
   let focused = 0;
   let unfocused = 0;
   let overlayFocused = true;
-  const terminalWrites: string[] = [];
   const notifications: Array<{ message: string; type: string | undefined }> = [];
-  let inputListener: TerminalInputHandler | undefined;
   let currentComponent: Component | undefined;
   const tui = fakeTui();
-  tui.terminal.write = (data: string) => {
-    terminalWrites.push(data);
-    if (data === options.failTerminalWrite) throw new Error("terminal write failed");
-  };
   const handle: OverlayHandle = {
     hide() {},
     setHidden() {},
@@ -535,21 +558,17 @@ function makeUI(options: { failTerminalWrite?: string } = {}): {
       overlayFocused = false;
     },
     isFocused: () => overlayFocused,
+    getBounds: () => undefined,
   };
   const ui = {
     theme: plainTheme,
-    onTerminalInput(handler: TerminalInputHandler) {
-      inputListener = handler;
-      return () => {
-        if (inputListener === handler) inputListener = undefined;
-      };
-    },
     async custom<T>(factory: (
       tui: TUI,
       theme: Theme,
       keybindings: TuiKeybindingsManager,
       done: (result: T) => void,
-    ) => Component | Promise<Component>, options?: { onHandle?: (value: OverlayHandle) => void }) {
+    ) => Component | Promise<Component>, customOptions?: { onHandle?: (value: OverlayHandle) => void }) {
+      if (options.failCustom) throw new Error("overlay host unavailable");
       return new Promise<T>((resolve, reject) => {
         let component: Component & { dispose?(): void } | undefined;
         const done = (value: T) => {
@@ -561,7 +580,7 @@ function makeUI(options: { failTerminalWrite?: string } = {}): {
             component = created;
             currentComponent = created;
             created.render(57);
-            options?.onHandle?.(handle);
+            customOptions?.onHandle?.(handle);
           })
           .catch(reject);
       });
@@ -574,9 +593,6 @@ function makeUI(options: { failTerminalWrite?: string } = {}): {
     ui,
     focusCount: () => focused,
     unfocusCount: () => unfocused,
-    terminalWrites,
-    emitTerminalInput: (data) => inputListener?.(data),
-    listenerCount: () => inputListener ? 1 : 0,
     notifications,
     input: (data) => currentComponent?.handleInput?.(data),
     render: (width = 57) => currentComponent?.render(width) ?? [],
@@ -584,20 +600,13 @@ function makeUI(options: { failTerminalWrite?: string } = {}): {
 }
 
 test("controller closes its exact real-TUI overlay below a later overlay and settles custom", async () => {
-  const tui = realTui();
+  const { tui } = realTui();
   const base: Component = { invalidate() {}, render() { return ["BASE"]; } };
   tui.addChild(base);
   tui.setFocus(base);
-  let terminalInput: TerminalInputHandler | undefined;
   let customSettlements = 0;
   const ui = {
     theme: plainTheme,
-    onTerminalInput(handler: TerminalInputHandler) {
-      terminalInput = handler;
-      return () => {
-        if (terminalInput === handler) terminalInput = undefined;
-      };
-    },
     custom<T>(factory: (
       tui: TUI,
       theme: Theme,
@@ -605,7 +614,7 @@ test("controller closes its exact real-TUI overlay below a later overlay and set
       done: (result: T) => void,
     ) => Component | Promise<Component>, options?: {
       overlay?: boolean;
-      overlayOptions?: Parameters<PiTUI["showOverlay"]>[1];
+      overlayOptions?: Parameters<TuiAltScreen["showOverlay"]>[1];
       onHandle?: (handle: OverlayHandle) => void;
     }): Promise<T> {
       const promise = new Promise<T>((resolve, reject) => {
@@ -742,37 +751,10 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
   assert.equal(capturedInput?.snapshot.thinkingLevel, "high");
   assert.deepEqual(capturedInput?.snapshot.activeToolNames, ["read", "edit"]);
   assert.equal(capturedInput?.parentIsIdle(), true, "runtime receives the live command-context idle callback");
-  assert.deepEqual(harness.terminalWrites.slice(0, 2), [
-    BTW_MOUSE_SEQUENCES.enableButtonReporting,
-    BTW_MOUSE_SEQUENCES.enableSgrReporting,
-  ]);
-  assert.equal(harness.listenerCount(), 1);
   assert.equal(parentUpdateAnnouncements, 1, "runtime attach immediately catches parent settlement during opening");
   assert.deepEqual(announcedParentHeads, ["02"]);
   await controller.announceParentUpdate();
   assert.equal(parentUpdateAnnouncements, 2, "later parent settlement is forwarded through the runtime handle");
-
-  for (let index = 0; index < 30; index += 1) capturedInput?.callbacks.onNotice(`notice ${index}`);
-  harness.render();
-  const priorFocuses = harness.focusCount();
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<0;63;2M"), { consume: true });
-  assert.equal(harness.focusCount(), priorFocuses + 1, "inside click focuses BTW");
-
-  const focusesBeforeWheel = harness.focusCount();
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<64;63;2M"), { consume: true });
-  assert.match(harness.render().join("\n"), /↑ 3 older · PgDn latest/, "inside focused wheel-up scrolls the actual overlay by three lines");
-  assert.equal(harness.focusCount(), focusesBeforeWheel, "wheel input does not refocus BTW");
-  assert.equal(harness.unfocusCount(), 0, "wheel input does not unfocus BTW");
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<65;63;2M"), { consume: true });
-  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "inside focused wheel-down returns toward the tail");
-
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<64;62;2M"), { consume: true });
-  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "outside wheel input is consumed without scrolling");
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<0;62;2M"), { consume: true });
-  assert.equal(harness.unfocusCount(), 1, "outside click returns focus to the main editor");
-  assert.deepEqual(harness.emitTerminalInput("\x1b[<64;63;2M"), { consume: true });
-  assert.doesNotMatch(harness.render().join("\n"), /older · PgDn latest/, "unfocused wheel input is consumed without scrolling BTW");
-  assert.equal(harness.unfocusCount(), 1, "wheel input never changes focus");
 
   const firstClose = controller.close();
   const secondClose = controller.close();
@@ -786,14 +768,9 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
   assert.equal(closeCount, 1);
   assert.equal(abortCount, 0);
   assert.equal(controller.isOpen, false);
-  assert.equal(harness.listenerCount(), 0);
-  assert.deepEqual(harness.terminalWrites.slice(-2), [
-    BTW_MOUSE_SEQUENCES.disableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableButtonReporting,
-  ]);
 });
 
-test("controller removes mouse input and discards generation prompts when closing during child opening", async () => {
+test("controller discards generation prompts when closing during child opening", async () => {
   let resolveRuntime!: (runtime: ChildRuntimeHandle) => void;
   const runtimePromise = new Promise<ChildRuntimeHandle>((resolve) => {
     resolveRuntime = resolve;
@@ -823,15 +800,9 @@ test("controller removes mouse input and discards generation prompts when closin
   const opening = controller.open("stale opening prompt", makeContext(harness.ui));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(controller.isOpen, true, "the mounted overlay exposes the opening phase through public behavior");
-  assert.equal(harness.listenerCount(), 1);
 
   const closing = controller.close();
   assert.equal(controller.isOpen, true, "close during opening retains the pane while child creation settles");
-  assert.equal(harness.listenerCount(), 0, "listener is removed before slow runtime creation settles");
-  assert.deepEqual(harness.terminalWrites.slice(-2), [
-    BTW_MOUSE_SEQUENCES.disableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableButtonReporting,
-  ]);
 
   resolveRuntime(runtime);
   await Promise.all([opening, closing]);
@@ -877,7 +848,7 @@ test("repeated pre-overlay snapshot failures retain no prompt for a later succes
   await controller.close();
 });
 
-test("controller restores mouse state and never replays prompts from a failed open", async () => {
+test("controller never replays prompts from a failed open", async () => {
   const harness = makeUI();
   const pi = {
     getThinkingLevel: () => "high",
@@ -905,13 +876,6 @@ test("controller restores mouse state and never replays prompts from a failed op
 
   await controller.open("stale failed prompt", makeContext(harness.ui));
   assert.equal(controller.isOpen, false);
-  assert.equal(harness.listenerCount(), 0);
-  assert.deepEqual(harness.terminalWrites, [
-    BTW_MOUSE_SEQUENCES.enableButtonReporting,
-    BTW_MOUSE_SEQUENCES.enableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableButtonReporting,
-  ]);
 
   await controller.open("fresh prompt", makeContext(harness.ui));
   await new Promise((resolve) => setImmediate(resolve));
@@ -936,9 +900,9 @@ test("controller surfaces child construction failures visibly", async () => {
   }]);
 });
 
-test("controller restores mouse state when overlay opening fails", async () => {
+test("controller surfaces overlay opening failures without starting a runtime", async () => {
   let runtimeCreates = 0;
-  const harness = makeUI({ failTerminalWrite: BTW_MOUSE_SEQUENCES.enableSgrReporting });
+  const harness = makeUI({ failCustom: true });
   const pi = {
     getThinkingLevel: () => "high",
     getActiveTools: () => ["read"],
@@ -951,11 +915,172 @@ test("controller restores mouse state when overlay opening fails", async () => {
   await controller.open("", makeContext(harness.ui));
   assert.equal(controller.isOpen, false);
   assert.equal(runtimeCreates, 0);
-  assert.equal(harness.listenerCount(), 0);
-  assert.deepEqual(harness.terminalWrites, [
-    BTW_MOUSE_SEQUENCES.enableButtonReporting,
-    BTW_MOUSE_SEQUENCES.enableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableSgrReporting,
-    BTW_MOUSE_SEQUENCES.disableButtonReporting,
+  assert.deepEqual(harness.notifications, [{ message: "BTW overlay failed: overlay host unavailable", type: "error" }]);
+});
+
+/** Pi's fullscreen interactive layout: plain containers mounted on the TUI, laid out by createChatViewport's shape. */
+function mountPiLikeMainScreen(tui: TuiAltScreen) {
+  const editorTheme = {
+    borderColor: (text: string) => text,
+    selectList: {
+      selectedPrefix: (text: string) => text,
+      selectedText: (text: string) => text,
+      description: (text: string) => text,
+      scrollInfo: (text: string) => text,
+      noMatch: (text: string) => text,
+    },
+  };
+  const document = new Container();
+  document.addChild(new Text(Array.from({ length: 80 }, (_, index) => `main transcript ${index}`).join("\n"), 0, 0));
+  const pending = new Container();
+  const status = new Container();
+  const editorContainer = new Container();
+  const mainEditor = new Editor(tui, editorTheme);
+  const mainSubmissions: string[] = [];
+  mainEditor.onSubmit = (text) => mainSubmissions.push(text);
+  editorContainer.addChild(mainEditor);
+  const footer = new Container();
+  footer.addChild(new Text("footer", 0, 0));
+  const root = new VStack([
+    { component: new ScrollView(document, { follow: "end", primary: true }), basis: 0, grow: 1, shrink: 1, minSize: 1 },
+    {
+      component: new VStack([
+        { component: pending, shrink: 1, minSize: 0 },
+        { component: status, shrink: 1, minSize: 0 },
+        { component: editorContainer, shrink: 1, minSize: 3 },
+        { component: footer, shrink: 1, minSize: 0 },
+      ]),
+      basis: "auto",
+      grow: 0,
+      shrink: 1,
+      minSize: 1,
+    },
   ]);
+  for (const component of [document, pending, status, editorContainer, footer]) tui.addChild(component);
+  tui.setLayoutRoot(root);
+  tui.setFocus(mainEditor);
+  return { mainEditor, mainSubmissions };
+}
+
+function overlayHostUI(tui: TuiAltScreen, onHandle: (handle: OverlayHandle) => void): ExtensionUIContext {
+  return {
+    theme: plainTheme,
+    custom<T>(factory: (
+      tui: TUI,
+      theme: Theme,
+      keybindings: TuiKeybindingsManager,
+      done: (result: T) => void,
+    ) => Component | Promise<Component>, options?: {
+      overlayOptions?: Parameters<TuiAltScreen["showOverlay"]>[1];
+      onHandle?: (handle: OverlayHandle) => void;
+    }): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        let component: (Component & { dispose?(): void }) | undefined;
+        const done = (value: T) => {
+          tui.hideOverlay();
+          resolve(value);
+          component?.dispose?.();
+        };
+        Promise.resolve(factory(tui, plainTheme, {} as TuiKeybindingsManager, done))
+          .then((created) => {
+            component = created;
+            const handle = tui.showOverlay(created, options?.overlayOptions);
+            onHandle(handle);
+            options?.onHandle?.(handle);
+          })
+          .catch(reject);
+      });
+    },
+    notify() {},
+  } as unknown as ExtensionUIContext;
+}
+
+test("fullscreen Pi: wheel scrolls BTW, clicks move focus both ways and it sticks, and submit stays in BTW", async () => {
+  const { tui, terminalWrites, input } = realTui(30, 100);
+  const { mainEditor, mainSubmissions } = mountPiLikeMainScreen(tui);
+  const childPrompts: string[] = [];
+  let notice: ((message: string, type?: "info" | "warning" | "error") => void) | undefined;
+  const controller = new BtwController({
+    getThinkingLevel: () => "off",
+    getActiveTools: () => ["read"],
+  } as ExtensionAPI, async (runtimeInput) => {
+    notice = runtimeInput.callbacks.onNotice;
+    return {
+      session: {
+        getToolDefinition: () => undefined,
+        sessionManager: { getCwd: () => "/tmp/btw-fullscreen" },
+      } as unknown as AgentSession,
+      childSessionDir: "/tmp/fake",
+      childSessionFile: "/tmp/fake/session.jsonl",
+      async prompt(text) { childPrompts.push(text); },
+      async announceParentUpdate() { return false; },
+      async abort() {},
+      async close() {},
+    };
+  });
+  const originalHandlers = tui.children.map((child) => child.handleMouse);
+  tui.start();
+  const writesBeforeOpen = terminalWrites.length;
+  try {
+    let btwHandle: OverlayHandle | undefined;
+    await controller.open("", makeContext(overlayHostUI(tui, (handle) => { btwHandle = handle; })));
+    await new Promise((resolve) => setImmediate(resolve));
+    for (let index = 0; index < 60; index += 1) notice?.(`btw line ${index}`);
+    tui.renderNow(true);
+
+    const bounds = btwHandle?.getBounds();
+    assert.ok(btwHandle && bounds, "BTW is mounted as a fullscreen overlay");
+    const insideX = bounds.col + Math.floor(bounds.width / 2) + 1;
+    const insideY = bounds.row + Math.floor(bounds.height / 3) + 1;
+    const sgr = (button: number, x: number, y: number, release = false) => `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
+    const click = (x: number, y: number) => {
+      input(sgr(0, x, y));
+      input(sgr(0, x, y, true));
+      tui.renderNow();
+    };
+    const screen = () => tui.getScreenLines().join("\n");
+    const isBtwFocused = () => btwHandle!.isFocused();
+    assert.equal(isBtwFocused(), true, "BTW opens focused");
+
+    const mainTopBefore = tui.viewportTop;
+    input(sgr(64, insideX, insideY));
+    tui.renderNow();
+    assert.match(screen(), /↑ \d+ older · PgDn latest/, "wheel over BTW scrolls the BTW transcript");
+    assert.equal(tui.viewportTop, mainTopBefore, "wheel over BTW leaves the main transcript where it was");
+    assert.equal(isBtwFocused(), true, "the wheel does not move focus");
+
+    click(10, 5);
+    assert.equal(isBtwFocused(), false, "a click on the main transcript releases BTW");
+    input("m");
+    assert.equal(mainEditor.getText(), "m", "keys then reach the main editor");
+    input("n");
+    assert.equal(mainEditor.getText(), "mn", "and focus stays on main for later keys");
+
+    click(insideX, insideY);
+    assert.equal(isBtwFocused(), true, "a click on BTW focuses it");
+    for (const char of "side question") input(char);
+    input("\r");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(childPrompts, ["side question"], "submit from BTW goes to the child");
+    assert.deepEqual(mainSubmissions, [], "and never to the main editor");
+    assert.equal(mainEditor.getText(), "mn");
+
+    const editorRow = tui.getScreenLines().findIndex((line) => line.includes("mn")) + 1;
+    assert.ok(editorRow > 0, "main editor row is on screen");
+    click(40, editorRow);
+    assert.equal(isBtwFocused(), false, "a click on the main editor focuses main");
+    input("o");
+    assert.equal(mainEditor.getText(), "mno", "focus sticks on main instead of snapping back to BTW");
+
+    await controller.close();
+    assert.deepEqual(tui.children.map((child) => child.handleMouse), originalHandlers, "closing restores Pi's main-screen handlers");
+    assert.equal(
+      terminalWrites.slice(writesBeforeOpen).some((data) => /\x1b\[\?100[0-6][hl]/.test(data)),
+      false,
+      "BTW leaves terminal mouse reporting to Pi",
+    );
+  } finally {
+    await controller.close();
+    tui.stop();
+  }
 });

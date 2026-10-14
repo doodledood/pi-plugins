@@ -15,7 +15,7 @@
 // (api.anthropic.com) using the local ANTHROPIC_API_KEY. Nothing here enters
 // LLM context except the report the user explicitly opens.
 
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import {
   buildCacheReport,
   formatCost,
@@ -35,10 +35,6 @@ import {
   type KeepaliveSpendRecord,
   type RequestRoute,
 } from "./cache-optimization/keepalive.ts";
-import {
-  acquireSharedMouseLease,
-  type SharedMouseLease,
-} from "./cache-optimization/mouse-lease.ts";
 
 // Bound on retained fingerprint pairs (hashes only) so long sessions don't grow unboundedly.
 const MAX_FINGERPRINT_PAIRS = 500;
@@ -155,7 +151,6 @@ export function activate(
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
   let keeperState: KeeperState = {};
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
-  const activeCacheOverlays = new Set<CacheReportOverlay>();
 
   pi.on("session_start", () => {
     fingerprints = { byTimestamp: new Map() };
@@ -167,8 +162,6 @@ export function activate(
   });
 
   pi.on("session_shutdown", () => {
-    for (const overlay of activeCacheOverlays) overlay.dispose();
-    activeCacheOverlays.clear();
     keepalive.shutdown();
     if (keepaliveTimer) {
       clearInterval(keepaliveTimer);
@@ -278,22 +271,8 @@ export function activate(
       });
       // Display-only overlay: the report never enters LLM context.
       await ctx.ui.custom(
-        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) => {
-          let overlay!: CacheReportOverlay;
-          overlay = new CacheReportOverlay(
-            theme,
-            (result) => {
-              activeCacheOverlays.delete(overlay);
-              done(result);
-            },
-            report.lines,
-            overlayViewportRows(tui),
-            tui?.terminal,
-            () => activeCacheOverlays.delete(overlay),
-          );
-          activeCacheOverlays.add(overlay);
-          return overlay;
-        },
+        (tui: any, theme: any, _keybindings: any, done: (result: undefined) => void) =>
+          new CacheReportOverlay(theme, done, report.lines, overlayViewportRows(tui)),
         { overlay: true },
       );
     },
@@ -312,23 +291,6 @@ function overlayViewportRows(tui: any): number {
   return Math.max(8, Math.min(30, rows - 6));
 }
 
-// SGR mouse reporting is held through the process-global cooperative lease so
-// overlapping extensions cannot disable reporting out from under one another.
-const WHEEL_SCROLL_LINES = 3;
-
-/** Net wheel movement in an input chunk: negative = up, positive = down. */
-function wheelDelta(data: string): number {
-  let delta = 0;
-  const sequence = /\x1b\[<(\d+);\d+;\d+[Mm]/g;
-  let match: RegExpExecArray | null;
-  while ((match = sequence.exec(data))) {
-    const base = Number(match[1]) & ~28; // strip shift/alt/ctrl modifier bits
-    if (base === 64) delta -= 1;
-    else if (base === 65) delta += 1;
-  }
-  return delta;
-}
-
 // Bordered report panel styled after the context-breakdown overlay: rounded
 // border, bold title, tone-tagged body rows, dim hint row inside the frame.
 export class CacheReportOverlay {
@@ -336,24 +298,14 @@ export class CacheReportOverlay {
   focused = false;
   private scroll = 0;
   private readonly viewport: number;
-  private mouseLease: SharedMouseLease | undefined;
 
   constructor(
     private readonly theme: any,
     private readonly done: (result: undefined) => void,
     readonly lines: ReportLine[],
     viewport = 30,
-    terminal?: { write(data: string): void },
-    private readonly onDispose?: () => void,
   ) {
     this.viewport = viewport;
-    if (terminal) this.mouseLease = acquireSharedMouseLease(terminal, this);
-  }
-
-  private releaseMouse(): void {
-    const lease = this.mouseLease;
-    this.mouseLease = undefined;
-    lease?.release();
   }
 
   private scrollBy(delta: number): void {
@@ -361,14 +313,15 @@ export class CacheReportOverlay {
     this.scroll = Math.max(0, Math.min(maxScroll, this.scroll + delta));
   }
 
+  /** Pi's fullscreen renderer routes the wheel over the report here, already in lines (negative = up). */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "wheel") return undefined;
+    if (event.wheelDelta) this.scrollBy(event.wheelDelta);
+    return { handled: true };
+  }
+
   handleInput(data: string): void {
-    const wheel = wheelDelta(data);
-    if (wheel !== 0) {
-      this.scrollBy(wheel * WHEEL_SCROLL_LINES);
-      return;
-    }
     if (matchesKey(data, "escape") || matchesKey(data, "return") || data === "q") {
-      this.releaseMouse();
       this.done(undefined);
       return;
     }
@@ -376,11 +329,6 @@ export class CacheReportOverlay {
     else if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) this.scrollBy(1);
     else if (matchesKey(data, "pageUp")) this.scrollBy(-this.viewport);
     else if (matchesKey(data, "pageDown")) this.scrollBy(this.viewport);
-  }
-
-  dispose(): void {
-    this.releaseMouse();
-    this.onDispose?.();
   }
 
   render(width: number): string[] {

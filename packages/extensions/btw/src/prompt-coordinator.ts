@@ -4,10 +4,7 @@ export interface ParentUpdateAnnouncement {
 }
 
 export interface ChildPromptSessionPort {
-  // Pi 0.80.6's exported PromptOptions includes this internal RPC hook and
-  // AgentSession.prompt invokes it immediately before model work (or on preflight failure).
-  // BTW is intentionally version-bound to that behavior for late cancellation admission.
-  prompt(text: string, options: { preflightResult(success: boolean): void }): Promise<void>;
+  prompt(text: string): Promise<void>;
   appendAnnouncement(announcement: ParentUpdateAnnouncement): Promise<void>;
   isIdle(): boolean;
   clearQueue(): void;
@@ -21,17 +18,13 @@ export interface ChildPromptCoordinatorCallbacks {
   onAnnouncementDiscarded(announcement: ParentUpdateAnnouncement): void;
 }
 
-class CancelledPromptAdmission extends Error {
-  constructor() {
-    super("BTW prompt admission was cancelled.");
-    this.name = "AbortError";
-  }
-}
-
 /**
  * Owns BTW prompt admission independently of Pi's steer/follow-up queues.
- * Cancellation invalidates an async input/preflight before it can start an
- * agent, and an agent_start observed after cancellation is aborted immediately.
+ * Cancellation drops prompts that have not reached the session yet. A prompt
+ * already inside session.prompt (input handlers, auth checks) cannot be
+ * withdrawn through public API, so its agent_start is aborted immediately:
+ * abort/close keep their flag set until the in-flight prompt settles, so that
+ * agent_start always observes the cancellation.
  */
 export class ChildPromptCoordinator {
   private readonly port: ChildPromptSessionPort;
@@ -63,16 +56,7 @@ export class ChildPromptCoordinator {
       try {
         await this.flushAnnouncements(generation);
         if (this.isCancelled(generation)) return;
-        try {
-          await this.port.prompt(value, {
-            preflightResult: (success) => {
-              if (!success) return;
-              if (this.isCancelled(generation)) throw new CancelledPromptAdmission();
-            },
-          });
-        } catch (error) {
-          if (!(error instanceof CancelledPromptAdmission)) throw error;
-        }
+        await this.port.prompt(value);
       } finally {
         let flushError: unknown;
         try {

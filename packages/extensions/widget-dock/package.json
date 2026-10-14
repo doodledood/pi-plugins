@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-widget-dock",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Fold Pi's todo and subagent widgets above the editor into one summary line you can expand.",
   "keywords": [
@@ -21,8 +21,8 @@
     "@earendil-works/pi-tui": ">=0.99.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.0.2",
-    "@earendil-works/pi-tui": "^1.0.2"
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@earendil-works/pi-tui": "^1.2.0"
   },
   "license": "MIT",
   "repository": {

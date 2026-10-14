@@ -11,9 +11,10 @@ import {
   type ExtensionContext,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { selectForkBranch, snapshotParent, type ForkSnapshot } from "../src/fork.ts";
+import { forkEntriesForChild, selectForkBranch, snapshotParent, type ForkSnapshot } from "../src/fork.ts";
 import {
   CHECK_PARENT_UPDATES_TOOL,
+  SEND_TO_MAIN_TOOL,
   filterBtwExtensions,
   inheritedRuntimeSpec,
   serializeFork,
@@ -109,7 +110,7 @@ function snapshot(entries: SessionEntry[]): ForkSnapshot {
     forkLeafId: entries.at(-1)?.id ?? null,
     model,
     thinkingLevel: "high",
-    activeToolNames: ["read", "edit"],
+    activeToolNames: ["read", "edit", "write", "goal", "bash"],
     projectTrusted: true,
     systemPromptOptions: { cwd: "/tmp/btw-workspace" },
     parentSessionFile: undefined,
@@ -310,12 +311,72 @@ test("serialized fork restores Pi's compaction-aware context", async () => {
   }
 });
 
-test("inherited runtime spec preserves cwd, model, thinking, tools and adds only the child tool", () => {
+test("inherited runtime spec keeps cwd, model and thinking, withholds edit/write/goal, and adds the child tools", () => {
   const spec = inheritedRuntimeSpec(snapshot([]));
   assert.equal(spec.cwd, "/tmp/btw-workspace");
   assert.equal(spec.model, model);
   assert.equal(spec.thinkingLevel, "high");
-  assert.deepEqual(spec.activeToolNames, ["read", "edit", CHECK_PARENT_UPDATES_TOOL]);
+  assert.deepEqual(spec.activeToolNames, ["read", "bash", CHECK_PARENT_UPDATES_TOOL, SEND_TO_MAIN_TOOL]);
+});
+
+function customState(id: string, parentId: string, customType: string, data: unknown): SessionEntry {
+  return {
+    type: "custom",
+    id,
+    parentId,
+    timestamp: `2026-07-13T00:03:${id.padStart(2, "0")}.000Z`,
+    customType,
+    data,
+  };
+}
+
+test("child fork drops parent extension state, re-chains the path, and remaps compaction", () => {
+  const entries: SessionEntry[] = [
+    user("01", null, "old user"),
+    customState("02", "01", "goal-controller-state", { status: "active", objective: "ship it" }),
+    assistant("03", "02", "old assistant"),
+    customState("04", "03", "goal-controller-reminder", { turn: 2 }),
+    user("05", "04", "kept user"),
+    {
+      type: "compaction",
+      id: "06",
+      parentId: "05",
+      timestamp: "2026-07-13T00:02:00.000Z",
+      summary: "summary",
+      firstKeptEntryId: "04",
+      tokensBefore: 100,
+    },
+    customState("07", "06", "goal-controller-state", { status: "active" }),
+    customMessage("08", "07", "visible extension context"),
+  ];
+  const kept = forkEntriesForChild(entries);
+  assert.deepEqual(kept.map((item) => item.id), ["01", "03", "05", "06", "08"]);
+  assert.deepEqual(kept.map((item) => item.parentId), [null, "01", "03", "05", "06"]);
+  const compaction = kept.find((item) => item.type === "compaction");
+  assert.equal(compaction?.type === "compaction" && compaction.firstKeptEntryId, "05", "a dropped first-kept entry moves to the next retained entry");
+  assert.equal(entries[1]?.parentId, "01", "input entries are not mutated");
+  assert.equal(entries[2]?.parentId, "02");
+});
+
+test("serialized fork carries no parent goal state yet the same model context", async () => {
+  const entries: SessionEntry[] = [
+    user("01", null, "question"),
+    customState("02", "01", "goal-controller-state", { status: "active", objective: "ship it" }),
+    assistant("03", "02", "answer"),
+    customState("04", "03", "goal-controller-state", { status: "active", objective: "ship it" }),
+  ];
+  const dir = await mkdtemp(join(tmpdir(), "btw-fork-custom-"));
+  const file = join(dir, "fork.jsonl");
+  try {
+    await writeFile(file, serializeFork(snapshot(entries)), "utf8");
+    const restored = SessionManager.open(file, dir, "/tmp/btw-workspace");
+    assert.equal(restored.getEntries().some((item) => item.type === "custom"), false);
+    assert.deepEqual(restored.getBranch().map((item) => item.id), ["01", "03"]);
+    const context = restored.buildSessionContext();
+    assert.deepEqual(context.messages.map((message) => message.role), ["user", "assistant"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("BTW extension paths are filtered without removing sibling resources", () => {

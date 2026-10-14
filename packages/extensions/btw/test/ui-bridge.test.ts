@@ -5,7 +5,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-  TUI as PiTUI,
+  TuiMainScreen,
   type Component,
   type KeybindingsManager,
   type OverlayHandle,
@@ -23,7 +23,7 @@ const theme = {} as Theme;
 const tui = { requestRender() {} } as TUI;
 const keybindings = {} as KeybindingsManager;
 
-function realTui(): PiTUI {
+function realTui(): TuiMainScreen {
   const terminal = {
     rows: 30,
     columns: 100,
@@ -40,8 +40,9 @@ function realTui(): PiTUI {
     clearScreen() {},
     setTitle() {},
     setProgress() {},
+    setProgramStatus() {},
   } satisfies Terminal;
-  return new PiTUI(terminal);
+  return new TuiMainScreen(terminal);
 }
 
 test("typed child custom UI cancellation rejects with AbortError instead of resolving undefined as T", async () => {

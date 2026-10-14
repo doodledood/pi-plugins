@@ -23,8 +23,9 @@ closes both gaps and explains every other break via `/cache`.
 
 Run **`/cache`** for a display-only report (never enters model context) with
 per-turn prompt/read/write tokens, hit-rate bars, per-turn cost, flagged
-breaks, and why each break happened. Its mouse wheel uses a process-global
-cooperative reporting lease so compatible overlapping Pi overlays can coexist.
+breaks, and why each break happened. In Pi's fullscreen mode the mouse wheel
+scrolls the report through Pi's native mouse routing; arrows and PgUp/PgDn work
+in either screen mode.
 Breaks are attributed in two layers:
 
 1. **Session-entry correlation** (works for every turn, including turns from

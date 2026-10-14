@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentSession, VERSION, type PromptOptions } from "@earendil-works/pi-coding-agent";
-import { comparePiVersions, MINIMUM_PI_VERSION } from "../index.ts";
 import {
   ChildPromptCoordinator,
   type ChildPromptSessionPort,
@@ -21,9 +19,8 @@ function coordinatorHarness(overrides: Partial<ChildPromptSessionPort> = {}) {
   const discarded: string[] = [];
   let aborts = 0;
   const port: ChildPromptSessionPort = {
-    async prompt(text, options) {
+    async prompt(text) {
       events.push(`preflight:${text}`);
-      options.preflightResult(true);
       events.push(`agent:${text}`);
     },
     async appendAnnouncement(announcement) {
@@ -55,38 +52,12 @@ const announcement = (parentHeadId: string): ParentUpdateAnnouncement => ({
   completedIds: [parentHeadId],
 });
 
-test("installed Pi (0.80.6+) exposes and invokes preflightResult before model work", () => {
-  let accepted: boolean | undefined;
-  const options = {
-    preflightResult(success: boolean) { accepted = success; },
-  } satisfies PromptOptions;
-  options.preflightResult(true);
-  assert.equal(accepted, true, "the installed declaration accepts the hook used by the coordinator");
-  assert.ok(
-    comparePiVersions(VERSION, MINIMUM_PI_VERSION) >= 0,
-    `installed Pi ${VERSION} must be at least ${MINIMUM_PI_VERSION}`,
-  );
-
-  const promptRuntime = AgentSession.prototype.prompt.toString();
-  assert.match(promptRuntime, /preflightResult/);
-  const finalAcceptedPreflight = promptRuntime.lastIndexOf("preflightResult?.(true)");
-  const modelWork = promptRuntime.indexOf("_runAgentPrompt", finalAcceptedPreflight);
-  assert.notEqual(finalAcceptedPreflight, -1, "the installed runtime has a final accepted-prompt callback");
-  assert.notEqual(modelWork, -1, "the accepted prompt proceeds to model work");
-  assert.ok(
-    finalAcceptedPreflight < modelWork,
-    "the final accepted-prompt callback runs before its model work",
-  );
-  assert.match(promptRuntime, /preflightResult\?\.\(false\)/);
-});
-
 test("coordinator owns announcement flush and serialized prompt order", async () => {
   const gate = deferred();
   const { coordinator, events } = coordinatorHarness({
     isIdle: () => false,
-    async prompt(text, options) {
+    async prompt(text) {
       events.push(`preflight:${text}`);
-      options.preflightResult(true);
       events.push(`agent:${text}`);
       if (text === "first") await gate.promise;
     },
@@ -113,18 +84,26 @@ test("coordinator owns announcement flush and serialized prompt order", async ()
   ]);
 });
 
-test("abort during async preflight rejects late admission before agent/model work", async () => {
+test("abort during an in-flight prompt's async preflight aborts its late agent_start", async () => {
   const preflightStarted = deferred();
   const releasePreflight = deferred();
   let modelCalls = 0;
-  const { coordinator, events, aborts } = coordinatorHarness({
-    async prompt(_text, options) {
+  let agentAbortedAtStart = false;
+  let coordinator!: ChildPromptCoordinator;
+  let abortsAtStart = 0;
+  const harness = coordinatorHarness({
+    async prompt() {
       preflightStarted.resolve();
       await releasePreflight.promise;
-      options.preflightResult(true);
-      modelCalls += 1;
+      // The session emits agent_start synchronously before model work.
+      abortsAtStart = harness.aborts();
+      coordinator.onAgentStart();
+      await new Promise((resolve) => setImmediate(resolve));
+      agentAbortedAtStart = harness.aborts() > abortsAtStart;
+      if (!agentAbortedAtStart) modelCalls += 1;
     },
   });
+  coordinator = harness.coordinator;
 
   const prompt = coordinator.prompt("delayed input");
   await preflightStarted.promise;
@@ -132,14 +111,31 @@ test("abort during async preflight rejects late admission before agent/model wor
   releasePreflight.resolve();
   await Promise.all([prompt, aborting]);
 
+  assert.equal(agentAbortedAtStart, true, "abort stays armed until the in-flight prompt settles");
   assert.equal(modelCalls, 0);
-  assert.ok(aborts() >= 1);
-  assert.deepEqual(events.slice(0, 4), [
+  assert.deepEqual(harness.events.slice(0, 4), [
     "clear",
     "abort-compaction",
     "abort-branch-summary",
     "abort-agent",
   ]);
+});
+
+test("prompts still queued behind an aborted prompt never reach the session", async () => {
+  const gate = deferred();
+  const { coordinator, events } = coordinatorHarness({
+    async prompt(text) {
+      events.push(`agent:${text}`);
+      if (text === "first") await gate.promise;
+    },
+  });
+  const first = coordinator.prompt("first");
+  const second = coordinator.prompt("second");
+  await new Promise((resolve) => setImmediate(resolve));
+  const aborting = coordinator.abort();
+  gate.resolve();
+  await Promise.all([first, second, aborting]);
+  assert.deepEqual(events.filter((event) => event.startsWith("agent:")), ["agent:first"]);
 });
 
 test("close discards announcements, rejects new prompts, and aborts a late agent_start", async () => {

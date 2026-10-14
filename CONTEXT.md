@@ -32,6 +32,10 @@ _Avoid_: Spinner, loader.
 The widget-dock extension's single line above the editor that stands in for the todo and subagent widgets, summarizing them until `alt+w` opens them in full.
 _Avoid_: Sidebar, side panel (pi has no side-by-side layout).
 
+**BTW**:
+The `/btw` side conversation: a read-only child session forked from the main session into a right-hand overlay, for asking questions while main keeps working. It starts without the parent's extension state and reaches the main session only through its `send_to_main` relay.
+_Avoid_: Subagent, panel (separate extensions), fork when Pi's `/fork` could be meant.
+
 **Compact tool rendering**:
 The tool activity renderer's default mode, drawing Graphite rows that hide routine output unless the row is expanded or something abnormal happens.
 _Avoid_: Compact mode when the renderer context is unclear.

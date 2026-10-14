@@ -13,11 +13,11 @@ import {
   type ChildRuntimeHandle,
   type CreateChildRuntimeInput,
 } from "./src/runtime.ts";
-import { enableBtwMouseInput, type BtwMouseInputScope } from "./src/mouse.ts";
+import { observeMainClicks } from "./src/main-clicks.ts";
 import { BTW_OVERLAY_OPTIONS, BtwOverlay } from "./src/ui.ts";
 
 const EXTENSION_ROOT = dirname(fileURLToPath(import.meta.url));
-export const MINIMUM_PI_VERSION = "0.80.6";
+export const MINIMUM_PI_VERSION = "1.0.0";
 
 /** Compare dotted numeric versions (prerelease/build metadata ignored) like a comparator. */
 export function comparePiVersions(a: string, b: string): number {
@@ -36,7 +36,7 @@ export function assertSupportedPiVersion(version = VERSION): void {
   if (comparePiVersions(version, MINIMUM_PI_VERSION) < 0) {
     throw new Error(
       `@doodledood/pi-btw requires Pi ${MINIMUM_PI_VERSION} or newer; running Pi is ${version}. ` +
-      "BTW relies on Pi's preflightResult behavior for prompt cancellation.",
+      "BTW relies on Pi's fullscreen mouse routing and overlay focus API.",
     );
   }
 }
@@ -49,7 +49,7 @@ type OverlayResources = {
   handle: OverlayHandle | undefined;
   tui: TUI;
   done: () => void;
-  mouseScope: BtwMouseInputScope | undefined;
+  stopMainClicks: (() => void) | undefined;
   disposed: boolean;
   panelDisposed: boolean;
   settled: boolean;
@@ -168,14 +168,7 @@ export class BtwController {
   private disposeOverlay(overlay: OverlayResources | undefined): void {
     if (!overlay) return;
     overlay.disposed = true;
-
-    const mouseScope = overlay.mouseScope;
-    overlay.mouseScope = undefined;
-    try {
-      mouseScope?.dispose();
-    } catch {
-      // Terminal teardown is best-effort when Pi is already shutting down.
-    }
+    this.stopMainClicks(overlay);
 
     if (overlay.handle && !overlay.settled) {
       overlay.settled = true;
@@ -193,6 +186,16 @@ export class BtwController {
       } catch {
         // Component disposal must not strand the child runtime.
       }
+    }
+  }
+
+  private stopMainClicks(overlay: OverlayResources): void {
+    const stop = overlay.stopMainClicks;
+    overlay.stopMainClicks = undefined;
+    try {
+      stop?.();
+    } catch {
+      // Restoring Pi's handlers is best-effort while Pi tears its UI down.
     }
   }
 
@@ -267,13 +270,6 @@ export class BtwController {
           onAbort: () => {
             void this.abort();
           },
-          onDispose: () => {
-            const overlay = opening.overlay;
-            if (!overlay) return;
-            const mouseScope = overlay.mouseScope;
-            overlay.mouseScope = undefined;
-            mouseScope?.dispose();
-          },
         });
         const overlay: OverlayResources = {
           generation: opening.generation,
@@ -281,7 +277,7 @@ export class BtwController {
           handle: undefined,
           tui,
           done: () => done(),
-          mouseScope: undefined,
+          stopMainClicks: undefined,
           disposed: false,
           panelDisposed: false,
           settled: false,
@@ -289,21 +285,13 @@ export class BtwController {
         opening.overlay = overlay;
         panel.setForkLeaf(snapshot.forkLeafId);
         panel.setParentRunning(this.parentRunning);
-        overlay.mouseScope = enableBtwMouseInput({
-          ui: ctx.ui,
-          tui,
-          getBounds: () => panel.getScreenBounds(),
-          isBtwFocused: () => overlay.handle?.isFocused() ?? panel.focused,
-          scrollBtw: (delta) => panel.scrollBy(delta),
-          focusBtw: () => {
-            if (!this.stateOwnsGeneration(overlay.generation) || this.currentOverlay() !== overlay) return;
-            overlay.handle?.focus();
-            panel.focusEditor();
-          },
-          focusMain: () => {
-            if (!this.stateOwnsGeneration(overlay.generation) || this.currentOverlay() !== overlay) return;
-            this.unfocus(overlay.generation);
-          },
+        // A click on BTW focuses it through its own handleMouse; a click anywhere on
+        // main hands focus back. Releasing the overlay explicitly matters: Pi treats
+        // focus moving to the editor BTW was opened over as temporary and would
+        // return it to BTW on the next keystroke.
+        overlay.stopMainClicks = observeMainClicks(tui, () => {
+          if (overlay.disposed || !overlay.handle?.isFocused()) return;
+          overlay.handle.unfocus();
         });
         return panel;
       },
@@ -355,6 +343,12 @@ export class BtwController {
         parentIsIdle: () => ctx.isIdle(),
         parentUI: ctx.ui,
         parentModelRegistry: ctx.modelRegistry,
+        sendToParent: (text) => {
+          // Relayed on the user's behalf: a user message in the main session,
+          // queued behind the main run when it is busy rather than steering it.
+          if (ctx.isIdle()) this.pi.sendUserMessage(text);
+          else this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+        },
         extensionRoot: EXTENSION_ROOT,
         callbacks: {
           onEvent: (event) => this.overlayForGeneration(opening.generation)?.panel.handleSessionEvent(event),
@@ -479,22 +473,11 @@ export class BtwController {
       runtime,
     };
     this.state = closing;
+    if (overlay) this.stopMainClicks(overlay);
     overlay?.panel.setClosing(message);
     if (prior.phase === "opening") {
       prior.pendingPrompts.length = 0;
       prior.settleOverlayReady();
-    }
-
-    // Stop terminal reporting and raw-input capture immediately. The visual
-    // overlay stays in its closing state until child/open cleanup completes.
-    if (overlay?.mouseScope) {
-      const mouseScope = overlay.mouseScope;
-      overlay.mouseScope = undefined;
-      try {
-        mouseScope.dispose();
-      } catch {
-        // Continue closing even if terminal input is already unavailable.
-      }
     }
 
     closing.promise = (async () => {

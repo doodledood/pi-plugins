@@ -18,4 +18,7 @@
 | 2026-08-20 | [Split the coding conventions out of setup/AGENTS.md](20260820-split-coding-conventions-from-setup-agents.md) | Accepted |
 | 2026-09-23 | [Validate only the goal checker's verdict path in Pi's JSON stream](20260923-validate-only-the-checker-verdict-path.md) | Accepted |
 | 2026-10-06 | [Tolerate trailing commas and re-ask once when a goal checker's verdict is badly formatted](20261006-re-ask-format-invalid-checker-verdicts-once.md) | Accepted |
+| 2026-10-14 | [Fork BTW without the parent's extension state](20261014-fork-btw-without-parent-extension-state.md) | Accepted |
+| 2026-10-14 | [Keep BTW read-only, with `send_to_main` as its one path into the main session](20261014-keep-btw-read-only-with-one-relay-to-main.md) | Accepted |
 | 2026-10-14 | [Draw narration in the thinking tone by writing the tone into its Markdown source, checked against pi's renderer](20261014-quiet-narration-through-checked-source-tone.md) | Accepted |
+| 2026-10-14 | [Use Pi's native fullscreen mouse routing for overlays and observe main-screen clicks through Pi's own handlers](20261014-use-pi-native-mouse-routing-for-overlays.md) | Accepted |
