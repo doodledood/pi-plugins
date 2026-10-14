@@ -63,21 +63,32 @@ class AdvisorCallView {
   private collapsedQuery = "";
   private readonly expandedText = new Text("", 0, 0);
   private expanded = false;
+  /**
+   * The last width's lines. pi draws the whole transcript every frame and keeps no lines between
+   * frames, so a call that has stopped changing hands back the same lines until update() or invalidate().
+   */
+  private drawn: { width: number; lines: string[] } | undefined;
 
   update(presentation: AdvisorCallPresentation, expanded: boolean): void {
     this.collapsedHeader = presentation.collapsedHeader;
     this.collapsedQuery = presentation.collapsedQuery;
     this.expandedText.setText(presentation.expanded);
     this.expanded = expanded;
+    this.drawn = undefined;
   }
 
   render(width: number): string[] {
     if (width <= 0) return [];
-    if (this.expanded) return this.expandedText.render(width).map((line) => truncateToWidth(line, width));
-    return [truncateToWidth(this.collapsedHeader, width), truncateToWidth(this.collapsedQuery, width)];
+    if (this.drawn?.width === width) return this.drawn.lines;
+    const lines = this.expanded
+      ? this.expandedText.render(width).map((line) => truncateToWidth(line, width))
+      : [truncateToWidth(this.collapsedHeader, width), truncateToWidth(this.collapsedQuery, width)];
+    this.drawn = { width, lines };
+    return lines;
   }
 
   invalidate(): void {
+    this.drawn = undefined;
     this.expandedText.invalidate();
   }
 }

@@ -301,6 +301,23 @@ test("renderCall tolerates partial and malformed streaming arguments and reuses 
   assert.match(ignoredOverrides, /timeout: 10m \(configured default\)/);
 });
 
+test("renderCall reuses a settled call's lines across frames until it updates", () => {
+  const tool = captureAdvisorTool();
+  const first = renderAdvisorCall(tool, { query: "Is the cache key complete?" }, { isPartial: false });
+  // pi draws the transcript every frame; an unchanged call hands back the same lines.
+  assert.equal(first.component.render(120), first.lines);
+  const narrow = first.component.render(40);
+  assert.deepEqual(narrow, renderAdvisorCall(tool, { query: "Is the cache key complete?" }, { isPartial: false, width: 40 }).lines, "a new width draws again");
+  assert.equal(first.component.render(40), narrow, "then is reused");
+
+  const expanded = renderAdvisorCall(tool, { query: "Is the cache key complete?" }, { isPartial: false, expanded: true, lastComponent: first.component });
+  assert.equal(expanded.component, first.component, "pi hands back the same view");
+  assert.notDeepEqual(expanded.lines, first.lines, "an update draws again rather than reusing the collapsed lines");
+  first.component.invalidate();
+  assert.notEqual(first.component.render(120), expanded.lines, "invalidate drops the reused lines");
+  assert.deepEqual(first.component.render(120), expanded.lines, "and draws the same content again");
+});
+
 test("renderCall escapes terminal and directional controls and obeys narrow widths", () => {
   const tool = captureAdvisorTool();
   const directionalControls = "\u061c\u200e\u200f\u202a\u202e\u2066\u2069";
