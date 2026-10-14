@@ -67,6 +67,8 @@ function createHarness(branch: SessionEntryLike[], session?: { file?: string; id
     model: { id: "test-model", provider: "test" },
     getContextUsage: () => undefined,
     sessionManager: {
+      // pi moves the leaf with every appended entry; these fixtures carry no ids, so the length stands in.
+      getLeafId: () => branch.at(-1)?.id ?? `entry-${branch.length}`,
       getBranch: () => branch,
       getEntries: () => session?.entries ?? branch,
       getSessionFile: () => session?.file,
@@ -163,7 +165,8 @@ test("footer leaves busy to the working line: π stays dim while a turn runs", (
 });
 
 test("footer draws a thin context meter: filled cells in the context tone, the empty track in borderMuted", () => {
-  const harness = createHarness([]);
+  const branch: SessionEntryLike[] = [];
+  const harness = createHarness(branch);
   harness.ctx.model.contextWindow = 200_000;
   harness.ctx.getContextUsage = () => ({ tokens: 46_000 });
 
@@ -172,6 +175,8 @@ test("footer draws a thin context meter: filled cells in the context tone, the e
   assert.ok(harness.themeCalls.some((call) => call.tone === "muted" && call.text === "━━"), "filled cells use the quiet context tone");
   assert.ok(harness.themeCalls.some((call) => call.tone === "borderMuted" && call.text === "─".repeat(8)), "empty track recedes");
 
+  // Context grows only as the session records more entries.
+  branch.push({ type: "message", id: "grew" });
   harness.ctx.getContextUsage = () => ({ tokens: 190_000 });
   renderFooter(harness);
   assert.ok(harness.themeCalls.some((call) => call.tone === "error" && call.text === "━".repeat(10)), "a nearly full window fills the meter in the error tone");
@@ -227,25 +232,31 @@ test("footer shows compact-at-boundary hint and warning tone at the threshold", 
 });
 
 test("footer refresh hooks cover compaction and branch changes", () => {
-  const harness = createHarness([]);
+  const branch: SessionEntryLike[] = [];
+  const harness = createHarness(branch);
   assert.ok(harness.handlers.get("session_compact"), "post-compaction hook registered");
   assert.ok(harness.handlers.get("session_tree"), "branch/tree hook registered");
   harness.ctx.model.contextWindow = 100_000;
   harness.ctx.getContextUsage = () => ({ tokens: 55_000 });
   assert.match(renderFooter(harness), /compact at boundary/);
 
+  // A compaction records a compaction entry, then a turn records the new, smaller context.
+  branch.push({ type: "compaction", id: "compaction-1" });
   harness.ctx.getContextUsage = () => ({ tokens: 10_000 });
   fakeTui.renderRequests = 0;
   harness.handlers.get("session_compact")!({ reason: "manual" }, harness.ctx);
   assert.equal(fakeTui.renderRequests, 1, "post-compaction hook requests a footer rerender");
   assert.doesNotMatch(renderFooter(harness), /compact at boundary/, "compaction refresh reflects the reset/lower context");
 
+  branch.push({ type: "message", id: "grew-again" }, { type: "compaction", id: "compaction-2" });
   harness.ctx.getContextUsage = () => ({ tokens: 55_000 });
   fakeTui.renderRequests = 0;
   harness.handlers.get("session_compact")!({ reason: "manual" }, harness.ctx);
   assert.equal(fakeTui.renderRequests, 1, "post-compaction hook requests rerender after recrossing");
   assert.match(renderFooter(harness), /compact at boundary/, "compaction hook re-arms the hint when context crosses again");
 
+  // Tree navigation moves the leaf to an earlier entry.
+  branch.splice(1);
   harness.ctx.getContextUsage = () => ({ tokens: 10_000 });
   fakeTui.renderRequests = 0;
   harness.handlers.get("session_tree")!({ newLeafId: "other" }, harness.ctx);

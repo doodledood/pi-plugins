@@ -8,7 +8,7 @@
 // Full cache diagnostics (/cache report, break attribution, fingerprinting)
 // live in the cache-optimization extension.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   computeSessionCacheStats,
@@ -50,7 +50,13 @@ type RuntimeState = {
   scanner: SessionTreeScanner;
   cost?: TreeCost;
   costComputedAt: number;
+  signals?: HeldSignals;
 };
+/** What the footer reads off the session: context usage and the session cache rate. */
+type SessionSignals = { usage: ContextUsage | undefined; cacheStats: SessionCacheStats };
+type ContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;
+/** Signals as computed for one session state: the session, its leaf entry, and the model. */
+type HeldSignals = { session: ExtensionContext["sessionManager"]; leaf: string | null; model: ExtensionContext["model"]; value: SessionSignals };
 type ModelSignal = { plain: string; colored: string };
 type StatusEntry = { key: string; value: string };
 /**
@@ -164,8 +170,7 @@ function renderMainLine(
   runtime: RuntimeState,
   inline: StatusEntry[],
 ): string {
-  const usage = ctx.getContextUsage?.();
-  const cacheStats = computeSessionCacheStats(ctx.sessionManager.getBranch());
+  const { usage, cacheStats } = sessionSignals(ctx, runtime);
 
   const project = basename(ctx.cwd) || ctx.cwd;
   const branch = footerData.getGitBranch?.() || "";
@@ -220,6 +225,22 @@ function renderMainLine(
 
   const gap = Math.max(minGap, width - visibleLength(leftPlain) - visibleLength(rightPlain));
   return fitLine(`${left}${" ".repeat(gap)}${right}`, width);
+}
+
+/**
+ * Context usage and the session cache rate both walk the whole session, and pi draws the footer on
+ * every frame. They can change only when the session's leaf entry moves — any appended entry moves
+ * it, and so does tree navigation — or the model changes, so they are computed once per such change.
+ */
+function sessionSignals(ctx: ExtensionContext, runtime: RuntimeState): SessionSignals {
+  const session = ctx.sessionManager;
+  const leaf = session.getLeafId();
+  const model = ctx.model;
+  const held = runtime.signals;
+  if (held && held.session === session && held.leaf === leaf && held.model === model) return held.value;
+  const value = { usage: ctx.getContextUsage?.(), cacheStats: computeSessionCacheStats(session.getBranch()) };
+  runtime.signals = { session, leaf, model, value };
+  return value;
 }
 
 function renderExtensionStatuses(width: number, theme: any, row: StatusEntry[]): string | undefined {
