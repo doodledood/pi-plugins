@@ -14,6 +14,5 @@ exec npx --yes skills add emilkowalski/skills \
   prototype \
   animation-vocabulary \
   apple-design \
-  pick-ui-library \
   mobile-native \
   break-ui
