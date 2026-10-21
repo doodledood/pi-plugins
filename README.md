@@ -89,7 +89,7 @@ Unless the user asks for a narrower scope, default to a **full portable sync**: 
    - For `settings.json`, preserve unknown keys, merge nested objects, and union package entries by package identity instead of duplicating them. Apply model, thinking, theme, telemetry, and delivery defaults only when selected.
    - For files under `setup/configs/`, merge or replace per file; do not assume every extension config is wanted in a custom profile.
    - Copy selected agent definitions to `~/.pi/agent/agents/`. Merge instruction files semantically so existing rules are not duplicated.
-   - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`. The Telegram skill includes its Python helper; follow [Telegram setup](setup/README.md#telegram-notifications) to pair a user's bot without copying credentials.
+   - Copy selected global skills to `~/.agents/skills/`; each skill is a directory containing `SKILL.md`.
    - For the selected upstream design skills, run `bash setup/install-external-skills.sh`; it installs the recorded selection globally for Claude Code, Codex, and Pi. See [external skills](setup/README.md#external-skills).
    - Do not overwrite working `auth.json`, `mcp-adapter.json`, or `web-search.json`. If only a legacy `~/.pi/agent/mcp.json` exists, `pi-mcp-adapter` 3.x no longer reads it: rename it with `mv ~/.pi/agent/mcp.json ~/.pi/agent/mcp-adapter.json` (merge the two if both exist). Start from an example only when the integration is selected and no usable local file exists.
 
