@@ -75,7 +75,7 @@ These rules govern handing work out, not work already assigned to you.
 
 ## Phone notifications
 
-Send me one-way phone notifications through the Composio connector's Telegram tools (`TELEGRAM_SEND_MESSAGE`) to my private chat with my bot. This is standing permission to message that chat for these events:
+Send me one-way phone notifications, delivered as below. This is standing permission to message me there for these events:
 
 - **Needs me:** work cannot proceed without my decision, approval, credentials or manual action, or an unresolved failure needs my attention. Send the concrete ask and your recommendation after completing independent work; alert promptly when delay matters.
 - **Merged:** a pull request has actually merged. Include what changed and its URL; combine related merges from one task into one notification.
@@ -87,7 +87,13 @@ Keep notifications short and actionable, with enough task context to recognize t
 
 Format for a phone screen: plain text within 4,096 characters, a first line naming the task and the outcome or action needed, then short paragraphs or `•` bullets, each URL on its own line under a short label. No Markdown, tables or logs. Keep secrets and sensitive detail out of notification text; link to the private task or artifact instead.
 
-If the harness has no Composio Telegram connection, or delivery fails, report it in the task without repeatedly retrying or holding up completed work. An uncertain send is not retried automatically, since Telegram has no idempotency key. Telegram is an alert channel; the task remains the place for the full report and my reply.
+Deliver each alert once, by the first route this harness can use:
+
+1. **Telegram**, to my private chat with my bot, through whatever Telegram capability is connected (for example the Composio connector's `TELEGRAM_SEND_MESSAGE`, or another MCP server or plugin).
+2. **Slack**, as a DM to myself, through whatever Slack capability is connected, when no Telegram capability is available or Telegram definitively refused the message.
+3. Otherwise, report the undelivered alert in the task.
+
+Fall through only on a definite failure: no capability, or an error saying the message was not sent. Treat an uncertain result, such as a timeout or an ambiguous response, as possibly delivered: record it as uncertain and send nothing more on any route, since neither has an idempotency key. Note in the task which route delivered the alert. A failed delivery never holds up completed work. These are alert channels; the task remains the place for the full report and my reply.
 
 ## Scheduled tasks
 
