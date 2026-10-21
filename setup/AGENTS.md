@@ -75,7 +75,7 @@ These rules govern handing work out, not work already assigned to you.
 
 ## Phone notifications
 
-Use the user-level `telegram` skill, when configured, to send me one-way phone notifications. This is standing permission to message my configured private chat for these events:
+Send me one-way phone notifications through the Composio connector's Telegram tools (`TELEGRAM_SEND_MESSAGE`) to my private chat with my bot. This is standing permission to message that chat for these events:
 
 - **Needs me:** work cannot proceed without my decision, approval, credentials or manual action, or an unresolved failure needs my attention. Send the concrete ask and your recommendation after completing independent work; alert promptly when delay matters.
 - **Merged:** a pull request has actually merged. Include what changed and its URL; combine related merges from one task into one notification.
@@ -85,7 +85,9 @@ Scheduled automations are the exception: I rarely read their reports, so a run a
 
 Keep notifications short and actionable, with enough task context to recognize them on my phone. Combine completion and merge into one alert when they are the same outcome. Skip routine progress, intermediate steps, quick conversational answers and repeated alerts for an unchanged blocker. Only the coordinating agent sends an alert for shared work. My task-specific notification instructions override these defaults.
 
-Use the skill's delivery and retry rules. Keep secrets and sensitive detail out of notification text; link to the private task or artifact instead. If delivery fails, report it in the task without repeatedly retrying or holding up completed work. Telegram is an alert channel; the task remains the place for the full report and my reply.
+Format for a phone screen: plain text within 4,096 characters, a first line naming the task and the outcome or action needed, then short paragraphs or `•` bullets, each URL on its own line under a short label. No Markdown, tables or logs. Keep secrets and sensitive detail out of notification text; link to the private task or artifact instead.
+
+If the harness has no Composio Telegram connection, or delivery fails, report it in the task without repeatedly retrying or holding up completed work. An uncertain send is not retried automatically, since Telegram has no idempotency key. Telegram is an alert channel; the task remains the place for the full report and my reply.
 
 ## Scheduled tasks
 

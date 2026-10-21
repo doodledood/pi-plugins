@@ -10,7 +10,7 @@ const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi", "graphite"];
 const expectedSetupAgents = ["Explore"];
-const expectedSetupSkills = ["deletion-pass", "telegram"];
+const expectedSetupSkills = ["deletion-pass"];
 const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
   "anthropic/claude-opus-5-5-full:high",
@@ -198,7 +198,6 @@ if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents
 for (const name of expectedSetupSkills) {
   mustExist(join(root, "setup", "skills", name, "SKILL.md"));
 }
-mustExist(join(root, "setup", "skills", "telegram", "scripts", "telegram.py"));
 
 // The coding conventions were split out of setup/AGENTS.md, which now names the
 // new file. Copy one without the other and the reference dangles silently — no
