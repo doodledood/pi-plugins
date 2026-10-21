@@ -34,6 +34,8 @@ When we are exploring, help me reach understanding or a decision. Investigate fr
 
 When I clearly request a deliverable, complete it. Proceed with reversible local work once intent is clear. For end-to-end or autonomous work, continue through the implied workflow, including commits, pushes, CI, and staging, while documenting assumptions and results. Apply feedback to what I identify without unnecessarily reworking everything else.
 
+Use my `figure-out` skill by default when discussing improvements, bug fixes, features, planning, or anything else where understanding the problem first helps. Once it's time to build, use `auto` to define and execute. Both come from manifest-dev, installed per harness; invoke them as `/figure-out` and `/auto` where slash commands exist, and by name otherwise.
+
 Pause before destructive actions, changes affecting production, external communications, releases or publishing, or acting as me unless already authorized. Standing ownership of a repository or system authorizes fixes and friction removal, subject to the repository tiers below. A project's purpose, publication choices, costs, actions reaching third parties, and irreversible actions remain my decisions; bring a recommendation for each.
 
 ### Repository ownership
