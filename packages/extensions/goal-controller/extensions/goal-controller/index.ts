@@ -509,6 +509,7 @@ export function activate(
     const isPendingAutomaticContinuation =
       activeGoal.awaitingContinuationTurn &&
       pendingContinuationGoalId === activeGoal.id &&
+      event.messageType === "user" &&
       pendingContinuationPrompt === event.prompt;
     if (activeGoal.awaitingContinuationTurn && !isPendingAutomaticContinuation) {
       activeGoal = resumeGoal(activeGoal);
@@ -684,7 +685,7 @@ function eventTurnHadToolUse(event: AgentEndEvent): boolean {
   for (const message of event.messages) {
     if (!isRecord(message)) continue;
     if (message.role === "toolResult") return true;
-    const content = message.content;
+    const content: unknown = (message as { content?: unknown }).content;
     if (!Array.isArray(content)) continue;
     if (content.some((block) => isRecord(block) && block.type === "toolCall")) return true;
   }

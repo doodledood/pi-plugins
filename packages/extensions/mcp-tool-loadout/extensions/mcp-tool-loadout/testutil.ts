@@ -16,6 +16,7 @@ export function mcpTool(name: string, description = "", propCount = 0): ToolInfo
     name,
     description,
     parameters: params(propCount),
+    exposure: "direct",
     sourceInfo: { path: "/pkg/pi-mcp-adapter/index.ts", source: "pi-mcp-adapter", scope: "user", origin: "package" },
   };
 }
@@ -25,6 +26,7 @@ export function builtinTool(name: string, description = ""): ToolInfo {
     name,
     description,
     parameters: params(0),
+    exposure: "direct",
     sourceInfo: { path: "/core", source: "builtin", scope: "user", origin: "top-level" },
   };
 }
@@ -34,6 +36,7 @@ export function ourTool(name: string, description = ""): ToolInfo {
     name,
     description,
     parameters: params(0),
+    exposure: "direct",
     sourceInfo: { path: "/ext/mcp-tool-loadout/index.ts", source: "mcp-tool-loadout", scope: "user", origin: "top-level" },
   };
 }

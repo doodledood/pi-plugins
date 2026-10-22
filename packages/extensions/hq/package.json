@@ -30,9 +30,9 @@
     "verify": "npm run typecheck && npm test"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
     "@types/node": "*",
     "tsx": "^4.22.4",
     "typebox": "*",

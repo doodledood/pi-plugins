@@ -22,7 +22,7 @@
     "smoke": "tsx extensions/goal-controller/smoke.ts"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
     "@types/node": "*",
     "tsx": "^4.22.4",
     "typebox": "*",

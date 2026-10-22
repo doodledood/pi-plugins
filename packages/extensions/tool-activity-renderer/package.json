@@ -40,7 +40,7 @@
     "package.json"
   ],
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.2.0",
-    "@earendil-works/pi-tui": "^1.2.0"
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0"
   }
 }

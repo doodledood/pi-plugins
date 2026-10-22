@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerCheckerModelBootstrap as registerRealModelAliasesBootstrap } from "../../../model-aliases/extensions/model-aliases/index.ts";
 import realModelAliasesCheckerBootstrap from "../../../model-aliases/extensions/model-aliases/checker-bootstrap.ts";
-import { createEventBus, type AgentEndEvent, type BeforeAgentStartEvent, type ExtensionCommandContext, type ExtensionContext, type SessionStartEvent, type SessionTreeEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type AgentEndEvent, type BeforeAgentStartEvent, type ExtensionCommandContext, type ExtensionContext, type ExtensionToolContext, type SessionStartEvent, type SessionTreeEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { deriveChildSessionDir } from "./sidecar.ts";
 import { activate as activateGoalController, activeStatusRefreshDelayMs, CHECKER_SESSION_KIND, formatStatus } from "./index.ts";
 import {
@@ -477,7 +477,7 @@ test("model-facing goal tool supersedes a stopped paused goal with a fresh activ
   await host.commandHandlers.get("goal_pause")?.("", ctx);
   assert.equal(latestGoal(host)?.status, "paused");
 
-  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as ExtensionContext);
+  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as unknown as ExtensionToolContext);
   const nextGoal = host.customEntries.at(-1)?.data as { goal?: { id?: string; goal?: string; status?: string } } | undefined;
   assert.match(result?.content[0]?.type === "text" ? result.content[0].text : "", /Goal started/iu);
   assert.equal(nextGoal?.goal?.goal, "new tool goal");
@@ -505,7 +505,7 @@ test("model-facing goal tool supersedes a completed goal with a fresh active goa
   await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
   assert.equal(latestGoal(host)?.status, "complete");
 
-  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as ExtensionContext);
+  const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as unknown as ExtensionToolContext);
   const nextGoal = host.customEntries.at(-1)?.data as { goal?: { id?: string; goal?: string; status?: string } } | undefined;
   assert.match(result?.content[0]?.type === "text" ? result.content[0].text : "", /Goal started/iu);
   assert.equal(nextGoal?.goal?.goal, "new tool goal");

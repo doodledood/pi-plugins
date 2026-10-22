@@ -352,15 +352,8 @@ export function estimateAliasRequestTokens(context: Context): number {
 
   if (usageInfo) {
     const trailingMessages = context.messages.slice(usageInfo.index + 1);
-    const addedToolNames = new Set(
-      trailingMessages.flatMap((message) =>
-        message.role === "toolResult" ? (message.addedToolNames ?? []) : [],
-      ),
-    );
-    const addedTools = context.tools?.filter((tool) => addedToolNames.has(tool.name));
     return usageInfo.tokens +
-      trailingMessages.reduce((total, message) => total + estimateMessageTokens(message), 0) +
-      estimateJsonTokens(addedTools);
+      trailingMessages.reduce((total, message) => total + estimateMessageTokens(message), 0);
   }
 
   return estimateTextTokens(context.systemPrompt ?? "") +

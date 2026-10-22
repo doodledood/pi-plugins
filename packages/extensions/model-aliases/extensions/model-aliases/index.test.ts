@@ -863,64 +863,6 @@ test("request estimation ignores errored and aborted assistant usage", async () 
   assert.equal(delegated, 0);
 });
 
-test("dual-window alias counts newly loaded tool definitions at the visible edge", async () => {
-  const config: ModelAliasesConfig = {
-    enabled: true,
-    aliases: [
-      {
-        provider: "openai",
-        id: "tiny-visible-window",
-        targetProvider: "openai",
-        targetModel: "gpt-5.5",
-        contextWindow: 10,
-        targetContextWindow: 100,
-      },
-    ],
-  };
-  let delegated = 0;
-  const streamSimple = createAliasStreamSimple(
-    buildAliasLookup(config),
-    buildTargetModelLookup(config, existingModels),
-    (model) => {
-      delegated += 1;
-      return fakeAssistantStream({ api: model.api, provider: model.provider, model: model.id });
-    },
-  );
-  const context = {
-    tools: [{ name: "x" }],
-    messages: [
-      {
-        role: "assistant",
-        content: [],
-        api: "openai-responses",
-        provider: "openai",
-        model: "tiny-visible-window",
-        usage: usageWithTotal(6),
-        stopReason: "toolUse",
-        timestamp: 1,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "load_tools",
-        content: [],
-        addedToolNames: ["x"],
-        isError: false,
-        timestamp: 2,
-      },
-    ],
-  };
-
-  assert.equal(estimateAliasRequestTokens(context as any), 10);
-  const result = await streamSimple(
-    { provider: "openai", id: "tiny-visible-window", api: MODEL_ALIASES_API, contextWindow: 10 } as any,
-    context as any,
-  ).result();
-
-  assert.equal(delegated, 0);
-  assert.equal(isContextOverflow(result, 10), true);
-});
-
 test("dual-window alias delegates normally while the estimated request stays below its visible edge", async () => {
   const config: ModelAliasesConfig = {
     enabled: true,

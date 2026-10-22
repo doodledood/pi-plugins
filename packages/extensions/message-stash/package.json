@@ -12,8 +12,17 @@
       "./extensions/message-stash.ts"
     ]
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/*.test.ts"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.8"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
   },
   "license": "MIT",
   "repository": {
@@ -31,6 +40,7 @@
   "files": [
     "extensions",
     "README.md",
-    "package.json"
+    "package.json",
+    "tsconfig.json"
   ]
 }
