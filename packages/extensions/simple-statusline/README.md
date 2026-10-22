@@ -60,7 +60,8 @@ That is expected: this figure is the one that answers "what did this cost".
 
 How it is computed: every session reachable from this one is scanned and summed
 with Pi's own rules (assistant usage, tool-result usage, compaction and
-branch-summary usage) over all entries, not just the active branch. Children are
+branch-summary usage, and the `usage` entries Pi writes for calls outside the
+conversation, such as cache warming) over all entries, not just the active branch. Children are
 found two ways — by their location under this session's directory, and by the
 `parentSession` link in their header — and each session is counted once no
 matter how many ways it is reachable. Scanning is incremental: session files are
@@ -72,15 +73,13 @@ from it — it was billed, and a figure you have already seen should not fall ju
 because a later read failed. What the scan can no longer see is disclosed rather
 than subtracted in silence.
 
+Each turn is counted at the cost Pi recorded for it, which already reflects the
+tier the provider billed — an OpenAI priority turn carries its premium — so no
+extension needs to describe pricing to this one.
+
 A leading `~` means the total is a **floor rather than an exact number**. Two
 kinds of thing cause it — a price it cannot pin down, and spend it cannot read:
 
-- **Premium billing tiers.** A turn billed above the standard rate — OpenAI's
-  priority service tier, for instance — costs more than Pi's per-model rates say.
-  Any extension can record the tier in force and what it costs relative to
-  standard; when it records the tier without the premium, those turns are counted
-  at standard rates and marked. (`gpt-fast-toggle` in this repo does both, from its
-  own `priorityMultiplier` setting.)
 - **Unpriceable models.** A model with no resolvable per-token price — typically
   a `model-aliases` entry whose target Pi does not price — reports real tokens
   at $0. A paid call that says outright it could not be priced counts the same
@@ -177,10 +176,9 @@ installed. Everything extension-specific reaches it through generic contracts:
   `/mcp` rather than in a footer.
 - **Spend from calls with no session of their own** arrives as `pi-cost-record`
   session entries, which any extension can write.
-- **Premium billing tiers** arrive as `pi-price-tier` entries carrying both the
-  tier and its price as a multiple of the standard rate, so the extension that
-  knows about the billing states the premium and this one never needs to know
-  which extension that is.
+- **Premium billing tiers** need no contract: Pi's recorded cost already
+  includes them. `pi-price-tier` entries written by older versions of
+  `gpt-fast-toggle` are ignored, so those sessions are no longer priced twice.
 
 Install any subset of the other extensions in this repo, or none of them, and the
 cost figure stays correct for whatever is there.

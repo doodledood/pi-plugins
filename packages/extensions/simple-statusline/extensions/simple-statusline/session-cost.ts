@@ -7,8 +7,11 @@
 //
 // Pi's rules, replicated in `accumulateEntry` (see the installed pi-coding-agent:
 // dist/core/agent-session.js getSessionStats() and dist/core/usage-totals.js
-// getUsageCostBreakdown()): assistant `usage`, `toolResult.usage`, and
+// getUsageCostBreakdown()): assistant `usage`, `type:"usage"` entries (Pi's own
+// non-turn calls, such as cache warming), `toolResult.usage`, and
 // `branch_summary`/`compaction` `usage`, over ALL entries rather than one branch.
+// Every figure is the `usage.cost` pi-ai recorded, which already prices the service
+// tier a provider billed (OpenAI priority, for instance); nothing here re-prices it.
 //
 // Four reads that fail are disclosed rather than absorbed: a sidecar directory that cannot
 // be listed, the session directory that cannot be listed (which is where forks live), a
@@ -38,10 +41,9 @@
 //
 // Two additions Pi has no equivalent for:
 //   - `pi-cost-record` custom entries, for billed calls that produce no session.
-//   - price fidelity: turns issued at OpenAI's priority tier cost more than Pi's
-//     static per-model rates, and an unpriceable model (e.g. a model-aliases
-//     entry whose target price cannot be resolved) reports real tokens at $0.
-//     Both mark the total approximate rather than reporting a confident wrong number.
+//   - an unpriceable model (e.g. a model-aliases entry whose target price cannot be
+//     resolved) reports real tokens at $0, so it marks the total approximate rather
+//     than reporting a confident wrong number.
 
 import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
@@ -76,8 +78,6 @@ function errorCode(error: unknown): string | undefined {
  * dist/core/session-manager.d.ts, appendCustomEntry in dist/core/session-manager.js).
  */
 export const COST_RECORD_TYPE = "pi-cost-record";
-/** Custom-entry type recording which billing tier subsequent turns were issued at. */
-export const PRICE_TIER_RECORD_TYPE = "pi-price-tier";
 
 /** Payload of a `pi-cost-record` custom entry. */
 export interface CostRecordData {
@@ -86,8 +86,6 @@ export interface CostRecordData {
   /** Bucket the spend is reported under, e.g. `keepalive` or `openai/tts-1`. */
   key: string;
   usage: UsageLike;
-  /** Billing tier this call actually paid, when it differs from the ambient tier. */
-  tier?: "standard" | "priority";
   /**
    * False when the call was billed but no rate was available to value it — speech
    * charged per character with no configured rate, for instance. The cost then reads
@@ -96,18 +94,6 @@ export interface CostRecordData {
   priced?: boolean;
 }
 
-/**
- * Payload of a `pi-price-tier` custom entry.
- *
- * Self-describing on purpose: whichever extension knows about the billing tier states
- * both the tier and what it costs relative to standard rates, so this module needs no
- * knowledge of that extension — not its name, not its config file.
- */
-export interface PriceTierData {
-  tier: "standard" | "priority";
-  /** Price as a multiple of the standard rate (2 = twice). Absent means unknown. */
-  multiplier?: number;
-}
 /** Bucket key Pi uses for non-assistant usage (tool results, compaction, branch summaries). */
 export const TOOLS_BUCKET_KEY = "Tools/summaries";
 
@@ -133,14 +119,6 @@ export interface ModelTotals extends TokenTotals {
   unpriced: boolean;
   /** Tokens that were billed but priced at $0 because no rate could be resolved. */
   unpricedTokens: number;
-  /** Tokens billed at a premium service tier whose surcharge Pi's rates do not model. */
-  priorityTokens: number;
-  /**
-   * Standard-rate cost of priority-tier turns left uncorrected because no multiplier is
-   * configured. The real charge is some multiple of this, so it is the size of the
-   * spend the total is approximating rather than the size of the missing premium.
-   */
-  uncorrectedPriorityCost: number;
 }
 
 export interface CostAccumulator {
@@ -158,10 +136,6 @@ export interface CostAccumulator {
   corruptEntries: number;
   /** Dedupe keys already counted, so a re-read or a duplicated record cannot inflate. */
   countedKeys: Set<string>;
-  /** Billing tier in force for subsequent entries, per the latest tier record. */
-  currentTier: "standard" | "priority";
-  /** Premium the latest tier record declared, when it declared one. */
-  currentMultiplier?: number;
 }
 
 export interface SessionCost {
@@ -175,8 +149,6 @@ export interface SessionCost {
   tokens: TokenTotals;
   models: ModelTotals[];
   unpricedModels: string[];
-  priorityTokens: number;
-  uncorrectedPriorityCost: number;
   /** Entries in this session that could not be parsed, so their spend is missing. */
   corruptEntries: number;
   /** Dedupe keys this session contributed, so a fork of it cannot re-count them. */
@@ -195,11 +167,6 @@ export interface TreeCost {
   approximateReasons: string[];
   /** Models whose usage was real but priced at $0. */
   unpricedModels: string[];
-  /**
-   * Standard-rate cost of the priority-tier turns whose premium is uncorrected. The
-   * real charge is a multiple of this figure.
-   */
-  uncorrectedPriorityCost: number;
   /** Parts of the tree whose spend could not be read, so it is missing from the total. */
   unreadableSessions: number;
   /** Session entries across the tree that could not be parsed, so their spend is missing. */
@@ -214,8 +181,8 @@ export interface TreeCost {
   missingSpend: boolean;
 }
 
-/** Folding options: price adjustments plus double-count suppression. */
-export interface FoldOptions extends PriceOptions {
+/** Folding options: double-count suppression. */
+export interface FoldOptions {
   /**
    * Session ids and file paths already counted from their own session files. A tool
    * result that names one of these reports the same work a second time, so its usage
@@ -230,21 +197,6 @@ export interface FoldOptions extends PriceOptions {
   excludeKeys?: ReadonlySet<string>;
 }
 
-/**
- * Price adjustments the scanner cannot derive from the session alone.
- *
- * Normally nothing needs to be supplied here: a tier record states its own premium.
- * This is the fallback for a producer that records a tier without one.
- */
-export interface PriceOptions {
-  /**
-   * Multiplier applied to priority-tier turn cost (e.g. 2 = twice the standard rate)
-   * when the tier record does not declare one. Unset leaves those turns at standard
-   * rates and marks the total approximate.
-   */
-  priorityMultiplier?: number;
-}
-
 export function createTokenTotals(): TokenTotals {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
@@ -256,7 +208,6 @@ export function createAccumulator(): CostAccumulator {
     byModel: new Map(),
     corruptEntries: 0,
     countedKeys: new Set(),
-    currentTier: "standard",
   };
 }
 
@@ -275,7 +226,7 @@ function addTokens(target: TokenTotals, usage: UsageLike): number {
 function modelTotals(acc: CostAccumulator, key: string): ModelTotals {
   let totals = acc.byModel.get(key);
   if (!totals) {
-    totals = { key, cost: 0, ...createTokenTotals(), unpriced: false, unpricedTokens: 0, priorityTokens: 0, uncorrectedPriorityCost: 0 };
+    totals = { key, cost: 0, ...createTokenTotals(), unpriced: false, unpricedTokens: 0 };
     acc.byModel.set(key, totals);
   }
   return totals;
@@ -285,6 +236,9 @@ function modelTotals(acc: CostAccumulator, key: string): ModelTotals {
 function billedUsage(entry: any): { key: string; usage: UsageLike } | undefined {
   if (entry?.type === "branch_summary" || entry?.type === "compaction") {
     return entry.usage ? { key: TOOLS_BUCKET_KEY, usage: entry.usage } : undefined;
+  }
+  if (entry?.type === "usage") {
+    return entry.usage ? { key: `${entry.provider ?? "unknown"}/${entry.model ?? "unknown"}`, usage: entry.usage } : undefined;
   }
   if (entry?.type === "custom" && entry.customType === COST_RECORD_TYPE) {
     const data = entry.data;
@@ -339,26 +293,19 @@ function restatesCountedSession(entry: any, counted: ReadonlySet<string> | undef
 }
 
 /**
- * Fold one session entry into `acc`, applying Pi's accounting rules plus the two
- * price-fidelity adjustments. Entries already counted (by id) are ignored, so
- * repeated scans and duplicated cost records cannot inflate a total.
+ * Fold one session entry into `acc`, applying Pi's accounting rules. Entries already
+ * counted (by id) are ignored, so repeated scans and duplicated cost records cannot
+ * inflate a total. Custom entries other than cost records — including the price-tier
+ * records older gpt-fast-toggle versions wrote — carry no spend and are skipped.
  */
-export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOptions = {}): void {
-  if (entry?.type === "custom" && entry.customType === PRICE_TIER_RECORD_TYPE) {
-    const tier = entry.data?.tier;
-    if (tier === "priority" || tier === "standard") acc.currentTier = tier;
-    const declared = entry.data?.multiplier;
-    acc.currentMultiplier = typeof declared === "number" && declared > 0 ? declared : undefined;
-    return;
-  }
-
+export function accumulateEntry(acc: CostAccumulator, entry: any, fold: FoldOptions = {}): void {
   const billed = billedUsage(entry);
   if (!billed) return;
-  if (restatesCountedSession(entry, price.countedSessions)) return;
+  if (restatesCountedSession(entry, fold.countedSessions)) return;
 
   const dedupeKey = entryDedupeKey(entry);
   if (dedupeKey) {
-    if (acc.countedKeys.has(dedupeKey) || price.excludeKeys?.has(dedupeKey)) return;
+    if (acc.countedKeys.has(dedupeKey) || fold.excludeKeys?.has(dedupeKey)) return;
     acc.countedKeys.add(dedupeKey);
   }
 
@@ -366,30 +313,14 @@ export function accumulateEntry(acc: CostAccumulator, entry: any, price: FoldOpt
   const totals = modelTotals(acc, billed.key);
   addTokens(totals, billed.usage);
 
-  const baseCost = billed.usage.cost?.total ?? 0;
-  // The ambient tier covers every request pi issues on the session's model — assistant
-  // turns, but also the compaction, branch-summary, and tool-nested calls that go
-  // through the same provider path and are billed at the same tier. A cost record is a
-  // separate paid call, so it is only priority when it says so itself.
-  const ownTier = entry?.type === "custom" ? entry.data?.tier : undefined;
-  const tier = ownTier ?? (entry?.type === "custom" ? "standard" : acc.currentTier);
-  const priority = tier === "priority";
-  // The record's own premium wins; a caller-supplied one is only a fallback, so no cost
-  // surface has to know which extension produced the tier.
-  const multiplier = priority ? (acc.currentMultiplier ?? price.priorityMultiplier) : undefined;
-  const cost = multiplier != null ? baseCost * multiplier : baseCost;
-
+  const cost = billed.usage.cost?.total ?? 0;
   acc.cost += cost;
   totals.cost += cost;
-  if (priority) {
-    totals.priorityTokens += tokens;
-    if (multiplier == null) totals.uncorrectedPriorityCost += baseCost;
-  }
   // Unpriced spend, from either direction: real usage that priced to nothing, or a
   // record that says outright it could not be priced (speech with no configured rate,
   // whose usage is characters rather than tokens).
   const declaredUnpriced = entry?.type === "custom" && entry.data?.priced === false;
-  if ((tokens > 0 && baseCost === 0) || declaredUnpriced) {
+  if ((tokens > 0 && cost === 0) || declaredUnpriced) {
     totals.unpriced = true;
     totals.unpricedTokens += tokens;
   }
@@ -406,8 +337,6 @@ export function summarize(acc: CostAccumulator, meta: { id?: string; path?: stri
     countedKeys: acc.countedKeys,
     models,
     unpricedModels: models.filter((m) => m.unpriced).map((m) => m.key),
-    priorityTokens: models.reduce((sum, m) => sum + m.priorityTokens, 0),
-    uncorrectedPriorityCost: models.reduce((sum, m) => sum + m.uncorrectedPriorityCost, 0),
   };
 }
 
@@ -425,12 +354,10 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
   const all = [own, ...descendants];
   const totalTokens = createTokenTotals();
   let totalCost = 0;
-  let uncorrectedPriorityCost = 0;
   let corruptEntries = 0;
   const unpriced = new Set<string>();
   for (const session of all) {
     totalCost += session.cost;
-    uncorrectedPriorityCost += session.uncorrectedPriorityCost;
     corruptEntries += session.corruptEntries;
     totalTokens.input += session.tokens.input;
     totalTokens.output += session.tokens.output;
@@ -439,9 +366,6 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     for (const key of session.unpricedModels) unpriced.add(key);
   }
   const reasons: string[] = [];
-  if (uncorrectedPriorityCost > 0) {
-    reasons.push("priority-tier turns counted at standard rates, because nothing declared the premium they were billed at");
-  }
   if (unpriced.size > 0) {
     reasons.push(`no price resolved for ${[...unpriced].join(", ")} (unpriced, or genuinely free)`);
   }
@@ -463,7 +387,6 @@ export function combine(own: SessionCost, descendants: SessionCost[], unreadable
     approximate: reasons.length > 0,
     approximateReasons: reasons,
     unpricedModels: [...unpriced],
-    uncorrectedPriorityCost,
     unreadableSessions,
     corruptEntries,
     missingSpend: unreadableSessions > 0 || corruptEntries > 0,
@@ -621,10 +544,7 @@ export class SessionTreeScanner {
    * `maxSidecarDepth` exists so the truncation disclosure can be exercised without
    * building a sixteen-generation tree; production uses the default.
    */
-  constructor(
-    private readonly price: PriceOptions = {},
-    private readonly maxSidecarDepth: number = MAX_SIDECAR_DEPTH,
-  ) {}
+  constructor(private readonly maxSidecarDepth: number = MAX_SIDECAR_DEPTH) {}
 
   private freshFileCache(header?: SessionHeader, reads = 0): FileCacheEntry {
     return { size: 0, mtimeMs: 0, offset: 0, remainder: "", decoder: new StringDecoder("utf8"), acc: createAccumulator(), header, reads };
@@ -634,13 +554,6 @@ export class SessionTreeScanner {
     return this.lastStats;
   }
 
-  setPrice(price: PriceOptions): void {
-    if (price.priorityMultiplier === this.price.priorityMultiplier) return;
-    // Pricing changes invalidate every folded total, so drop the cache wholesale.
-    (this.price as PriceOptions).priorityMultiplier = price.priorityMultiplier;
-    this.files.clear();
-  }
-
   /**
    * Cost of one session file, folding only bytes appended since the last scan.
    *
@@ -648,7 +561,7 @@ export class SessionTreeScanner {
    * first folded — a fork's copied history is fixed when the fork is created — so a
    * cached file needs no re-evaluation when they grow.
    */
-  scanFile(path: string, kind: string, fold: Omit<FoldOptions, keyof PriceOptions> = {}): SessionCost | undefined {
+  scanFile(path: string, kind: string, fold: FoldOptions = {}): SessionCost | undefined {
     let stat: import("node:fs").Stats;
     try {
       stat = statSync(path);
@@ -708,7 +621,7 @@ export class SessionTreeScanner {
         entry.header = { id: parsed.id, parentSession: parsed.parentSession, cwd: parsed.cwd };
         continue;
       }
-      accumulateEntry(entry.acc, parsed, { ...this.price, ...fold });
+      accumulateEntry(entry.acc, parsed, fold);
     }
     // Offset tracks bytes actually consumed; the incomplete tail lives in `remainder`,
     // so the next read resumes after it and no byte is folded twice. A short read
@@ -859,7 +772,7 @@ export class SessionTreeScanner {
     let own: SessionCost | undefined;
     if (args.ownEntries) {
       const ownAcc = createAccumulator();
-      for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { ...this.price, countedSessions });
+      for (const entry of args.ownEntries) accumulateEntry(ownAcc, entry, { countedSessions });
       own = summarize(ownAcc, { id: rootId, path: args.sessionFile, kind: "own" });
     } else if (args.sessionFile) {
       own = this.scanFile(args.sessionFile, "own", { countedSessions });

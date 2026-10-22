@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import simpleStatusline from "../simple-statusline.ts";
 import type { SessionEntryLike } from "./cache.ts";
-import { deriveChildSessionDir, PRICE_TIER_RECORD_TYPE } from "./session-cost.ts";
+import { deriveChildSessionDir } from "./session-cost.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -426,34 +426,6 @@ test("a session that genuinely cost nothing shows no figure at all", () => {
   assert.doesNotMatch(renderFooter(harness), /\$/, "nothing billed and nothing missing means nothing to report");
 });
 
-test("a premium declared by the tier record prices those turns exactly, with no marker", async () => {
-  // The record is self-describing: whichever extension knows about the tier states what
-  // it costs, so the footer prices it without knowing that extension exists.
-  const { parent } = tempSessionTree();
-  const own = [
-    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority", multiplier: 2 } },
-    ownAssistant(0.4, "own-1"),
-  ];
-  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
-
-  const line = renderFooter(harness);
-  assert.match(line, /\$0\.800/, "0.4 at twice the standard rate");
-  assert.doesNotMatch(line, /~\$/, "a declared premium means the total is exact");
-
-  await harness.commands.get("cost")!.handler("", harness.ctx);
-  assert.doesNotMatch(harness.notices.join("\n"), /Approximate, because/);
-});
-
-test("footer prices priority-tier turns as approximate until a multiplier is configured", () => {
-  const { parent } = tempSessionTree();
-  const own = [
-    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
-    ownAssistant(0.4, "own-1"),
-  ];
-  const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
-  assert.match(renderFooter(harness), /~\$0\.400/);
-});
-
 test("a large tree renders within a bounded time and is never re-read while rendering", async () => {
   const { parent } = tempSessionTree();
   // 60 spawned sessions: past the point where re-reading them per paint would show.
@@ -548,22 +520,16 @@ test("/cost's branch subtotal counts tool and compaction usage, not assistant tu
 
 test("/cost states the total is a floor and names each reason, over real fixtures", async () => {
   const { parent } = tempSessionTree();
-  // A child whose model has no resolvable price, and a priority-tier window in the
-  // parent with no configured premium: both reasons must reach the report.
+  // A child whose model has no resolvable price must reach the report as a reason.
   writeChildSession(parent, "tasks", "unpriced", [0]);
-  const own = [
-    { type: "custom", id: "tier", customType: PRICE_TIER_RECORD_TYPE, data: { tier: "priority" } },
-    ownAssistant(0.4, "own-1"),
-  ];
+  const own = [ownAssistant(0.4, "own-1")];
   const harness = createHarness(own as SessionEntryLike[], { file: parent, id: "parent-1", entries: own });
 
   await harness.commands.get("cost")!.handler("", harness.ctx);
   const report = harness.notices.join("\n");
   assert.match(report, /Session tree lifetime cost: ~\$0\.400/, "the report headline carries the floor marker too");
   assert.match(report, /Approximate, because:/);
-  assert.match(report, /priority-tier turns counted at standard rates/);
   assert.match(report, /no price resolved for openai\/child-model/);
-  assert.match(report, /priority-tier turns billed above the \$0\.400 counted here/);
 });
 
 test("/cost drops the approximation section once everything is priced", async () => {

@@ -77,8 +77,6 @@ export default function simpleStatusline(pi: any) {
     if (!force && runtime.cost && now - runtime.costComputedAt < COST_REFRESH_INTERVAL_MS) return;
     runtime.costComputedAt = now;
     try {
-      // Nothing to configure here: a tier record declares its own premium, so the
-      // scanner needs no knowledge of which extension produced it.
       runtime.cost = runtime.scanner.scanTree({
         ownEntries: ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(),
         sessionFile: ctx.sessionManager.getSessionFile?.(),
@@ -282,8 +280,8 @@ function formatExtensionStatus(key: string, value: string, theme: any): string {
 
 /**
  * Lifetime spend for the whole session tree. A leading "~" says the figure is a
- * floor rather than an exact number — unpriced models, an uncorrected priority
- * premium, or spend the scan could not read — with the reasons available in /cost.
+ * floor rather than an exact number — unpriced models or spend the scan could not
+ * read — with the reasons available in /cost.
  *
  * A tree that priced to nothing is hidden rather than shown as $0.00, since an
  * ambient footer has no room for a figure that says nothing. A $0 total does say

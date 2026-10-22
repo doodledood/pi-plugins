@@ -10,7 +10,6 @@ import {
   accumulateEntry,
   createAccumulator,
   SessionTreeScanner,
-  type PriceOptions,
   type ScanStats,
   type SessionCost,
   type TreeCost,
@@ -95,9 +94,6 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
     lines.push("");
     lines.push("Approximate, because:");
     for (const reason of cost.approximateReasons) lines.push(`  · ${reason}`);
-    if (cost.uncorrectedPriorityCost > 0) {
-      lines.push(`  · priority-tier turns billed above the ${formatCost(cost.uncorrectedPriorityCost)} counted here`);
-    }
   }
 
   if (options.scan) {
@@ -120,20 +116,20 @@ export function renderCostReport(cost: TreeCost | undefined, options: ReportOpti
  * Scan a session tree from disk — no live session needed. Used by /cost for the
  * current session and available for post-hoc analysis of any session file.
  */
-export function analyzeSessionTree(sessionFile: string, price: PriceOptions = {}): TreeCost {
+export function analyzeSessionTree(sessionFile: string): TreeCost {
   // The same single tree walk the footer uses, with the parent read from disk instead
   // of from a live session manager. One implementation is what stops a dedupe fix from
   // landing in the footer and quietly missing /cost.
-  return new SessionTreeScanner(price).scanTree({ sessionFile });
+  return new SessionTreeScanner().scanTree({ sessionFile });
 }
 
 /**
- * Spend on one branch of a session, by the same rules as the lifetime total: all four
- * native usage sources plus cost records, rather than assistant messages alone.
+ * Spend on one branch of a session, by the same rules as the lifetime total: every
+ * native usage source plus cost records, rather than assistant messages alone.
  */
-export function branchCost(branch: Iterable<unknown>, price: PriceOptions = {}): number {
+export function branchCost(branch: Iterable<unknown>): number {
   const acc = createAccumulator();
-  for (const entry of branch) accumulateEntry(acc, entry, price);
+  for (const entry of branch) accumulateEntry(acc, entry);
   return acc.cost;
 }
 

@@ -30,30 +30,19 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 See `config/` for safe example config and `setup/configs/` for Aviram's current non-secret defaults.
 
-`~/.pi/agent/gpt-fast-toggle.json` holds two keys:
+`~/.pi/agent/gpt-fast-toggle.json` (in Pi's agent directory) holds one key, `mode`: `"fast"` or `"deep"` — the toggle's own state. It is shared by every pi process, and each request reads it, so a toggle in one session applies to the next request of every other.
 
-| Key | Meaning |
-| --- | --- |
-| `mode` | `"fast"` or `"deep"` — the toggle's own state. |
-| `priorityMultiplier` | Optional. The priority tier's price as a multiple of the standard rate for your model — `2` means priority turns cost twice the standard rate, not twice plus the standard rate. It is copied into each tier record, so any cost surface can price those turns. |
+Requires Pi 1.4.0 or newer.
 
 ## Cost accounting
 
-OpenAI bills the priority service tier **above** the standard per-token rate, and
-pi prices every turn from its static model rates, so a session that ran in fast
-mode cost more than the usage alone can show.
+OpenAI bills the priority service tier above the standard per-token rate. pi-ai
+prices each turn at the tier OpenAI reports having billed it at, so a priority
+turn's recorded cost already includes the premium and every cost surface that sums
+Pi's usage — `/session`, simple-statusline's footer and `/cost` — shows it without
+any help from this extension.
 
-To keep that visible, this extension appends a `pi-price-tier` entry to the session
-whenever the effective tier changes, recorded from the same read of the state file
-that decides the outgoing request. That matters because the file is shared across
-pi processes: toggling fast mode in one session changes what every other session is
-billed, and a record derived only from session or model events would go stale —
-turns billed at the premium while the session's own records still said standard. A later scan can then tell which turns paid
-the premium. These are custom entries: they live in the session file, so they last
-exactly as long as it does, they are excluded from LLM context, and they carry
-nothing but the tier and its configured premium — no request or response content.
-
-Set `priorityMultiplier` and the record carries it, so a cost surface prices those
-turns without knowing this extension exists. Until you do, the record states the
-tier alone and cost surfaces mark the total with a leading `~` — a floor rather
-than an exact number — instead of quietly reporting it low.
+Versions before 0.3.0 wrote a `pi-price-tier` entry into the session and read a
+`priorityMultiplier` from the state file, which made cost surfaces apply the premium
+a second time. Neither exists any more; a `priorityMultiplier` left in the state file
+is ignored, and old entries in existing sessions are ignored by simple-statusline.

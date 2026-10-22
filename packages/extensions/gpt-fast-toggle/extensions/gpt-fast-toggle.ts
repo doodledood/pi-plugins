@@ -2,70 +2,31 @@
 // Fast = service_tier: "priority". Deep/not-fast = default service tier.
 // This intentionally does not change reasoning/thinking level.
 //
-// Priority is billed above the standard rate, and pi prices a turn from its static
-// per-model rates, so a session that ran in fast mode costs more than any cost
-// surface can tell from the usage alone. The tier in force is therefore recorded in
-// the session as a context-excluded custom entry whenever it changes (and once at
-// session start), so a later scan can tell which turns paid the premium.
-// The premium travels inside the record: this extension knows what priority billing
-// is and reads its own `priorityMultiplier`, so cost surfaces need no knowledge of this
-// extension at all. Without a configured multiplier they mark the total approximate
-// rather than reporting it low.
+// Priority is billed above the standard rate. pi-ai prices each turn from the
+// service tier the provider reports billing it at, so a priority turn's recorded
+// cost already carries the premium and nothing here needs to record the tier.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const STATE_PATH = join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent", "gpt-fast-toggle.json");
 const STATUS_KEY = "gpt-fast";
-/** Custom-entry type read by cost surfaces to price priority-tier turns. */
-export const PRICE_TIER_RECORD_TYPE = "pi-price-tier";
+
+/** Resolved per call, so the agent directory Pi was started with is the one used. */
+function statePath(): string {
+  return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "gpt-fast-toggle.json");
+}
 
 type TargetMode = "fast" | "deep";
 type BillingTier = "standard" | "priority";
 
 export default function gptFastToggle(pi: any) {
-  // Tier and premium actually recorded in this session, so repeats are not appended per
-  // event while a genuine change to either is.
-  let recordedTier: BillingTier | undefined;
-  let recordedMultiplier: number | undefined;
+  pi.on("session_start", (_event: any, ctx: any) => updateStatus(ctx));
+  pi.on("model_select", (_event: any, ctx: any) => updateStatus(ctx));
 
-  const recordTier = (ctx: any, tier: BillingTier, multiplier: number | undefined) => {
-    if (tier === recordedTier && multiplier === recordedMultiplier) return;
-    recordedTier = tier;
-    recordedMultiplier = multiplier;
-    try {
-      // Self-describing: the record states both the tier and what it costs relative to
-      // standard rates, so a reader prices it without knowing this extension exists.
-      pi.appendEntry(PRICE_TIER_RECORD_TYPE, multiplier === undefined ? { tier } : { tier, multiplier });
-    } catch {
-      // Session may be ephemeral or shutting down; the toggle itself still works.
-    }
-  };
-
-  pi.on("session_start", (_event: any, ctx: any) => {
-    updateStatus(ctx);
-    recordedTier = undefined;
-    recordedMultiplier = undefined;
-    const state = readState();
-    recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
-  });
-  pi.on("model_select", (_event: any, ctx: any) => {
-    updateStatus(ctx);
-    // Switching off an OpenAI GPT model ends priority billing even with fast mode on.
-    const state = readState();
-    recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
-  });
-
-  // The tier is recorded here, from the same read that decides the payload, so the
-  // record can never disagree with what was actually requested. Deriving it only from
-  // session/model events would go stale the moment another pi process toggled the
-  // shared state file: turns would be billed at the premium while the session's own
-  // records still said standard, and a cost surface would report that as exact.
+  // The mode is read per request, so a toggle made in another pi process applies at once.
   pi.on("before_provider_request", (event: any, ctx: any) => {
-    const state = readState();
-    const tier = effectiveTier(ctx.model, state.mode);
-    recordTier(ctx, tier, state.priorityMultiplier);
-    if (tier !== "priority") return undefined;
+    if (effectiveTier(ctx.model, readSavedMode()) !== "priority") return undefined;
     if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return undefined;
 
     return {
@@ -89,8 +50,6 @@ export default function gptFastToggle(pi: any) {
         return;
       }
       await applyGptMode(ctx, target);
-      const state = readState();
-      recordTier(ctx, effectiveTier(ctx.model, state.mode), state.priorityMultiplier);
     },
   });
 }
@@ -135,44 +94,27 @@ function updateStatus(ctx: any): void {
   ctx.ui.setStatus(STATUS_KEY, readSavedMode() === "fast" ? "GPT priority" : undefined);
 }
 
-/**
- * Mode and configured premium from one read, so the tier that gets recorded and the
- * tier that gets requested cannot come from two different views of the file.
- */
-export function readState(): { mode?: TargetMode; priorityMultiplier?: number } {
+export function readSavedMode(): TargetMode | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8"));
-    const mode = parsed?.mode === "fast" || parsed?.mode === "deep" ? (parsed.mode as TargetMode) : undefined;
-    const multiplier = parsed?.priorityMultiplier;
-    return {
-      ...(mode ? { mode } : {}),
-      ...(typeof multiplier === "number" && multiplier > 0 ? { priorityMultiplier: multiplier } : {}),
-    };
+    const parsed = JSON.parse(readFileSync(statePath(), "utf8"));
+    return parsed?.mode === "fast" || parsed?.mode === "deep" ? (parsed.mode as TargetMode) : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
-function readSavedMode(): TargetMode | undefined {
-  return readState().mode;
-}
-
-/**
- * Persist the mode without disturbing the rest of the file. This file also holds the
- * user's `priorityMultiplier`, which cost surfaces read to price priority-tier turns;
- * writing only `mode` would erase that configuration on the very toggle that makes it
- * relevant. Unknown keys are preserved for the same reason.
- */
+/** Persist the mode without disturbing other keys in the file. */
 function saveMode(mode: TargetMode): void {
-  mkdirSync(dirname(STATE_PATH), { recursive: true });
+  const path = statePath();
+  mkdirSync(dirname(path), { recursive: true });
   let existing: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
   } catch {
     // Missing or unreadable: start from an empty object rather than failing the toggle.
   }
-  writeFileSync(STATE_PATH, `${JSON.stringify({ ...existing, mode }, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify({ ...existing, mode }, null, 2)}\n`);
 }
 
 function supportsPriorityServiceTier(model: any): boolean {

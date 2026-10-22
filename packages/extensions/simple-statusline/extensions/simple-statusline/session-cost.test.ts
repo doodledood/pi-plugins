@@ -15,7 +15,6 @@ import {
   isAbsence,
   listSidecarSessionFiles,
   MAX_SIDECAR_DEPTH,
-  PRICE_TIER_RECORD_TYPE,
   readSessionHeader,
   SessionTreeScanner,
   summarize,
@@ -68,22 +67,12 @@ function branchSummary(cost: number) {
   entrySeq += 1;
   return { type: "branch_summary", id: `e${entrySeq}`, usage: usage(cost) };
 }
-// Cost records and tier records are context-excluded custom entries, the shape
+// Cost records are context-excluded custom entries, the shape
 // pi.appendEntry() writes: { type: "custom", customType, data }.
 function costRecord(cost: number, recordId: string, key = "keepalive") {
   entrySeq += 1;
   return { type: "custom", id: `e${entrySeq}`, customType: COST_RECORD_TYPE, data: { recordId, key, usage: usage(cost) } };
 }
-function tierRecord(tier: "priority" | "standard", multiplier?: number) {
-  entrySeq += 1;
-  return {
-    type: "custom",
-    id: `e${entrySeq}`,
-    customType: PRICE_TIER_RECORD_TYPE,
-    data: multiplier === undefined ? { tier } : { tier, multiplier },
-  };
-}
-
 /** Write a session file with a header plus entries. */
 function writeSession(path: string, opts: { id: string; parentSession?: string; entries?: unknown[] }): string {
   mkdirSync(join(path, ".."), { recursive: true });
@@ -580,54 +569,6 @@ test("a header-less or unreadable file yields no header rather than throwing", (
   assert.equal(readSessionHeader(join(root, "missing.jsonl")), undefined);
 });
 
-test("priority-tier turns are marked approximate when no multiplier is configured", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority"));
-  accumulateEntry(acc, assistant(1));
-  const tree = combine(summarize(acc, { kind: "own" }), []);
-  assert.equal(tree.totalCost, 1);
-  assert.ok(tree.approximate, "an uncorrected priority premium makes the total approximate");
-  assert.equal(tree.uncorrectedPriorityCost, 1);
-  assert.match(tree.approximateReasons.join(" "), /priority-tier/);
-});
-
-test("a configured multiplier prices priority turns exactly, and the marker clears", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
-  accumulateEntry(acc, assistant(1), { priorityMultiplier: 2 });
-  const tree = combine(summarize(acc, { kind: "own" }), []);
-  assert.equal(tree.totalCost, 2);
-  assert.equal(tree.approximate, false);
-});
-
-test("toggling the tier mid-session prices each turn by the tier in force", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
-  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 3 });
-  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
-  accumulateEntry(acc, tierRecord("standard"), { priorityMultiplier: 3 });
-  accumulateEntry(acc, assistant(1), { priorityMultiplier: 3 });
-  assert.equal(summarize(acc, { kind: "own" }).cost, 1 + 3 + 1);
-});
-
-test("everything billed in a priority window takes the premium, not just assistant turns", () => {
-  // pi issues compaction, branch-summary, and tool-nested calls through the same
-  // provider path, so they are billed at whatever tier is in force.
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
-  for (const entry of [assistant(1), toolResult(1), compaction(1), branchSummary(1)]) {
-    accumulateEntry(acc, entry, { priorityMultiplier: 2 });
-  }
-  assert.equal(summarize(acc, { kind: "own" }).cost, 8, "all four sources doubled");
-});
-
-test("a keepalive cost record is not swept into a priority window it never joined", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority"), { priorityMultiplier: 2 });
-  accumulateEntry(acc, costRecord(1, "ping-1"), { priorityMultiplier: 2 });
-  assert.equal(summarize(acc, { kind: "own" }).cost, 1, "a separate paid call keeps its own price");
-});
-
 test("real tokens priced at zero are surfaced as unpriced, not silently free", () => {
   const acc = createAccumulator();
   accumulateEntry(acc, { type: "message", id: "z1", message: { role: "assistant", provider: "openai", model: "mystery-alias", usage: usage(0) } });
@@ -642,16 +583,6 @@ test("a zero-token, zero-cost entry is not reported as unpriced", () => {
   const acc = createAccumulator();
   accumulateEntry(acc, { type: "message", id: "z2", message: { role: "assistant", provider: "openai", model: "aborted", usage: usage(0, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) } });
   assert.equal(combine(summarize(acc, { kind: "own" }), []).approximate, false);
-});
-
-test("changing the configured premium re-prices an already-scanned tree", () => {
-  const root = tempRoot();
-  const parent = writeSession(join(root, "parent.jsonl"), { id: "p1" });
-  writeSession(join(deriveChildSessionDir(parent, "tasks"), "child.jsonl"), { id: "c1", entries: [tierRecord("priority"), assistant(1)] });
-  const scanner = new SessionTreeScanner();
-  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 1);
-  scanner.setPrice({ priorityMultiplier: 2 });
-  assert.equal(scanner.scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" }).totalCost, 2);
 });
 
 // ── non-session cost records (D6) ───────────────────────────────────────────
@@ -870,39 +801,25 @@ test("a priced call reports its cost with no approximation marker", () => {
 
 // ── plugin-agnostic pricing (INV-G19) ───────────────────────────────────────
 
-test("a tier record's own premium prices its turns, with no configuration passed in", () => {
+test("a priority turn counts at its recorded cost, and an old tier record changes nothing", () => {
+  // pi-ai prices the tier OpenAI billed into usage.cost; a tier record from an older
+  // gpt-fast-toggle would apply the premium a second time.
   const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority", 2));
-  accumulateEntry(acc, assistant(1));
+  accumulateEntry(acc, { type: "custom", id: "old-tier", customType: "pi-price-tier", data: { tier: "priority", multiplier: 2 } });
+  accumulateEntry(acc, assistant(0.8));
+  accumulateEntry(acc, toolResult(0.2));
   const tree = combine(summarize(acc, { kind: "own" }), []);
-  assert.equal(tree.totalCost, 2, "priced from the record alone");
+  assert.equal(tree.totalCost, 1);
   assert.equal(tree.approximate, false);
 });
 
-test("a declared premium wins over one supplied by the caller", () => {
+test("Pi's usage entries are billed and bucketed by provider and model", () => {
   const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority", 3), { priorityMultiplier: 10 });
-  accumulateEntry(acc, assistant(1), { priorityMultiplier: 10 });
-  assert.equal(summarize(acc, { kind: "own" }).cost, 3, "the producer knows its own billing, the caller is only a fallback");
-});
-
-test("a tier record that declares no premium leaves the total a marked floor", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority"));
   accumulateEntry(acc, assistant(1));
-  const tree = combine(summarize(acc, { kind: "own" }), []);
-  assert.equal(tree.totalCost, 1);
-  assert.ok(tree.approximate);
-  assert.match(tree.approximateReasons.join(" "), /nothing declared the premium/);
-});
-
-test("dropping a premium back to undefined stops applying the old one", () => {
-  const acc = createAccumulator();
-  accumulateEntry(acc, tierRecord("priority", 2));
-  accumulateEntry(acc, assistant(1));
-  accumulateEntry(acc, tierRecord("priority"));
-  accumulateEntry(acc, assistant(1));
-  assert.equal(summarize(acc, { kind: "own" }).cost, 3, "2 then 1, not 2 then 2");
+  accumulateEntry(acc, { type: "usage", id: "warm-1", kind: "cache_warm", provider: "anthropic", model: "claude-opus-5-5", usage: usage(0.25) });
+  const summary = summarize(acc, { kind: "own" });
+  assert.equal(summary.cost, 1.25);
+  assert.ok(summary.models.some((m) => m.key === "anthropic/claude-opus-5-5" && m.cost === 0.25), JSON.stringify(summary.models));
 });
 
 test("a tree with no records from any other extension still totals correctly", () => {
@@ -950,7 +867,7 @@ test("a tree deeper than the bound reports the gap instead of reading exact", ()
 
   // Same disclosure path an unreadable file takes: spend is missing, so the figure is
   // a floor and says why — never a confident number over an incomplete walk.
-  const tree = new SessionTreeScanner({}, 2).scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
+  const tree = new SessionTreeScanner(2).scanTree({ ownEntries: [], sessionFile: parent, sessionId: "p1" });
   assert.ok(tree.totalCost < 3, `expected a partial total, got ${tree.totalCost}`);
   assert.ok(tree.approximate, "a truncated walk cannot report an exact total");
   assert.equal(tree.unreadableSessions, 1);
