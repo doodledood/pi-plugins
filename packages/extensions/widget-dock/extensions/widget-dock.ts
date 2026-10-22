@@ -63,10 +63,7 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 		return { glyph, rest };
 	});
 	const inProgress = rows.filter((row) => row.glyph === "◐");
-	const task = inProgress
-		.at(-1)
-		?.rest?.replace(/\s+\(.*\)\s*$/, "")
-		.trim();
+	const task = inProgress.at(-1)?.rest === undefined ? undefined : taskSubject(inProgress.at(-1)!.rest!);
 	const count = inProgress.length > 1 ? ` · ${inProgress.length} active` : "";
 	// The heading's ● means pending *or* in progress, and pending work alone is not live, so a visible
 	// ◐ row decides. Only when some open tasks are not shown as rows (the widget collapsed, or cut off
@@ -77,6 +74,19 @@ export function summarizeTodos(lines: readonly string[]): { active: boolean; tex
 	return { active, text: `Todos ${done}/${total}${count}${task ? ` · ${task}` : ""}` };
 }
 
+/**
+ * The subject from a task row's text: `#3 Fix login (SSO) (fixing login) ⛓ #1` gives `Fix login (SSO)`.
+ * rpiv-todo prefixes the id when any task is blocked, appends the active form in one parenthesized group,
+ * and ends a blocked row with its blocked-by chain.
+ */
+function taskSubject(rowText: string): string {
+	return rowText
+		.replace(/^#\d+\s+/, "")
+		.replace(/\s+⛓\s*#\d+(?:,\s*#\d+)*\s*$/, "")
+		.replace(/\s+\([^()]*\)\s*$/, "")
+		.trim();
+}
+
 /** The docked widgets, drawn as one summary line or, toggled open, as the widgets themselves. */
 export class Dock implements WidgetComponent {
 	expanded = false;
@@ -85,6 +95,11 @@ export class Dock implements WidgetComponent {
 	private readonly components = new Map<DockedKey, WidgetComponent>();
 	private tui: TUI | undefined;
 	private theme: Theme | undefined;
+	/**
+	 * The UI context the docked widgets read. rpiv-todo folds its list to the first ten open tasks unless
+	 * tools are expanded, which can hide the task in progress, so the summary reads the widget expanded.
+	 */
+	ui: Pick<ExtensionUIContext, "getToolsExpanded"> | undefined;
 
 	/** Nothing docked at all: pi drops the dock widget. A dock with widgets that draw nothing is not empty. */
 	get isEmpty(): boolean {
@@ -139,6 +154,19 @@ export class Dock implements WidgetComponent {
 		this.tui = undefined;
 	}
 
+	/** Run a synchronous render with the UI reporting tools expanded, then put the real answer back. */
+	private withToolsExpanded<T>(read: () => T): T {
+		const ui = this.ui;
+		if (!ui) return read();
+		const original = ui.getToolsExpanded;
+		ui.getToolsExpanded = () => true;
+		try {
+			return read();
+		} finally {
+			ui.getToolsExpanded = original;
+		}
+	}
+
 	private build(key: DockedKey): void {
 		const content = this.contents.get(key);
 		if (!content || !this.tui || !this.theme) return;
@@ -155,7 +183,7 @@ export class Dock implements WidgetComponent {
 		const hint = theme.fg("dim", `${TOGGLE_KEY} to expand`);
 		const segments: string[] = [];
 		const todos = this.components.get("rpiv-todos");
-		const todoLines = todos ? plainLines(todos, width) : [];
+		const todoLines = todos ? this.withToolsExpanded(() => plainLines(todos, width)) : [];
 		if (todoLines.length > 0) {
 			const summary = summarizeTodos(todoLines);
 			if (summary) segments.push(`${theme.fg(summary.active ? "accent" : "dim", summary.active ? "●" : "○")} ${theme.fg("muted", summary.text)}`);
@@ -184,6 +212,7 @@ export class Dock implements WidgetComponent {
 export function installDock(ui: ExtensionUIContext, dock: Dock): boolean {
 	if (routed.has(ui)) return false;
 	routed.add(ui);
+	dock.ui = ui;
 	const setWidget: SetWidget = ui.setWidget.bind(ui);
 	const setStatus: SetStatus = ui.setStatus.bind(ui);
 	let shown = false;

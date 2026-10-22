@@ -2,6 +2,8 @@
 
 Folds the todo and subagent widgets above Pi's editor into one summary line, so they stop taking transcript space.
 
+Requires Pi 1.4.0 or later.
+
 ```
  ● Todos 1/3 · Push, deploy t205986   ⠋ 20 running agents                    alt+w to expand
 ```
@@ -26,7 +28,7 @@ Pi gives every extension the same `ctx.ui` object, and extensions call `ctx.ui.s
 On `session_start` this extension wraps `setWidget` and `setStatus` on that object: the two docked keys are kept by the dock, which draws them as one widget, and everything else passes through unchanged.
 
 - It must load before the widgets' extensions register them; list this package before `rpiv-todo` in `settings.json` `packages` (a todo widget restored at startup by an earlier extension is not docked until it is set again).
-- It reads the docked widgets' rendered text to build the summary (`Todos (N/M)`, the `◐` task line). If those extensions change their wording, the summary falls back to less detail; the expanded view is always their own rendering.
+- It reads the docked widgets' rendered text to build the summary (`Todos (N/M)`, the `◐` task line). For that one read it renders rpiv-todo's widget as if tools were expanded, so a task in progress beyond the first ten open rows is still found; the setting is put back straight after. The task shown is the row's subject without rpiv-todo's `#id` prefix, its `⛓ #n` blocked-by chain, or the trailing `(active form)` group; parentheses inside the subject stay. A subject that itself ends in parentheses and has no active form loses that last group, since the rendered row cannot tell them apart. If those extensions change their wording, the summary falls back to less detail; the expanded view is always their own rendering.
 - The toggle is an alt chord on purpose: `ctrl+shift` chords degrade to plain `ctrl` in terminals without extended keys, and `ctrl+shift+d` would arrive as `ctrl+d`, which quits Pi.
 
 It reads and writes no files.

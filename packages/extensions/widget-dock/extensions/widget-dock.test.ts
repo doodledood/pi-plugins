@@ -180,3 +180,70 @@ test("todo summaries: with several tasks in progress, the newest is named and th
 	const three = ["● Todos (0/3)", "├─ ◐ a", "├─ ◐ b", "└─ ◐ c"];
 	assert.deepEqual(summarizeTodos(three), { active: true, text: "Todos 0/3 · 3 active · c" });
 });
+
+/**
+ * rpiv-todo's widget as it lays itself out (2.13.x): an id prefix on every row when any task is blocked,
+ * the active form in parentheses after an in-progress subject, a `⛓ #n` chain on blocked rows, and,
+ * unless tools are expanded, only the first ten open tasks with the rest folded into a `+N more` tail.
+ */
+type FakeTask = { id: number; subject: string; status: "pending" | "in_progress" | "completed"; activeForm?: string; blockedBy?: number[] };
+function rpivTodoWidget(ui: ExtensionUIContext, tasks: FakeTask[]) {
+	const glyph = { pending: "○", in_progress: "◐", completed: "✓" } as const;
+	const anyBlocked = tasks.some((task) => task.blockedBy?.length);
+	const row = (task: FakeTask) =>
+		`${glyph[task.status]} ${anyBlocked ? `#${task.id} ` : ""}${task.subject}${task.status === "in_progress" && task.activeForm ? ` (${task.activeForm})` : ""}${task.blockedBy?.length ? ` ⛓ ${task.blockedBy.map((id) => `#${id}`).join(",")}` : ""}`;
+	return () => ({
+		invalidate() {},
+		render() {
+			const done = tasks.filter((task) => task.status === "completed").length;
+			let shown = tasks;
+			let tail: string | undefined;
+			if (!ui.getToolsExpanded()) {
+				const open = tasks.filter((task) => task.status !== "completed");
+				shown = open.slice(0, 10);
+				const hidden = tasks.filter((task) => !shown.includes(task));
+				if (hidden.length > 0) {
+					const pending = hidden.filter((task) => task.status !== "completed").length;
+					const completed = hidden.length - pending;
+					tail = `+${hidden.length} more (${[completed && `${completed} completed`, pending && `${pending} pending`].filter(Boolean).join(", ")})`;
+				}
+			}
+			const rows = [...shown.map(row), ...(tail ? [tail] : [])];
+			return [`● Todos (${done}/${tasks.length})`, ...rows.map((text, index) => `${index === rows.length - 1 ? "└─" : "├─"} ${text}`)];
+		},
+	});
+}
+
+function dockSummary(tasks: FakeTask[]): string {
+	const harness = fakeUi();
+	let expanded = false;
+	(harness.ui as { getToolsExpanded(): boolean }).getToolsExpanded = () => expanded;
+	installDock(harness.ui, new Dock());
+	harness.ui.setWidget("rpiv-todos", rpivTodoWidget(harness.ui, tasks));
+	const line = harness.plain(DOCK_WIDGET_KEY, 200)[0] ?? "";
+	assert.equal(harness.ui.getToolsExpanded(), false, "the dock leaves the tools-expanded setting as it found it");
+	expanded = true;
+	return line;
+}
+
+test("the summary names an in-progress task that rpiv-todo folds past its first ten open rows", () => {
+	const tasks: FakeTask[] = [
+		{ id: 1, subject: "Old task left open", status: "in_progress", activeForm: "working on the old task" },
+		...Array.from({ length: 10 }, (_, index) => ({ id: index + 2, subject: `Pending ${index + 2}`, status: "pending" as const })),
+		{ id: 12, subject: "Newest task", status: "in_progress", activeForm: "doing the newest task" },
+	];
+	assert.match(dockSummary(tasks), /● Todos 0\/12 · 2 active · Newest task {2}/);
+});
+
+test("the summary leaves out the id prefix and the blocked-by chain", () => {
+	const tasks: FakeTask[] = [
+		{ id: 1, subject: "Base", status: "pending" },
+		{ id: 2, subject: "Other base", status: "pending" },
+		{ id: 3, subject: "Ship it", status: "in_progress", activeForm: "shipping", blockedBy: [1, 2] },
+	];
+	assert.match(dockSummary(tasks), /● Todos 0\/3 · Ship it {2}/);
+});
+
+test("a subject with its own parentheses is shown whole", () => {
+	assert.match(dockSummary([{ id: 1, subject: "Fix login (SSO)", status: "in_progress", activeForm: "fixing login" }]), /· Fix login \(SSO\) {2}/);
+});
