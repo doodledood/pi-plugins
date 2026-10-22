@@ -14,7 +14,9 @@ import {
   Container,
   CURSOR_MARKER,
   Editor,
+  KeybindingsManager,
   ScrollView,
+  TUI_KEYBINDINGS,
   Text,
   TuiAltScreen,
   visibleWidth,
@@ -27,6 +29,7 @@ import {
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { assertSupportedPiVersion, BtwController, MINIMUM_PI_VERSION } from "../index.ts";
+import type { QueuedPrompt } from "../src/prompt-coordinator.ts";
 import type { ChildRuntimeHandle, CreateChildRuntimeInput } from "../src/runtime.ts";
 import {
   boundedText,
@@ -37,6 +40,13 @@ import {
 } from "../src/ui.ts";
 
 initTheme("dark", false);
+
+// Pi's interactive host hands overlays its app keybindings; these are the BTW-relevant defaults.
+const testKeybindings = new KeybindingsManager({
+  ...TUI_KEYBINDINGS,
+  "app.message.followUp": { defaultKeys: "alt+enter", description: "Queue follow-up message" },
+  "app.message.dequeue": { defaultKeys: "alt+up", description: "Restore queued messages" },
+});
 
 test("runtime version guard accepts the minimum Pi host and newer", () => {
   assert.doesNotThrow(() => assertSupportedPiVersion(MINIMUM_PI_VERSION));
@@ -122,7 +132,8 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
   let closeCalls = 0;
   let abortCalls = 0;
   const tui = fakeTui();
-  const overlay = new BtwOverlay(tui, plainTheme, {
+  const overlay = new BtwOverlay(tui, plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit: (text) => submitted.push(text),
     onMain: () => { mainCalls += 1; },
     onClose: () => { closeCalls += 1; },
@@ -204,9 +215,8 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
     assert.doesNotMatch(screen, /MESSAGE/, "no stray section label above the editor");
     assert.doesNotMatch(screen, /transcript/, "no labeled transcript rule");
     assert.match(screen, /Wheel\/PgUp\/PgDn scroll/);
-    assert.match(screen, /click in\/out focus/);
-    assert.match(screen, /\/main unfocus/);
-    assert.match(screen, /\/done close/);
+    assert.match(screen, /click in\/out to focus/);
+    assert.match(screen, /Enter send · Esc main · \/done close/, "idle: the keys that matter now");
   }
   typeText(overlay, "hello child");
   assert.deepEqual(submitted, ["hello child"]);
@@ -218,7 +228,8 @@ test("overlay renders responsive bounded lines, statuses, transcript and control
 });
 
 test("long multiline editor preserves Pi Editor's cursor-aware top viewport", () => {
-  const overlay = new BtwOverlay(fakeTui(40), plainTheme, {
+  const overlay = new BtwOverlay(fakeTui(40), plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit() {},
     onMain() {},
     onClose() {},
@@ -243,7 +254,8 @@ test("long multiline editor preserves Pi Editor's cursor-aware top viewport", ()
 
 test("short terminals retain the multiline editor cursor, controls, border, and screen bounds", () => {
   for (const rows of [12, 16]) {
-    const overlay = new BtwOverlay(fakeTui(rows, 80), plainTheme, {
+    const overlay = new BtwOverlay(fakeTui(rows, 80), plainTheme, testKeybindings, {
+      onDequeue() {},
       onSubmit() {},
       onMain() {},
       onClose() {},
@@ -262,7 +274,7 @@ test("short terminals retain the multiline editor cursor, controls, border, and 
     assert.ok(rendered.every((line) => visibleWidth(line) <= 60));
     assert.match(screen, /short editor line 1/);
     assert.ok(screen.includes(CURSOR_MARKER), `${rows}-row editor retains its cursor-bearing viewport`);
-    assert.match(screen, /Esc main · click focus · \/done close/);
+    assert.match(screen, /Esc main · \/done close/);
     assert.match(rendered.at(-1) ?? "", /^╰─+╯$/);
   }
 });
@@ -372,7 +384,8 @@ test("tool-result projection caps aggregate storage while retaining recent block
   assert.equal(projected.content[0]?.text, "… older projected content omitted …");
   assert.match(projected.content.at(-1)?.text ?? "", /block-799/, "the useful recent tail is retained");
 
-  const overlay = new BtwOverlay(fakeTui(32), plainTheme, {
+  const overlay = new BtwOverlay(fakeTui(32), plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit() {},
     onMain() {},
     onClose() {},
@@ -401,7 +414,8 @@ test("tool-result projection caps aggregate storage while retaining recent block
 });
 
 test("overlay transcript projection is capped, keeps recent content, and marks omissions", () => {
-  const overlay = new BtwOverlay(fakeTui(32), plainTheme, {
+  const overlay = new BtwOverlay(fakeTui(32), plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit() {},
     onMain() {},
     onClose() {},
@@ -442,7 +456,8 @@ function mouse(type: TuiMouseEvent["type"], extra: Partial<TuiMouseEvent> = {}):
 }
 
 test("overlay mouse: wheel scrolls by Pi's delta, a click takes focus, press and drag stay with Pi's selection", () => {
-  const overlay = new BtwOverlay(fakeTui(24), plainTheme, {
+  const overlay = new BtwOverlay(fakeTui(24), plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit() {},
     onMain() {},
     onClose() {},
@@ -465,10 +480,58 @@ test("overlay mouse: wheel scrolls by Pi's delta, a click takes focus, press and
   assert.equal(overlay.handleMouse(mouse("drag")), undefined);
 });
 
+test("overlay queues like main: Enter steers, the follow-up key follows up, the dequeue key takes them back", () => {
+  const submitted: Array<[string, string]> = [];
+  let dequeues = 0;
+  const overlay = new BtwOverlay(fakeTui(30), plainTheme, testKeybindings, {
+    onSubmit: (text, mode) => submitted.push([text, mode]),
+    onDequeue: () => { dequeues += 1; },
+    onMain() {},
+    onClose() {},
+    onAbort() {},
+  });
+  overlay.focused = true;
+
+  // Input is taken while the child is still loading.
+  assert.match(overlay.render(60).join("\n"), /Start typing/);
+  assert.match(overlay.render(60).join("\n"), /Enter queue · Esc main/);
+  typeText(overlay, "early");
+  assert.deepEqual(submitted, [["early", "steer"]], "Enter submits before the child is ready");
+
+  overlay.attachSession({
+    getToolDefinition: () => undefined,
+    sessionManager: { getCwd: () => "/tmp" },
+  } as unknown as AgentSession);
+  overlay.handleSessionEvent({ type: "agent_start" });
+  assert.match(overlay.render(60).join("\n"), /Enter steer · alt\+enter follow-up · Esc stop/);
+
+  for (const char of "later") overlay.handleInput(char);
+  overlay.handleInput("\x1b\r"); // alt+enter
+  assert.deepEqual(submitted.at(-1), ["later", "followUp"]);
+
+  overlay.setQueue([{ text: "fix that\nsecond line", mode: "steer" }, { text: "later", mode: "followUp" }]);
+  const screen = overlay.render(60).join("\n");
+  assert.match(screen, /Steering: fix that/);
+  assert.doesNotMatch(screen, /second line/, "one line per queued prompt");
+  assert.match(screen, /Follow-up: later/);
+  assert.match(screen, /alt\+up to edit all queued messages/);
+
+  overlay.handleInput("\x1b[1;3A"); // alt+up
+  assert.equal(dequeues, 1);
+  for (const char of "draft") overlay.handleInput(char);
+  overlay.restoreToEditor([{ text: "fix that", mode: "steer" }, { text: "later", mode: "followUp" }]);
+  overlay.setQueue([]);
+  const restored = overlay.render(60).join("\n");
+  assert.match(restored, /fix that/);
+  assert.match(restored, /draft/, "the draft stays, after the restored prompts");
+  assert.doesNotMatch(restored, /Steering:/);
+});
+
 test("overlay keyboard scroll and escape distinguish active abort from idle /main", () => {
   let mainCalls = 0;
   let abortCalls = 0;
-  const overlay = new BtwOverlay(fakeTui(24), plainTheme, {
+  const overlay = new BtwOverlay(fakeTui(24), plainTheme, testKeybindings, {
+    onDequeue() {},
     onSubmit() {},
     onMain: () => { mainCalls += 1; },
     onClose() {},
@@ -575,7 +638,7 @@ function makeUI(options: { failCustom?: boolean } = {}): {
           component?.dispose?.();
           resolve(value);
         };
-        Promise.resolve(factory(tui, plainTheme, {} as TuiKeybindingsManager, done))
+        Promise.resolve(factory(tui, plainTheme, testKeybindings, done))
           .then((created) => {
             component = created;
             currentComponent = created;
@@ -627,7 +690,7 @@ test("controller closes its exact real-TUI overlay below a later overlay and set
           resolve(value);
           component?.dispose?.();
         };
-        Promise.resolve(factory(tui, plainTheme, {} as TuiKeybindingsManager, done))
+        Promise.resolve(factory(tui, plainTheme, testKeybindings, done))
           .then((created) => {
             if (closed) return;
             component = created;
@@ -651,6 +714,8 @@ test("controller closes its exact real-TUI overlay below a later overlay and set
     childSessionDir: "/tmp/fake",
     childSessionFile: "/tmp/fake/session.jsonl",
     async prompt() {},
+    queued: () => [],
+    dequeue: () => [],
     async announceParentUpdate() { return false; },
     async abort() {},
     async close() {},
@@ -698,6 +763,8 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
       childSessionDir: "/tmp/fake",
       childSessionFile: "/tmp/fake/session.jsonl",
       async prompt(text) { prompts.push(text); },
+      queued: () => [],
+      dequeue: () => [],
       async announceParentUpdate() {
         parentUpdateAnnouncements += 1;
         announcedParentHeads.push(input.parentSessionManager.getBranch().at(-1)?.id);
@@ -770,6 +837,65 @@ test("controller creates one child, focuses/reuses it, submits optional text, an
   assert.equal(controller.isOpen, false);
 });
 
+test("controller takes input while the child loads, shows the queue, and Esc returns it to the editor", async () => {
+  let releaseRuntime!: () => void;
+  const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+  const prompts: Array<[string, string | undefined]> = [];
+  let childQueue: QueuedPrompt[] = [];
+  let abortCount = 0;
+  let capturedInput: CreateChildRuntimeInput | undefined;
+  const controller = new BtwController({
+    getThinkingLevel: () => "off",
+    getActiveTools: () => ["read"],
+  } as ExtensionAPI, async (input) => {
+    capturedInput = input;
+    await runtimeGate;
+    return {
+      session: {
+        getToolDefinition: () => undefined,
+        sessionManager: { getCwd: () => "/tmp/btw-controller" },
+      } as unknown as AgentSession,
+      childSessionDir: "/tmp/fake",
+      childSessionFile: "/tmp/fake/session.jsonl",
+      async prompt(text, mode) { prompts.push([text, mode]); },
+      queued: () => [...childQueue],
+      dequeue: () => childQueue.splice(0),
+      async announceParentUpdate() { return false; },
+      async abort() { abortCount += 1; },
+      async close() {},
+    };
+  });
+  const harness = makeUI();
+  const opening = controller.open("", makeContext(harness.ui));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  for (const char of "early question") harness.input(char);
+  harness.input("\r");
+  assert.match(harness.render(80).join("\n"), /Steering: early question/, "a prompt typed while loading is visibly queued");
+  assert.deepEqual(prompts, []);
+
+  releaseRuntime();
+  await opening;
+  assert.deepEqual(prompts, [["early question", "steer"]], "the queued prompt is sent the moment the child is ready");
+  assert.doesNotMatch(harness.render(80).join("\n"), /Steering:/);
+
+  capturedInput!.callbacks.onEvent({ type: "agent_start" });
+  childQueue = [{ text: "steer this", mode: "steer" }, { text: "then this", mode: "followUp" }];
+  capturedInput!.callbacks.onQueueChange();
+  const running = harness.render(80).join("\n");
+  assert.match(running, /Steering: steer this/);
+  assert.match(running, /Follow-up: then this/);
+
+  harness.input("\x1b");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(abortCount, 1, "Esc stops the running child");
+  const afterAbort = harness.render(80).join("\n");
+  assert.doesNotMatch(afterAbort, /Steering:/);
+  assert.match(afterAbort, /steer this/, "queued prompts go back to the editor instead of being lost");
+  assert.match(afterAbort, /then this/);
+  await controller.close();
+});
+
 test("controller discards generation prompts when closing during child opening", async () => {
   let resolveRuntime!: (runtime: ChildRuntimeHandle) => void;
   const runtimePromise = new Promise<ChildRuntimeHandle>((resolve) => {
@@ -786,6 +912,8 @@ test("controller discards generation prompts when closing during child opening",
     childSessionDir: "/tmp/fake",
     childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text) { prompts.push(text); },
+    queued: () => [],
+    dequeue: () => [],
     async announceParentUpdate() { return false; },
     async abort() {},
     async close() { closeCount += 1; },
@@ -823,6 +951,8 @@ test("repeated pre-overlay snapshot failures retain no prompt for a later succes
     childSessionDir: "/tmp/fake",
     childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text) { prompts.push(text); },
+    queued: () => [],
+    dequeue: () => [],
     async announceParentUpdate() { return false; },
     async abort() {},
     async close() {},
@@ -864,6 +994,8 @@ test("controller never replays prompts from a failed open", async () => {
     childSessionDir: "/tmp/fake",
     childSessionFile: "/tmp/fake/session.jsonl",
     async prompt(text: string) { prompts.push(text); },
+    queued: () => [],
+    dequeue: () => [],
     async announceParentUpdate() { return false; },
     async abort() {},
     async close() {},
@@ -981,7 +1113,7 @@ function overlayHostUI(tui: TuiAltScreen, onHandle: (handle: OverlayHandle) => v
           resolve(value);
           component?.dispose?.();
         };
-        Promise.resolve(factory(tui, plainTheme, {} as TuiKeybindingsManager, done))
+        Promise.resolve(factory(tui, plainTheme, testKeybindings, done))
           .then((created) => {
             component = created;
             const handle = tui.showOverlay(created, options?.overlayOptions);
@@ -1013,6 +1145,8 @@ test("fullscreen Pi: wheel scrolls BTW, clicks move focus both ways and it stick
       childSessionDir: "/tmp/fake",
       childSessionFile: "/tmp/fake/session.jsonl",
       async prompt(text) { childPrompts.push(text); },
+      queued: () => [],
+      dequeue: () => [],
       async announceParentUpdate() { return false; },
       async abort() {},
       async close() {},

@@ -13,6 +13,7 @@ import {
   CURSOR_MARKER,
   Editor,
   Key,
+  type KeybindingsManager,
   matchesKey,
   truncateToWidth,
   type Component,
@@ -25,6 +26,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import type { QueuedPrompt, QueuedPromptMode } from "./prompt-coordinator.ts";
 
 export type OverlayPhase = "opening" | "ready" | "closing";
 
@@ -37,7 +39,10 @@ export const BTW_OVERLAY_OPTIONS = {
 } satisfies OverlayOptions;
 
 export interface BtwOverlayCallbacks {
-  onSubmit(text: string): void;
+  /** Enter submits as a steer, the follow-up key (Alt+Enter) as a follow-up; idle, both start a run. */
+  onSubmit(text: string, mode: QueuedPromptMode): void;
+  /** The dequeue key (Alt+Up): take back every queued prompt into the editor. */
+  onDequeue(): void;
   onMain(): void;
   onClose(): void;
   onAbort(): void;
@@ -61,6 +66,8 @@ const MAX_PROJECTED_LINES = 1_200;
 const MAX_PROJECTED_BYTES = 160_000;
 const TRANSCRIPT_OMISSION_MARKER = "… older BTW transcript omitted; full child session retained …";
 const ITEM_OMISSION_MARKER = "… older projected content omitted …";
+/** Queued prompts listed above the editor; the rest collapse into one "+N more" line. */
+const MAX_QUEUE_LINES = 4;
 
 function estimateBytes(value: unknown): number {
   try {
@@ -363,7 +370,9 @@ export class BtwOverlay implements Component, Focusable {
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly callbacks: BtwOverlayCallbacks;
+  private readonly keybindings: KeybindingsManager;
   private readonly editor: Editor;
+  private queue: QueuedPrompt[] = [];
   private readonly transcript: TranscriptItem[] = [];
   private transcriptEstimatedBytes = 0;
   private omittedTranscriptItems = 0;
@@ -382,9 +391,10 @@ export class BtwOverlay implements Component, Focusable {
   private lastMaxScroll = 0;
   private disposed = false;
 
-  constructor(tui: TUI, theme: Theme, callbacks: BtwOverlayCallbacks) {
+  constructor(tui: TUI, theme: Theme, keybindings: KeybindingsManager, callbacks: BtwOverlayCallbacks) {
     this.tui = tui;
     this.theme = theme;
+    this.keybindings = keybindings;
     this.callbacks = callbacks;
 
     const editorTheme: EditorTheme = {
@@ -398,8 +408,7 @@ export class BtwOverlay implements Component, Focusable {
       },
     };
     this.editor = new Editor(tui, editorTheme, { paddingX: 1, autocompleteMaxVisible: 5 });
-    this.editor.onSubmit = (text) => this.submit(text);
-    this.editor.disableSubmit = true;
+    this.editor.onSubmit = (text) => this.submit(text, "steer");
   }
 
   get focused(): boolean {
@@ -421,14 +430,13 @@ export class BtwOverlay implements Component, Focusable {
     this.childSession = session;
     this.phase = "ready";
     this.phaseMessage = "Independent context · shared workspace";
-    this.editor.disableSubmit = false;
     this.requestRender();
   }
 
+  /** Submitting stays open while the child loads: prompts queue and run once it is ready. */
   setOpeningMessage(message: string): void {
     this.phase = "opening";
     this.phaseMessage = message;
-    this.editor.disableSubmit = true;
     this.requestRender();
   }
 
@@ -441,6 +449,23 @@ export class BtwOverlay implements Component, Focusable {
 
   setParentRunning(running: boolean): void {
     this.parentRunning = running;
+    this.requestRender();
+  }
+
+  /** Prompts submitted but not yet delivered to the child's model, oldest first. */
+  setQueue(queue: readonly QueuedPrompt[]): void {
+    this.queue = [...queue];
+    this.requestRender();
+  }
+
+  /** Put taken-back prompts into the editor ahead of any draft, as main's Alt+Up does. */
+  restoreToEditor(prompts: readonly QueuedPrompt[]): void {
+    if (prompts.length === 0) return;
+    const draft = this.editor.getText();
+    const combined = [prompts.map((prompt) => prompt.text).join("\n\n"), draft]
+      .filter((text) => text.trim())
+      .join("\n\n");
+    this.editor.setText(combined);
     this.requestRender();
   }
 
@@ -684,7 +709,7 @@ export class BtwOverlay implements Component, Focusable {
     return component;
   }
 
-  private submit(raw: string): void {
+  private submit(raw: string, mode: QueuedPromptMode): void {
     const text = raw.trim();
     if (!text) return;
     const control = text.toLowerCase();
@@ -699,7 +724,7 @@ export class BtwOverlay implements Component, Focusable {
       this.callbacks.onMain();
       return;
     }
-    this.callbacks.onSubmit(text);
+    this.callbacks.onSubmit(text, mode);
   }
 
   /**
@@ -731,6 +756,14 @@ export class BtwOverlay implements Component, Focusable {
     if (matchesKey(data, Key.escape)) {
       if (this.childRunning) this.callbacks.onAbort();
       else this.callbacks.onMain();
+      return;
+    }
+    if (this.keybindings.matches(data, "app.message.followUp")) {
+      if (this.phase !== "closing") this.submit(this.editor.getExpandedText(), "followUp");
+      return;
+    }
+    if (this.keybindings.matches(data, "app.message.dequeue")) {
+      this.callbacks.onDequeue();
       return;
     }
     this.editor.handleInput(data);
@@ -772,7 +805,8 @@ export class BtwOverlay implements Component, Focusable {
       ? Math.max(0, renderedEditorLines.length - editorBudget)
       : Math.max(0, Math.min(cursorLine, renderedEditorLines.length - editorBudget));
     const editorLines = renderedEditorLines.slice(editorStart, editorStart + editorBudget);
-    const fixedLines = 8 + editorLines.length;
+    const queueLines = shortLayout ? [] : this.renderQueue(contentWidth);
+    const fixedLines = 8 + editorLines.length + queueLines.length;
     const transcriptViewport = shortLayout ? 0 : Math.max(1, targetHeight - fixedLines);
     this.lastTranscriptViewport = transcriptViewport;
 
@@ -811,8 +845,12 @@ export class BtwOverlay implements Component, Focusable {
       allTranscriptLines.unshift(this.theme.fg("warning", TRANSCRIPT_OMISSION_MARKER));
     }
     if (allTranscriptLines.length === 0) {
-      allTranscriptLines.push(this.theme.fg("muted", "Ask a side question or prototype with the requested child tools."));
-      allTranscriptLines.push(this.theme.fg("dim", "Parent updates stay paused until check_parent_updates is called."));
+      if (this.phase === "opening") {
+        allTranscriptLines.push(this.theme.fg("muted", "Start typing — BTW sends it the moment it's ready."));
+      } else {
+        allTranscriptLines.push(this.theme.fg("muted", "Ask a side question while main keeps working."));
+        allTranscriptLines.push(this.theme.fg("dim", "BTW sees main's later work only when it checks for updates."));
+      }
     }
 
     this.lastMaxScroll = Math.max(0, allTranscriptLines.length - transcriptViewport);
@@ -845,17 +883,49 @@ export class BtwOverlay implements Component, Focusable {
         lines.push(dimBorder("├") + dimBorder("─".repeat(innerWidth)) + dimBorder("┤"));
       }
     }
+    for (const line of queueLines) lines.push(framed(this.theme, ` ${line}`, panelWidth, borderColor));
     for (const line of editorLines) lines.push(framed(this.theme, ` ${line}`, panelWidth, borderColor));
-    if (shortLayout) {
-      lines.push(framed(this.theme, ` ${this.theme.fg("dim", "Esc main · click focus · /done close")}`, panelWidth, borderColor));
-    } else {
-      lines.push(framed(this.theme, ` ${this.theme.fg("dim", "Wheel/PgUp/PgDn scroll · click in/out focus")}`, panelWidth, borderColor));
-      lines.push(framed(this.theme, ` ${this.theme.fg("dim", "Esc abort/main · /main unfocus · /done close")}`, panelWidth, borderColor));
+    lines.push(framed(this.theme, ` ${this.theme.fg("dim", this.actionHint())}`, panelWidth, borderColor));
+    if (!shortLayout) {
+      lines.push(framed(this.theme, ` ${this.theme.fg("dim", "Wheel/PgUp/PgDn scroll · click in/out to focus")}`, panelWidth, borderColor));
     }
     lines.push(border("╰") + border("─".repeat(innerWidth)) + border("╯"));
 
     const rendered = lines.map((line) => truncateToWidth(line, panelWidth, ""));
     return rendered;
+  }
+
+  /** The keys that matter right now, as main's editor would treat them. */
+  private actionHint(): string {
+    if (this.phase === "closing") return "Closing…";
+    if (this.childRunning) {
+      const followUpKey = this.keybindings.getKeys("app.message.followUp")[0];
+      return [
+        "Enter steer",
+        ...(followUpKey ? [`${followUpKey} follow-up`] : []),
+        "Esc stop",
+      ].join(" · ");
+    }
+    return `${this.phase === "opening" ? "Enter queue" : "Enter send"} · Esc main · /done close`;
+  }
+
+  /** Main's pending-messages block: one dim line per queued prompt and how to take them back. */
+  private renderQueue(width: number): string[] {
+    if (this.queue.length === 0) return [];
+    const shown = this.queue.length > MAX_QUEUE_LINES ? this.queue.slice(0, MAX_QUEUE_LINES - 1) : this.queue;
+    const lines = shown.map((prompt) => {
+      const label = prompt.mode === "followUp" ? "Follow-up" : "Steering";
+      const firstLine = prompt.text.split("\n", 1)[0] ?? "";
+      return truncateToWidth(this.theme.fg("dim", `${label}: ${firstLine}`), width);
+    });
+    if (shown.length < this.queue.length) {
+      lines.push(this.theme.fg("dim", `+${this.queue.length - shown.length} more queued`));
+    }
+    const dequeueKey = this.keybindings.getKeys("app.message.dequeue")[0];
+    if (dequeueKey) {
+      lines.push(truncateToWidth(this.theme.fg("dim", `↳ ${dequeueKey} to edit all queued messages`), width));
+    }
+    return lines;
   }
 
   invalidate(): void {

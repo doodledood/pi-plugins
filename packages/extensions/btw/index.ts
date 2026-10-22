@@ -15,6 +15,7 @@ import {
   type RelayOutcome,
 } from "./src/runtime.ts";
 import { observeMainClicks } from "./src/main-clicks.ts";
+import type { QueuedPrompt, QueuedPromptMode } from "./src/prompt-coordinator.ts";
 import { BTW_OVERLAY_OPTIONS, BtwOverlay } from "./src/ui.ts";
 
 const EXTENSION_ROOT = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +64,8 @@ type OpeningState = {
   generation: number;
   promise: Promise<void>;
   overlay: OverlayResources | undefined;
-  pendingPrompts: string[];
+  /** Prompts submitted while the child loads, sent in order once it is ready. */
+  pendingPrompts: QueuedPrompt[];
   settleOverlayReady: () => void;
   overlayReady: Promise<void>;
 };
@@ -231,19 +233,19 @@ export class BtwController {
       const settledState = this.controllerState();
       if (settledState.phase !== "open" || settledState.generation !== opening.generation) return;
       this.focus(settledState.overlay);
-      if (prompt) this.submit(prompt);
+      if (prompt) this.submit(prompt, "steer");
       return;
     }
 
     if (this.state.phase === "open") {
       this.focus(this.state.overlay);
-      if (prompt) this.submit(prompt);
+      if (prompt) this.submit(prompt, "steer");
       return;
     }
 
     const opening = createOpeningState(++this.nextGeneration);
     this.state = opening;
-    if (prompt) opening.pendingPrompts.push(prompt);
+    if (prompt) opening.pendingPrompts.push({ text: prompt, mode: "steer" });
     opening.promise = this.openGeneration(opening, ctx).finally(() => {
       if (this.state === opening) this.state = { phase: "closed" };
     });
@@ -266,9 +268,10 @@ export class BtwController {
     }
 
     void ctx.ui.custom<void>(
-      (tui, theme, _keybindings, done) => {
-        const panel = new BtwOverlay(tui, theme, {
-          onSubmit: (text) => this.submitForGeneration(opening.generation, text),
+      (tui, theme, keybindings, done) => {
+        const panel = new BtwOverlay(tui, theme, keybindings, {
+          onSubmit: (text, mode) => this.submitForGeneration(opening.generation, text, mode),
+          onDequeue: () => this.dequeue(opening.generation),
           onMain: () => this.unfocus(opening.generation),
           onClose: () => {
             void this.close("Closed from the BTW pane.");
@@ -291,6 +294,8 @@ export class BtwController {
         opening.overlay = overlay;
         panel.setForkLeaf(snapshot.forkLeafId);
         panel.setParentRunning(this.parentRunning);
+        // A prompt passed to /btw is already waiting for the child.
+        panel.setQueue(opening.pendingPrompts);
         // A click on BTW focuses it through its own handleMouse; a click anywhere on
         // main hands focus back. Releasing the overlay explicitly matters: Pi treats
         // focus moving to the editor BTW was opened over as temporary and would
@@ -360,6 +365,7 @@ export class BtwController {
               void this.close("Child requested shutdown.");
             }
           },
+          onQueueChange: () => this.refreshQueue(opening.generation),
         },
       });
       createdRuntime = runtime;
@@ -394,7 +400,8 @@ export class BtwController {
         overlay,
         runtime,
       };
-      for (const pendingPrompt of pendingPrompts) this.submit(pendingPrompt);
+      for (const pendingPrompt of pendingPrompts) this.submit(pendingPrompt.text, pendingPrompt.mode);
+      this.refreshQueue(opening.generation);
     } catch (error) {
       opening.pendingPrompts.length = 0;
       if (createdRuntime) {
@@ -411,12 +418,16 @@ export class BtwController {
     }
   }
 
-  private submitForGeneration(generation: number, text: string): void {
+  private submitForGeneration(generation: number, text: string, mode: QueuedPromptMode): void {
     if (!this.stateOwnsGeneration(generation)) return;
-    this.submit(text);
+    this.submit(text, mode);
   }
 
-  private submit(text: string): void {
+  /**
+   * Like the main chat, a prompt never waits for the child to finish before it is taken: while the
+   * child loads it queues here, while the child runs it joins the run as a steer or follow-up.
+   */
+  private submit(text: string, mode: QueuedPromptMode): void {
     const prompt = text.trim();
     if (!prompt) return;
     const control = prompt.toLowerCase();
@@ -430,18 +441,38 @@ export class BtwController {
       return;
     }
     if (this.state.phase === "opening") {
-      this.state.pendingPrompts.push(prompt);
-      this.state.overlay?.panel.addNotice("Queued until the child runtime is ready.", "info");
+      this.state.pendingPrompts.push({ text: prompt, mode });
+      this.refreshQueue(this.state.generation);
       return;
     }
     if (this.state.phase !== "open") return;
 
     const open = this.state;
-    void open.runtime.prompt(prompt).catch((error: unknown) => {
+    void open.runtime.prompt(prompt, mode).catch((error: unknown) => {
       if (this.state !== open) return;
       const message = error instanceof Error ? error.message : String(error);
       open.overlay.panel.addNotice(`Prompt failed: ${message}`, "error");
     });
+  }
+
+  /** Show what is still waiting for the child: the opening queue, or the runtime's. */
+  private refreshQueue(generation: number): void {
+    if (!this.stateOwnsGeneration(generation)) return;
+    const state = this.state;
+    if (state.phase === "opening") state.overlay?.panel.setQueue(state.pendingPrompts);
+    else if (state.phase === "open") state.overlay.panel.setQueue(state.runtime.queued());
+  }
+
+  /** Take every prompt still waiting for the child back into the editor (main's Alt+Up). */
+  private dequeue(generation: number): void {
+    if (!this.stateOwnsGeneration(generation)) return;
+    const state = this.state;
+    let taken: QueuedPrompt[] = [];
+    if (state.phase === "opening") taken = state.pendingPrompts.splice(0);
+    else if (state.phase === "open") taken = state.runtime.dequeue();
+    else return;
+    state.overlay?.panel.restoreToEditor(taken);
+    this.refreshQueue(generation);
   }
 
   private unfocus(generation: number): void {
@@ -481,11 +512,13 @@ export class BtwController {
     return { delivered: true };
   }
 
+  /** Abort the child run; as in main, queued prompts go back to the editor rather than being lost. */
   abort(): Promise<void> {
     if (this.abortPromise) return this.abortPromise;
     if (this.state.phase === "opening") this.state.pendingPrompts.length = 0;
     const runtime = this.currentRuntime();
     if (!runtime) return Promise.resolve();
+    if (this.state.phase === "open") this.dequeue(this.state.generation);
     this.abortPromise = runtime.abort().finally(() => {
       this.abortPromise = undefined;
     });

@@ -30,19 +30,21 @@ Inside the pane:
 
 | Control | Behavior |
 | --- | --- |
-| `Enter` | Submit the editor contents. Prompts submitted during a child run wait locally in order. |
+| `Enter` | Send the editor contents. The pane takes input from the moment it appears: while the child is still loading, the prompt queues and is sent as soon as it is ready. While the child runs, the prompt steers the run, as in the main chat — it reaches the model after the current tool batch instead of waiting for the run to end. |
+| `Alt+Enter` (Pi's `app.message.followUp`) | Queue a follow-up: delivered once the running child would otherwise stop. When the child is idle it sends like `Enter`. |
+| `Alt+Up` (Pi's `app.message.dequeue`) | Take every queued prompt back into the editor, ahead of any draft. |
 | Mouse wheel over the pane | Scroll the BTW transcript, using Pi's wheel speed setting (`fullscreenWheelScrollLines`). The main transcript does not move. |
 | `PgUp` / `PgDn`, `Ctrl+Up` / `Ctrl+Down` | Scroll by roughly one viewport. |
-| `Esc` | Abort an active child run; when idle, return focus to the parent. |
+| `Esc` | Stop an active child run, returning any queued prompts to the editor; when idle, return focus to the parent. |
 | Click the pane / click main | Focus BTW, or hand focus back to the main session — anywhere on main, transcript or editor. Focus stays where you put it. |
 | `/main` | Return focus to the parent while keeping BTW visible. |
 | `done`, `/done`, `/btw done` | Close BTW. |
 
-The overlay presents separate parent/child activity, streaming output, tool progress and results, retries, compaction, errors, and aborts. Its transcript projection is bounded; the child's own session file remains authoritative while the pane is open.
+Queued prompts show above the editor as dim `Steering:` and `Follow-up:` lines, the same as main's, until the child takes them. The bottom line names the keys that matter in the current state. The overlay presents separate parent/child activity, streaming output, tool progress and results, retries, compaction, errors, and aborts. Its transcript projection is bounded; the child's own session file remains authoritative while the pane is open.
 
 ## Parent updates
 
-The child does not continuously synchronize parent content after its fork. When the parent settles at a newer head, BTW adds a minimal hidden notice to the child that the child-only `check_parent_updates` tool is available. The child can explicitly pull the parent entries persisted since the fork when a later answer depends on them.
+The child does not continuously synchronize parent content after its fork. When the parent settles at a newer head, BTW adds a minimal hidden notice to the child that the child-only `check_parent_updates` tool is available. The notice never enters a running child on its own, since that would cost the run an extra model turn; it waits for the run to end, or rides in just ahead of the next prompt you send. The child can explicitly pull the parent entries persisted since the fork when a later answer depends on them.
 
 The tool reports no-op, linear-update, post-compaction, or branch-divergence state; normalizes and bounds returned content; records the pull only in child history; and never mutates parent history.
 
@@ -110,7 +112,7 @@ BTW is a focused ask/try workspace, not a nested copy of Pi's complete interacti
 - Resources reload in-process with this BTW extension filtered out to prevent recursion.
 - Runtime-only SDK tool identity cannot be inherited exactly. Requested active tool names may resolve to another discoverable definition. A parent tool that a fresh load cannot resolve — for example an MCP proxy tool the parent registered under an older config — does not block opening: BTW opens with every tool that does resolve and shows a warning in the pane naming the ones it left behind, so the reduction is visible rather than silent.
 - Third-party child extensions can enqueue public `nextTurn` context that Pi's API cannot clear on abort. BTW-owned prompts and parent-update notices avoid that queue; closing disposes the child runtime.
-- Cancelling a prompt that is already inside Pi's prompt preflight (input handlers, auth checks) cannot withdraw it through Pi's public API; BTW aborts its run at `agent_start` instead, before model work proceeds.
+- Cancelling a prompt that is already inside Pi's prompt preflight (input handlers, auth checks) cannot withdraw it through Pi's public API; BTW aborts its run at `agent_start` instead, before model work proceeds. Such a prompt is also too far along for `Alt+Up` or `Esc` to take back into the editor. Preflight is usually a few milliseconds.
 - Child prompts use the parent's configured model and can incur normal model cost. Automated tests use controlled local providers and make no network requests.
 
 If extension/provider interference or runtime non-fidelity is unacceptable, close or uninstall BTW.
@@ -133,7 +135,7 @@ From this package directory:
 npm run verify
 ```
 
-This runs strict TypeScript checks and deterministic Node tests covering compaction-aware forks, parent-update pulls, child lifecycle and cleanup, model/tool/cwd inheritance, history isolation, shared-workspace effects, prompt serialization and cancellation, recursion filtering, the read-only tool set, the parent-state-free fork, `send_to_main` delivery through a real parent session (ordering, compaction, undelivered relays), TUI rendering, and mouse wheel and click-focus behavior on Pi's real fullscreen renderer.
+This runs strict TypeScript checks and deterministic Node tests covering compaction-aware forks, parent-update pulls, child lifecycle and cleanup, model/tool/cwd inheritance, history isolation, shared-workspace effects, prompt admission (steer, follow-up, dequeue) and cancellation, recursion filtering, the read-only tool set, the parent-state-free fork, `send_to_main` delivery through a real parent session (ordering, compaction, undelivered relays), TUI rendering, and mouse wheel and click-focus behavior on Pi's real fullscreen renderer.
 
 The tests use temporary directories and controlled local provider streams; they do not call a live model.
 

@@ -141,6 +141,7 @@ export default function (pi) {
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     }), /thinking level does not match/);
 
@@ -187,6 +188,7 @@ test("child opens without parent tools a fresh load cannot resolve and names the
         onNotice(message, type) { notices.push({ message, type }); },
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -247,6 +249,7 @@ export default function (pi) {
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -318,6 +321,7 @@ test("real child AgentSession is temp-backed, isolated, and cleans up idempotent
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -583,6 +587,7 @@ test("deterministic child turn streams without touching parent history", async (
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -656,7 +661,12 @@ test("deterministic child turn streams without touching parent history", async (
     const heldPrompt = child.prompt("hold until abort");
     while (!child.session.isStreaming) await new Promise((resolve) => setImmediate(resolve));
     const staleQueuedPrompt = child.prompt("stale queued prompt");
-    assert.equal(child.session.pendingMessageCount, 0, "local serialization never uses Pi's prompt queues");
+    await staleQueuedPrompt;
+    assert.deepEqual(
+      child.queued(),
+      [{ text: "stale queued prompt", mode: "steer" }],
+      "a prompt sent mid-run is queued into the run, not held until it ends",
+    );
     const abortOrder: string[] = [];
     const originalAbortCompaction = child.session.abortCompaction.bind(child.session);
     const originalAbortBranchSummary = child.session.abortBranchSummary.bind(child.session);
@@ -776,7 +786,7 @@ test("a persisted aside is kept under the parent session so its spend stays coun
       sendToParent: async () => ({ delivered: true }),
       modelRuntime: testModelRuntime,
       agentDir,
-      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {}, onQueueChange() {} },
     });
 
     // Lives under the parent session, where a cost scan finds it — not in a temp dir.
@@ -799,7 +809,7 @@ test("a persisted aside is kept under the parent session so its spend stays coun
       sendToParent: async () => ({ delivered: true }),
       modelRuntime: testModelRuntime,
       agentDir,
-      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+      callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {}, onQueueChange() {} },
     });
     assert.notEqual(sibling.childSessionFile, child.childSessionFile);
 
@@ -860,7 +870,7 @@ test("construction failure removes only its own aside, never the shared sidecar 
         sendToParent: async () => ({ delivered: true }),
         modelRuntime: testModelRuntime,
         agentDir,
-        callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {} },
+        callbacks: { onEvent() {}, onNotice() {}, onChildStatus() {}, onRequestClose() {}, onQueueChange() {} },
       }),
       /thinking level does not match/,
     );

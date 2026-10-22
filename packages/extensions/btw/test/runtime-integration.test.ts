@@ -421,6 +421,7 @@ test("a mid-turn fork yields a usable child session and announces the turn's com
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -550,6 +551,7 @@ test("parent and BTW child overlap, share the workspace read-only, pull updates,
         onNotice() {},
         onChildStatus() {},
         onRequestClose() {},
+        onQueueChange() {},
       },
     });
 
@@ -606,32 +608,33 @@ test("parent and BTW child overlap, share the workspace read-only, pull updates,
     assert.equal(child.session.isStreaming, true, "child remains in its original blocked run after parent settles");
     const parentAfterOverlappingSettlement = parent.sessionManager.getEntries();
     const childEntriesBeforeStreamingAnnouncement = child.session.sessionManager.getEntries();
-    const queuedChildPull = child.prompt(CHILD_PULL_PROMPT);
-    assert.equal(child.session.pendingMessageCount, 0, "later prompts are serialized locally, never in Pi's follow-up queue");
     assert.equal(await child.announceParentUpdate(), true, "parent settlement is announced while the child is streaming");
     assert.deepEqual(parent.sessionManager.getEntries(), parentAfterOverlappingSettlement);
     assert.deepEqual(
       child.session.sessionManager.getEntries(),
       childEntriesBeforeStreamingAnnouncement,
-      "next-turn availability stays queued instead of mutating the active child run",
+      "a notice alone stays out of the active child run",
     );
-    assert.equal(child.session.isStreaming, true, "availability does not settle or continue the active child run");
-    assert.equal(
-      child.session.sessionManager.getEntries().some((entry) => entryMessageText(entry).includes(CHILD_PULL_PROMPT)),
-      false,
-      "the later local prompt cannot start before the current child run settles",
-    );
+    assert.equal(child.session.pendingMessageCount, 0, "a notice alone is not queued into the run");
+    // Like the main chat, a prompt sent mid-run steers the run instead of waiting for it to end.
+    await child.prompt(CHILD_PULL_PROMPT);
+    assert.deepEqual(child.session.getSteeringMessages(), [CHILD_PULL_PROMPT], "the later prompt steers the running child");
+    assert.equal(child.session.isStreaming, true, "steering does not settle or restart the active child run");
 
     barrier.release("child");
-    await Promise.all([childTurn, queuedChildPull]);
+    await childTurn;
     assert.ok(
-      child.session.sessionManager.getEntries().some((entry) => entryMessageText(entry).includes(`child read complete: ${SCRATCH_CONTENT}`)),
+      child.session.sessionManager.getEntries().some((entry) =>
+        entry.type === "message" &&
+        entry.message.role === "toolResult" &&
+        entry.message.toolName === "read" &&
+        entryMessageText(entry).includes(SCRATCH_CONTENT)),
       "the child reads the shared workspace",
     );
     assert.match(
       child.session.getLastAssistantText() ?? "",
       /CHILD PULLED UPDATE/,
-      "the later prompt runs only after deferred hidden availability is inserted",
+      "the steered prompt reaches the model with the parent-update notice carried in ahead of it",
     );
 
     await parent.prompt(PARENT_UPDATE_PROMPT);

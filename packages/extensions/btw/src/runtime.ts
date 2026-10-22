@@ -25,6 +25,8 @@ import { deriveChildSessionDir } from "./sidecar.ts";
 import {
   ChildPromptCoordinator,
   type ParentUpdateAnnouncement,
+  type QueuedPrompt,
+  type QueuedPromptMode,
 } from "./prompt-coordinator.ts";
 import { ChildUIBridge } from "./ui-bridge.ts";
 import { ParentUpdateTracker, type ParentUpdateResult } from "./updates.ts";
@@ -53,6 +55,8 @@ export interface ChildRuntimeCallbacks {
   onNotice(message: string, type?: "info" | "warning" | "error"): void;
   onChildStatus(key: string, text: string | undefined): void;
   onRequestClose(): void;
+  /** The prompts waiting for the child changed; read them with `queued()`. */
+  onQueueChange(): void;
 }
 
 export interface ChildRuntimeHandle {
@@ -63,7 +67,12 @@ export interface ChildRuntimeHandle {
   readonly childSessionFile: string;
   /** Set only when the directory is this aside's private temp dir, removed on close. */
   readonly disposableDir?: string;
-  prompt(text: string): Promise<void>;
+  /** Start a run when idle; otherwise join the running one as a steer (default) or follow-up. */
+  prompt(text: string, mode?: QueuedPromptMode): Promise<void>;
+  /** Prompts submitted but not yet delivered to the child's model, oldest first. */
+  queued(): QueuedPrompt[];
+  /** Take back every prompt not yet delivered, oldest first. */
+  dequeue(): QueuedPrompt[];
   announceParentUpdate(): Promise<boolean>;
   abort(): Promise<void>;
   close(reason?: string): Promise<void>;
@@ -229,6 +238,13 @@ function notDeliveredText(reason: string): string {
   return `Not delivered: the message did not reach the main session (${reason}).`;
 }
 
+function queuedFrom(queues: { steering: readonly string[]; followUp: readonly string[] }): QueuedPrompt[] {
+  return [
+    ...queues.steering.map((text) => ({ text, mode: "steer" as const })),
+    ...queues.followUp.map((text) => ({ text, mode: "followUp" as const })),
+  ];
+}
+
 export function missingInheritedToolsNotice(missingTools: readonly string[]): string {
   return `BTW opened without ${missingTools.length} parent tool(s) that are not available in a fresh load: ${missingTools.join(", ")}. Restart or /reload the parent to bring them back in sync.`;
 }
@@ -315,6 +331,8 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
     unsubscribe = session.subscribe((event) => {
       if (event.type === "agent_start") coordinator?.onAgentStart();
       callbacks.onEvent(event);
+      // Pi's own steer/follow-up queues moved (a queued prompt reached the model, or was cleared).
+      if (event.type === "queue_update") callbacks.onQueueChange();
     });
 
     await session.bindExtensions({
@@ -382,15 +400,22 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
 
     let closePromise: Promise<void> | undefined;
     coordinator = new ChildPromptCoordinator({
-      prompt: (text) => session!.prompt(text),
-      appendAnnouncement: (announcement) => session!.sendCustomMessage({
+      prompt: (text, mode, onAdmitted) => session!.prompt(text, {
+        streamingBehavior: mode,
+        preflightResult: onAdmitted,
+      }),
+      appendAnnouncement: (announcement, mode) => session!.sendCustomMessage({
         customType: PARENT_UPDATE_AVAILABLE_CUSTOM_TYPE,
         content: PARENT_UPDATE_AVAILABLE_MESSAGE,
         display: false,
         details: { parentHeadId: announcement.parentHeadId },
-      }),
+      }, { deliverAs: mode }),
       isIdle: () => session!.isIdle,
-      clearQueue: () => { session!.clearQueue(); },
+      clearQueue: () => queuedFrom(session!.clearQueue()),
+      queuedPrompts: () => queuedFrom({
+        steering: session!.getSteeringMessages(),
+        followUp: session!.getFollowUpMessages(),
+      }),
       abortCompaction: () => session!.abortCompaction(),
       abortBranchSummary: () => session!.abortBranchSummary(),
       abort: () => session!.abort(),
@@ -401,6 +426,7 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
       onAnnouncementDiscarded(announcement) {
         announcedParentHeads.delete(announcement.parentHeadId);
       },
+      onQueueChange: callbacks.onQueueChange,
     });
 
     const runtime: ChildRuntimeHandle = {
@@ -408,8 +434,14 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
       childSessionDir,
       childSessionFile,
       ...(disposableDir ? { disposableDir } : {}),
-      prompt(text) {
-        return coordinator!.prompt(text);
+      prompt(text, mode) {
+        return coordinator!.prompt(text, mode);
+      },
+      queued() {
+        return coordinator!.queued();
+      },
+      dequeue() {
+        return coordinator!.dequeue();
       },
       async announceParentUpdate() {
         const completedEntries = selectForkBranch(
