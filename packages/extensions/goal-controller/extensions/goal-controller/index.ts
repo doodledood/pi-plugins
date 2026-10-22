@@ -302,11 +302,11 @@ export function activate(
     if (!activeGoal) return;
     if (pendingContinuationPrompt !== undefined && text === pendingContinuationPrompt) return;
     if (activeGoal.status === "waiting_for_user") {
-      activeGoal = resumeGoal(activeGoal);
+      activeGoal = resumeGoal(activeGoal, currentTokenTotal(ctx));
       // Status transition: re-anchor the reminder on this activation.
       reminderInjectedForGoalId = undefined;
     } else if (activeGoal.status === "active" && activeGoal.awaitingContinuationTurn) {
-      activeGoal = resumeGoal(activeGoal);
+      activeGoal = resumeGoal(activeGoal, currentTokenTotal(ctx));
     } else {
       return;
     }
@@ -412,7 +412,7 @@ export function activate(
         ctx.ui.notify("No paused, waiting, blocked, budget-limited, or completed goal can be resumed.", "warning");
         return;
       }
-      activeGoal = resumeGoal(activeGoal);
+      activeGoal = resumeGoal(activeGoal, currentTokenTotal(ctx));
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
@@ -464,7 +464,7 @@ export function activate(
         return;
       }
 
-      activeGoal = editGoalText(current, nextGoalText);
+      activeGoal = editGoalText(current, nextGoalText, currentTokenTotal(ctx));
       resetCheckerRuntime(checkerRun, true);
       clearPendingContinuation();
       persistGoal(activeGoal);
@@ -636,7 +636,7 @@ export function activate(
       // user-driven, so a waiting goal resumes and the automatic-continuation
       // state is reset; Pi runs it next and the following settle checks again.
       if (ctx.hasPendingMessages() && (activeGoal.status === "waiting_for_user" || activeGoal.status === "active")) {
-        activeGoal = resumeGoal(activeGoal);
+        activeGoal = resumeGoal(activeGoal, currentTokenTotal(ctx));
         persistGoal(activeGoal);
         setStatus(ctx);
         return;

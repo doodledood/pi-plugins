@@ -141,7 +141,7 @@ test("resumeGoal reactivates completed goals while making prior completion histo
     6_000,
   );
 
-  const resumed = resumeGoal(complete, 7_000);
+  const resumed = resumeGoal(complete, complete.baselineTokens + complete.tokensUsed, 7_000);
 
   assert.equal(resumed.status, "active");
   assert.equal(resumed.id, complete.id);
@@ -153,7 +153,7 @@ test("resumeGoal reactivates completed goals while making prior completion histo
   assert.equal(resumed.iteration, complete.iteration);
   assert.equal(resumed.tokensUsed, complete.tokensUsed);
   assert.equal(resumed.turnsUsed, complete.turnsUsed);
-  assert.equal(resumed.timeUsedSeconds, complete.timeUsedSeconds);
+  assert.equal(resumed.timeUsedSeconds, 6, "lifetime wall-clock time is brought up to the resume");
   assert.equal(resumed.tokenBudget, complete.tokenBudget);
   assert.equal(resumed.turnBudget, complete.turnBudget);
   assert.equal(resumed.timeBudgetSeconds, complete.timeBudgetSeconds);
@@ -166,7 +166,7 @@ test("resumeGoal preserves last checker verdict for non-complete resumable goals
   const started = startGoal(undefined, "finish task", config, 0);
   if (!started.ok) throw new Error("expected goal");
   const waiting = applyCheckerVerdict(started.goal, { decision: "waiting_for_user", complete: false, reason: "need user input" }, config, true);
-  const resumed = resumeGoal(waiting);
+  const resumed = resumeGoal(waiting, waiting.baselineTokens);
 
   assert.equal(resumed.status, "active");
   assert.equal(resumed.lastCheckerVerdict, waiting.lastCheckerVerdict);
@@ -286,7 +286,7 @@ test("pause and resume are user/system state transitions, not completion", () =>
   if (!started.ok) throw new Error("expected goal");
   const paused = pauseGoal(started.goal, "interrupted");
   assert.equal(paused.status, "paused");
-  const resumed = resumeGoal(paused);
+  const resumed = resumeGoal(paused, paused.baselineTokens);
   assert.equal(resumed.status, "active");
   assert.equal(resumed.lastTransitionReason, "resumed by user");
 });

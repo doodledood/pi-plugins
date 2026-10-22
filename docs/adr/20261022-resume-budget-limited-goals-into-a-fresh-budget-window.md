@@ -9,7 +9,7 @@ Accepted
 Budgets in goal-controller are a guard on one stretch of automatic continuation the user has authorized, not a lifetime spending cap: they default to unbounded, and the user can resume any stopped goal. Resuming is the user explicitly authorizing more work.
 
 ## Decision
-Resuming a `budget_limited` goal opens a fresh budget window measured from the resume point. The goal records where the window starts (`budgetWindowStart`: tokens, turns and elapsed seconds at the resume), and budget checks and the status line compare the budget against usage since that point. Lifetime counters (`tokensUsed`, `turnsUsed`, `timeUsedSeconds`) keep counting from the goal's start and stay the audit trail; the goal summary shows both once a window exists.
+Resuming a `budget_limited` goal, with `/goal_resume` or by editing it (`/goal_edit` also resumes), opens a fresh budget window measured from the resume point. The goal records where the window starts (`budgetWindowStart`: tokens, turns and elapsed seconds at the resume, with usage first brought up to date, since turns can run while the goal is stopped), and budget checks and the status line compare the budget against usage since that point. Lifetime counters (`tokensUsed`, `turnsUsed`, `timeUsedSeconds`) keep counting from the goal's start and stay the audit trail; the goal summary shows both once a window exists.
 
 Resuming from any other status keeps the current window, so pausing and resuming a goal mid-budget does not grant a new budget.
 

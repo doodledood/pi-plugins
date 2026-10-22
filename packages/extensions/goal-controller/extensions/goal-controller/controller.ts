@@ -239,23 +239,33 @@ export function clearGoal(goal: ActiveGoal | undefined, now = Date.now()): Activ
   return transitionGoal(goal, "cleared", "cleared by user", now);
 }
 
-export function resumeGoal(goal: ActiveGoal, now = Date.now()): ActiveGoal {
+/**
+ * Make a stopped goal active again. Usage is brought up to `tokenTotal`, the session's token total now,
+ * because turns can run while the goal is stopped. Leaving `budget_limited` opens a fresh budget window
+ * at that point; lifetime counters stay the audit trail.
+ */
+function reactivateGoal(goal: ActiveGoal, reason: string, tokenTotal: number, now: number): ActiveGoal {
+  const current = updateUsage(goal, tokenTotal, now);
   return {
-    ...transitionGoal(goal, "active", "resumed by user", now),
-    // A budget-limited goal resumes into a fresh budget window; lifetime
-    // counters are kept as the audit trail.
+    ...transitionGoal(current, "active", reason, now),
     budgetWindowStart: goal.status === "budget_limited"
-      ? { tokens: goal.tokensUsed, turns: goal.turnsUsed, timeSeconds: Math.max(0, Math.floor((now - goal.startedAt) / 1000)) }
+      ? { tokens: current.tokensUsed, turns: current.turnsUsed, timeSeconds: current.timeUsedSeconds }
       : goal.budgetWindowStart,
+  };
+}
+
+export function resumeGoal(goal: ActiveGoal, tokenTotal: number, now = Date.now()): ActiveGoal {
+  return {
+    ...reactivateGoal(goal, "resumed by user", tokenTotal, now),
     lastCheckerVerdict: goal.status === "complete" ? undefined : goal.lastCheckerVerdict,
     awaitingContinuationTurn: false,
     consecutiveNoToolContinuations: 0,
   };
 }
 
-export function editGoalText(goal: ActiveGoal, goalText: string, now = Date.now()): ActiveGoal {
+export function editGoalText(goal: ActiveGoal, goalText: string, tokenTotal: number, now = Date.now()): ActiveGoal {
   return {
-    ...transitionGoal(goal, "active", "edited by user", now),
+    ...reactivateGoal(goal, "edited by user", tokenTotal, now),
     goal: goalText.trim(),
     iteration: 0,
     checkerIteration: 0,

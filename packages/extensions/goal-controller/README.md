@@ -137,7 +137,7 @@ The controller decides once Pi has settled the run (`agent_before_settle`), not 
 
 A message the user sends while the checker runs counts as the user-driven turn: it resumes a waiting goal and resets the automatic no-tool continuation count.
 
-`/goal_resume` on a budget-limited goal opens a fresh budget window measured from the resume point. Lifetime usage counters keep counting from the goal's start, and `/goal` shows both. Resuming from any other status keeps the current window. See `docs/adr/20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md`.
+`/goal_resume` on a budget-limited goal, or `/goal_edit` (which also resumes it), opens a fresh budget window measured from the resume point; turns you ran while the goal was stopped do not count against it. Lifetime usage counters keep counting from the goal's start, and `/goal` shows both. Resuming from any other status keeps the current window. See `docs/adr/20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md`.
 
 `/goal_edit` applies the edit only if, when the editor closes, the same goal is still there and editable; if it entered checking, finished, or was replaced, the edit is not applied and your text is shown back.
 

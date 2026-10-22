@@ -1,4 +1,4 @@
-// Formal-bug-hunt harness: a REAL Pi AgentSession (0.80.8) with the real goal-controller
+// Real-session test harness: a real Pi 1.4 AgentSession with the real goal-controller
 // extension loaded via extensionFactories, a scripted deterministic provider, and a
 // controllable fake checker (the only fake: the checker subprocess).
 import { mkdtemp } from "node:fs/promises";

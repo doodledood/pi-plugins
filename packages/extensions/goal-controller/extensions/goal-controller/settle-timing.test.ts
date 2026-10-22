@@ -164,3 +164,29 @@ test("a goal the model starts mid-run carries its own reminder after the old goa
     assert.ok(retraction > reminderA && retraction < reminderB, "GOAL-A's reminder is retracted before GOAL-B's reminder");
   }
 });
+
+test("a budget-limited goal's fresh window starts at the resume, after turns run while it was stopped", { timeout: 10_000 }, async () => {
+  // Each provider call bills 15 tokens; the budget is 20, so the goal's second turn uses it up.
+  const checker = new ScriptedChecker([continueVerdict("not yet"), continueVerdict("not yet"), continueVerdict("one more"), completeVerdict("all proven")]);
+  const h = await createHarness({
+    checker,
+    config: { defaultTokenBudget: 20 },
+    replies: () => ({ kind: "text", text: "Progress made." }),
+  });
+  await h.session.prompt("/goal token task");
+  await waitUntil(() => h.goalState().status === "budget_limited");
+  await settle(h);
+  const stopped = h.goalState();
+  // The user chats while the goal is stopped.
+  for (const text of ["unrelated question 1", "unrelated question 2", "unrelated question 3"]) {
+    await h.session.prompt(text);
+    await settle(h);
+  }
+  await h.session.prompt("/goal_resume");
+  await waitUntil(() => h.goalState().status !== "active" && h.goalState().status !== "checking", 5_000);
+  await settle(h);
+  const goal = h.goalState();
+  assert.equal(goal.budgetWindowStart?.tokens, stopped.tokensUsed + 3 * 15, "the window started before the chat turns");
+  assert.equal(goal.status, "complete", `the resumed goal stopped early: ${goal.lastTransitionReason}`);
+  assert.equal(goal.turnsUsed, stopped.turnsUsed + 2, "the resumed window allowed a full budget of goal turns");
+});
