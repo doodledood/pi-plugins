@@ -16,10 +16,13 @@ const SUPPORTED_FIELDS = new Set([
   "excludedTools",
 ]);
 
-export const CONFIG_PATH = join(
-  process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
-  "advisor-consult.json",
-);
+/** Node's `setTimeout` maximum; a longer delay fires after about 1 ms instead. */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+/** Resolved per call, so the file follows Pi's agent directory as it is at the time. */
+export function configPath(): string {
+  return join(process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"), "advisor-consult.json");
+}
 
 export const DEFAULT_CONFIG: AdvisorConsultConfig = {
   defaultModel: "anthropic/claude-fable-5-1",
@@ -34,7 +37,7 @@ export function defaultConfig(): AdvisorConsultConfig {
   return { ...DEFAULT_CONFIG, excludedTools: [...DEFAULT_CONFIG.excludedTools] };
 }
 
-export function loadConfig(path = CONFIG_PATH): LoadedConfig {
+export function loadConfig(path = configPath()): LoadedConfig {
   if (!existsSync(path)) return { config: defaultConfig(), path };
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -47,7 +50,7 @@ export function loadConfig(path = CONFIG_PATH): LoadedConfig {
       path,
       warning:
         merged.warnings.length > 0
-          ? `advisor-consult config ignored invalid value(s): ${merged.warnings.join(", ")}`
+          ? `advisor-consult config ignored or adjusted value(s): ${merged.warnings.join(", ")}`
           : undefined,
     };
   } catch (error) {
@@ -102,6 +105,10 @@ function positiveInteger(value: unknown, defaultValue: number, field: string, wa
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     warnings.push(field);
     return defaultValue;
+  }
+  if (value > MAX_TIMER_MS) {
+    warnings.push(`${field} (capped at ${MAX_TIMER_MS} ms, the longest timer Node can set)`);
+    return MAX_TIMER_MS;
   }
   return Math.floor(value);
 }

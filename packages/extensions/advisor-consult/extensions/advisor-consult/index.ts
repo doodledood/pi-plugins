@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { keyHint, resolveCliModel, type ExtensionAPI, type ExtensionContext, type ModelRuntime, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { clampTimeout, loadConfig } from "./config.ts";
@@ -93,6 +93,56 @@ class AdvisorCallView {
   }
 }
 
+/** Per-row renderer state Pi shares between a call's call and result renders. */
+interface AdvisorRowState {
+  ranWith?: AdvisorConsultConfig;
+  callView?: AdvisorCallView;
+}
+
+function configFromDetails(details: unknown): AdvisorConsultConfig | undefined {
+  if (!isRecord(details) || !isRecord(details.config)) return undefined;
+  const config = details.config;
+  if (
+    typeof config.defaultModel !== "string" ||
+    !isThinkingLevel(config.defaultThinking) ||
+    typeof config.defaultTimeoutMs !== "number" ||
+    typeof config.minTimeoutMs !== "number" ||
+    typeof config.maxTimeoutMs !== "number" ||
+    !Array.isArray(config.excludedTools)
+  ) {
+    return undefined;
+  }
+  return config as unknown as AdvisorConsultConfig;
+}
+
+/** Lines of a collapsed result, matching Pi's own preview of tool output. */
+const COLLAPSED_RESULT_LINES = 10;
+
+/** The tool output as Pi's default view shows it: a ten-line preview, the whole text when expanded. */
+function renderResultText(content: readonly { type: string; text?: string }[], expanded: boolean, theme: Theme): Text {
+  const output = content
+    .filter((block) => block.type === "text")
+    .map((block) => sanitizeOutput(block.text ?? ""))
+    .join("\n");
+  const lines = output.split("\n");
+  const shown = expanded ? lines : lines.slice(0, COLLAPSED_RESULT_LINES);
+  let text = shown.map((line) => theme.fg("toolOutput", line)).join("\n");
+  const remaining = lines.length - shown.length;
+  if (remaining > 0) {
+    text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+  }
+  return new Text(text, 0, 0);
+}
+
+function sanitizeOutput(value: string): string {
+  let out = "";
+  for (const character of value.replace(/\r/gu, "")) {
+    const codePoint = character.codePointAt(0)!;
+    out += codePoint === 0x0a || codePoint === 0x09 || !isTerminalControl(codePoint) ? character : `\\x${codePoint.toString(16).padStart(2, "0")}`;
+  }
+  return out;
+}
+
 export interface ConsultDeps {
   runner: AdvisorRunner;
   config: AdvisorConsultConfig;
@@ -102,11 +152,18 @@ export interface ConsultDeps {
   /** Where the advisor's session file goes; undefined when the parent has none. */
   sessionDir?: string;
   signal?: AbortSignal;
+  /**
+   * What a `--model` pattern resolves to (`provider/id`), the way Pi resolves it: thinking suffixes and fuzzy
+   * matches included. Undefined when the pattern resolves to no single model.
+   */
+  resolveModelPattern?: (pattern: string) => string | undefined;
 }
 
 export interface ConsultOutput {
   text: string;
-  details: Record<string, unknown>;
+  /** True when the consult produced no advice: the result is reported to the model as a failed tool call. */
+  isError: boolean;
+  details: Record<string, unknown> & { ok: boolean };
 }
 
 /**
@@ -119,7 +176,8 @@ export async function consult(params: AdvisorParams, deps: ConsultDeps): Promise
   if (!query) {
     return {
       text: "advisor_consult needs a non-empty `query`: a context-rich advisory brief (objective, key facts, your current read, the tensions, and the decision). Nothing was consulted.",
-      details: { ok: false, error: "empty_query" },
+      isError: true,
+      details: { ok: false, error: "empty_query", config: deps.config },
     };
   }
 
@@ -141,7 +199,13 @@ export async function consult(params: AdvisorParams, deps: ConsultDeps): Promise
     signal: deps.signal,
   });
 
-  return formatResult(result, { requestedModel: model, inherited, timeoutNote: timeout.note });
+  return formatResult(result, {
+    requestedModel: model,
+    inherited,
+    timeoutNote: timeout.note,
+    config: deps.config,
+    resolveModelPattern: deps.resolveModelPattern,
+  });
 }
 
 export function resolveModel(
@@ -180,17 +244,25 @@ export function resolveTimeout(
 
 function formatResult(
   result: AdvisorResult,
-  meta: { requestedModel?: string; inherited: boolean; timeoutNote?: string },
+  meta: {
+    requestedModel?: string;
+    inherited: boolean;
+    timeoutNote?: string;
+    config: AdvisorConsultConfig;
+    resolveModelPattern?: (pattern: string) => string | undefined;
+  },
 ): ConsultOutput {
   if (!result.ok) {
     return {
       text: [meta.timeoutNote, result.error].filter(Boolean).join("\n\n"),
+      isError: true,
       details: {
         ok: false,
         timedOut: result.timedOut === true,
         elapsedMs: result.elapsedMs,
         model: result.model,
         requestedModel: meta.requestedModel,
+        config: meta.config,
       },
     };
   }
@@ -198,30 +270,62 @@ function formatResult(
   const headerBits = [`advisor · model: ${result.model ?? meta.requestedModel ?? "unknown"} · ${formatDuration(result.elapsedMs)}`];
   const notes: string[] = [];
   if (meta.timeoutNote) notes.push(meta.timeoutNote);
-  if (!meta.inherited && meta.requestedModel && result.model && modelsDiffer(meta.requestedModel, result.model)) {
+  if (!meta.inherited && meta.requestedModel && result.model && modelNotUsed(meta.requestedModel, result.model, meta.resolveModelPattern)) {
     notes.push(`note: requested model '${meta.requestedModel}' was not used; the advisor ran on '${result.model}'.`);
   }
 
   const text = [`[${headerBits.join("")}]`, ...notes, "", result.advice ?? ""].join("\n").trim();
   return {
     text,
+    isError: false,
     details: {
       ok: true,
       model: result.model,
       requestedModel: meta.requestedModel,
       elapsedMs: result.elapsedMs,
+      config: meta.config,
     },
   };
 }
 
-/** Compare model identifiers tolerantly (provider/id vs bare id). */
-export function modelsDiffer(requested: string, actual: string): boolean {
-  const norm = (value: string): string => {
-    const trimmed = value.trim().toLowerCase();
-    const slash = trimmed.lastIndexOf("/");
-    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+/**
+ * True when the advisor ran on a model other than the one its pattern resolves to. The pattern is compared
+ * through Pi's own resolution, so `model:high` or a fuzzy `fable` that resolves to the model used is not a
+ * mismatch. A pattern that resolves to no single model here gives nothing to compare against: no note.
+ */
+export function modelNotUsed(
+  requested: string,
+  actual: string,
+  resolveModelPattern: ((pattern: string) => string | undefined) | undefined,
+): boolean {
+  const expected = resolveModelPattern?.(requested);
+  if (!expected) return false;
+  const [expectedProvider, expectedId] = splitModel(expected);
+  const [actualProvider, actualId] = splitModel(actual);
+  if (expectedId !== actualId) return true;
+  return expectedProvider !== undefined && actualProvider !== undefined && expectedProvider !== actualProvider;
+}
+
+function splitModel(value: string): [string | undefined, string] {
+  const trimmed = value.trim().toLowerCase();
+  const slash = trimmed.indexOf("/");
+  return slash >= 0 ? [trimmed.slice(0, slash), trimmed.slice(slash + 1)] : [undefined, trimmed];
+}
+
+/**
+ * Resolve a `--model` pattern against the parent's model registry with Pi's CLI resolver, the same rules the
+ * advisor subprocess applies to its `--model` flag.
+ */
+function registryPatternResolver(registry: ExtensionContext["modelRegistry"]): (pattern: string) => string | undefined {
+  // resolveCliModel reads only these two runtime methods; the extension API exposes the registry facade.
+  const runtime = {
+    getModels: () => registry.getAll(),
+    hasConfiguredAuth: (provider: string) => registry.getAvailable().some((model) => model.provider === provider),
+  } as unknown as ModelRuntime;
+  return (pattern) => {
+    const resolved = resolveCliModel({ cliModel: pattern, modelRuntime: runtime });
+    return resolved.model ? `${resolved.model.provider}/${resolved.model.id}` : undefined;
   };
-  return norm(requested) !== norm(actual);
 }
 
 function presentAdvisorCall(
@@ -393,11 +497,24 @@ export function activate(
     promptGuidelines: [...ADVISOR_TOOL_GUIDELINES],
     parameters: advisorSchema,
     renderCall(args, theme, context) {
-      const loaded = configLoader();
+      const state = context.state as AdvisorRowState;
+      // A finished call shows the configuration it ran with (carried in its result), not today's file.
+      const config = state.ranWith ?? configLoader().config;
       const view = context.lastComponent instanceof AdvisorCallView ? context.lastComponent : new AdvisorCallView();
       const argsSettled = context.argsComplete || context.executionStarted || (!context.isPartial && !context.isError);
-      view.update(presentAdvisorCall(args, loaded.config, argsSettled, theme), context.expanded);
+      view.update(presentAdvisorCall(args, config, argsSettled, theme), context.expanded);
+      state.callView = view;
       return view;
+    },
+    renderResult(result, options, theme, context) {
+      const state = context.state as AdvisorRowState;
+      const ranWith = configFromDetails(result.details);
+      if (ranWith) {
+        state.ranWith = ranWith;
+        // Pi draws the call row before the result row, so the header drawn this frame is corrected in place.
+        state.callView?.update(presentAdvisorCall(context.args, ranWith, true, theme), options.expanded);
+      }
+      return renderResultText(result.content, options.expanded, theme);
     },
     async execute(_toolCallId: string, params: AdvisorParams, signal, _onUpdate, ctx: ExtensionContext) {
       const loaded = configLoader();
@@ -410,15 +527,17 @@ export function activate(
         bootstrapExtensionPath: BOOTSTRAP_EXTENSION_PATH,
         sessionDir: deriveChildSessionDir(ctx.sessionManager?.getSessionFile?.(), ADVISOR_SESSION_KIND),
         signal,
+        ...(ctx.modelRegistry ? { resolveModelPattern: registryPatternResolver(ctx.modelRegistry) } : {}),
       });
       return {
         content: [{ type: "text" as const, text: output.text }],
         details: output.details,
+        isError: output.isError,
       };
     },
   });
 }
 
 export default function advisorConsult(pi: ExtensionAPI): void {
-  activate(pi, new PiSubprocessAdvisorRunner(pi));
+  activate(pi, new PiSubprocessAdvisorRunner());
 }

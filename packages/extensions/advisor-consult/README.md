@@ -14,6 +14,8 @@ On hard calls — validating a plan, adversarially reviewing your own reasoning,
 
 ## Install
 
+Requires Pi 1.4.0 or later.
+
 From a local clone:
 
 ```bash
@@ -58,6 +60,8 @@ advisor_consult({
 
 The result is advice for the parent to weigh, prefixed with a compact `[advisor · model: … · duration]` header. It is **not** an action taken on the user's behalf.
 
+Only a finished final answer counts as advice. If the advisor's last model call errored, stopped at the output token limit, or was aborted, the consult returns "no advice", even when an earlier turn produced text such as narration before a tool call. A timeout, abort, or failure is returned as a failed tool call (`isError`), and its text carries the cause, the configuration, and the advisor's stderr, never its half-streamed answer.
+
 ### Invocation display
 
 The tool row shows invocation details before the advisor returns:
@@ -65,7 +69,9 @@ The tool row shows invocation details before the advisor returns:
 - **Collapsed:** a width-bounded model/effort/timeout summary and one-line query preview.
 - **Expanded:** labeled values with their provenance (`requested`, `configured default`, or `clamped`) and the complete multiline query.
 
-Configured defaults are a renderer-time preview, not a claim about the subprocess's eventual model. `inherit` is shown as `parent model`; the completed result header remains authoritative for the model that actually ran and surfaces any requested/actual mismatch.
+Before the call runs, configured defaults are a preview, not a claim about the subprocess's eventual model. Once the call has finished, the row shows the configuration that call ran with, so editing `advisor-consult.json` later does not relabel past calls. `inherit` is shown as `parent model`; the completed result header remains authoritative for the model that actually ran.
+
+The result notes "requested model … was not used" only when the advisor ran on a model other than the one its pattern resolves to under Pi's own rules, so `provider/id:high` or a fuzzy pattern that resolves to the model used raises no note.
 
 The query is visible in the local transcript and stored with the tool call, so do not put credentials or other secrets in an advisory brief. The renderer visibly escapes terminal control and bidirectional override characters instead of executing or silently hiding them; it does not heuristically redact ordinary text.
 
@@ -109,7 +115,7 @@ Optional config at `~/.pi/agent/advisor-consult.json` (see `config/advisor-consu
 | `defaultThinking` | `xhigh` | Advisor reasoning effort (Pi-native names only, up to `max` where the advisor model supports it). |
 | `defaultTimeoutMs` | `600000` | Default subprocess timeout (10 min). |
 | `minTimeoutMs` | `30000` | Lower bound for a per-call `timeout_ms`. |
-| `maxTimeoutMs` | `1800000` | Upper bound for a per-call `timeout_ms`. |
+| `maxTimeoutMs` | `1800000` | Upper bound for a per-call `timeout_ms`. Timeouts above 2,147,483,647 ms (Node's longest timer) are capped there, with a warning. |
 | `excludedTools` | `["goal","subagent","get_subagent_result","steer_subagent"]` | Extra tools denied to the advisor, on top of the always-on hard denylist. |
 
 ### Model default and portability
@@ -137,6 +143,8 @@ Each consult spawns `pi --mode json -p` with:
 - `-e <child-bootstrap>` to broaden the active non-MCP tool set after the child's extensions load;
 - `--session-dir <parent-session-file-without-.jsonl>/advisor` so the consult's own session persists (see **Local state**);
 - `--model` / `--thinking` resolved from config and per-call overrides.
+
+The extension spawns the subprocess itself, in its own process group, rather than through `pi.exec`. On a timeout or abort it sends SIGTERM to the group, then SIGKILL after 4 seconds; an abort after the timeout kills at once. The consult therefore settles within 5 seconds of its timeout even when the advisor's own extensions are slow to shut down, and nothing the advisor started outlives the consult. If the advisor had already settled on its final answer when the timeout landed, that answer is kept.
 
 The runner parses JSON-mode output for the advisor's final message, redacts secrets from any diagnostics, and returns a clear result for success, empty output, nonzero exit, timeout, or a model/provider error. Pi reports a failed model call (e.g. an unknown model id) on an assistant message with `stopReason: "error"` while still exiting 0, so the runner surfaces that error explicitly; for model-not-found it points you at `pi --list-models` to see what's available in this environment.
 

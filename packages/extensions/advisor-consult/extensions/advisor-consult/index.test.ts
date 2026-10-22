@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { activate, ADVISOR_SESSION_KIND, consult, modelsDiffer, resolveModel, resolveTimeout } from "./index.ts";
+import { activate, ADVISOR_SESSION_KIND, consult, modelNotUsed, resolveModel, resolveTimeout } from "./index.ts";
 import { deriveChildSessionDir } from "./sidecar.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { HARD_DENIED_TOOLS } from "./child-profile.ts";
@@ -130,7 +130,10 @@ test("consult surfaces a timeout as an explicit non-advice result", async () => 
 test("consult flags when the advisor ran on a different model than requested", async () => {
   const mismatched: AdvisorResult = { ok: true, advice: "advice", model: "openai/gpt-5.5", elapsedMs: 1000 };
   const { runner } = recordingRunner(mismatched);
-  const out = await consult({ query: "q", model: "anthropic/claude-fable-5-1" }, deps(runner));
+  const out = await consult(
+    { query: "q", model: "anthropic/claude-fable-5-1" },
+    deps(runner, { resolveModelPattern: () => "anthropic/claude-fable-5-1" }),
+  );
   assert.match(out.text, /requested model 'anthropic\/claude-fable-5-1' was not used/);
 });
 
@@ -151,15 +154,16 @@ test("resolveTimeout applies default, clamp, and invalid handling", () => {
   assert.match(resolveTimeout(-1, DEFAULT_CONFIG).note ?? "", /invalid/i);
 });
 
-test("modelsDiffer tolerates provider/id vs bare id", () => {
-  assert.equal(modelsDiffer("anthropic/claude-fable-5-1", "claude-fable-5-1"), false);
-  assert.equal(modelsDiffer("anthropic/claude-fable-5-1", "openai/gpt-5.5"), true);
+test("modelNotUsed compares what the pattern resolves to, tolerating a bare id", () => {
+  const resolve = (pattern: string) => (pattern.startsWith("anthropic/claude-fable-5-1") ? "anthropic/claude-fable-5-1" : undefined);
+  assert.equal(modelNotUsed("anthropic/claude-fable-5-1:high", "claude-fable-5-1", resolve), false);
+  assert.equal(modelNotUsed("anthropic/claude-fable-5-1", "openai/gpt-5.5", resolve), true);
+  assert.equal(modelNotUsed("unknown-pattern", "openai/gpt-5.5", resolve), false, "nothing to compare against");
 });
 
 test("activate registers advisor_consult and drives the runner through the tool seam", async () => {
   const captured = captureAdvisorTool();
   assert.equal(captured.name, "advisor_consult");
-  assert.equal(captured.renderResult, undefined, "raw result fallback remains authoritative");
 
   const notes: string[] = [];
   const ctx = { cwd: "/tmp/project", model: { provider: "openai", id: "gpt-5.5" }, ui: { notify: (m: string) => notes.push(m) } };
