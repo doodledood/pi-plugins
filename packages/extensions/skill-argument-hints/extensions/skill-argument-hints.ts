@@ -7,9 +7,15 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { CustomEditor, type ExtensionAPI, type KeybindingsManager, type SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import {
+  CustomEditor,
+  parseFrontmatter,
+  type ExtensionAPI,
+  type KeybindingsManager,
+  type SlashCommandInfo,
+} from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, AutocompleteSuggestions, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { renderFakeCursor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 type HintCacheEntry = {
   mtimeMs: number;
@@ -19,7 +25,8 @@ type HintCacheEntry = {
 const COMMAND_PREFIX = "skill:";
 const SUPPORTED_FRONTMATTER_KEYS = ["argument-hint", "argumentHint", "argument_hint"];
 const MAX_LISTED_HINTS = 25;
-const CURSOR_AT_END = "\u001b[7m \u001b[0m";
+/** What pi-tui's editor draws for the cursor sitting past the last character. */
+const CURSOR_AT_END = renderFakeCursor(" ");
 
 export default function skillArgumentHints(pi: ExtensionAPI): void {
   const hintCache = new Map<string, HintCacheEntry>();
@@ -282,97 +289,22 @@ function readCachedArgumentHint(path: string, cache: Map<string, HintCacheEntry>
   return hint;
 }
 
-function parseArgumentHint(markdown: string): string | undefined {
-  const normalized = markdown.replace(/^\uFEFF/, "");
-  if (!normalized.startsWith("---")) {
-    return undefined;
-  }
-
-  const lines = normalized.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") {
-    return undefined;
-  }
-
-  const frontmatterLines: string[] = [];
-  for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line?.trim() === "---") {
-      return parseArgumentHintFromFrontmatter(frontmatterLines);
+/**
+ * The skill's argument-hint as Pi's own frontmatter parser (the `yaml` package) reads it, collapsed to one
+ * line for display. A non-scalar value is not a hint.
+ */
+export function parseArgumentHint(markdown: string): string | undefined {
+  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(markdown);
+  for (const key of SUPPORTED_FRONTMATTER_KEYS) {
+    const value = frontmatter[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return normalizeHint(String(value));
     }
-    frontmatterLines.push(line ?? "");
   }
-
   return undefined;
-}
-
-function parseArgumentHintFromFrontmatter(lines: string[]): string | undefined {
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!match || !SUPPORTED_FRONTMATTER_KEYS.includes(match[1] ?? "")) {
-      continue;
-    }
-
-    const rawValue = match[2] ?? "";
-    if (rawValue === "|" || rawValue === ">") {
-      return parseBlockScalar(lines, index + 1);
-    }
-
-    return normalizeYamlScalar(rawValue);
-  }
-
-  return undefined;
-}
-
-function parseBlockScalar(lines: string[], startIndex: number): string | undefined {
-  const blockLines: string[] = [];
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (!/^\s+/.test(line)) {
-      break;
-    }
-    blockLines.push(line.trim());
-  }
-
-  return normalizeHint(blockLines.join(" "));
-}
-
-function normalizeYamlScalar(rawValue: string): string | undefined {
-  const trimmed = rawValue.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const quote = trimmed[0];
-  if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
-    const unquoted = trimmed.slice(1, -1);
-    return normalizeHint(quote === '"' ? unescapeDoubleQuotedYaml(unquoted) : unquoted.replace(/''/g, "'"));
-  }
-
-  return normalizeHint(trimmed.replace(/\s+#.*$/, ""));
-}
-
-function unescapeDoubleQuotedYaml(value: string): string {
-  return value.replace(/\\(["\\/bfnrt])/g, (_match, escaped: string) => {
-    switch (escaped) {
-      case "b":
-        return "\b";
-      case "f":
-        return "\f";
-      case "n":
-        return "\n";
-      case "r":
-        return "\r";
-      case "t":
-        return "\t";
-      default:
-        return escaped;
-    }
-  });
 }
 
 function normalizeHint(value: string): string | undefined {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > 0 ? normalized : undefined;
 }
-
