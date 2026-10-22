@@ -281,7 +281,6 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `cache-optimization` — prompt-cache diagnostics and TTL keepalive.
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-6-luna` at `medium` while the extension default remains `inherit`.
-- `hq` — `/hq` decision-queue supervision of delegated sessions: headless workers stop, stops are triaged against ratified doctrine, and whatever needs you arrives as a self-contained packet you rule on without opening the session; `/fleet` shows the board.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; Pi prices priority turns itself.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
@@ -428,5 +427,3 @@ npm test
 ```
 
 `npm run verify` runs structure checks, typechecks, and package test suites, including BTW's deterministic child-runtime and TUI coverage.
-
-`npm run sync:doctrine` copies the live HQ doctrine (`~/.pi/hq/doctrine/global.md`) into `setup/hq/doctrine.global.md`, so the rules HQ decides by are versioned with the rest of the setup; `npm run sync:doctrine -- --install` puts it on a machine that has none and leaves an existing one alone.
