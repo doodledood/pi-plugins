@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { seedDoctrine } from "./doctrine.ts";
@@ -31,7 +31,7 @@ interface Harness {
   answers: Array<string | undefined>;
   /** Queued answers for ctx.ui.input, in order. */
   typed: Array<string | undefined>;
-  ctx: ExtensionContext;
+  ctx: ExtensionToolContext;
 }
 
 async function harness(label: string, options: { seatActive?: boolean; env?: NodeJS.ProcessEnv; maxWorkers?: number } = {}): Promise<Harness> {
@@ -78,7 +78,7 @@ async function harness(label: string, options: { seatActive?: boolean; env?: Nod
       notify: () => {},
       confirm: async () => true,
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 
   return { root, store, tools, calls, deps, selects, inputs, answers, typed, ctx };
 }
