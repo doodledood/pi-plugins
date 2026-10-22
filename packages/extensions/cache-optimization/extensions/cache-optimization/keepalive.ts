@@ -42,6 +42,12 @@ export const PING_AFTER_IDLE_MS = 4.5 * 60_000;
  * input price; ping = prompt x 0.1x. 6 pings ~= half of one rewrite.
  */
 export const PER_GAP_MAX_PINGS = 6;
+
+/**
+ * Cache lifetime assumed after a Pi warmer refresh when the model's catalog entry gives none: Anthropic's
+ * 5-minute entries, the ones the keepalive pings for.
+ */
+export const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 /**
  * Daily budget backstop across all gaps (estimated read cost, USD). Sized to
  * fit at least one full gap budget at the headline scale (6 pings x ~$0.50 at
@@ -184,6 +190,8 @@ export interface RequestRoute {
   pricePerMTok?: { input?: number; output?: number; cacheWrite?: number };
   /** provider/id of the model being pinged, used as the cost bucket key. */
   modelKey?: string;
+  /** Lifetime of the cache entry this request writes, from Pi's model catalog (`promptCache`). */
+  cacheTtlMs?: number;
 }
 
 /**
@@ -343,6 +351,11 @@ export class CacheKeepalive {
   private readonly inFlightTools = new Set<string>();
   private readonly backgroundWork = new Map<string, { startedAt: number; wakeArmed: boolean }>();
   private pingInFlight = false;
+  /** Settles when the ping in flight has reported its spend. */
+  private pingSettled: Promise<void> | undefined;
+  /** When Pi's own cache warmer last refreshed the prefix, and how long that refresh keeps it warm. */
+  private lastNativeRefreshAt = Number.NEGATIVE_INFINITY;
+  private lastCacheTtlMs = DEFAULT_CACHE_TTL_MS;
 
   constructor(private readonly deps: KeepaliveDeps) {}
 
@@ -360,10 +373,20 @@ export class CacheKeepalive {
   private lastModelKey: string | undefined;
   private pingSequence = 0;
 
-  /** A real provider request went out: re-anchor the gap and capture the payload. */
+  /**
+   * A provider request went out. A real one re-anchors the gap and is captured as the ping payload. Pi's
+   * cache warmer (Pi 1.2+) replays the last request with max_tokens 1 through the same hook; that refresh
+   * is not activity: it leaves the gap, its ping count, armed wakes and the capture alone, and only makes
+   * the keepalive stand down while the refreshed entry lives.
+   */
   noteProviderRequest(payload: unknown, route?: RequestRoute): void {
+    if (isDict(payload) && payload.max_tokens === 1) {
+      this.lastNativeRefreshAt = this.deps.now();
+      return;
+    }
     this.lastActivityAt = this.deps.now();
     this.gapPings = 0;
+    this.lastCacheTtlMs = typeof route?.cacheTtlMs === "number" && route.cacheTtlMs > 0 ? route.cacheTtlMs : DEFAULT_CACHE_TTL_MS;
     this.completeOneBackgroundWake();
     this.lastCapture = undefined;
     const kind = isPingableRoute(route) ? classifyPingablePayload(payload) : undefined;
@@ -419,6 +442,14 @@ export class CacheKeepalive {
     this.lastCapture = undefined;
   }
 
+  /** Wait, at most `maxMs`, for a ping already sent to report its spend. */
+  async drain(maxMs: number): Promise<void> {
+    if (!this.pingInFlight || !this.pingSettled) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([this.pingSettled, new Promise<void>((resolve) => (timer = setTimeout(resolve, maxMs)))]);
+    clearTimeout(timer);
+  }
+
   shutdown(): void {
     this.inFlightTools.clear();
     this.backgroundWork.clear();
@@ -469,6 +500,7 @@ export class CacheKeepalive {
       isAnthropicOAuthToken(apiKey) ||
       this.lastPromptTokens < MIN_PROMPT_TOKENS ||
       now - this.lastActivityAt < PING_AFTER_IDLE_MS ||
+      now - this.lastNativeRefreshAt < this.lastCacheTtlMs || // Pi's own warmer is keeping this prefix warm
       this.gapPings >= PER_GAP_MAX_PINGS ||
       this.daySpendUsd + estimate > DAILY_BUDGET_USD
     ) {
@@ -486,6 +518,8 @@ export class CacheKeepalive {
     // Snapshot the prices for the same reason: a request landing mid-flight would
     // otherwise bill this ping at the newly-active model's rates.
     const pricing = { read: this.lastReadPricePerMTok, prices: this.lastPrices, modelKey: this.lastModelKey };
+    let settle!: () => void;
+    this.pingSettled = new Promise<void>((resolve) => (settle = resolve));
     try {
       const outcome = await this.pingCapturedPayload(pinged, apiKey);
       const success = outcome.ok;
@@ -508,6 +542,7 @@ export class CacheKeepalive {
       if (this.lastCapture === pinged) this.lastCapture = undefined;
     } finally {
       this.pingInFlight = false;
+      settle();
     }
     return "pinged";
   }

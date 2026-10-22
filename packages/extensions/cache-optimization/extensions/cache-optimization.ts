@@ -115,6 +115,19 @@ function hasAnthropicRequestOverrides(modelRegistry: unknown, model: unknown): b
  */
 export const COST_RECORD_TYPE = "pi-cost-record";
 
+/**
+ * Lifetime of the cache entry a request to `model` writes, read the way Pi's cache warmer reads it: the
+ * catalog's `promptCache` tier for the retention PI_CACHE_RETENTION selects.
+ */
+function promptCacheTtlMs(model: unknown): number | undefined {
+  const promptCache = (model as { promptCache?: Record<string, unknown> } | undefined)?.promptCache;
+  const seconds = promptCache?.[process.env.PI_CACHE_RETENTION === "long" ? "long" : "short"];
+  return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : undefined;
+}
+
+/** How long session shutdown waits for a keepalive ping already in flight. */
+const SHUTDOWN_PING_DRAIN_MS = 5_000;
+
 export default function cacheOptimization(pi: any) {
   activate(pi);
 }
@@ -149,19 +162,26 @@ export function activate(
   // record-writing path is exercised rather than substituted.
   keepalive.setSpendReporter?.(recordSpend);
   let fingerprints: FingerprintState = { byTimestamp: new Map() };
+  /** The keeper's baseline: the last request the provider accepted. */
   let keeperState: KeeperState = {};
+  /** The keeper's view of the request in flight; it becomes the baseline only once the provider accepts it. */
+  let pendingKeeperState: KeeperState | undefined;
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   pi.on("session_start", () => {
     fingerprints = { byTimestamp: new Map() };
     keeperState = {};
+    pendingKeeperState = undefined;
     if (!keepaliveTimer) {
       keepaliveTimer = setInterval(() => void keepalive.tick(), KEEPALIVE_TICK_MS);
       keepaliveTimer.unref?.();
     }
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    // Pi awaits shutdown handlers before it retires this extension's context, so a ping already sent can
+    // still record its spend in the session it belongs to.
+    await keepalive.drain(SHUTDOWN_PING_DRAIN_MS);
     keepalive.shutdown();
     if (keepaliveTimer) {
       clearInterval(keepaliveTimer);
@@ -179,7 +199,11 @@ export function activate(
     let outgoing = event?.payload;
     let replacement: unknown | undefined;
     try {
-      const result = applyCacheKeeper(outgoing, keeperState);
+      // A rejected request (429, 529, 5xx) wrote no cache, and Pi's retry resends the same blocks, so the
+      // keeper works on a copy that only an accepted response promotes.
+      const trial: KeeperState = { ...keeperState };
+      pendingKeeperState = trial;
+      const result = applyCacheKeeper(outgoing, trial);
       if (result.action === "stamped" && result.payload !== undefined) {
         replacement = result.payload;
         outgoing = result.payload;
@@ -205,12 +229,18 @@ export function activate(
           cacheWrite: ctx?.model?.cost?.cacheWrite,
         },
         modelKey: ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+        cacheTtlMs: promptCacheTtlMs(ctx?.model),
       };
       keepalive.noteProviderRequest(outgoing, route);
     } catch {
       keepalive.clearCapture();
     }
     return replacement;
+  });
+
+  pi.on("after_provider_response", (event: any) => {
+    if (pendingKeeperState && typeof event?.status === "number" && event.status < 400) keeperState = pendingKeeperState;
+    pendingKeeperState = undefined;
   });
 
   pi.on("turn_end", (event: any) => {

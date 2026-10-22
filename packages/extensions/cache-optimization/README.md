@@ -19,6 +19,8 @@ whole history as a cache write, and a >5-minute foreground-tool or background
 wait expires the cache (~$5-6 per event at 500k-token contexts). This extension
 closes both gaps and explains every other break via `/cache`.
 
+Requires Pi 1.4.0 or later.
+
 ## /cache report
 
 Run **`/cache`** for a display-only report (never enters model context) with
@@ -58,7 +60,10 @@ are free, so the stamp costs nothing when it isn't needed.
 Safety rules: never stamps when 4 breakpoints already exist (e.g. OAuth mode's
 dual system blocks), never touches non-Anthropic payloads, never marks
 non-cacheable block types (thinking), resets its anchor on branch switches, and
-copies Pi's own TTL shape onto the stamped marker.
+copies Pi's own TTL shape onto the stamped marker. The anchor moves only when
+the provider accepts a request: a rejected one (HTTP 400 or above, such as a
+529 overload) wrote no cache, so Pi's retry of the same blocks still carries the
+spare breakpoint at the last write the provider accepted.
 
 ## TTL keepalive
 
@@ -121,6 +126,20 @@ the Pi conversation. If another payload-rewriting extension is loaded after
 cache-optimization, the actual request may differ from the replayed one; load
 cache-optimization last among payload-rewriting extensions (this repo's root
 manifest and setup templates already order it last).
+
+Pi's own cache warmer (on by default since Pi 1.2) also refreshes the prefix,
+by replaying the last request with `max_tokens: 1` through the same request
+hook. The keepalive tells those refreshes apart from real requests: a refresh
+does not reset the per-gap ping budget, does not use up a background-work
+wake, and does not restart the idle clock. It only makes the keepalive stand
+down while the refreshed entry lives (the model's `promptCache` lifetime from
+Pi's catalog, for the retention `PI_CACHE_RETENTION` selects; 5 minutes when
+the catalog has none), so the two never ping the same prefix twice.
+
+When the session ends or is replaced (`/new`, `/resume`, `/fork`, `/reload`,
+quit) while a ping is in flight, shutdown waits up to 5 seconds for the reply,
+so the ping's spend is recorded in the session it belongs to. A ping slower
+than that goes unrecorded.
 
 Worst case ever: one hung tool costs ~half of one rewrite in pings and then the
 rewrite anyway — bounded at ~1.5× one break, once. **For Anthropic**,

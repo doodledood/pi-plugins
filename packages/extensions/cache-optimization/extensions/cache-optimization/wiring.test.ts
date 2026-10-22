@@ -216,6 +216,7 @@ test("before_provider_request returns the keeper's replacement payload when it s
   });
 
   assert.equal(before({ payload: payload(30) }, harness.ctx), undefined, "first request: no replacement");
+  harness.handlers.get("after_provider_response")!({ status: 200, headers: {} }, harness.ctx);
   const replaced = before({ payload: payload(60) }, harness.ctx) as any;
   assert.ok(replaced, "burst past threshold returns a replacement payload");
   const markers = replaced.messages[0].content.filter((b: any) => b.cache_control).length;

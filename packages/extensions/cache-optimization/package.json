@@ -14,8 +14,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-tui": ">=1.0.0",
-    "@earendil-works/pi-coding-agent": ">=1.0.0"
+    "@earendil-works/pi-tui": ">=1.4.0",
+    "@earendil-works/pi-coding-agent": ">=1.4.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
