@@ -39,6 +39,7 @@
   },
   "files": [
     "extensions",
+    "!extensions/*.test.ts",
     "README.md",
     "package.json",
     "tsconfig.json"

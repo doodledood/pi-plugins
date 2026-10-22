@@ -205,6 +205,26 @@ test("a message sent from an empty editor restores the draft without a dialog", 
   }
 });
 
+test("another session in the same Pi process (a BTW aside, say) leaves the stash alone", { timeout: 20_000 }, async () => {
+  const mainUi = new FakeUi();
+  // BTW's UI bridge has no editor: it reads as empty and ignores writes.
+  const asideUi = new FakeUi();
+  const main = await startPi(mainUi);
+  const aside = await startPi(asideUi);
+  try {
+    mainUi.editor = "draft kept in main";
+    await press(main, STASH_KEY);
+    await within(aside.session.prompt("question in the aside"), 5_000, "the aside's turn");
+    assert.equal(asideUi.status, undefined, "the aside shows main's stash");
+    mainUi.editor = "";
+    await press(main, POP_KEY);
+    assert.equal(mainUi.editor, "draft kept in main", `the aside took main's draft: ${mainUi.notices.at(-1)}`);
+  } finally {
+    await aside.dispose();
+    await main.dispose();
+  }
+});
+
 // ── AC-9.2 ──────────────────────────────────────────────────────────────────
 
 const swaps: Array<[string, (runtime: AgentSessionRuntime, firstSessionFile: string) => Promise<unknown>]> = [

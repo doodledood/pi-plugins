@@ -6,9 +6,11 @@
 // already holds new text, the draft stays stashed and the user is told so.
 // Option+Shift+S manually pops the stash.
 //
-// The slot lives on the Pi process, not on this module: Pi re-imports
-// extensions on /new, /resume, /fork and /reload, which would otherwise drop a
-// stashed draft.
+// Each session has its own slot. Pi re-imports extensions on /new, /resume,
+// /fork and /reload, so the slot is handed over through the Pi process at that
+// moment: the outgoing session leaves it under the session it is switching to,
+// and only that session picks it up. Another session in the same process (a
+// BTW aside, say) never sees or clears it.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -21,17 +23,19 @@ interface StashSlot {
   autoRestorePending: boolean;
 }
 
-const SLOT_KEY = Symbol.for("@doodledood/pi-message-stash/slot");
+const HANDOFF_KEY = Symbol.for("@doodledood/pi-message-stash/handoff");
+/** Stands for a session with no file (an in-memory session) in the handoff map. */
+const NO_FILE = "";
 
-/** The process-wide stash slot, shared by every load of this extension in one Pi process. */
-function processSlot(): StashSlot {
-  const holder = globalThis as typeof globalThis & { [SLOT_KEY]?: StashSlot };
-  holder[SLOT_KEY] ??= { text: undefined, autoRestorePending: false };
-  return holder[SLOT_KEY];
+/** Slots in transit between a session and its replacement, keyed by the replacement's session file. */
+function handoffs(): Map<string, StashSlot> {
+  const holder = globalThis as typeof globalThis & { [HANDOFF_KEY]?: Map<string, StashSlot> };
+  holder[HANDOFF_KEY] ??= new Map();
+  return holder[HANDOFF_KEY];
 }
 
 export default function messageStash(pi: ExtensionAPI) {
-  const slot = processSlot();
+  const slot: StashSlot = { text: undefined, autoRestorePending: false };
   let operationInProgress = false;
   let suppressAutoRestoreUntil = 0;
 
@@ -150,8 +154,22 @@ export default function messageStash(pi: ExtensionAPI) {
     ctx.ui.notify("Your draft is still stashed because the editor has new text. Press Option+Shift+S to restore it.", "info");
   });
 
-  pi.on("session_start", (_event, ctx) => updateStatus(ctx));
-  pi.on("session_shutdown", (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+  pi.on("session_start", (_event, ctx) => {
+    const key = ctx.sessionManager.getSessionFile() ?? NO_FILE;
+    const handed = handoffs().get(key);
+    if (handed) {
+      handoffs().delete(key);
+      Object.assign(slot, handed);
+    }
+    updateStatus(ctx);
+  });
+  pi.on("session_shutdown", (event, ctx) => {
+    ctx.ui.setStatus(STATUS_KEY, undefined);
+    if (event.reason === "quit" || slot.text === undefined) return;
+    // A reload keeps the session file; the other switches name the session they open.
+    const key = event.targetSessionFile ?? ctx.sessionManager.getSessionFile() ?? NO_FILE;
+    handoffs().set(key, { ...slot });
+  });
 }
 
 function isBlank(text: string): boolean {

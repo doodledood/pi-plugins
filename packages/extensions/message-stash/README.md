@@ -10,7 +10,7 @@ Requires Pi 1.4.0 or later.
 - After the next user message is sent, the draft comes back on its own, into an empty editor. If you have typed something new in the meantime, your new text is left alone and the draft stays stashed; a notice says so. Restoring never opens a dialog, so it never holds up the agent's turn.
 - **Option+Shift+S** pops the stash by hand. It asks before replacing text already in the editor.
 
-The stash is one slot per Pi process. It survives `/new`, `/resume`, `/fork` and `/reload`, and is gone when Pi exits.
+The stash is one slot per session. It follows you across `/new`, `/resume`, `/fork` and `/reload`, is gone when Pi exits, and another session in the same Pi process (a `/btw` aside, say) neither sees nor clears it.
 
 ## Install
 
