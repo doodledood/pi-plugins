@@ -413,7 +413,7 @@ test("a mid-turn fork yields a usable child session and announces the turn's com
       parentIsIdle: () => parentIdle,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: registry,
-      sendToParent() {},
+      sendToParent: async () => ({ delivered: true }),
       modelRuntime,
       agentDir,
       callbacks: {
@@ -542,7 +542,7 @@ test("parent and BTW child overlap, share the workspace read-only, pull updates,
       parentIsIdle: () => parent?.isIdle ?? true,
       parentUI: { theme: {} } as ExtensionUIContext,
       parentModelRegistry: parentRegistry,
-      sendToParent(text) { relayed.push(text); },
+      sendToParent: async (text) => { relayed.push(text); return { delivered: true }; },
       modelRuntime: parentRuntime,
       agentDir,
       callbacks: {

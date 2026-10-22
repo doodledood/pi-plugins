@@ -71,14 +71,20 @@ export interface ChildRuntimeHandle {
 
 type ReadonlyParentSessionManager = ExtensionContext["sessionManager"];
 
+/** Whether a relay reached the main session, and if not, why. */
+export type RelayOutcome = { delivered: true } | { delivered: false; reason: string };
+
 export interface CreateChildRuntimeInput {
   snapshot: ForkSnapshot;
   parentSessionManager: ReadonlyParentSessionManager;
   parentIsIdle(): boolean;
   parentUI: ExtensionUIContext;
   parentModelRegistry: ModelRegistry;
-  /** Deliver a message to the parent session as a user message on the user's behalf. */
-  sendToParent(text: string): void;
+  /**
+   * Deliver a message to the parent session as a user message on the user's behalf. Settles once the parent
+   * has been handed the message, or with the reason it never will be; `signal` gives up waiting.
+   */
+  sendToParent(text: string, signal?: AbortSignal): Promise<RelayOutcome>;
   /** Optional runtime override for tests; defaults to a fresh ModelRuntime from agentDir files. */
   modelRuntime?: ModelRuntime;
   agentDir?: string;
@@ -179,28 +185,48 @@ function createParentUpdateTool(tracker: ParentUpdateTracker, parent: ReadonlyPa
   });
 }
 
-function createSendToMainTool(sendToParent: (text: string) => void, onSent: (text: string) => void) {
+function createSendToMainTool(
+  sendToParent: CreateChildRuntimeInput["sendToParent"],
+  onOutcome: (outcome: RelayOutcome) => void,
+) {
   return defineTool({
     name: SEND_TO_MAIN_TOOL,
     label: "Send to main",
     description:
-      "Send a message to the main session on the user's behalf, as if the user typed it there. It starts a main turn when main is idle, or queues behind the current main run. Use only when the user asks you to tell, send, or relay something to main.",
+      "Send a message to the main session on the user's behalf, as if the user typed it there. It starts a main turn when main is idle, or queues behind the current main run; while main is compacting it waits until compaction ends. The result says whether the message was delivered. Use only when the user asks you to tell, send, or relay something to main.",
     promptSnippet: "Relay a message to the main session on the user's explicit request",
     parameters: Type.Object({
       message: Type.String({ description: "The message for the main session, written as the user would say it." }),
     }),
-    async execute(_toolCallId, params): Promise<{ content: Array<{ type: "text"; text: string }>; details: { delivered: string } }> {
+    async execute(
+      _toolCallId,
+      params,
+      signal,
+    ): Promise<{ content: Array<{ type: "text"; text: string }>; details: { relayed: string; delivered: boolean }; isError?: boolean }> {
       const body = params.message.trim();
       if (!body) throw new Error("send_to_main needs a non-empty message.");
-      const delivered = `${SEND_TO_MAIN_PREFIX}\n\n${body}`;
-      sendToParent(delivered);
-      onSent(body);
+      const relayed = `${SEND_TO_MAIN_PREFIX}\n\n${body}`;
+      const outcome = await sendToParent(relayed, signal);
+      onOutcome(outcome);
+      if (!outcome.delivered) {
+        return {
+          content: [{ type: "text", text: notDeliveredText(outcome.reason) }],
+          details: { relayed, delivered: false },
+          isError: true,
+        };
+      }
       return {
-        content: [{ type: "text", text: "Sent to the main session." }],
-        details: { delivered },
+        content: [{ type: "text", text: SENT_TEXT }],
+        details: { relayed, delivered: true },
       };
     },
   });
+}
+
+const SENT_TEXT = "Sent to the main session.";
+
+function notDeliveredText(reason: string): string {
+  return `Not delivered: the message did not reach the main session (${reason}).`;
 }
 
 export function missingInheritedToolsNotice(missingTools: readonly string[]): string {
@@ -260,8 +286,9 @@ export async function createChildRuntime(input: CreateChildRuntimeInput): Promis
     let observedCompletedParentIds = [...snapshot.entryIds];
     const announcedParentHeads = new Set(snapshot.forkLeafId ? [snapshot.forkLeafId] : []);
     const updateTool = createParentUpdateTool(tracker, input.parentSessionManager);
-    const sendToMainTool = createSendToMainTool(input.sendToParent, () => {
-      callbacks.onNotice("Sent to the main session.", "info");
+    const sendToMainTool = createSendToMainTool(input.sendToParent, (outcome) => {
+      if (outcome.delivered) callbacks.onNotice(SENT_TEXT, "info");
+      else callbacks.onNotice(notDeliveredText(outcome.reason), "error");
     });
     const inherited = inheritedRuntimeSpec(snapshot);
     const activeToolNames = inherited.activeToolNames;

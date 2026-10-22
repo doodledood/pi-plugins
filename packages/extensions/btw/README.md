@@ -2,7 +2,7 @@
 
 A `/btw` side conversation for Pi. BTW opens one child `AgentSession` in a Pi-owned right overlay so you can ask questions and think things through while the main session keeps working, without adding the child conversation or its tool results to the parent history.
 
-BTW requires Pi 1.0.0 or newer and its interactive TUI. It refuses to register under an older Pi host with an actionable compatibility error, because its mouse handling uses Pi's native fullscreen mouse routing (introduced in 1.0.0). It does not open in RPC, JSON, or print mode.
+BTW requires Pi 1.4.0 or newer and its interactive TUI. It refuses to register under an older Pi host with an actionable compatibility error: its mouse handling uses Pi's native fullscreen mouse routing (introduced in 1.0.0), and `send_to_main` relies on how Pi 1.4 queues messages and reports when main is idle. It does not open in RPC, JSON, or print mode.
 
 The child forks in place: it starts from the parent's latest persisted, compaction-aware state at the moment you open it — including tool calls of a parent turn that is still running — trimmed only when the branch ends in a tool call whose result has not landed yet. Content the parent is still streaming is not persisted anywhere and cannot be forked. The child is told it may have been forked mid-work and to address your messages rather than continue the parent's unfinished task. It inherits the parent's model, thinking level, working directory, and best-effort active tool set. Parent and child histories remain separate, but they intentionally share the same project workspace.
 
@@ -14,7 +14,7 @@ The fork also leaves the parent's extension state behind. Pi `custom` session en
 
 ## Relaying to main
 
-The child-only `send_to_main` tool sends one message to the main session on your behalf, as if you had typed it there — for example the verdict you reached in BTW. The child calls it only when you ask it to tell, send, or relay something to main. The message arrives as a user message prefixed `[Relayed from my BTW side conversation]`; it starts a main turn when main is idle and queues as a follow-up behind the current run when main is busy. This is the only path by which BTW adds anything to the main session.
+The child-only `send_to_main` tool sends one message to the main session on your behalf, as if you had typed it there — for example the verdict you reached in BTW. The child calls it only when you ask it to tell, send, or relay something to main. The message arrives as a user message prefixed `[Relayed from my BTW side conversation]`; it starts a main turn when main is idle and queues as a follow-up behind the current run when main is busy. While main is compacting, the message waits and is sent once compaction ends. Several relays in one child turn arrive in the order the child sent them. The tool result says whether the message was handed to main: if BTW closes or is stopped before main can take it, the child and the pane are told it was **not delivered**, never that it was sent. This is the only path by which BTW adds anything to the main session.
 
 ## Use
 
@@ -117,7 +117,7 @@ If extension/provider interference or runtime non-fidelity is unacceptable, clos
 
 ## Troubleshooting
 
-- **Unsupported Pi version:** install/use Pi 1.0.0 or newer for this package version. BTW refuses to register under older host versions.
+- **Unsupported Pi version:** install/use Pi 1.4.0 or newer for this package version. BTW refuses to register under older host versions.
 - **Wheel or clicks do nothing:** check that Pi runs in fullscreen mode (`tuiMode` in `/settings`). Regular screen mode has no mouse input.
 - **No active parent model:** select or configure a model in the parent session, then run `/btw` again.
 - **Missing inherited tools:** BTW still opens and warns in the pane which parent tools it could not bring along. This usually means the parent loaded under different config or extensions than a fresh load would; restart or `/reload` the parent to bring them back in sync. Runtime-only SDK tool overrides may require using the parent session instead.
@@ -133,7 +133,7 @@ From this package directory:
 npm run verify
 ```
 
-This runs strict TypeScript checks and deterministic Node tests covering compaction-aware forks, parent-update pulls, child lifecycle and cleanup, model/tool/cwd inheritance, history isolation, shared-workspace effects, prompt serialization and cancellation, recursion filtering, the read-only tool set, the parent-state-free fork, `send_to_main`, TUI rendering, and mouse wheel and click-focus behavior on Pi's real fullscreen renderer.
+This runs strict TypeScript checks and deterministic Node tests covering compaction-aware forks, parent-update pulls, child lifecycle and cleanup, model/tool/cwd inheritance, history isolation, shared-workspace effects, prompt serialization and cancellation, recursion filtering, the read-only tool set, the parent-state-free fork, `send_to_main` delivery through a real parent session (ordering, compaction, undelivered relays), TUI rendering, and mouse wheel and click-focus behavior on Pi's real fullscreen renderer.
 
 The tests use temporary directories and controlled local provider streams; they do not call a live model.
 

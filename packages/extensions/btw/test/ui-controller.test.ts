@@ -40,12 +40,12 @@ initTheme("dark", false);
 
 test("runtime version guard accepts the minimum Pi host and newer", () => {
   assert.doesNotThrow(() => assertSupportedPiVersion(MINIMUM_PI_VERSION));
-  assert.doesNotThrow(() => assertSupportedPiVersion("1.0.1"));
-  assert.doesNotThrow(() => assertSupportedPiVersion("1.2.0"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("1.4.1"));
+  assert.doesNotThrow(() => assertSupportedPiVersion("1.5.0"));
   assert.doesNotThrow(() => assertSupportedPiVersion("2.0.0"));
   assert.throws(
-    () => assertSupportedPiVersion("0.80.8"),
-    /requires Pi 1\.0\.0 or newer; running Pi is 0\.80\.8/,
+    () => assertSupportedPiVersion("1.3.9"),
+    /requires Pi 1\.4\.0 or newer; running Pi is 1\.3\.9/,
   );
 });
 

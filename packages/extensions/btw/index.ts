@@ -12,12 +12,13 @@ import {
   createChildRuntime,
   type ChildRuntimeHandle,
   type CreateChildRuntimeInput,
+  type RelayOutcome,
 } from "./src/runtime.ts";
 import { observeMainClicks } from "./src/main-clicks.ts";
 import { BTW_OVERLAY_OPTIONS, BtwOverlay } from "./src/ui.ts";
 
 const EXTENSION_ROOT = dirname(fileURLToPath(import.meta.url));
-export const MINIMUM_PI_VERSION = "1.0.0";
+export const MINIMUM_PI_VERSION = "1.4.0";
 
 /** Compare dotted numeric versions (prerelease/build metadata ignored) like a comparator. */
 export function comparePiVersions(a: string, b: string): number {
@@ -138,6 +139,11 @@ export class BtwController {
 
   private stateOwnsGeneration(generation: number): boolean {
     return this.state.phase !== "closed" && this.state.generation === generation;
+  }
+
+  /** A closing BTW still owns its generation, but sends nothing more to main. */
+  private acceptsRelays(generation: number): boolean {
+    return (this.state.phase === "open" || this.state.phase === "opening") && this.state.generation === generation;
   }
 
   private overlayForGeneration(generation: number): OverlayResources | undefined {
@@ -343,12 +349,7 @@ export class BtwController {
         parentIsIdle: () => ctx.isIdle(),
         parentUI: ctx.ui,
         parentModelRegistry: ctx.modelRegistry,
-        sendToParent: (text) => {
-          // Relayed on the user's behalf: a user message in the main session,
-          // queued behind the main run when it is busy rather than steering it.
-          if (ctx.isIdle()) this.pi.sendUserMessage(text);
-          else this.pi.sendUserMessage(text, { deliverAs: "followUp" });
-        },
+        sendToParent: (text, signal) => this.relayToParent(opening.generation, ctx, text, signal),
         extensionRoot: EXTENSION_ROOT,
         callbacks: {
           onEvent: (event) => this.overlayForGeneration(opening.generation)?.panel.handleSessionEvent(event),
@@ -447,6 +448,37 @@ export class BtwController {
     this.overlayForGeneration(generation)?.handle?.unfocus();
   }
 
+  /**
+   * Relay a message to main on the user's behalf: a user message, queued behind the main run when one is
+   * active rather than steering it.
+   *
+   * `deliverAs: "followUp"` is always passed. Pi ignores it when main is idle and starts a turn; checking
+   * isIdle() first and omitting it races another prompt that is still in Pi's preflight, which then rejects
+   * the relay as "already processing". While main compacts or summarizes it is neither idle nor running, and
+   * Pi rejects any prompt, so the relay waits for main to go idle. Pi's sendUserMessage reports failures only
+   * to its error log, so waiting here is what lets the child be told the truth.
+   */
+  private async relayToParent(
+    generation: number,
+    ctx: ExtensionCommandContext,
+    text: string,
+    signal: AbortSignal | undefined,
+  ): Promise<RelayOutcome> {
+    while (!ctx.isIdle() && !this.parentRunning) {
+      // waitForIdle can return before compaction state clears (or at once, in a host that binds no idle
+      // wait); the pause keeps a re-check from spinning.
+      const stopped = await raceAbort(ctx.waitForIdle().then(() => delay(RELAY_RECHECK_MS)), signal);
+      if (stopped || !this.acceptsRelays(generation)) {
+        return { delivered: false, reason: "BTW stopped before main finished compacting" };
+      }
+    }
+    if (signal?.aborted || !this.acceptsRelays(generation)) {
+      return { delivered: false, reason: "BTW stopped before the message was handed to main" };
+    }
+    this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+    return { delivered: true };
+  }
+
   abort(): Promise<void> {
     if (this.abortPromise) return this.abortPromise;
     if (this.state.phase === "opening") this.state.pendingPrompts.length = 0;
@@ -500,6 +532,32 @@ export class BtwController {
 
     return closing.promise;
   }
+}
+
+const RELAY_RECHECK_MS = 50;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Resolves true if `signal` aborts before `promise` settles. */
+function raceAbort(promise: Promise<unknown>, signal: AbortSignal | undefined): Promise<boolean> {
+  if (!signal) return promise.then(() => false);
+  if (signal.aborted) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(true);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(false);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export default function btwExtension(pi: ExtensionAPI): void {
