@@ -45,6 +45,9 @@ mcp-adapter.json.pre-*.bak
 mcp-cache.json
 mcp-npx-cache.json
 *-stats.json
+*-stats.json.imported
+*-usage.jsonl
+*-usage.jsonl.compacting-*
 .cache/
 **/.cache/
 **/Cookies

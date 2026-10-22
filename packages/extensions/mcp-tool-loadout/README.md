@@ -44,8 +44,8 @@ description + JSON schema). With several servers that is ~20–30k tokens of def
 in your prompt before you type anything. This extension keeps that awareness but trims
 the cost:
 
-1. **Always-visible catalog.** Every MCP tool's *name* is injected into the system
-   prompt, grouped by server and marked active/·dormant/·proxy. The model never has to
+1. **Always-visible catalog.** Every MCP tool's *name* is added to the system prompt as
+   its own section (`<mcp_tool_catalog>`), grouped by server and marked active/·dormant/·proxy. The model never has to
    guess a keyword to discover a tool — it sees the exact callable names. (Active tools
    also appear with full schemas in the normal tool list, so the catalog stays names-only
    to keep it compact.)
@@ -56,14 +56,21 @@ the cost:
    usage plus a cold-start prior, recomputed once per session. Usage is tiered: this
    repo's own history first; if it has little MCP usage, your pooled **global** usage
    (across all repos); and only then the configured prior. Stats are keyed by **repo
-   name**, so all worktrees/clones of a repo share one history.
+   name**, so all worktrees/clones of a repo share one history. Only MCP tool calls are
+   recorded (direct MCP tools, `mcp({ tool })` proxy calls and `load_tools` names), so
+   built-in tools never crowd MCP usage out of the per-repo history.
 4. **Cache-safe schema loading.** A `load_tools` tool returns full schemas and exact
    `mcp({ tool, args })` examples for dormant tools without changing the active tool
    set. Set `direct:true` only when direct native function calling is worth the
    prompt-cache rewrite.
 
-Built-in tools (read, bash, edit, grep, …), the `mcp` proxy, and `load_tools` are
-**never** gated — only `pi-mcp-adapter` tools are.
+Only `pi-mcp-adapter` tools are gated. Every other tool — built-ins, `load_tools`, other
+extensions' tools — keeps exactly the active state Pi, your settings or another extension
+gave it: the loadout neither switches off an active tool nor switches on an inactive one
+(such as `powershell` on macOS, or a tool another extension keeps off until needed). The
+`mcp` proxy is kept active because it is the route to every dormant tool.
+
+Requires Pi 1.4.0 or newer.
 
 ## Why it works this way
 
@@ -73,6 +80,11 @@ Built-in tools (read, bash, edit, grep, …), the `mcp` proxy, and `load_tools` 
   active set; they append schemas in the tool result and route calls through `mcp`,
   keeping the cached prefix byte-stable. `direct:true` remains as an explicit hard-load
   escape hatch.
+- **The catalog is a prompt section, not a replaced prompt.** Pi diffs prompt sections
+  and sends a mid-conversation patch when a section or the tool set changes, leaving the
+  cached prefix alone. Replacing the whole system prompt would make Pi resend the full
+  prompt and tool list instead, so any mid-session tool change — from this extension or
+  any other — would rewrite the cache.
 - **Awareness over blind search.** A pure proxy hides tool names and forces keyword
   search. Listing names (≈1–1.5k tokens) is far cheaper than the schemas (~20k+) and
   removes the discovery guesswork.
@@ -123,7 +135,8 @@ orders the set, and as you use tools the prior washes out.
 
 - Installed package source location depends on install source: your local package path, Pi's git package cache, or Pi's npm package cache. In this repo, the development package lives at `packages/extensions/mcp-tool-loadout/` and its extension entry is `extensions/mcp-tool-loadout/index.ts`.
 - `~/.pi/agent/mcp-tool-loadout.json` — tunables (optional).
-- `~/.pi/agent/mcp-tool-loadout-stats.json` — usage events keyed by repo name (auto-created); the global signal is the pool of all repos' buckets.
+- `~/.pi/agent/mcp-tool-loadout-usage.jsonl` — usage events keyed by repo name (auto-created); the global signal is the pool of all repos' buckets. It is an append-only log, so concurrent sessions never overwrite each other's events and an interrupted write costs only its own line. It keeps the newest 5,000 events per repo and is compacted when it holds 5,000 more lines than that.
+- `~/.pi/agent/mcp-tool-loadout-stats.json` — the stats file of versions before 0.3.0. It is imported into the log once and renamed to `mcp-tool-loadout-stats.json.imported`; delete that file whenever you like.
 - Reads `~/.pi/agent/mcp-cache.json` (the adapter's metadata cache) for the full tool universe.
 
 ## Failure behavior

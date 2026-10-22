@@ -18,7 +18,7 @@ const universe: McpToolMeta[] = [
   { server: "warehouse_mcp", name: "q", description: "runs a query" }, // proxy-only
 ];
 
-test("never deactivates non-MCP tools; keeps infra (mcp) active; gates over-budget MCP", () => {
+test("keeps non-MCP tools as they were; keeps the mcp proxy active; gates over-budget MCP", () => {
   const allTools = [
     builtinTool("read"),
     builtinTool("bash"),
@@ -29,7 +29,8 @@ test("never deactivates non-MCP tools; keeps infra (mcp) active; gates over-budg
     mcpTool("chat_x", "", 0), // small
   ];
   const budget = estimateTokens(mcpTool("alpha_b", "", 0)) + estimateTokens(mcpTool("chat_x", "", 0));
-  const r = computeLoadout({ allTools, universe, cfg: cfg({ budgetTokens: budget }), recency: new Map() });
+  const activeNames = allTools.map((t) => t.name);
+  const r = computeLoadout({ allTools, activeNames, universe, cfg: cfg({ budgetTokens: budget }), recency: new Map() });
 
   for (const must of ["read", "bash", "load_tools", "mcp"]) {
     assert.ok(r.activeToolNames.includes(must), `${must} must stay active`);
@@ -49,7 +50,7 @@ test("catalog lists registered (active/dormant) and proxy-only tools", () => {
     mcpTool("chat_x", "x tool", 0),
   ];
   const budget = estimateTokens(mcpTool("alpha_b", "beta tool", 0));
-  const r = computeLoadout({ allTools, universe, cfg: cfg({ budgetTokens: budget }), recency: new Map() });
+  const r = computeLoadout({ allTools, activeNames: allTools.map((t) => t.name), universe, cfg: cfg({ budgetTokens: budget }), recency: new Map() });
   assert.match(r.catalog, /`alpha_a`/);
   assert.match(r.catalog, /`alpha_b`/);
   assert.match(r.catalog, /`chat_x`/);
@@ -59,15 +60,16 @@ test("catalog lists registered (active/dormant) and proxy-only tools", () => {
 
 test("deterministic for identical input", () => {
   const allTools = [builtinTool("read"), mcpTool("alpha_a"), mcpTool("alpha_b")];
-  const a = computeLoadout({ allTools, universe, cfg: cfg(), recency: new Map() });
-  const b = computeLoadout({ allTools, universe, cfg: cfg(), recency: new Map() });
+  const activeNames = allTools.map((t) => t.name);
+  const a = computeLoadout({ allTools, activeNames, universe, cfg: cfg(), recency: new Map() });
+  const b = computeLoadout({ allTools, activeNames, universe, cfg: cfg(), recency: new Map() });
   assert.deepEqual(a.activeToolNames, b.activeToolNames);
   assert.equal(a.catalog, b.catalog);
 });
 
-test("empty universe + only built-ins: no throw, all non-MCP active", () => {
-  const allTools = [builtinTool("read"), builtinTool("bash")];
-  const r = computeLoadout({ allTools, universe: [], cfg: cfg(), recency: new Map() });
+test("empty universe + only built-ins: no throw, the active set is unchanged", () => {
+  const allTools = [builtinTool("read"), builtinTool("bash"), builtinTool("powershell")];
+  const r = computeLoadout({ allTools, activeNames: ["read", "bash"], universe: [], cfg: cfg(), recency: new Map() });
   assert.deepEqual(r.activeToolNames.sort(), ["bash", "read"]);
   assert.equal(r.activeMcpCount, 0);
 });
@@ -78,12 +80,12 @@ test("planActivation: recent usage promotes a tool within a one-slot budget", ()
   const budget = estimateTokens(mcpTool("alpha_a", "", 0)); // fits exactly one
   const c = cfg({ budgetTokens: budget, minProjectEvents: 1 });
 
-  const noEvents = planActivation(allTools, universe, c, [], [], now);
+  const noEvents = planActivation(allTools, allTools.map((t) => t.name), universe, c, [], [], now);
   assert.ok(noEvents.activeToolNames.includes("alpha_a")); // tie -> name asc
   assert.ok(!noEvents.activeToolNames.includes("alpha_b"));
 
   const events: UsageEvent[] = [{ name: "alpha_b", ts: now }];
-  const withUse = planActivation(allTools, universe, c, events, [], now);
+  const withUse = planActivation(allTools, allTools.map((t) => t.name), universe, c, events, [], now);
   assert.ok(withUse.activeToolNames.includes("alpha_b"), "recent usage promotes alpha_b");
   assert.ok(!withUse.activeToolNames.includes("alpha_a"));
 });
@@ -100,7 +102,7 @@ test("planActivation falls back to global usage when project data is sparse", ()
   ];
 
   // Sparse project (< 3 relevant MCP events) → rank by global usage (favors alpha_b).
-  const sparse = planActivation(allTools, universe, c, [{ name: "alpha_a", ts: now }], global, now);
+  const sparse = planActivation(allTools, allTools.map((t) => t.name), universe, c, [{ name: "alpha_a", ts: now }], global, now);
   assert.ok(sparse.activeToolNames.includes("alpha_b"), "global promotes alpha_b on sparse project");
   assert.ok(!sparse.activeToolNames.includes("alpha_a"));
 
@@ -110,7 +112,28 @@ test("planActivation falls back to global usage when project data is sparse", ()
     { name: "alpha_a", ts: now },
     { name: "alpha_a", ts: now },
   ];
-  const dense = planActivation(allTools, universe, c, proj, global, now);
+  const dense = planActivation(allTools, allTools.map((t) => t.name), universe, c, proj, global, now);
   assert.ok(dense.activeToolNames.includes("alpha_a"), "project usage wins once threshold met");
   assert.ok(!dense.activeToolNames.includes("alpha_b"));
+});
+
+test("only MCP tools change: inactive non-MCP tools stay inactive, active ones stay active", () => {
+  const allTools = [
+    builtinTool("read"),
+    builtinTool("powershell"), // inactive by Pi default on this platform
+    builtinTool("web_search"), // deactivated by another extension
+    ourTool("load_tools"),
+    mcpTool("mcp"),
+    mcpTool("alpha_a", "", 20),
+    mcpTool("alpha_b", "", 0),
+  ];
+  const before = ["read", "load_tools", "alpha_a"];
+  const r = computeLoadout({
+    allTools,
+    activeNames: before,
+    universe,
+    cfg: cfg({ budgetTokens: estimateTokens(mcpTool("alpha_b", "", 0)) }),
+    recency: new Map(),
+  });
+  assert.deepEqual(r.activeToolNames.sort(), ["alpha_b", "load_tools", "mcp", "read"]);
 });

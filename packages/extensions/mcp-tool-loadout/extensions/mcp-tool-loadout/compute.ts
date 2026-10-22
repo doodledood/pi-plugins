@@ -9,6 +9,8 @@ import { recencyScores, type UsageEvent } from "./stats.ts";
 
 export interface LoadoutInput {
   allTools: readonly ToolInfo[];
+  /** The tool set active before the loadout applies: Pi defaults, other extensions, restored state. */
+  activeNames: readonly string[];
   universe: readonly McpToolMeta[];
   cfg: LoadoutConfig;
   recency: ReadonlyMap<string, number>;
@@ -27,14 +29,15 @@ function unique(names: Iterable<string>): string[] {
   return [...new Set(names)];
 }
 
-export function computeLoadout({ allTools, universe, cfg, recency }: LoadoutInput): LoadoutResult {
+export function computeLoadout({ allTools, activeNames, universe, cfg, recency }: LoadoutInput): LoadoutResult {
   const serverNames = unique(universe.map((u) => u.server));
   const excluded = new Set(cfg.excludeFromCatalog);
 
   // Partition registered tools.
   const mcpTools = allTools.filter((t) => isMcpTool(t) && !INFRA_TOOLS.has(t.name));
-  const nonMcpNames = allTools.filter((t) => !isMcpTool(t)).map((t) => t.name);
-  const infraPresent = allTools.filter((t) => INFRA_TOOLS.has(t.name)).map((t) => t.name);
+  const gated = new Set(mcpTools.map((t) => t.name));
+  // The `mcp` proxy is the adapter's own tool and the route to every dormant tool.
+  const proxy = allTools.filter((t) => t.name === "mcp" && isMcpTool(t)).map((t) => t.name);
 
   // Score + select the registered MCP tools.
   const candidates: Candidate[] = mcpTools.map((t) => {
@@ -45,7 +48,8 @@ export function computeLoadout({ allTools, universe, cfg, recency }: LoadoutInpu
   const { active } = selectActiveMcp(candidates, cfg.budgetTokens, cfg.alwaysActiveMcpTools);
   const activeMcp = new Set(active);
 
-  const activeToolNames = unique([...nonMcpNames, ...active, ...infraPresent]);
+  // Only MCP tools change: everything else stays exactly as active or inactive as it was.
+  const activeToolNames = unique([...activeNames.filter((name) => !gated.has(name)), ...active, ...proxy]);
 
   // Catalog: registered MCP tools (prefixed names) + proxy-only servers (from cache).
   const registeredServers = new Set(mcpTools.map((t) => inferServer(t.name, serverNames)).filter(Boolean));
@@ -73,6 +77,7 @@ export function computeLoadout({ allTools, universe, cfg, recency }: LoadoutInpu
  */
 export function planActivation(
   allTools: readonly ToolInfo[],
+  activeNames: readonly string[],
   universe: readonly McpToolMeta[],
   cfg: LoadoutConfig,
   projectEvents: readonly UsageEvent[],
@@ -86,5 +91,5 @@ export function planActivation(
   for (const e of projectEvents) if (mcpNames.has(e.name)) relevantProjectEvents++;
   const events = relevantProjectEvents >= cfg.minProjectEvents ? projectEvents : globalEvents;
   const recency = recencyScores(events, cfg.halfLifeDays, now);
-  return computeLoadout({ allTools, universe, cfg, recency });
+  return computeLoadout({ allTools, activeNames, universe, cfg, recency });
 }

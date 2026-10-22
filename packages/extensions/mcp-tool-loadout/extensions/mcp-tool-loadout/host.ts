@@ -2,11 +2,7 @@
 // plain mock (no casts, no `any`). The real ExtensionAPI is assignable to LoadoutPi,
 // because each handler's event/ctx type is a *widening* of Pi's concrete types (a
 // handler that needs less is assignable where Pi passes more).
-import type {
-  ToolInfo,
-  BeforeAgentStartEventResult,
-  ToolCallEventResult,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolInfo, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 
 /** The only ctx members the handlers use. Wider than ExtensionContext so ExtensionContext is assignable. */
 export interface LoadoutCtx {
@@ -16,7 +12,8 @@ export interface LoadoutCtx {
 
 /** Minimal shapes of the events the handlers actually read. */
 export interface SystemPromptCarrier {
-  systemPrompt: string;
+  /** Pi's mutable prompt sections; a section is diffed and patched by Pi, keeping the prompt cache. */
+  systemPromptOptions: { sections: Record<string, string> };
 }
 export interface ToolCallCarrier {
   toolName: string;
@@ -27,10 +24,8 @@ type Handler<E, R = void> = (event: E, ctx: LoadoutCtx) => Promise<R | void> | R
 
 export interface LoadoutHandlerMap {
   session_start: Handler<unknown>;
-  before_agent_start: Handler<SystemPromptCarrier, BeforeAgentStartEventResult>;
+  before_agent_start: Handler<SystemPromptCarrier>;
   tool_call: Handler<ToolCallCarrier, ToolCallEventResult>;
-  turn_end: Handler<unknown>;
-  session_shutdown: Handler<unknown>;
 }
 
 /** Subset of ExtensionAPI used by the event wiring. */

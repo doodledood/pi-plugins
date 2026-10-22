@@ -14,6 +14,12 @@ export function cachePath(): string {
   return join(agentDir(), "mcp-cache.json");
 }
 
-export function statsPath(): string {
+/** Append-only usage log (JSON Lines). */
+export function usageLogPath(): string {
+  return join(agentDir(), "mcp-tool-loadout-usage.jsonl");
+}
+
+/** The whole-file stats store used before the usage log; imported into the log once. */
+export function legacyStatsPath(): string {
   return join(agentDir(), "mcp-tool-loadout-stats.json");
 }

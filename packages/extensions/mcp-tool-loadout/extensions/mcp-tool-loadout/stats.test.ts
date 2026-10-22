@@ -1,18 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { attributeToolNames, recencyScores, StatsStore, type UsageEvent } from "./stats.ts";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { attributeToolNames, recencyScores, UsageLog, type UsageEvent } from "./stats.ts";
 import { priorFor } from "./select.ts";
 import { tmpDir } from "./testutil.ts";
 
-test("attributeToolNames unwraps proxy and wake calls", () => {
-  assert.deepEqual(attributeToolNames("mcp", { tool: "alpha_get_x" }), ["alpha_get_x"]);
-  assert.deepEqual(attributeToolNames("mcp", {}), []);
-  assert.deepEqual(attributeToolNames("mcp", { tool: "" }), []);
-  assert.deepEqual(attributeToolNames("load_tools", { names: ["a", "b"] }), ["a", "b"]);
-  assert.deepEqual(attributeToolNames("load_tools", { names: ["a", 3] }), ["a"]);
-  assert.deepEqual(attributeToolNames("load_tools", {}), []);
-  assert.deepEqual(attributeToolNames("grep", {}), ["grep"]);
+test("attributeToolNames unwraps proxy and wake calls and records only MCP tools", () => {
+  const isMcp = (name: string) => name.startsWith("alpha_");
+  assert.deepEqual(attributeToolNames("mcp", { tool: "alpha_get_x" }, isMcp), ["alpha_get_x"]);
+  assert.deepEqual(attributeToolNames("mcp", {}, isMcp), []);
+  assert.deepEqual(attributeToolNames("mcp", { tool: "" }, isMcp), []);
+  assert.deepEqual(attributeToolNames("load_tools", { names: ["a", "b"] }, isMcp), ["a", "b"]);
+  assert.deepEqual(attributeToolNames("load_tools", { names: ["a", 3] }, isMcp), ["a"]);
+  assert.deepEqual(attributeToolNames("load_tools", {}, isMcp), []);
+  assert.deepEqual(attributeToolNames("alpha_get_x", {}, isMcp), ["alpha_get_x"]);
+  assert.deepEqual(attributeToolNames("grep", {}, isMcp), []);
 });
 
 test("recencyScores decays older events", () => {
@@ -40,31 +43,81 @@ test("prior pseudo-count ranks a no-usage-but-prior tool above an unknown tool",
   assert.ok(scoreRare > scoreUnknown);
 });
 
-test("StatsStore records per-project and round-trips through disk", () => {
-  const p = join(tmpDir(), "stats.json");
-  const s1 = StatsStore.load(p); // missing file
+test("UsageLog records per-project and round-trips through disk", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  const s1 = UsageLog.open(log, legacy);
   assert.deepEqual(s1.eventsFor("proj"), []);
   s1.record("proj1", ["a", "b"], 111);
   s1.record("proj2", ["c"], 222);
-  s1.save();
 
-  const s2 = StatsStore.load(p);
-  assert.equal(s2.eventsFor("proj1").length, 2);
+  const s2 = UsageLog.open(log, legacy);
+  assert.deepEqual(s2.eventsFor("proj1"), [{ name: "a", ts: 111 }, { name: "b", ts: 111 }]);
   assert.equal(s2.eventsFor("proj2").length, 1);
-  assert.equal(s2.eventsFor("proj1")[0]?.name, "a");
   assert.deepEqual(s2.eventsFor("missing"), []);
 });
 
 test("allEvents pools usage across every project", () => {
-  const s = StatsStore.load(join(tmpDir(), "s.json"));
-  s.record("repoA", ["x"], 1);
-  s.record("repoB", ["y", "x"], 2);
-  const names = s.allEvents().map((e) => e.name).sort();
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  UsageLog.open(log, join(dir, "stats.json")).record("repoA", ["x"], 1);
+  UsageLog.open(log, join(dir, "stats.json")).record("repoB", ["y", "x"], 2);
+  const names = UsageLog.open(log, join(dir, "stats.json")).allEvents().map((e) => e.name).sort();
   assert.deepEqual(names, ["x", "x", "y"]);
 });
 
-test("StatsStore.record ignores empty name lists", () => {
-  const s = StatsStore.load(join(tmpDir(), "s.json"));
-  s.record("p", []);
-  assert.deepEqual(s.eventsFor("p"), []);
+test("record ignores empty name lists", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  UsageLog.open(log, join(dir, "stats.json")).record("p", []);
+  assert.equal(existsSync(log), false);
+});
+
+test("the pre-log stats file is imported once and renamed aside", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  writeFileSync(legacy, JSON.stringify({ version: 1, projects: { p: [{ name: "alpha_x", ts: 5 }, { name: "bad" }] } }));
+  assert.deepEqual(UsageLog.open(log, legacy).eventsFor("p"), [{ name: "alpha_x", ts: 5 }]);
+  assert.equal(existsSync(legacy), false);
+  assert.equal(existsSync(`${legacy}.imported`), true);
+  // A not-yet-restarted older version writes the old file again: it is not imported twice.
+  writeFileSync(legacy, JSON.stringify({ version: 1, projects: { p: [{ name: "alpha_x", ts: 5 }] } }));
+  assert.equal(UsageLog.open(log, legacy).eventsFor("p").length, 1);
+});
+
+test("an unreadable pre-log stats file is kept for a later import, not dropped", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  const full = JSON.stringify({ version: 1, projects: { p: [{ name: "alpha_x", ts: 5 }] } });
+  writeFileSync(legacy, full.slice(0, 20));
+  const original = console.error;
+  console.error = () => {};
+  try {
+    assert.deepEqual(UsageLog.open(log, legacy).eventsFor("p"), []);
+  } finally {
+    console.error = original;
+  }
+  writeFileSync(legacy, full);
+  assert.deepEqual(UsageLog.open(log, legacy).eventsFor("p"), [{ name: "alpha_x", ts: 5 }]);
+});
+
+test("compaction keeps the newest events per project and appends made meanwhile", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  const writer = UsageLog.open(log, legacy);
+  for (let i = 0; i < 12_000; i++) writer.record("busy", ["alpha_x"], i);
+  writer.record("quiet", ["alpha_y"], 1);
+  const compacted = UsageLog.open(log, legacy, 20_000);
+  assert.equal(compacted.eventsFor("busy").length, 5_000);
+  assert.equal(compacted.eventsFor("busy")[0]!.ts, 7_000, "the oldest events were the ones dropped");
+  writer.record("busy", ["alpha_z"], 12_000);
+  const reread = UsageLog.open(log, legacy, 20_000);
+  assert.equal(reread.eventsFor("busy").at(-1)!.name, "alpha_z");
+  assert.deepEqual(reread.eventsFor("quiet"), [{ name: "alpha_y", ts: 1 }]);
+  const lines = readFileSync(log, "utf8").split("\n").filter(Boolean).length;
+  assert.equal(lines, 5_002);
 });
