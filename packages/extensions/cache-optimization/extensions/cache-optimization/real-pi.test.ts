@@ -56,7 +56,7 @@ function sse(blocks: Array<Record<string, unknown>>): string {
 
 async function fakeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  if (!url.startsWith("https://api.anthropic.com/")) return originalFetch(input, init);
+  if (!url.startsWith("https://api.anthropic.com/")) throw new Error(`unexpected network request in a test: ${url}`);
   const raw = typeof init?.body === "string" ? init.body : input instanceof Request ? await input.text() : "";
   const payload = JSON.parse(raw) as Payload;
   if (payload.max_tokens === 1) {
