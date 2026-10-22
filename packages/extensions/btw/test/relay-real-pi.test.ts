@@ -328,6 +328,39 @@ test("a relay sent while main runs /compact arrives once compaction ends", { tim
   }
 });
 
+test("a relay from a BTW opened while main is already compacting waits for compaction to end", { timeout: 30_000 }, async () => {
+  const main = await startMain(6);
+  let release!: () => void;
+  summaryGate = new Promise((resolve) => (release = resolve));
+  summaryRequested = false;
+  try {
+    const compacting = main.session.compact().then(
+      () => "compacted",
+      (error: unknown) => `compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    await until(() => summaryRequested, "main to start compacting");
+    await main.session.prompt("/btw");
+    relayCallsServed = 0;
+    const asked = main.session.prompt("/btw RELAY_ONCE");
+    await until(() => relayCallsServed === 1, "the child to call send_to_main");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(main.errors, [], "Pi rejected the relay");
+    assert.deepEqual(relaysInMain(main), [], "nothing reaches main while it compacts");
+    release();
+    assert.equal(await compacting, "compacted");
+    await asked;
+    await until(() => relaysInMain(main).length > 0 || main.errors.length > 0, "the held relay");
+    await until(() => childRelayResults(main).length === 1, "the child's tool result");
+    await main.session.waitForIdle();
+    assert.deepEqual(main.errors, [], "Pi rejected the relay");
+    assert.deepEqual(relaysInMain(main), ["relay during compaction"]);
+    assert.deepEqual(childRelayResults(main), [{ text: "Sent to the main session.", isError: false }]);
+  } finally {
+    release();
+    await closeMain(main);
+  }
+});
+
 // ── AC-8.2 ──────────────────────────────────────────────────────────────────
 
 test("a relay BTW closes on before main can take it is reported as not delivered", { timeout: 30_000 }, async () => {

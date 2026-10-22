@@ -454,9 +454,11 @@ export class BtwController {
    *
    * `deliverAs: "followUp"` is always passed. Pi ignores it when main is idle and starts a turn; checking
    * isIdle() first and omitting it races another prompt that is still in Pi's preflight, which then rejects
-   * the relay as "already processing". While main compacts or summarizes it is neither idle nor running, and
-   * Pi rejects any prompt, so the relay waits for main to go idle. Pi's sendUserMessage reports failures only
-   * to its error log, so waiting here is what lets the child be told the truth.
+   * the relay as "already processing". While main compacts it is busy without an agent run (`ctx.signal` is
+   * the active run's), and Pi rejects any prompt, so the relay waits for main to go idle. Pi's state is read
+   * at each check rather than tracked from events: BTW can open while main is already compacting. Pi's
+   * sendUserMessage reports failures only to its error log, so waiting here is what lets the child be told
+   * the truth.
    */
   private async relayToParent(
     generation: number,
@@ -464,7 +466,7 @@ export class BtwController {
     text: string,
     signal: AbortSignal | undefined,
   ): Promise<RelayOutcome> {
-    while (!ctx.isIdle() && !this.parentRunning) {
+    while (!ctx.isIdle() && ctx.signal === undefined) {
       // waitForIdle can return before compaction state clears (or at once, in a host that binds no idle
       // wait); the pause keeps a re-check from spinning.
       const stopped = await raceAbort(ctx.waitForIdle().then(() => delay(RELAY_RECHECK_MS)), signal);
