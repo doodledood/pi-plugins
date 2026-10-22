@@ -866,7 +866,7 @@ test("pending messages after checker suppress continuation", async () => {
   assert.equal(host.sentMessages.length, 1);
 });
 
-test("non-idle state after checker queues follow-up continuation", async () => {
+test("non-idle state after checker queues steering continuation", async () => {
   let idle = true;
   const host = new FakeHost();
   const checker = new FakeChecker([{ decision: "continue", complete: false, reason: "need more evidence", nextTurnGuidance: "run test" }], () => {
@@ -879,7 +879,7 @@ test("non-idle state after checker queues follow-up continuation", async () => {
   assert.equal(checker.inputs.length, 1);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(host.sentMessages.length, 2);
-  assert.equal(host.sentMessages[1]?.options?.deliverAs, "followUp");
+  assert.equal(host.sentMessages[1]?.options?.deliverAs, "steer");
   assert.match(host.sentMessages[1]?.content ?? "", /need more evidence/iu);
 });
 

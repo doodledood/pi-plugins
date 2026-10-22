@@ -449,10 +449,10 @@ export class BtwController {
   }
 
   /**
-   * Relay a message to main on the user's behalf: a user message, queued behind the main run when one is
-   * active rather than steering it.
+   * Relay a message to main on the user's behalf: a user message that steers the main run when one is
+   * active, reaching main's model after its current tool batch rather than waiting for the run to end.
    *
-   * `deliverAs: "followUp"` is always passed. Pi ignores it when main is idle and starts a turn; checking
+   * `deliverAs: "steer"` is always passed. Pi ignores it when main is idle and starts a turn; checking
    * isIdle() first and omitting it races another prompt that is still in Pi's preflight, which then rejects
    * the relay as "already processing". While main compacts it is busy without an agent run (`ctx.signal` is
    * the active run's), and Pi rejects any prompt, so the relay waits for main to go idle. Pi's state is read
@@ -477,7 +477,7 @@ export class BtwController {
     if (signal?.aborted || !this.acceptsRelays(generation)) {
       return { delivered: false, reason: "BTW stopped before the message was handed to main" };
     }
-    this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+    this.pi.sendUserMessage(text, { deliverAs: "steer" });
     return { delivered: true };
   }
 

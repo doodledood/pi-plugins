@@ -374,7 +374,7 @@ export function activate(
       setStatus(ctx);
       injectReminderMidRun(ctx);
       ctx.ui.notify(`Goal started: ${activeGoal.goal}`, "info");
-      await sendGoalKickoff(pi, ctx, activeGoal);
+      sendGoalKickoff(pi, activeGoal);
     },
   });
 
@@ -420,7 +420,7 @@ export function activate(
       reminderInjectedForGoalId = undefined;
       injectReminderMidRun(ctx);
       ctx.ui.notify("Goal resumed.", "info");
-      await sendGoalKickoff(pi, ctx, activeGoal);
+      sendGoalKickoff(pi, activeGoal);
     },
   });
 
@@ -473,7 +473,7 @@ export function activate(
       reminderInjectedForGoalId = undefined;
       injectReminderMidRun(ctx);
       ctx.ui.notify(`Goal edited and resumed: ${activeGoal.goal}`, "info");
-      await sendGoalKickoff(pi, ctx, activeGoal);
+      sendGoalKickoff(pi, activeGoal);
     },
   });
 
@@ -667,7 +667,7 @@ export function activate(
       }
       injectReminderMidRun(ctx);
       pendingContinuationPrompt = buildContinuationPrompt(activeGoal, verdict);
-      pi.sendUserMessage(pendingContinuationPrompt, { deliverAs: "followUp" });
+      sendUserMessage(pi, pendingContinuationPrompt);
     } catch (error) {
       if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
       const message = safeCheckerFailureMessage(error, checkerConfig, checkerModel);
@@ -694,13 +694,16 @@ export function activate(
   });
 }
 
-async function sendGoalKickoff(pi: GoalControllerHost, ctx: ExtensionContext, goal: ActiveGoal): Promise<void> {
-  await sendUserMessage(pi, ctx, `Goal mode is active. Work toward this goal until the independent checker marks it complete:\n\n<goal_objective>\n${goal.goal}\n</goal_objective>\n\nSurface concrete verification evidence as you work. Do not claim completion authority; the checker owns completion.`);
+function sendGoalKickoff(pi: GoalControllerHost, goal: ActiveGoal): void {
+  sendUserMessage(pi, `Goal mode is active. Work toward this goal until the independent checker marks it complete:\n\n<goal_objective>\n${goal.goal}\n</goal_objective>\n\nSurface concrete verification evidence as you work. Do not claim completion authority; the checker owns completion.`);
 }
 
-async function sendUserMessage(pi: GoalControllerHost, ctx: ExtensionContext, prompt: string): Promise<void> {
-  if (ctx.isIdle()) pi.sendUserMessage(prompt);
-  else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+// Goal prompts steer: mid-run they reach the model after the current tool
+// batch instead of waiting for the run to end. Pi ignores deliverAs when idle
+// and starts a turn, so it is always passed; branching on isIdle() would race
+// a prompt still in Pi's preflight.
+function sendUserMessage(pi: GoalControllerHost, prompt: string): void {
+  pi.sendUserMessage(prompt, { deliverAs: "steer" });
 }
 
 function currentTokenTotal(ctx: ExtensionContext): number {

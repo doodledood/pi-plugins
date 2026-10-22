@@ -1,7 +1,7 @@
 # ADR: Keep BTW read-only, with `send_to_main` as its one path into the main session
 
 ## Status
-Accepted
+Accepted; amended by 20261022-steer-main-with-extension-sent-user-messages (relays steer main's current run instead of queuing as a follow-up)
 
 ## Context
 BTW inherited the parent's full active tool set and was told only to "verify shared state before a conflicting write". In practice the side conversation is used to ask questions while the main session works, and an aside that edits the same workspace competes with main. Users also want a way to carry a conclusion reached in BTW back to main without retyping it.
