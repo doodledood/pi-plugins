@@ -2,6 +2,16 @@
 
 Single-slot draft stash for Pi input editor with keyboard shortcuts.
 
+Requires Pi 1.4.0 or later.
+
+## Use
+
+- **Ctrl+Option+S** stashes the editor's text and clears the editor, so you can send a temporary message. If a draft is already stashed, it asks before replacing it.
+- After the next user message is sent, the draft comes back on its own, into an empty editor. If you have typed something new in the meantime, your new text is left alone and the draft stays stashed; a notice says so. Restoring never opens a dialog, so it never holds up the agent's turn.
+- **Option+Shift+S** pops the stash by hand. It asks before replacing text already in the editor.
+
+The stash is one slot per Pi process. It survives `/new`, `/resume`, `/fork` and `/reload`, and is gone when Pi exits.
+
 ## Install
 
 From a local clone:

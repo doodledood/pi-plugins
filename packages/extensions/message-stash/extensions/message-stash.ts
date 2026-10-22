@@ -1,9 +1,14 @@
 // message-stash.ts — single-slot draft stash for Pi's input editor.
 //
 // Ctrl+Option+S stashes the current editor text and clears the editor so a
-// temporary message can be sent. After the next normal user message is sent,
-// the stashed draft is restored automatically. Option+Shift+S manually pops
-// the stash.
+// temporary message can be sent. After the next user message is sent, the
+// stashed draft is restored automatically into an empty editor. If the editor
+// already holds new text, the draft stays stashed and the user is told so.
+// Option+Shift+S manually pops the stash.
+//
+// The slot lives on the Pi process, not on this module: Pi re-imports
+// extensions on /new, /resume, /fork and /reload, which would otherwise drop a
+// stashed draft.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -11,16 +16,29 @@ const STATUS_KEY = "message-stash";
 
 type RestoreSource = "auto" | "manual";
 
+interface StashSlot {
+  text: string | undefined;
+  autoRestorePending: boolean;
+}
+
+const SLOT_KEY = Symbol.for("@doodledood/pi-message-stash/slot");
+
+/** The process-wide stash slot, shared by every load of this extension in one Pi process. */
+function processSlot(): StashSlot {
+  const holder = globalThis as typeof globalThis & { [SLOT_KEY]?: StashSlot };
+  holder[SLOT_KEY] ??= { text: undefined, autoRestorePending: false };
+  return holder[SLOT_KEY];
+}
+
 export default function messageStash(pi: ExtensionAPI) {
-  let stashedText: string | undefined;
-  let autoRestorePending = false;
+  const slot = processSlot();
   let operationInProgress = false;
   let suppressAutoRestoreUntil = 0;
 
   const updateStatus = (ctx: ExtensionContext): void => {
     ctx.ui.setStatus(
       STATUS_KEY,
-      stashedText === undefined ? undefined : `draft stashed (${formatDraftSize(stashedText)})`,
+      slot.text === undefined ? undefined : `draft stashed (${formatDraftSize(slot.text)})`,
     );
   };
 
@@ -32,7 +50,7 @@ export default function messageStash(pi: ExtensionAPI) {
       const currentText = ctx.ui.getEditorText();
       if (isBlank(currentText)) {
         ctx.ui.notify(
-          stashedText === undefined
+          slot.text === undefined
             ? "Nothing to stash."
             : "A draft is already stashed. Press Option+Shift+S to restore it.",
           "info",
@@ -40,7 +58,7 @@ export default function messageStash(pi: ExtensionAPI) {
         return;
       }
 
-      if (stashedText !== undefined) {
+      if (slot.text !== undefined) {
         const overwrite = await ctx.ui.confirm(
           "Overwrite stashed draft?",
           "A draft is already stashed. Replace it with the current editor input?",
@@ -56,8 +74,8 @@ export default function messageStash(pi: ExtensionAPI) {
         }
       }
 
-      stashedText = currentText;
-      autoRestorePending = true;
+      slot.text = currentText;
+      slot.autoRestorePending = true;
       ctx.ui.setEditorText("");
       updateStatus(ctx);
       ctx.ui.notify(
@@ -69,43 +87,36 @@ export default function messageStash(pi: ExtensionAPI) {
     }
   };
 
-  const popStashedDraft = async (ctx: ExtensionContext, source: RestoreSource): Promise<boolean> => {
-    if (operationInProgress) return false;
+  const restoreDraft = (ctx: ExtensionContext, draft: string, source: RestoreSource): void => {
+    ctx.ui.setEditorText(draft);
+    slot.text = undefined;
+    slot.autoRestorePending = false;
+    updateStatus(ctx);
+    ctx.ui.notify(source === "auto" ? "Stashed draft restored." : "Stashed draft popped.", "info");
+  };
 
-    const draft = stashedText;
+  const popStashedDraft = async (ctx: ExtensionContext): Promise<void> => {
+    if (operationInProgress) return;
+
+    const draft = slot.text;
     if (draft === undefined) {
-      if (source === "manual") ctx.ui.notify("No stashed draft.", "info");
-      return false;
+      ctx.ui.notify("No stashed draft.", "info");
+      return;
     }
 
     operationInProgress = true;
     try {
-      const currentText = ctx.ui.getEditorText();
-      if (!isBlank(currentText)) {
+      if (!isBlank(ctx.ui.getEditorText())) {
         const replace = await ctx.ui.confirm(
-          source === "auto" ? "Restore stashed draft?" : "Replace current input?",
-          source === "auto"
-            ? "The editor already has input. Replace it with the stashed draft?"
-            : "Replace the current editor input with the stashed draft?",
+          "Replace current input?",
+          "Replace the current editor input with the stashed draft?",
         );
         if (!replace) {
-          if (source === "auto") {
-            autoRestorePending = false;
-            updateStatus(ctx);
-            ctx.ui.notify("Stashed draft kept. Press Option+Shift+S to restore it.", "info");
-          } else {
-            ctx.ui.notify("Stash kept.", "info");
-          }
-          return false;
+          ctx.ui.notify("Stash kept.", "info");
+          return;
         }
       }
-
-      ctx.ui.setEditorText(draft);
-      stashedText = undefined;
-      autoRestorePending = false;
-      updateStatus(ctx);
-      ctx.ui.notify(source === "auto" ? "Stashed draft restored." : "Stashed draft popped.", "info");
-      return true;
+      restoreDraft(ctx, draft, "manual");
     } finally {
       operationInProgress = false;
     }
@@ -118,21 +129,25 @@ export default function messageStash(pi: ExtensionAPI) {
 
   pi.registerShortcut("alt+shift+s", {
     description: "Pop stashed editor draft into the editor",
-    handler: async (ctx) => {
-      await popStashedDraft(ctx, "manual");
-    },
+    handler: popStashedDraft,
   });
 
-  pi.on("message_start", async (event, ctx) => {
+  pi.on("message_start", (event, ctx) => {
     if (event.message.role !== "user") return;
-    if (!autoRestorePending || stashedText === undefined) return;
+    const draft = slot.text;
+    if (!slot.autoRestorePending || draft === undefined) return;
     if (operationInProgress || Date.now() < suppressAutoRestoreUntil) return;
 
-    // One-shot auto restore: if replacement is declined, the stash remains for
-    // manual Option+Shift+S restore but future messages do not keep prompting.
-    autoRestorePending = false;
+    // One-shot and never interactive: this runs inside the agent's turn, so it must not wait on the user,
+    // and text typed since the stash is newer than the draft. With the editor in use, the draft stays
+    // stashed for a manual Option+Shift+S.
+    slot.autoRestorePending = false;
+    if (isBlank(ctx.ui.getEditorText())) {
+      restoreDraft(ctx, draft, "auto");
+      return;
+    }
     updateStatus(ctx);
-    await popStashedDraft(ctx, "auto");
+    ctx.ui.notify("Your draft is still stashed because the editor has new text. Press Option+Shift+S to restore it.", "info");
   });
 
   pi.on("session_start", (_event, ctx) => updateStatus(ctx));
