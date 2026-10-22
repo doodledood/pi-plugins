@@ -2,6 +2,8 @@
 
 Aviram's ambient custom Pi footer/statusline.
 
+Requires Pi 1.4.0 or later: cost totals bill Pi's own usage entries, including its cache-warming refreshes.
+
 ## Layout
 
 The left side is quiet identity: the `π` marker in `dim` (whether pi is busy is

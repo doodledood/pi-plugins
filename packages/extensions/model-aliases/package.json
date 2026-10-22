@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-model-aliases",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "type": "module",
   "description": "Configurable Pi model aliases with separate visible and provider-target metadata.",
   "scripts": {
@@ -22,7 +22,7 @@
     "@earendil-works/pi-ai": "*"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8"
+    "@earendil-works/pi-coding-agent": ">=1.4.0"
   },
   "license": "MIT",
   "repository": {

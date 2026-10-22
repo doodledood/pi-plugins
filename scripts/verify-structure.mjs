@@ -288,11 +288,6 @@ const recordTypeContracts = [
     ],
     readers: ["packages/extensions/simple-statusline/extensions/simple-statusline/session-cost.ts"],
   },
-  {
-    literal: "pi-price-tier",
-    writers: ["packages/extensions/gpt-fast-toggle/extensions/gpt-fast-toggle.ts"],
-    readers: ["packages/extensions/simple-statusline/extensions/simple-statusline/session-cost.ts"],
-  },
 ];
 for (const contract of recordTypeContracts) {
   for (const [role, paths] of [["writer", contract.writers], ["reader", contract.readers]]) {

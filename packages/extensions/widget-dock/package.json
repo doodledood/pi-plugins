@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-widget-dock",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "Fold Pi's todo and subagent widgets above the editor into one summary line you can expand.",
   "keywords": [

@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-goal-controller",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "description": "Pi goal controller with model-callable goal start and checker-only completion.",
   "keywords": [
@@ -13,7 +13,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
     "typebox": "*"
   },
   "scripts": {

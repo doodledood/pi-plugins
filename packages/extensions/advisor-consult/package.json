@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-advisor-consult",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "type": "module",
   "description": "Pi advisor-consult: an independent second-opinion advisor with inspectable invocation details for risky, uncertain, or high-leverage work.",
   "keywords": [
@@ -13,7 +13,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },

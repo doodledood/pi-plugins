@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-message-stash",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "description": "Single-slot draft stash for Pi input editor with keyboard shortcuts.",
   "keywords": [

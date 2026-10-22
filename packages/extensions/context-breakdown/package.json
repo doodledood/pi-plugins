@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-context-breakdown",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "type": "module",
   "description": "Claude-Code-style /context command for Pi showing context-window usage by category.",
   "keywords": [
@@ -17,7 +17,7 @@
     "test": "tsx --test extensions/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8",
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {

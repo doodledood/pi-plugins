@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-simple-statusline",
-  "version": "0.10.5",
+  "version": "0.11.0",
   "type": "module",
   "description": "Aviram's ambient custom Pi footer/statusline.",
   "keywords": [
@@ -14,7 +14,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-coding-agent": ">=0.80.8"
+    "@earendil-works/pi-coding-agent": ">=1.4.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

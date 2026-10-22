@@ -2,6 +2,8 @@
 
 Pi goal controller with model-callable goal start and checker-only completion.
 
+Requires Pi 1.4.0 or later: it decides at Pi's `agent_before_settle` / `agent_settled` events, after retries and queued input have drained.
+
 ## Install
 
 From a local clone:
