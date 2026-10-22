@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export type ModelInputType = "text" | "image";
 export type ThinkingLevelName = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -56,9 +56,8 @@ interface RawObject {
 
 const CONFIG_FILE_NAME = "model-aliases.json";
 
-export function defaultConfigPaths(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
-  const home = env.HOME ?? env.USERPROFILE ?? ".";
-  const paths = [join(home, ".pi", "agent", CONFIG_FILE_NAME)];
+export function defaultConfigPaths(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env, agentDir = getAgentDir()): string[] {
+  const paths = [join(agentDir, CONFIG_FILE_NAME)];
 
   if (env.PI_AGENT_HOME) {
     paths.push(join(env.PI_AGENT_HOME, CONFIG_FILE_NAME));

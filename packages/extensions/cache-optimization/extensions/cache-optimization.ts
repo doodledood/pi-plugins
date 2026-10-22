@@ -26,6 +26,7 @@ import {
 } from "./cache-optimization/cache.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { applyCacheKeeper, type KeeperState } from "./cache-optimization/keeper.ts";
 import {
   CacheKeepalive,
@@ -67,8 +68,7 @@ function anthropicUsesNonApiKeyAuth(): boolean {
   // (`sk-ant-oat...`). Keepalive sends x-api-key, so either shape is a
   // different auth route and must disable pings.
   if (process.env.ANTHROPIC_OAUTH_TOKEN || isAnthropicOAuthToken(process.env.ANTHROPIC_API_KEY)) return true;
-  const dir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? process.env.USERPROFILE ?? ".", ".pi", "agent");
-  const authPath = join(dir, "auth.json");
+  const authPath = join(getAgentDir(), "auth.json");
   if (!existsSync(authPath)) return false;
   try {
     return isNonApiKeyAnthropicAuth(JSON.parse(readFileSync(authPath, "utf8")));

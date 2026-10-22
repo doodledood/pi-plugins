@@ -58,7 +58,7 @@ From the Git repo with a package filter, add this to `~/.pi/agent/settings.json`
 
 Aliases are configured in `model-aliases.json`. The extension reads config files in normal priority order:
 
-1. `~/.pi/agent/model-aliases.json`
+1. `~/.pi/agent/model-aliases.json`, or the agent directory `PI_CODING_AGENT_DIR` names, the same one Pi uses
 2. `$PI_AGENT_HOME/model-aliases.json`, when set
 3. `<cwd>/.pi/model-aliases.json`
 

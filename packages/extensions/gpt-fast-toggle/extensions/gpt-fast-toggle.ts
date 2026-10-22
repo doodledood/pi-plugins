@@ -7,14 +7,14 @@
 // cost already carries the premium and nothing here needs to record the tier.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "gpt-fast";
 
-/** Resolved per call, so the agent directory Pi was started with is the one used. */
+/** Resolved per call through Pi's own agent-directory resolver, so it is the directory Pi uses. */
 function statePath(): string {
-  return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "gpt-fast-toggle.json");
+  return join(getAgentDir(), "gpt-fast-toggle.json");
 }
 
 type TargetMode = "fast" | "deep";

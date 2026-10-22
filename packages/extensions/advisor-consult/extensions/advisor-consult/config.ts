@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ORCHESTRATION_DENYLIST } from "./child-profile.ts";
 import { isThinkingLevel, type AdvisorConsultConfig, type LoadedConfig, type ThinkingLevel } from "./types.ts";
 
@@ -21,7 +22,7 @@ export const MAX_TIMER_MS = 2_147_483_647;
 
 /** Resolved per call, so the file follows Pi's agent directory as it is at the time. */
 export function configPath(): string {
-  return join(process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"), "advisor-consult.json");
+  return join(getAgentDir(), "advisor-consult.json");
 }
 
 export const DEFAULT_CONFIG: AdvisorConsultConfig = {

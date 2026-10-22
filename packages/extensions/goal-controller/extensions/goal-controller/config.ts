@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_TRUSTED_CHECKER_MODEL_BOOTSTRAP_PACKAGES } from "./checker-model-bootstrap.ts";
 import { isThinkingLevel, type CheckerTrustedModelBootstrapPackage, type GoalControllerConfig } from "./types.ts";
 
@@ -8,10 +9,10 @@ const DEFAULT_NO_TOOL_CONTINUATION_LIMIT = 3;
 const REMOVED_CHECKER_CAPABILITY_FIELD = "toolMode";
 const CHECKER_CONFIG_FIELDS = new Set(["mode", "model", "thinking", "timeoutMs", "trustedModelBootstrapPackages"]);
 
-export const CONFIG_PATH = join(
-  process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
-  "goal-controller.config.json",
-);
+/** Resolved per call through Pi's own agent-directory resolver, so it is the directory Pi uses. */
+export function configPath(): string {
+  return join(getAgentDir(), "goal-controller.config.json");
+}
 
 export const DEFAULT_CONFIG: GoalControllerConfig = {
   checker: {
@@ -35,7 +36,7 @@ export interface LoadedConfig {
   path: string;
 }
 
-export function loadConfig(path = CONFIG_PATH): LoadedConfig {
+export function loadConfig(path = configPath()): LoadedConfig {
   if (!existsSync(path)) return { config: DEFAULT_CONFIG, path };
 
   try {

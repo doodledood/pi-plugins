@@ -117,3 +117,14 @@ test("toggling off an OpenAI GPT model is refused with a hint", async () => {
   assert.equal(readSavedMode(), "deep");
   assert.ok(harness.notices.some((n) => /only applies to direct OpenAI GPT/.test(n)));
 });
+
+test("the mode is saved in the agent directory Pi resolves, including a ~ path", async (t) => {
+  t.after(() => {
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+  });
+  process.env.PI_CODING_AGENT_DIR = "~/custom-agent";
+  mkdirSync(join(home, "custom-agent"), { recursive: true });
+  const harness = createHarness(gpt);
+  await harness.commands.get("gpt-fast")!.handler("on", harness.ctx);
+  assert.equal(JSON.parse(readFileSync(join(home, "custom-agent", "gpt-fast-toggle.json"), "utf8")).mode, "fast");
+});
