@@ -122,16 +122,22 @@ Lifecycle handling keeps the reminder truthful across the goal's life:
 
 ## Completion behavior
 
-On each completed worker turn, the controller:
+The controller decides once Pi has settled the run (`agent_before_settle`), not at the first `agent_end`: a provider error Pi retries successfully, an overflow compaction, and messages the user queued all run first. A run that ends in an error Pi gave up on, or that the user interrupted, pauses the goal without a check. Otherwise the controller:
 
 1. updates goal usage counters,
-2. checks budgets/limits,
-3. runs an independent checker subprocess when safe,
-4. applies the checker verdict:
+2. runs an independent checker subprocess,
+3. applies the checker verdict:
    - `decision: "complete"` → goal becomes complete and continuation stops
    - `decision: "continue"` → checker guidance is fed into the next worker turn
    - `decision: "waiting_for_user"` → automatic continuation stops until the next user-driven worker turn, then goal context resumes automatically
    - `decision: "blocked"` → goal becomes blocked and continuation stops until resumed
+4. stops automatic continuation when a budget is used up. The turn that used it up is still checked, so a goal that finished within budget completes.
+
+A message the user sends while the checker runs counts as the user-driven turn: it resumes a waiting goal and resets the automatic no-tool continuation count.
+
+`/goal_resume` on a budget-limited goal opens a fresh budget window measured from the resume point. Lifetime usage counters keep counting from the goal's start, and `/goal` shows both. Resuming from any other status keeps the current window. See `docs/adr/20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md`.
+
+`/goal_edit` applies the edit only if, when the editor closes, the same goal is still there and editable; if it entered checking, finished, or was replaced, the edit is not applied and your text is shown back.
 
 A completed goal is not live. The model-facing `goal` tool may supersede it with a fresh goal, and the user-only `/goal_resume` command may reactivate the same goal record. Resuming a completed goal preserves its checker history and counters for audit continuity, but clears the operational `lastCheckerVerdict` so the previous completion is historical rather than current proof.
 

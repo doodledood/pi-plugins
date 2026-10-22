@@ -6,7 +6,7 @@
 | 2026-06-24 | [Allow new goals over stopped goals](20260624-allow-new-goals-over-stopped-goals.md) | Accepted |
 | 2026-06-24 | [Keep goal statusline rendering separate from goal-controller](20260624-keep-goal-statusline-separate.md) | Accepted |
 | 2026-06-24 | [Use a single audit-only goal checker profile](20260624-use-audit-only-goal-checker-profile.md) | Accepted |
-| 2026-06-29 | [Resume completed goals as historical reactivation](20260629-resume-completed-goals.md) | Accepted |
+| 2026-06-29 | [Resume completed goals as historical reactivation](20260629-resume-completed-goals.md) | Accepted; narrowed by [20261022-resume-budget-limited-goals-into-a-fresh-budget-window](20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md) (budgets on a budget-limited resume apply to a fresh window) |
 | 2026-07-06 | [Layered cache-efficiency observability (footer signal + /cache attribution)](20260706-cache-efficiency-observability.md) | Accepted |
 | 2026-07-06 | [cache-optimization extension (keeper + keepalive) and head-stable goal reminders](20260706-cache-optimization-extension.md) | Accepted |
 | 2026-07-07 | [Use captured-provider-payload replay for adaptive-thinking TTL keepalive](20260707-adaptive-thinking-ttl-keepalive.md) | Accepted |
@@ -22,3 +22,4 @@
 | 2026-10-14 | [Keep BTW read-only, with `send_to_main` as its one path into the main session](20261014-keep-btw-read-only-with-one-relay-to-main.md) | Accepted |
 | 2026-10-14 | [Draw narration in the thinking tone by writing the tone into its Markdown source, checked against pi's renderer](20261014-quiet-narration-through-checked-source-tone.md) | Accepted |
 | 2026-10-14 | [Use Pi's native fullscreen mouse routing for overlays and observe main-screen clicks through Pi's own handlers](20261014-use-pi-native-mouse-routing-for-overlays.md) | Accepted |
+| 2026-10-22 | [Resume budget-limited goals into a fresh budget window](20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md) | Accepted |

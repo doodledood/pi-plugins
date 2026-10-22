@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   ActiveGoal,
+  BudgetUsage,
   CheckerHistoryEntry,
   CheckerVerdict,
   GoalControllerConfig,
@@ -203,6 +204,16 @@ export function applyCheckerVerdict(
   };
 }
 
+/** Usage counted against the budgets: lifetime usage minus the current window's start. */
+export function budgetWindowUsage(goal: ActiveGoal): BudgetUsage {
+  const start = goal.budgetWindowStart ?? { tokens: 0, turns: 0, timeSeconds: 0 };
+  return {
+    tokens: Math.max(0, goal.tokensUsed - start.tokens),
+    turns: Math.max(0, goal.turnsUsed - start.turns),
+    timeSeconds: Math.max(0, goal.timeUsedSeconds - start.timeSeconds),
+  };
+}
+
 export function maybeApplyBudgetLimit(goal: ActiveGoal, now = Date.now()): ActiveGoal {
   const reason = budgetLimitReason(goal);
   if (!reason) return goal;
@@ -210,14 +221,15 @@ export function maybeApplyBudgetLimit(goal: ActiveGoal, now = Date.now()): Activ
 }
 
 export function budgetLimitReason(goal: ActiveGoal): string | undefined {
-  if (goal.tokenBudget !== undefined && goal.tokensUsed >= goal.tokenBudget) {
-    return `Goal token budget reached (${goal.tokensUsed}/${goal.tokenBudget}).`;
+  const used = budgetWindowUsage(goal);
+  if (goal.tokenBudget !== undefined && used.tokens >= goal.tokenBudget) {
+    return `Goal token budget reached (${used.tokens}/${goal.tokenBudget}).`;
   }
-  if (goal.turnBudget !== undefined && goal.turnsUsed >= goal.turnBudget) {
-    return `Goal turn budget reached (${goal.turnsUsed}/${goal.turnBudget}).`;
+  if (goal.turnBudget !== undefined && used.turns >= goal.turnBudget) {
+    return `Goal turn budget reached (${used.turns}/${goal.turnBudget}).`;
   }
-  if (goal.timeBudgetSeconds !== undefined && goal.timeUsedSeconds >= goal.timeBudgetSeconds) {
-    return `Goal time budget reached (${goal.timeUsedSeconds}/${goal.timeBudgetSeconds}s).`;
+  if (goal.timeBudgetSeconds !== undefined && used.timeSeconds >= goal.timeBudgetSeconds) {
+    return `Goal time budget reached (${used.timeSeconds}/${goal.timeBudgetSeconds}s).`;
   }
   return undefined;
 }
@@ -230,6 +242,11 @@ export function clearGoal(goal: ActiveGoal | undefined, now = Date.now()): Activ
 export function resumeGoal(goal: ActiveGoal, now = Date.now()): ActiveGoal {
   return {
     ...transitionGoal(goal, "active", "resumed by user", now),
+    // A budget-limited goal resumes into a fresh budget window; lifetime
+    // counters are kept as the audit trail.
+    budgetWindowStart: goal.status === "budget_limited"
+      ? { tokens: goal.tokensUsed, turns: goal.turnsUsed, timeSeconds: Math.max(0, Math.floor((now - goal.startedAt) / 1000)) }
+      : goal.budgetWindowStart,
     lastCheckerVerdict: goal.status === "complete" ? undefined : goal.lastCheckerVerdict,
     awaitingContinuationTurn: false,
     consecutiveNoToolContinuations: 0,
@@ -255,11 +272,15 @@ export function pauseGoal(goal: ActiveGoal, reason: string, now = Date.now()): A
 
 export function goalSummary(goal: ActiveGoal | undefined): string {
   if (!goal) return "No goal is set.";
+  const used = budgetWindowUsage(goal);
   const budgetParts = [
-    goal.tokenBudget === undefined ? undefined : `tokens ${goal.tokensUsed}/${goal.tokenBudget}`,
-    goal.turnBudget === undefined ? undefined : `turns ${goal.turnsUsed}/${goal.turnBudget}`,
-    goal.timeBudgetSeconds === undefined ? undefined : `time ${goal.timeUsedSeconds}s/${goal.timeBudgetSeconds}s`,
+    goal.tokenBudget === undefined ? undefined : `tokens ${used.tokens}/${goal.tokenBudget}`,
+    goal.turnBudget === undefined ? undefined : `turns ${used.turns}/${goal.turnBudget}`,
+    goal.timeBudgetSeconds === undefined ? undefined : `time ${used.timeSeconds}s/${goal.timeBudgetSeconds}s`,
   ].filter((part): part is string => part !== undefined);
+  if (budgetParts.length > 0 && goal.budgetWindowStart) {
+    budgetParts.push(`lifetime tokens ${goal.tokensUsed}, turns ${goal.turnsUsed}, time ${goal.timeUsedSeconds}s`);
+  }
   const checker = goal.lastCheckerVerdict ? `\nLast checker: ${goal.lastCheckerVerdict.decision ?? (goal.lastCheckerVerdict.complete ? "complete" : "not complete")} — ${goal.lastCheckerVerdict.reason}` : "";
   const reason = goal.lastTransitionReason ? `\nReason: ${goal.lastTransitionReason}` : "";
   return [`Goal: ${goal.goal}`, `Status: ${goal.status}`, `Iteration: ${goal.iteration}`, budgetParts.length > 0 ? `Budget: ${budgetParts.join(", ")}` : "Budget: none", checker, reason]

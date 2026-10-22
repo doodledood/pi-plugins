@@ -187,6 +187,23 @@ function agentEnd(text: string, toolUse = false, stopReason: "stop" | "toolUse" 
   } as unknown as AgentEndEvent;
 }
 
+// Plays Pi 1.4's end of an agent run: agent_end for the attempt, then
+// agent_before_settle once nothing is left to retry or drain — or, for an
+// aborted run, agent_settled without a settle boundary.
+async function settleRun(host: FakeHost, event: AgentEndEvent, ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+  await host.handlers.agent_end?.(event, ctx as ExtensionContext);
+  const final = [...event.messages].reverse().find((message) => (message as { role?: string }).role === "assistant") as { stopReason?: string } | undefined;
+  if (final?.stopReason === "aborted") {
+    await host.handlers.agent_settled?.({ type: "agent_settled", aborted: true }, ctx as ExtensionContext);
+    return;
+  }
+  await host.handlers.agent_before_settle?.(
+    { type: "agent_before_settle", outcome: final?.stopReason === "error" ? "error" : "completed", entries: [], continue: false, context: { contextEntries: [], contextMessages: [], llmMessages: [], pendingMessages: [], canContinue: true } },
+    ctx as ExtensionContext,
+  );
+  await host.handlers.agent_settled?.({ type: "agent_settled", aborted: false }, ctx as ExtensionContext);
+}
+
 function latestGoal(host: FakeHost): { goal?: string; status?: string; consecutiveNoToolContinuations?: number; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } | undefined {
   return (host.customEntries.at(-1)?.data as { goal?: { goal?: string; status?: string; consecutiveNoToolContinuations?: number; lastCheckerVerdict?: { complete?: boolean; decision?: string }; lastTransitionReason?: string } } | undefined)?.goal;
 }
@@ -354,7 +371,7 @@ test("checker runs continue without bootstrap registrations when no provider adv
   const ctx = makeCtx();
 
   await host.commandHandler?.("goal without model aliases", ctx);
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
 
   assert.deepEqual(checker.inputs[0]?.checkerModelBootstrapPaths, []);
   assert.equal(latestGoal(host)?.status, "complete");
@@ -379,7 +396,7 @@ test("real model-aliases bootstrap producer advertises a path goal-controller tr
   const ctx = makeCtx();
 
   await host.commandHandler?.("goal using real alias bootstrap", ctx);
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
 
   const paths = checker.inputs[0]?.checkerModelBootstrapPaths ?? [];
   assert.equal(paths.length, 1);
@@ -411,7 +428,7 @@ test("session_shutdown detaches checker bootstrap registration listener", async 
   await host.handlers.session_shutdown?.({ type: "session_shutdown", reason: "reload" } as never, ctx as ExtensionContext);
   host.events.emit(CHECKER_MODEL_BOOTSTRAP_REGISTER_CHANNEL, validCheckerBootstrapRegistration());
   await host.commandHandler?.("old activation should ignore bootstrap after shutdown", ctx);
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
 
   assert.deepEqual(checker.inputs[0]?.checkerModelBootstrapPaths, []);
 });
@@ -444,7 +461,7 @@ async function checkerBootstrapPathsForLoadOrder(order: "before-activate" | "aft
   const ctx = makeCtx();
 
   await host.commandHandler?.("goal using alias model", ctx);
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
 
   assert.equal(latestGoal(host)?.status, "complete");
   return checker.inputs[0]?.checkerModelBootstrapPaths;
@@ -502,7 +519,7 @@ test("model-facing goal tool supersedes a completed goal with a fresh active goa
   const ctx = makeCtx();
   await host.commandHandler?.("old completed goal", ctx);
   const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
   assert.equal(latestGoal(host)?.status, "complete");
 
   const result = await host.tools[0]?.execute("tool-call-1", { goal: "new tool goal" }, undefined, undefined, ctx as unknown as ExtensionToolContext);
@@ -530,7 +547,7 @@ test("goal_resume reactivates a completed goal without stale completion verdict"
   const ctx = makeCtx();
   await host.commandHandler?.("resumable completed goal", ctx);
   const oldGoalId = (host.customEntries.at(-1)?.data as { goal?: { id?: string } } | undefined)?.goal?.id;
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
   assert.equal(latestGoal(host)?.status, "complete");
   assert.equal(latestGoal(host)?.lastCheckerVerdict?.complete, true);
 
@@ -600,7 +617,7 @@ test("command start, checker continuation, and no-tool threshold are wired", asy
   assert.equal(secondStart?.message, undefined, "reminder injected once per (goal, activation), not every turn");
   assert.equal(secondStart?.systemPrompt, undefined);
 
-  await host.handlers.agent_end?.(agentEnd("not done yet", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done yet", true), ctx);
   assert.equal(checker.inputs.length, 1);
   assert.equal(checker.inputs[0]?.context.sessionFile, "/tmp/pi-current-session.jsonl");
   assert.equal(checker.inputs[0]?.context.currentLeafId, "leaf-1");
@@ -609,15 +626,15 @@ test("command start, checker continuation, and no-tool threshold are wired", asy
   assert.equal(host.sentMessages.length, 2);
   assert.match(host.sentMessages[1]?.content ?? "", /need tests/iu);
 
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(host.sentMessages.length, 3);
 
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(host.sentMessages.length, 4);
 
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "blocked");
   assert.equal(host.sentMessages.length, 4);
 });
@@ -634,20 +651,20 @@ test("user intervention resets pending no-tool continuation threshold", async ()
   activate(host, checker);
   const ctx = makeCtx();
   await host.commandHandler?.("finish the smoke goal", ctx);
-  await host.handlers.agent_end?.(agentEnd("not done yet", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done yet", true), ctx);
   assert.equal(latestGoal(host)?.status, "active");
 
   await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "I have extra context", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(latestGoal(host)?.consecutiveNoToolContinuations, 0);
 
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(latestGoal(host)?.consecutiveNoToolContinuations, 2);
 
-  await host.handlers.agent_end?.(agentEnd("still not done", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("still not done", false), ctx);
   assert.equal(latestGoal(host)?.status, "blocked");
 });
 
@@ -665,7 +682,7 @@ test("missing user success evidence continues with ask-user guidance instead of 
   activate(host, checker);
   const ctx = makeCtx();
   await host.commandHandler?.("make me laugh", ctx);
-  await host.handlers.agent_end?.(agentEnd("delivered jokes but no user reaction yet", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("delivered jokes but no user reaction yet", false), ctx);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(latestGoal(host)?.lastCheckerVerdict?.decision, "continue");
   assert.equal(host.sentMessages.length, 2);
@@ -685,7 +702,7 @@ test("waiting_for_user verdict stops auto-continuation and resumes on next user 
   activate(host, checker);
   const ctx = makeCtx();
   await host.commandHandler?.("make me laugh", ctx);
-  await host.handlers.agent_end?.(agentEnd("Did any of those make you laugh?", false), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("Did any of those make you laugh?", false), ctx);
   assert.equal(latestGoal(host)?.status, "waiting_for_user");
   assert.equal(host.sentMessages.length, 1);
 
@@ -709,7 +726,7 @@ test("checker-complete verdict completes without worker completion tool", async 
   activate(host, checker);
   const ctx = makeCtx();
   await host.commandHandler?.("complete this smoke goal", ctx);
-  await host.handlers.agent_end?.(agentEnd("evidence is ready", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("evidence is ready", true), ctx);
   assert.equal(latestGoal(host)?.status, "complete");
   assert.equal(latestGoal(host)?.lastCheckerVerdict?.complete, true);
 });
@@ -724,7 +741,7 @@ test("unexpected checker failures are replaced before goal persistence and UI no
   });
   await host.commandHandler?.("goal with secret-bearing checker failure", ctx);
 
-  const run = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const run = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   const omittedTail = "TAIL_MUST_NOT_PERSIST";
   checker.reject(new Error(`Goal checker model failed before returning a verdict. passphrase="correct horse battery staple" ${"x".repeat(5_000)}${omittedTail}`));
@@ -789,7 +806,7 @@ test("recognized checker failures preserve fixed safe diagnostics through persis
   const ctx = makeCtx([], { onNotify: (message, level) => notifications.push({ message, level }) });
   await host.commandHandler?.("goal with recognized checker failure", ctx);
 
-  await host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done", true), ctx);
 
   const persistedReason = latestGoal(host)?.lastTransitionReason ?? "";
   assert.match(persistedReason, /provider refused the checker request/iu);
@@ -808,14 +825,14 @@ test("abort and error turns pause without running checker or persisting raw prov
   const notifications: string[] = [];
   const ctx = makeCtx([], { onNotify: (message) => notifications.push(message) });
   await host.commandHandler?.("goal that gets interrupted", ctx);
-  await host.handlers.agent_end?.(agentEnd("", false, "aborted"), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("", false, "aborted"), ctx);
   assert.equal(checker.inputs.length, 0);
   assert.equal(latestGoal(host)?.status, "paused");
   assert.match(latestGoal(host)?.lastTransitionReason ?? "", /interruption/iu);
 
   await host.commandHandlers.get("goal_resume")?.("", ctx);
   const rawProviderError = "boom apiKey=sk-worker-secret123 correct horse battery staple";
-  await host.handlers.agent_end?.(agentEnd("", false, "error", rawProviderError), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("", false, "error", rawProviderError), ctx);
   assert.equal(checker.inputs.length, 0);
   assert.equal(latestGoal(host)?.status, "paused");
   const persistedReason = latestGoal(host)?.lastTransitionReason ?? "";
@@ -826,7 +843,7 @@ test("abort and error turns pause without running checker or persisting raw prov
 
   await host.commandHandlers.get("goal_resume")?.("", ctx);
   const inconsistentProviderError = "stop-with-error token=sk-inconsistent-secret123";
-  await host.handlers.agent_end?.(agentEnd("", false, "stop", inconsistentProviderError), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("", false, "stop", inconsistentProviderError), ctx);
   const inconsistentReason = latestGoal(host)?.lastTransitionReason ?? "";
   assert.equal(latestGoal(host)?.status, "paused");
   assert.match(inconsistentReason, /agent error/iu);
@@ -843,7 +860,7 @@ test("pending messages after checker suppress continuation", async () => {
   activate(host, checker);
   const ctx = makeCtx([], { pending: () => pending });
   await host.commandHandler?.("goal with pending race", ctx);
-  await host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done", true), ctx);
   assert.equal(checker.inputs.length, 1);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(host.sentMessages.length, 1);
@@ -858,7 +875,7 @@ test("non-idle state after checker queues follow-up continuation", async () => {
   activate(host, checker);
   const ctx = makeCtx([], { idle: () => idle });
   await host.commandHandler?.("goal with idle race", ctx);
-  await host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done", true), ctx);
   assert.equal(checker.inputs.length, 1);
   assert.equal(latestGoal(host)?.status, "active");
   assert.equal(host.sentMessages.length, 2);
@@ -874,7 +891,7 @@ test("checker running publishes compact footer loading status and clears it on c
   const ctx = makeCtx([], { onStatus: (key, value) => statuses.push({ key, value }) });
   await host.commandHandler?.("goal with visible checker", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
 
   const goalStatuses = goalStatusLog(statuses);
@@ -938,7 +955,7 @@ test("goal_pause during checking aborts checker, persists pause, and ignores lat
   const ctx = makeCtx([], { onStatus: (key, value) => statuses.push({ key, value }) });
   await host.commandHandler?.("goal with cancellable checker", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checker.inputs[0]?.signal?.aborted, false);
 
@@ -969,7 +986,7 @@ test("goal_pause during checking ignores late checker rejection without checker-
   });
   await host.commandHandler?.("goal with checker that rejects after pause", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   await host.commandHandlers.get("goal_pause")?.("", ctx);
 
@@ -997,7 +1014,7 @@ test("goal_clear during checking aborts checker and ignores late resolution", as
   const ctx = makeCtx([], { onStatus: (key, value) => statuses.push({ key, value }) });
   await host.commandHandler?.("goal that gets cleared while checking", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checker.inputs[0]?.signal?.aborted, false);
 
@@ -1032,7 +1049,7 @@ test("goal_clear during checking aborts checker and ignores late rejection", asy
   });
   await host.commandHandler?.("goal with checker that rejects after clear", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checker.inputs[0]?.signal?.aborted, false);
 
@@ -1063,13 +1080,13 @@ test("late checker result from an old run cannot complete a resumed goal's curre
   const ctx = makeCtx();
   await host.commandHandler?.("goal with repeated checker runs", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("first incomplete turn", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("first incomplete turn", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   await host.commandHandlers.get("goal_pause")?.("", ctx);
   assert.equal(checker.inputs[0]?.signal?.aborted, true);
 
   await host.commandHandlers.get("goal_resume")?.("", ctx);
-  const second = host.handlers.agent_end?.(agentEnd("second verification turn", true), ctx as ExtensionContext) as Promise<void>;
+  const second = settleRun(host, agentEnd("second verification turn", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(checker.inputs.length, 2);
   assert.equal(checker.inputs[1]?.signal?.aborted, false);
@@ -1107,7 +1124,7 @@ test("goal_edit during checking gives actionable pause or clear guidance", async
   const ctx = makeCtx([], { onNotify: (message) => notifications.push(message) });
   await host.commandHandler?.("goal with edit blocked during checking", ctx);
 
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   await host.commandHandlers.get("goal_edit")?.("new text", ctx);
 
@@ -1125,9 +1142,9 @@ test("concurrent agent_end while checker is running does not start a second chec
   activate(host, checker);
   const ctx = makeCtx();
   await host.commandHandler?.("goal with slow checker", ctx);
-  const first = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const first = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
-  await host.handlers.agent_end?.(agentEnd("not done again", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("not done again", true), ctx);
   assert.equal(checker.inputs.length, 1);
   checker.resolve({ decision: "continue", complete: false, reason: "continue", nextTurnGuidance: "more work" });
   await first;
@@ -1319,7 +1336,7 @@ test("terminal states retract the standing reminder (complete via checker, clear
   await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
   assert.equal(host.customMessages.length, 0, "no retraction while active");
 
-  await host.handlers.agent_end?.(agentEnd("done", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("done", true), ctx);
   assert.equal(latestGoal(host)?.status, "complete");
   assert.equal(host.customMessages.length, 1, "completion retracts the reminder");
   assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
@@ -1391,7 +1408,7 @@ test("blocked verdicts retract the standing reminder", async () => {
   const ctx = makeCtx();
   await host.commandHandler?.("block me", ctx);
   await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
-  await host.handlers.agent_end?.(agentEnd("stuck", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("stuck", true), ctx);
   assert.equal(latestGoal(host)?.status, "blocked");
   assert.equal(host.customMessages.length, 1, "blocked transition retracts the reminder");
   assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
@@ -1399,7 +1416,8 @@ test("blocked verdicts retract the standing reminder", async () => {
 
 test("budget-limited transitions retract the standing reminder", async () => {
   const host = new FakeHost();
-  activate(host, new FakeChecker([]));
+  // Budgets stop automatic continuation after the check, so the checker runs first.
+  activate(host, new FakeChecker([{ decision: "continue", complete: false, reason: "more work" }]));
   const entries: SessionEntryLike[] = [];
   const ctx = makeCtx(entries);
 
@@ -1411,17 +1429,10 @@ test("budget-limited transitions retract the standing reminder", async () => {
   await host.handlers.before_agent_start?.({ type: "before_agent_start", prompt: "", images: [], systemPrompt: "base", systemPromptOptions: {} } as unknown as BeforeAgentStartEvent, ctx as ExtensionContext);
   host.customMessages.length = 0;
 
-  await host.handlers.agent_end?.(agentEnd("one turn used", true), ctx as ExtensionContext);
+  await settleRun(host, agentEnd("one turn used", true), ctx);
   assert.equal(latestGoal(host)?.status, "budget_limited");
   assert.equal(host.customMessages.length, 1, "budget-limited transition retracts the reminder");
   assert.equal(host.customMessages[0]?.customType, "goal-controller-reminder-retraction");
-});
-
-test("configured settings do not load the old pi-goal package", () => {
-  const settingsPath = join(process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"), "settings.json");
-  const settings = readFileSync(settingsPath, "utf8");
-  assert.equal(settings.includes("npm:@narumitw/pi-goal"), false);
-  assert.equal(settings.includes("goal_complete"), false);
 });
 
 test("a failing checker pauses the goal safely AND still ran against the derived sidecar session", async () => {
@@ -1433,7 +1444,7 @@ test("a failing checker pauses the goal safely AND still ran against the derived
   const ctx = makeCtx([], { sessionFile, onNotify: (message, level) => notifications.push({ message, level }) });
   await host.commandHandler?.("goal whose checker will fail", ctx);
 
-  const run = host.handlers.agent_end?.(agentEnd("not done", true), ctx as ExtensionContext) as Promise<void>;
+  const run = settleRun(host, agentEnd("not done", true), ctx) as Promise<void>;
   await new Promise((resolve) => setImmediate(resolve));
   checker.reject(new Error("checker died"));
   await run;

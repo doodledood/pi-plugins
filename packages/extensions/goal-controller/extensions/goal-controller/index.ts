@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentBeforeSettleEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { loadConfig, type LoadedConfig } from "./config.ts";
 import {
   applyCheckerVerdict,
+  budgetWindowUsage,
   canEditGoal,
   canPauseGoal,
   canResumeGoal,
@@ -32,7 +33,7 @@ import {
 } from "./checker-model-bootstrap.ts";
 import { buildActiveGoalSystemPrompt, buildCheckerSessionContext, buildContinuationPrompt, GOAL_DESCRIPTION, GOAL_GUIDELINES } from "./prompts.ts";
 import type { GoalControllerHost } from "./host.ts";
-import type { ActiveGoal, CheckerVerdict, GoalStateEntryData, MessageLike, SessionEntryLike } from "./types.ts";
+import type { ActiveGoal, GoalStateEntryData, MessageLike, SessionEntryLike } from "./types.ts";
 
 /** Sidecar folder name for goal-checker sessions under the parent session. */
 export const CHECKER_SESSION_KIND = "goal-checker";
@@ -89,8 +90,12 @@ export function activate(
   let activeGoal: ActiveGoal | undefined;
   let checkerRun: LiveCheckerRun | undefined;
   let activeStatusTimer: ReturnType<typeof setTimeout> | undefined;
-  let pendingContinuationGoalId: string | undefined;
   let pendingContinuationPrompt: string | undefined;
+  // Messages of the agent run since the last settle decision. agent_end fires
+  // once per attempt (including errored attempts Pi will retry), so the
+  // decision waits for agent_before_settle and judges everything collected.
+  let runMessages: unknown[] = [];
+  const currentGoal = (): ActiveGoal | undefined => activeGoal;
   const checkerModelBootstrapRegistrations = new Map<string, CheckerModelBootstrapRegistration>();
   const collectCheckerModelBootstrap = (data: unknown): void => {
     const registration = checkerModelBootstrapRegistration(data);
@@ -144,31 +149,45 @@ export function activate(
     return current;
   };
 
-  // Append a retraction when a reminder-bearing goal stops being active work.
-  // Delivery is "nextTurn": several call sites run inside agent_end handlers,
-  // where the agent still counts as streaming — a steer-delivered message there
-  // would be queued and then drained by an unprompted continuation turn over
-  // the full context (exactly the spend this extension exists to avoid).
-  // "nextTurn" rides the next user prompt instead; if the session shuts down
-  // before one arrives, retireStaleReminderAfterLoad retracts on reload.
-  const retireReminder = (goal: ActiveGoal, status: string): void => {
+  // Context-only goal notes (reminder, retraction) must reach the model without
+  // starting a turn of their own. While idle they ride the next prompt
+  // ("nextTurn"). Mid-run — the model's goal tool, a command typed while the
+  // agent works, a decision at agent_before_settle — "nextTurn" would wait for
+  // the next user prompt and a steer would start an unprompted turn, so they
+  // are appended at the next turn boundary instead (triggerTurn: false).
+  const sendGoalNote = (ctx: ExtensionContext | undefined, customType: string, content: string, goalId: string): void => {
+    pi.sendMessage(
+      { customType, content, display: false, details: { goalId } },
+      ctx && !ctx.isIdle() ? { triggerTurn: false } : { deliverAs: "nextTurn" },
+    );
+  };
+
+  const retractionText = (status: string): string =>
+    `The goal-controller goal is now ${status}. The earlier "Active goal-controller goal" reminder no longer applies; there is no active goal-controller goal unless a new one is started or it is resumed.`;
+
+  // Append a retraction when a reminder-bearing goal stops being active work,
+  // so the standing "Active goal-controller goal" instruction never outlives
+  // its goal. If the session shuts down before an idle-time retraction is
+  // delivered, retireStaleReminderAfterLoad retracts on reload.
+  const retireReminder = (goal: ActiveGoal, status: string, ctx: ExtensionContext | undefined): void => {
     if (reminderInjectedForGoalId !== goal.id) return;
     reminderInjectedForGoalId = undefined;
-    pi.sendMessage(
-      {
-        customType: REMINDER_RETRACTION_TYPE,
-        content: `The goal-controller goal is now ${status}. The earlier "Active goal-controller goal" reminder no longer applies; there is no active goal-controller goal unless a new one is started or it is resumed.`,
-        display: false,
-        details: { goalId: goal.id },
-      },
-      { deliverAs: "nextTurn" },
-    );
+    sendGoalNote(ctx, REMINDER_RETRACTION_TYPE, retractionText(status), goal.id);
+  };
+
+  // A goal that becomes active mid-run never passes through before_agent_start
+  // (Pi drains queued turns without it), so its reminder is delivered here.
+  // While idle, before_agent_start injects it with the next prompt.
+  const injectReminderMidRun = (ctx: ExtensionContext): void => {
+    if (ctx.isIdle() || !activeGoal || activeGoal.status !== "active" || reminderInjectedForGoalId === activeGoal.id) return;
+    reminderInjectedForGoalId = activeGoal.id;
+    sendGoalNote(ctx, REMINDER_MESSAGE_TYPE, buildActiveGoalSystemPrompt(activeGoal), activeGoal.id);
   };
 
   // Reload safety net: if the branch carries a live reminder for a goal that is
   // no longer active work (terminal, superseded, or cleared), retract it now —
   // covers retractions lost to shutdown races and pre-fix sessions.
-  const retireStaleReminderAfterLoad = (): void => {
+  const retireStaleReminderAfterLoad = (ctx: ExtensionContext): void => {
     if (!reminderInjectedForGoalId) return;
     const goal = activeGoal;
     const reminderIsForCurrentGoal = goal !== undefined && goal.id === reminderInjectedForGoalId;
@@ -176,20 +195,12 @@ export function activate(
     if (restingButResumable) return;
     const staleGoal: ActiveGoal | undefined = reminderIsForCurrentGoal ? goal : undefined;
     if (staleGoal) {
-      retireReminder(staleGoal, staleGoal.status);
+      retireReminder(staleGoal, staleGoal.status, ctx);
     } else {
       // Superseded or cleared: no goal object to hand over; retract directly.
       const staleId = reminderInjectedForGoalId;
       reminderInjectedForGoalId = undefined;
-      pi.sendMessage(
-        {
-          customType: REMINDER_RETRACTION_TYPE,
-          content: `The goal-controller goal is now inactive. The earlier "Active goal-controller goal" reminder no longer applies; there is no active goal-controller goal unless a new one is started or it is resumed.`,
-          display: false,
-          details: { goalId: staleId },
-        },
-        { deliverAs: "nextTurn" },
-      );
+      sendGoalNote(ctx, REMINDER_RETRACTION_TYPE, retractionText("inactive"), staleId);
     }
   };
 
@@ -281,8 +292,28 @@ export function activate(
   };
 
   const clearPendingContinuation = (): void => {
-    pendingContinuationGoalId = undefined;
     pendingContinuationPrompt = undefined;
+  };
+
+  // A user-driven turn (a fresh prompt, or a message the user queued while the
+  // agent or checker ran) resumes a goal waiting for the user, and is never
+  // counted as an automatic continuation turn.
+  const noteUserDrivenInput = (text: string, ctx: ExtensionContext): void => {
+    if (!activeGoal) return;
+    if (pendingContinuationPrompt !== undefined && text === pendingContinuationPrompt) return;
+    if (activeGoal.status === "waiting_for_user") {
+      activeGoal = resumeGoal(activeGoal);
+      // Status transition: re-anchor the reminder on this activation.
+      reminderInjectedForGoalId = undefined;
+    } else if (activeGoal.status === "active" && activeGoal.awaitingContinuationTurn) {
+      activeGoal = resumeGoal(activeGoal);
+    } else {
+      return;
+    }
+    clearPendingContinuation();
+    persistGoal(activeGoal);
+    setStatus(ctx);
+    injectReminderMidRun(ctx);
   };
 
   pi.registerTool({
@@ -303,11 +334,12 @@ export function activate(
       }
 
       // A superseded goal's standing reminder must not govern the new goal.
-      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded");
+      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded", ctx);
       activeGoal = result.goal;
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      injectReminderMidRun(ctx);
       ctx.ui.notify(`Goal started: ${activeGoal.goal}`, "info");
       return {
         content: [{ type: "text" as const, text: `Goal started. Checker-only completion is active. Goal: ${activeGoal.goal}` }],
@@ -335,11 +367,12 @@ export function activate(
       }
 
       // A superseded goal's standing reminder must not govern the new goal.
-      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded");
+      if (activeGoal && activeGoal.id !== result.goal.id) retireReminder(activeGoal, "superseded", ctx);
       activeGoal = result.goal;
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
+      injectReminderMidRun(ctx);
       ctx.ui.notify(`Goal started: ${activeGoal.goal}`, "info");
       await sendGoalKickoff(pi, ctx, activeGoal);
     },
@@ -383,8 +416,9 @@ export function activate(
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
-      // Status transition: the next agent start re-injects the goal reminder.
+      // Status transition: re-inject the goal reminder.
       reminderInjectedForGoalId = undefined;
+      injectReminderMidRun(ctx);
       ctx.ui.notify("Goal resumed.", "info");
       await sendGoalKickoff(pi, ctx, activeGoal);
     },
@@ -404,9 +438,19 @@ export function activate(
       }
 
       const trimmedArg = args.trim();
-      const editedText = trimmedArg || (await ctx.ui.editor("Edit goal", activeGoal.goal));
+      const target = activeGoal;
+      const editedText = trimmedArg || (await ctx.ui.editor("Edit goal", target.goal));
       if (editedText === undefined) {
         ctx.ui.notify("Goal edit cancelled.", "info");
+        return;
+      }
+      // The editor stays open while the agent keeps working: the goal may have
+      // entered checking, finished, or been replaced meanwhile.
+      // (Read through currentGoal(): TypeScript keeps the pre-await narrowing.)
+      const current = currentGoal();
+      if (current?.id !== target.id || current.status === "checking" || !canEditGoal(current)) {
+        const change = current?.id !== target.id ? "was replaced by another goal" : `is now ${current.status}`;
+        ctx.ui.notify(`Goal edit not applied: the goal ${change} while the editor was open. Your text:\n${editedText.trim()}`, "warning");
         return;
       }
 
@@ -415,18 +459,19 @@ export function activate(
         ctx.ui.notify("Goal text cannot be empty.", "warning");
         return;
       }
-      if (nextGoalText === activeGoal.goal) {
+      if (nextGoalText === current.goal) {
         ctx.ui.notify("Goal unchanged.", "info");
         return;
       }
 
-      activeGoal = editGoalText(activeGoal, nextGoalText);
+      activeGoal = editGoalText(current, nextGoalText);
       resetCheckerRuntime(checkerRun, true);
       clearPendingContinuation();
       persistGoal(activeGoal);
       setStatus(ctx);
-      // Goal text changed: the injected reminder is stale — re-inject next start.
+      // Goal text changed: the injected reminder is stale — re-inject it.
       reminderInjectedForGoalId = undefined;
+      injectReminderMidRun(ctx);
       ctx.ui.notify(`Goal edited and resumed: ${activeGoal.goal}`, "info");
       await sendGoalKickoff(pi, ctx, activeGoal);
     },
@@ -441,7 +486,7 @@ export function activate(
         return;
       }
       if (activeGoal?.status === "checking") resetCheckerRuntime(checkerRun, true);
-      if (activeGoal) retireReminder(activeGoal, "cleared");
+      if (activeGoal) retireReminder(activeGoal, "cleared", ctx);
       const cleared = clearGoal(activeGoal);
       persistGoal(cleared);
       activeGoal = undefined;
@@ -458,8 +503,9 @@ export function activate(
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session reload; run /goal_resume to continue");
     if (activeGoal?.lastTransitionReason?.includes("session reload")) persistGoal(activeGoal);
     reminderInjectedForGoalId = findInjectedReminderGoalId(ctx.sessionManager.getBranch());
-    retireStaleReminderAfterLoad();
+    retireStaleReminderAfterLoad(ctx);
     clearPendingContinuation();
+    runMessages = [];
     setStatus(ctx);
   });
 
@@ -470,7 +516,7 @@ export function activate(
     activeGoal = loadGoalFromSession(ctx.sessionManager.getBranch(), "checker interrupted by session navigation; run /goal_resume to continue");
     if (activeGoal?.lastTransitionReason?.includes("session navigation")) persistGoal(activeGoal);
     reminderInjectedForGoalId = findInjectedReminderGoalId(ctx.sessionManager.getBranch());
-    retireStaleReminderAfterLoad();
+    retireStaleReminderAfterLoad(ctx);
     clearPendingContinuation();
     setStatus(ctx);
   });
@@ -496,27 +542,11 @@ export function activate(
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!activeGoal) return;
-    if (activeGoal.status === "waiting_for_user") {
-      activeGoal = resumeGoal(activeGoal);
-      clearPendingContinuation();
-      persistGoal(activeGoal);
-      setStatus(ctx);
-      // Status transition: re-anchor the reminder on this activation.
-      reminderInjectedForGoalId = undefined;
-    }
+    // Every run start is user-driven: a prompt, or an idle custom message an
+    // extension sent with triggerTurn. Continuations are queued mid-run and never
+    // start a run of their own.
+    noteUserDrivenInput(event.messageType === "user" ? event.prompt : "", ctx);
     if (activeGoal.status !== "active") return;
-
-    const isPendingAutomaticContinuation =
-      activeGoal.awaitingContinuationTurn &&
-      pendingContinuationGoalId === activeGoal.id &&
-      event.messageType === "user" &&
-      pendingContinuationPrompt === event.prompt;
-    if (activeGoal.awaitingContinuationTurn && !isPendingAutomaticContinuation) {
-      activeGoal = resumeGoal(activeGoal);
-      persistGoal(activeGoal);
-      setStatus(ctx);
-    }
-    clearPendingContinuation();
 
     // Never touch event.systemPrompt: the reminder rides as a persistent
     // appended message so goal lifecycle changes cannot break the prompt cache.
@@ -532,15 +562,33 @@ export function activate(
     };
   });
 
-  pi.on("agent_end", async (event, ctx) => {
+  // Queued user messages are drained inside the run without before_agent_start;
+  // message_start is where they enter the conversation.
+  pi.on("message_start", (event, ctx) => {
+    const message = event.message as MessageLike;
+    if (message.role !== "user") return;
+    noteUserDrivenInput(messageText(message.content), ctx);
+  });
+
+  pi.on("agent_end", (event) => {
+    runMessages.push(...event.messages);
+  });
+
+  // The goal decision happens once the run has settled its own business: Pi's
+  // automatic retries, overflow compaction, and queued messages have all run
+  // by agent_before_settle. A continuation queued here keeps the same run going.
+  pi.on("agent_before_settle", async (event, ctx): Promise<AgentBeforeSettleEventResult | void> => {
+    const messages = runMessages;
+    runMessages = [];
     if (!activeGoal || activeGoal.status !== "active") return;
     if (checkerRun?.goalId === activeGoal.id) return;
+    if (ctx.hasPendingMessages()) return;
 
     const goalId = activeGoal.id;
     activeGoal = updateUsage(activeGoal, currentTokenTotal(ctx), Date.now(), true);
-    const finalAssistant = findFinalAssistantMessage(event.messages);
-    if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error" || finalAssistant?.errorMessage) {
-      activeGoal = pauseGoal(activeGoal, finalAssistant.stopReason === "aborted"
+    const finalAssistant = findFinalAssistantMessage(messages);
+    if (event.outcome !== "completed" || finalAssistant?.stopReason === "error" || finalAssistant?.errorMessage) {
+      activeGoal = pauseGoal(activeGoal, event.outcome === "aborted"
         ? "paused after interruption"
         : "paused after agent error; inspect local Pi logs for details");
       clearPendingContinuation();
@@ -550,24 +598,7 @@ export function activate(
       return;
     }
 
-    activeGoal = maybeApplyBudgetLimit(activeGoal);
-    if (activeGoal.status === "budget_limited") {
-      clearPendingContinuation();
-      persistGoal(activeGoal);
-      setStatus(ctx);
-      retireReminder(activeGoal, "budget-limited");
-      ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal budget reached.", "warning");
-      return;
-    }
-
-    if (ctx.hasPendingMessages()) {
-      clearPendingContinuation();
-      persistGoal(activeGoal);
-      setStatus(ctx);
-      return;
-    }
-
-    const turnHadToolUse = eventTurnHadToolUse(event);
+    const turnHadToolUse = messagesHadToolUse(messages);
     activeGoal = markChecking(activeGoal);
     persistGoal(activeGoal);
     const run = startCheckerRun(ctx, goalId);
@@ -583,7 +614,7 @@ export function activate(
         ctx.sessionManager.getBranch(),
         ctx.sessionManager.getSessionFile(),
         ctx.sessionManager.getLeafId(),
-        event.messages as MessageLike[],
+        messages as MessageLike[],
         turnHadToolUse,
       );
       const verdict = await checkerRunner.run({
@@ -600,36 +631,43 @@ export function activate(
 
       if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
       activeGoal = applyCheckerVerdict(activeGoal, verdict, checkerConfig, turnHadToolUse);
+      clearPendingContinuation();
+      // A message the user queued while the checker ran is the next turn: it is
+      // user-driven, so a waiting goal resumes and the automatic-continuation
+      // state is reset; Pi runs it next and the following settle checks again.
+      if (ctx.hasPendingMessages() && (activeGoal.status === "waiting_for_user" || activeGoal.status === "active")) {
+        activeGoal = resumeGoal(activeGoal);
+        persistGoal(activeGoal);
+        setStatus(ctx);
+        return;
+      }
+      // Budgets stop automatic continuation, never the check of a finished turn.
+      if (activeGoal.status === "active") activeGoal = maybeApplyBudgetLimit(activeGoal);
       persistGoal(activeGoal);
       setStatus(ctx);
 
       if (activeGoal.status === "complete") {
-        clearPendingContinuation();
-        retireReminder(activeGoal, "complete");
+        retireReminder(activeGoal, "complete", ctx);
         ctx.ui.notify(`Goal complete: ${verdict.reason}`, "info");
         return;
       }
       if (activeGoal.status === "waiting_for_user") {
-        clearPendingContinuation();
         ctx.ui.notify(`Goal waiting for user input: ${activeGoal.lastTransitionReason ?? verdict.reason}`, "info");
         return;
       }
       if (activeGoal.status === "blocked") {
-        clearPendingContinuation();
-        retireReminder(activeGoal, "blocked");
+        retireReminder(activeGoal, "blocked", ctx);
         ctx.ui.notify(`Goal blocked: ${activeGoal.lastTransitionReason ?? verdict.reason}`, "warning");
         return;
       }
-      if (activeGoal.status === "active") {
-        if (ctx.hasPendingMessages()) {
-          clearPendingContinuation();
-          persistGoal(activeGoal);
-          setStatus(ctx);
-          return;
-        }
-        pendingContinuationPrompt = await sendContinuation(pi, ctx, activeGoal, verdict);
-        pendingContinuationGoalId = activeGoal.id;
+      if (activeGoal.status === "budget_limited") {
+        retireReminder(activeGoal, "budget-limited", ctx);
+        ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal budget reached.", "warning");
+        return;
       }
+      injectReminderMidRun(ctx);
+      pendingContinuationPrompt = buildContinuationPrompt(activeGoal, verdict);
+      pi.sendUserMessage(pendingContinuationPrompt, { deliverAs: "followUp" });
     } catch (error) {
       if (!activeGoal || activeGoal.id !== run.goalId || activeGoal.status !== "checking" || checkerRun !== run) return;
       const message = safeCheckerFailureMessage(error, checkerConfig, checkerModel);
@@ -643,16 +681,21 @@ export function activate(
       if (checkerRun === run) resetCheckerRuntime(run, false);
     }
   });
+
+  // An aborted run (Escape) ends without agent_before_settle.
+  pi.on("agent_settled", (event, ctx) => {
+    runMessages = [];
+    if (!event.aborted || !activeGoal || activeGoal.status !== "active") return;
+    activeGoal = pauseGoal(updateUsage(activeGoal, currentTokenTotal(ctx), Date.now(), true), "paused after interruption");
+    clearPendingContinuation();
+    persistGoal(activeGoal);
+    setStatus(ctx);
+    ctx.ui.notify(activeGoal.lastTransitionReason ?? "Goal paused.", "warning");
+  });
 }
 
 async function sendGoalKickoff(pi: GoalControllerHost, ctx: ExtensionContext, goal: ActiveGoal): Promise<void> {
   await sendUserMessage(pi, ctx, `Goal mode is active. Work toward this goal until the independent checker marks it complete:\n\n<goal_objective>\n${goal.goal}\n</goal_objective>\n\nSurface concrete verification evidence as you work. Do not claim completion authority; the checker owns completion.`);
-}
-
-async function sendContinuation(pi: GoalControllerHost, ctx: ExtensionContext, goal: ActiveGoal, verdict: CheckerVerdict): Promise<string> {
-  const prompt = buildContinuationPrompt(goal, verdict);
-  await sendUserMessage(pi, ctx, prompt);
-  return prompt;
 }
 
 async function sendUserMessage(pi: GoalControllerHost, ctx: ExtensionContext, prompt: string): Promise<void> {
@@ -681,8 +724,8 @@ function usageRecord(value: unknown): { input?: number; output?: number } | unde
   };
 }
 
-function eventTurnHadToolUse(event: AgentEndEvent): boolean {
-  for (const message of event.messages) {
+function messagesHadToolUse(messages: readonly unknown[]): boolean {
+  for (const message of messages) {
     if (!isRecord(message)) continue;
     if (message.role === "toolResult") return true;
     const content: unknown = (message as { content?: unknown }).content;
@@ -692,7 +735,13 @@ function eventTurnHadToolUse(event: AgentEndEvent): boolean {
   return false;
 }
 
-function findFinalAssistantMessage(messages: unknown[]): { stopReason?: string; errorMessage?: string } | undefined {
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((block) => (isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "")).join("\n");
+}
+
+function findFinalAssistantMessage(messages: readonly unknown[]): { stopReason?: string; errorMessage?: string } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (!isRecord(message) || message.role !== "assistant") continue;
@@ -723,9 +772,10 @@ export function formatStatus(
 }
 
 function formatBudget(goal: ActiveGoal): string {
-  const token = goal.tokenBudget === undefined ? undefined : `${formatCount(goal.tokensUsed)}/${formatCount(goal.tokenBudget)}`;
-  const turn = goal.turnBudget === undefined ? undefined : `${goal.turnsUsed}/${goal.turnBudget} turns`;
-  return [token, turn].filter((part): part is string => part !== undefined).join(" ") || `${goal.turnsUsed} turns`;
+  const used = budgetWindowUsage(goal);
+  const token = goal.tokenBudget === undefined ? undefined : `${formatCount(used.tokens)}/${formatCount(goal.tokenBudget)}`;
+  const turn = goal.turnBudget === undefined ? undefined : `${used.turns}/${goal.turnBudget} turns`;
+  return [token, turn].filter((part): part is string => part !== undefined).join(" ") || `${used.turns} turns`;
 }
 
 function formatCount(value: number): string {

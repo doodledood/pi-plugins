@@ -1,7 +1,7 @@
 # ADR: Resume completed goals as historical reactivation
 
 ## Status
-Accepted
+Accepted; narrowed by 20261022-resume-budget-limited-goals-into-a-fresh-budget-window (budgets on a budget-limited resume apply to a fresh window)
 
 ## Context
 The goal controller already treats a checker-completed goal as non-live: starting a new goal after `complete` is accepted, while active, checking, and waiting-for-user goals remain protected from replacement. A separate usability need emerged: a user should also be able to resume a completed goal when the same objective needs more work or follow-up.

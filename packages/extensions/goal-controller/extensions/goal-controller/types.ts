@@ -83,6 +83,12 @@ export interface CheckerHistoryEntry extends CheckerVerdict {
   iteration: number;
 }
 
+export interface BudgetUsage {
+  tokens: number;
+  turns: number;
+  timeSeconds: number;
+}
+
 export interface ActiveGoal {
   id: string;
   goal: string;
@@ -98,6 +104,12 @@ export interface ActiveGoal {
   tokenBudget?: number;
   turnBudget?: number;
   timeBudgetSeconds?: number;
+  /**
+   * Lifetime usage at the start of the current budget window. Budgets measure
+   * usage since this point; resuming a budget-limited goal opens a new window
+   * while the lifetime counters above keep accumulating. Absent = goal start.
+   */
+  budgetWindowStart?: BudgetUsage;
   lastCheckerVerdict?: CheckerHistoryEntry;
   checkerHistory: CheckerHistoryEntry[];
   awaitingContinuationTurn: boolean;

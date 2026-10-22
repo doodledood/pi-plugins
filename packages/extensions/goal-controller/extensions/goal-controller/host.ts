@@ -1,5 +1,8 @@
 import type {
+  AgentBeforeSettleEvent,
+  AgentBeforeSettleEventResult,
   AgentEndEvent,
+  AgentSettledEvent,
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
   ExecOptions,
@@ -7,6 +10,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   EventBus,
+  MessageStartEvent,
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
@@ -29,11 +33,14 @@ export interface GoalControllerHost {
   on(event: "session_shutdown", handler: Handler<SessionShutdownEvent>): void;
   on(event: "session_compact", handler: Handler<SessionCompactEvent>): void;
   on(event: "before_agent_start", handler: Handler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
+  on(event: "message_start", handler: Handler<MessageStartEvent>): void;
   on(event: "agent_end", handler: Handler<AgentEndEvent>): void;
+  on(event: "agent_before_settle", handler: Handler<AgentBeforeSettleEvent, AgentBeforeSettleEventResult>): void;
+  on(event: "agent_settled", handler: Handler<AgentSettledEvent>): void;
   appendEntry<T = unknown>(customType: string, data?: T): void;
   sendMessage(
     message: { customType: string; content: string; display: boolean; details?: Record<string, unknown> },
-    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
   getThinkingLevel(): HostThinkingLevel;
@@ -46,5 +53,8 @@ export type CapturedHandlers = {
   session_shutdown?: Handler<SessionShutdownEvent>;
   session_compact?: Handler<SessionCompactEvent>;
   before_agent_start?: Handler<BeforeAgentStartEvent, BeforeAgentStartEventResult>;
+  message_start?: Handler<MessageStartEvent>;
   agent_end?: Handler<AgentEndEvent>;
+  agent_before_settle?: Handler<AgentBeforeSettleEvent, AgentBeforeSettleEventResult>;
+  agent_settled?: Handler<AgentSettledEvent>;
 };
