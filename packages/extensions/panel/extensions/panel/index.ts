@@ -197,7 +197,7 @@ export async function runPanelCommand(
         display: message.display,
         details: message.details,
       },
-      { deliverAs: "followUp", triggerTurn: index === plan.triggerIndex },
+      { deliverAs: "steer", triggerTurn: index === plan.triggerIndex },
     );
   });
 }

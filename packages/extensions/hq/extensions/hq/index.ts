@@ -277,7 +277,7 @@ export function createHqExtension(options: HqExtensionOptions = {}) {
           pending > 0
             ? "Take the seat: read the queue plan and put the first ask to me."
             : "Take the seat. The queue is empty, so just tell me what the fleet is doing.",
-          { deliverAs: "followUp" },
+          { deliverAs: "steer" },
         );
       },
     });

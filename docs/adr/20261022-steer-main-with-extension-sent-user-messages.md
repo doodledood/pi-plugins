@@ -29,3 +29,4 @@ Checker continuations sent from `agent_before_settle` behave the same either way
 ## Source
 - Session: user request — "when they send to main it uses the follow up … I want them to steer instead".
 - Related: 20261014-keep-btw-read-only-with-one-relay-to-main (amended: relays steer instead of queuing as a follow-up)
+- See also: `/hq`'s take-the-seat prompt and `/panel`'s injected question and answers adopt the same steering delivery in the change after this record; HQ's system nudge that new decisions arrived stays a follow-up because the user did not send it.
