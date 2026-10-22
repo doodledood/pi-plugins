@@ -141,13 +141,17 @@ export async function activateModelAliases(pi: any): Promise<void> {
   // An alias with neither its own price nor a resolvable target price would report
   // real token spend at $0. Pi still needs a cost object, so the zero stays — but it
   // is announced here rather than quietly distorting every cost surface.
+  // Told once, to the person, in a session that has a UI: console output lands in
+  // the middle of the TUI, and every in-process agent and headless child loads this
+  // extension too, so a console warning repeated once per running agent.
   const unpriced = findUnpricedAliases(config, existingModels);
   if (unpriced.length > 0) {
-    console.warn(
-      `[model-aliases] No price resolved for ${unpriced.join(", ")} — usage on ${
-        unpriced.length === 1 ? "this alias" : "these aliases"
-      } will be counted at $0. Add a "cost" block to the alias, or point targetModel at a model pi already prices.`,
-    );
+    const message = `[model-aliases] No price resolved for ${unpriced.join(", ")} — usage on ${
+      unpriced.length === 1 ? "this alias" : "these aliases"
+    } will be counted at $0. Add a "cost" block to the alias, or point targetModel at a model pi already prices.`;
+    pi.on("session_start", (_event: unknown, ctx: { hasUI?: boolean; ui?: { notify(message: string, level: string): void } }) => {
+      if (ctx.hasUI) ctx.ui?.notify(message, "warning");
+    });
   }
 
   for (const registration of buildProviderRegistrations(config, existingModels, aliasStreamSimple)) {
@@ -179,7 +183,7 @@ export async function activateModelAliases(pi: any): Promise<void> {
  */
 export function findUnpricedAliases(config: ModelAliasesConfig, existingModels: readonly ExistingModel[] = []): string[] {
   if (!config.enabled) return [];
-  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+  const targetModelByKey = chatModelsByKey(existingModels);
   const unpriced: string[] = [];
   for (const alias of config.aliases) {
     if (alias.cost) continue;
@@ -206,7 +210,7 @@ export function buildProviderRegistrations(
     grouped.set(alias.provider, aliases);
   }
 
-  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+  const targetModelByKey = chatModelsByKey(existingModels);
 
   return [...grouped.entries()].map(([provider, aliases]) => {
     const providerExistingModels = existingModels.filter((model) => model.provider === provider);
@@ -262,7 +266,7 @@ export function buildTargetModelLookup(
   const lookup: TargetModelLookup = new Map();
   if (!config.enabled) return lookup;
 
-  const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
+  const targetModelByKey = chatModelsByKey(existingModels);
   for (const alias of config.aliases) {
     const inherited = inheritedModelForAlias(alias, targetModelByKey);
     lookup.set(modelKey(alias.provider, alias.id), aliasToTargetModel(alias, inherited));
@@ -507,6 +511,23 @@ export function rewriteModelAliasPayload(payload: unknown, targetModel: string):
     ...(payload as Record<string, unknown>),
     model: targetModel,
   };
+}
+
+/**
+ * Chat models by `provider/id`. Pi can list a classifier under the same provider
+ * and id as a chat model (OpenAI's gpt-6-luna is both), so a plain map over every
+ * model let whichever came last win — the classifier — and the alias then
+ * inherited nothing: no price, no API, no reasoning map. Only a chat model can be
+ * an alias target, so only chat models are indexed.
+ */
+function chatModelsByKey(existingModels: readonly ExistingModel[]): Map<string, ExistingModel> {
+  const byKey = new Map<string, ExistingModel>();
+  for (const model of existingModels) {
+    if (!isModelType(model, "chat")) continue;
+    const key = modelKey(model.provider, model.id);
+    if (!byKey.has(key)) byKey.set(key, model);
+  }
+  return byKey;
 }
 
 function inheritedModelForAlias(

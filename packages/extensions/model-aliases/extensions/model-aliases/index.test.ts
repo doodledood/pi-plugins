@@ -1141,3 +1141,38 @@ test("model-aliases refuses a Pi older than the 1.4.0 its peer floor names", () 
   assert.throws(() => assertMinimumPiVersion("1.3.9"), /requires pi >= 1\.4\.0/);
   assert.doesNotThrow(() => assertMinimumPiVersion("1.4.0"));
 });
+
+test("an alias whose target id is shared by a classifier inherits from the chat model, whichever is listed last", () => {
+  // Pi lists OpenAI's gpt-6-luna twice: a chat model and a classifier on the same
+  // provider and id, classifier last. Indexing every model let the classifier win,
+  // so the alias inherited nothing and was reported as unpriced on every start.
+  const chatTarget = {
+    ...existingModels.find((model) => model.provider === "openai" && model.id === "gpt-5.5")!,
+    id: "shared-id",
+    cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+  };
+  const classifier = {
+    type: "classifier",
+    id: "shared-id",
+    name: "Shared classifier",
+    api: "openai-decisions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    input: ["text"],
+    cost: { input: 0.1, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000,
+  } as unknown as (typeof existingModels)[number];
+  const models = [...existingModels, chatTarget, classifier];
+  const config: ModelAliasesConfig = {
+    enabled: true,
+    aliases: [{ provider: "openai", id: "shared-alias", targetProvider: "openai", targetModel: "shared-id" }],
+  };
+
+  assert.deepEqual(findUnpricedAliases(config, models), []);
+  const target = buildTargetModelLookup(config, models).get("openai/shared-alias")!;
+  assert.equal(target.api, chatTarget.api);
+  assert.deepEqual(target.cost, chatTarget.cost);
+  const registration = buildProviderRegistrations(config, models)[0]!;
+  const alias = (registration.config.models as unknown as Array<Record<string, unknown>>).find((m) => m.id === "shared-alias")!;
+  assert.deepEqual(alias.cost, chatTarget.cost);
+});
