@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { matchesKey } from "@earendil-works/pi-tui";
 
 type PiExecResult = { stdout?: string; stderr?: string; code?: number; killed?: boolean };
 type PiApi = {
@@ -99,6 +100,8 @@ export default function openaiTtsExtension(pi: PiApi): void {
       "If openai_tts_speak fails, continue in text and briefly report the failure instead of repeatedly retrying or switching to another audio path.",
     ],
     parameters: TtsParamsSchema,
+    // Several speak calls in one message are spoken in the order they were made, never at once.
+    executionMode: "sequential",
     async execute(_toolCallId: string, params: TtsParams, signal?: AbortSignal, onUpdate?: (partial: Record<string, unknown>) => void) {
       onUpdate?.({ content: [{ type: "text", text: "Requesting speech audio from OpenAI…" }], details: { stage: "requesting" } });
       const result = await speakWithOpenAI(pi, params, signal, (message, details) => {
@@ -124,12 +127,27 @@ export default function openaiTtsExtension(pi: PiApi): void {
         );
         return;
       }
+      // A command run while Pi is idle gets no abort signal from Pi, so Esc stops it here.
+      const stop = new AbortController();
+      const parent: AbortSignal | undefined = ctx.signal;
+      const onParentAbort = () => stop.abort(parent?.reason);
+      if (parent?.aborted) onParentAbort();
+      else parent?.addEventListener("abort", onParentAbort, { once: true });
+      const stopOnEscape = ctx.ui.onTerminalInput?.((data: string) => {
+        if (!matchesKey(data, "escape")) return undefined;
+        stop.abort(new Error("Stopped with Esc."));
+        return { consume: true };
+      });
       try {
-        ctx.ui.notify("OpenAI TTS: requesting speech…", "info");
-        const result = await speakWithOpenAI(pi, { text }, ctx.signal, (message) => ctx.ui.notify(message, "info"));
+        ctx.ui.notify("OpenAI TTS: requesting speech… (Esc to stop)", "info");
+        const result = await speakWithOpenAI(pi, { text }, stop.signal, (message) => ctx.ui.notify(message, "info"));
         ctx.ui.notify(`OpenAI TTS: spoke ${result.chars} character(s).`, "info");
       } catch (error) {
-        ctx.ui.notify(`OpenAI TTS failed: ${errorMessage(error)}`, "error");
+        if (stop.signal.aborted) ctx.ui.notify("OpenAI TTS: stopped.", "info");
+        else ctx.ui.notify(`OpenAI TTS failed: ${errorMessage(error)}`, "error");
+      } finally {
+        stopOnEscape?.();
+        parent?.removeEventListener("abort", onParentAbort);
       }
     },
   });
@@ -138,9 +156,10 @@ export default function openaiTtsExtension(pi: PiApi): void {
 /**
  * Record one billed speech call durably, so its spend is countable: characters,
  * model, and voice always, plus a dollar figure when a per-character rate is
- * configured. Called as soon as OpenAI returns audio — that is the moment the charge
- * exists — so a later local playback failure cannot lose it. A call that never
- * reached that point (bad key, HTTP error, over the character limit) records nothing.
+ * configured. Called as soon as OpenAI accepts the request (HTTP 200) — the charge
+ * exists from then — so a failure while downloading (abort, timeout, size cap) or at
+ * the speaker cannot lose it. A call that never got a 200 (bad key, HTTP error, over
+ * the character limit) records nothing.
  */
 export function recordSpeechSpend(pi: Pick<PiApi, "appendEntry">, billed: { model: string; voice: string; chars: number }): void {
   // Guarded for hosts older than the appendEntry API, not for type reasons.
@@ -210,14 +229,15 @@ async function speakWithOpenAI(
       throw new Error(`OpenAI speech request failed (${response.status} ${response.statusText}): ${truncate(detail.trim(), 800)}`);
     }
 
-    const audio = await readAudioResponse(response, config.maxAudioBytes, timeout.signal);
-    // OpenAI billed the synthesis the moment it returned audio. Record the spend here,
-    // before local playback, so a failure at the speaker does not lose the charge.
     recordSpeechSpend(pi, { model: config.model, voice: config.voice, chars: text.length });
+    const audio = await readAudioResponse(response, config.maxAudioBytes, timeout.signal);
 
     await writeFile(tempFile, audio);
-    onProgress?.("Playing speech audio locally…", { stage: "playing", audioBytes: audio.byteLength });
-    const player = await playAudioFile(pi, tempFile, config.playbackTimeoutMs, signal);
+    const player = await onSpeaker(() => {
+      if (signal?.aborted) throw new Error("OpenAI TTS playback was stopped before it started.");
+      onProgress?.("Playing speech audio locally…", { stage: "playing", audioBytes: audio.byteLength });
+      return playAudioFile(pi, tempFile, config.playbackTimeoutMs, signal);
+    });
 
     return {
       model: config.model,
@@ -276,13 +296,14 @@ function normalizeFormat(value: unknown): AudioFormat {
 }
 
 function normalizeOptionalNumber(value: unknown, min: number, max: number): number | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) return undefined;
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return undefined;
   return Math.min(max, Math.max(min, parsed));
 }
 
 function normalizeInt(value: unknown, fallback: number, min: number, max: number): number {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) return fallback;
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
@@ -355,6 +376,14 @@ async function readAudioResponse(response: Response, maxBytes: number, signal: A
   return Buffer.concat(chunks, total);
 }
 
+// One speaker per Pi process: speech from the tool and from /openai-tts plays one at a time, in turn.
+let speaker: Promise<unknown> = Promise.resolve();
+function onSpeaker<T>(play: () => Promise<T>): Promise<T> {
+  const turn = speaker.then(play, play);
+  speaker = turn.catch(() => undefined);
+  return turn;
+}
+
 async function playAudioFile(pi: Pick<PiApi, "exec">, filePath: string, timeoutMs: number | undefined, signal?: AbortSignal): Promise<string> {
   const candidates = playbackCandidates(filePath);
   const failures: string[] = [];
@@ -363,6 +392,7 @@ async function playAudioFile(pi: Pick<PiApi, "exec">, filePath: string, timeoutM
     const result = await pi.exec(candidate.command, candidate.args, { timeout: timeoutMs, signal });
     if (result.code === 0 && !result.killed) return candidate.label;
     if (result.killed) {
+      if (signal?.aborted) throw new Error(`${candidate.label} playback was stopped.`);
       const reason = timeoutMs === undefined ? "was interrupted before it finished" : `timed out after ${timeoutMs}ms`;
       throw new Error(`${candidate.label} playback ${reason}. Set a larger OPENAI_TTS_PLAYBACK_TIMEOUT_MS or leave it unset for uncapped playback.`);
     }

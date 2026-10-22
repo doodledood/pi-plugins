@@ -22,7 +22,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.8"
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "@earendil-works/pi-tui": ">=1.4.0"
   },
   "license": "MIT",
   "repository": {
@@ -42,5 +43,9 @@
     "README.md",
     "package.json",
     "tsconfig.json"
-  ]
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0"
+  }
 }

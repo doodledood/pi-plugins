@@ -2,6 +2,10 @@
 
 OpenAI Speech API text-to-speech for Pi. Adds a model-callable `openai_tts_speak` tool and a manual `/openai-tts` command that synthesize text with OpenAI and play the returned audio on the machine running Pi.
 
+Requires Pi 1.4.0 or later.
+
+Speech never overlaps: several speak calls in one assistant message run one after another in the order they were made, and speech from the tool and from `/openai-tts` takes turns at the speaker. Aborting the agent run stops a speak call; `/openai-tts` started while Pi is idle stops on **Esc**. A stopped call says it was stopped.
+
 ## Install
 
 From a local clone:
@@ -34,7 +38,7 @@ pi install git:github.com/doodledood/pi-plugins@main
 
 ## Configuration
 
-The extension reads configuration from environment variables in the process that starts Pi. Do not commit API keys to this repo or to setup templates.
+The extension reads configuration from environment variables in the process that starts Pi. A variable set to an empty string counts as unset, so its default applies. Do not commit API keys to this repo or to setup templates.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -65,11 +69,12 @@ figure only appears once you set `OPENAI_TTS_PRICE_PER_MCHAR` to the rate for
 your model. Until then the record carries characters with no invented price, and
 the total is marked as a floor rather than reported low.
 
-The record is written the moment OpenAI returns audio, because that is when the
-charge exists. A call that fails after that point — player error, playback
-timeout, abort — is still recorded, since it was still billed. Only a call that
-never got audio back records nothing: a missing key, an HTTP error, or text over
-the character limit. The record never contains the spoken text.
+The record is written the moment OpenAI accepts the request (HTTP 200), because
+that is when the charge exists. A call that fails after that point — an abort or
+timeout while downloading, audio over `OPENAI_TTS_MAX_AUDIO_BYTES`, a player
+error, a playback timeout — is still recorded, since it was still billed. Only a
+call that never got a 200 records nothing: a missing key, an HTTP error, or text
+over the character limit. The record never contains the spoken text.
 
 These are custom entries: they live in the session file, so they last exactly as
 long as that session does, and they are excluded from LLM context.
