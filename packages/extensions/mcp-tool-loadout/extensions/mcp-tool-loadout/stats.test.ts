@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
 import { attributeToolNames, recencyScores, UsageLog, type UsageEvent } from "./stats.ts";
 import { priorFor } from "./select.ts";
 import { tmpDir } from "./testutil.ts";
@@ -120,4 +120,32 @@ test("compaction keeps the newest events per project and appends made meanwhile"
   assert.deepEqual(reread.eventsFor("quiet"), [{ name: "alpha_y", ts: 1 }]);
   const lines = readFileSync(log, "utf8").split("\n").filter(Boolean).length;
   assert.equal(lines, 5_002);
+});
+
+test("a compaction another session just claimed is left alone, even when the log was idle", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  UsageLog.open(log, legacy).record("p", ["alpha_x"], 1);
+  // The log was last written two minutes ago; a session claims it for compaction now.
+  const idle = (Date.now() - 120_000) / 1000;
+  utimesSync(log, idle, idle);
+  const now = Date.now();
+  const claimed = `${log}.compacting-99999-${now}`;
+  renameSync(log, claimed);
+  UsageLog.open(log, legacy, now + 5);
+  assert.ok(existsSync(claimed), "a live session's compaction claim was taken over");
+  assert.equal(existsSync(log) ? readFileSync(log, "utf8").trim() : "", "", "the claimed events were appended a second time");
+});
+
+test("the claim of a session that died mid-compaction is carried over once it is a minute old", () => {
+  const dir = tmpDir();
+  const log = join(dir, "usage.jsonl");
+  const legacy = join(dir, "stats.json");
+  UsageLog.open(log, legacy).record("p", ["alpha_x"], 1);
+  const claimedAt = 1_000_000;
+  renameSync(log, `${log}.compacting-99999-${claimedAt}`);
+  assert.deepEqual(UsageLog.open(log, legacy, claimedAt + 59_000).eventsFor("p"), [], "recovered before the claim was a minute old");
+  assert.deepEqual(UsageLog.open(log, legacy, claimedAt + 61_000).eventsFor("p"), [{ name: "alpha_x", ts: 1 }]);
+  assert.deepEqual(readdirSync(dir).filter((name) => name.includes("compacting")), [], "the abandoned claim was left behind");
 });

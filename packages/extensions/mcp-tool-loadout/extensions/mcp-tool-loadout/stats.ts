@@ -6,7 +6,7 @@
 // costs only that line: nothing ever rewrites the log from a stale snapshot. The log is
 // compacted by renaming it aside before rewriting, so a concurrent append lands either in
 // the claimed file (and is carried over) or in the fresh log.
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { legacyStatsPath, usageLogPath } from "./paths.ts";
 
@@ -156,28 +156,42 @@ function importLegacyStats(legacyPath: string, logPath: string): void {
   renameSync(claimed, `${legacyPath}.imported`);
 }
 
+/**
+ * Name for a claimed file. It ends in the time of the claim, which is how other sessions judge its age:
+ * a rename keeps the file's modification time, so that says when the file was last written, not claimed.
+ */
+function claimName(path: string, kind: "compacting" | "recovering", now: number): string {
+  return `${path}.${kind}-${process.pid}-${now}`;
+}
+
+/** When a claim was made, from the time its name ends in. */
+function claimedAt(name: string): number | undefined {
+  const match = /-(\d+)$/.exec(name);
+  return match ? Number(match[1]) : undefined;
+}
+
 /** Rewrite the log down to what is kept, without losing appends made meanwhile. */
 function compact(logPath: string, now: number): void {
-  const claimed = `${logPath}.compacting-${process.pid}-${now}`;
+  const claimed = claimName(logPath, "compacting", now);
   if (!claim(logPath, claimed)) return;
   appendLines(logPath, toLines(keepNewest(readLines(claimed))));
   unlinkSync(claimed);
 }
 
-/** Carry over the claim of a session that died mid-compaction. */
+/**
+ * Carry over the claim of a session that died mid-compaction or mid-recovery. A claim counts as abandoned
+ * once its claim time is ABANDONED_CLAIM_MS old; a live session finishes with its claim in milliseconds.
+ */
 function recoverAbandonedCompactions(logPath: string, now: number): void {
   const dir = dirname(logPath);
   if (!existsSync(dir)) return;
   const prefix = `${basename(logPath)}.compacting-`;
   for (const name of readdirSync(dir)) {
     if (!name.startsWith(prefix)) continue;
+    const at = claimedAt(name);
+    if (at === undefined || now - at < ABANDONED_CLAIM_MS) continue;
     const path = join(dir, name);
-    try {
-      if (now - statSync(path).mtimeMs < ABANDONED_CLAIM_MS) continue;
-    } catch {
-      continue;
-    }
-    const reclaimed = `${path}.recovering-${process.pid}`;
+    const reclaimed = claimName(path, "recovering", now);
     if (!claim(path, reclaimed)) continue;
     appendLines(logPath, readLines(reclaimed));
     unlinkSync(reclaimed);

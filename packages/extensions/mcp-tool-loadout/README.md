@@ -135,7 +135,7 @@ orders the set, and as you use tools the prior washes out.
 
 - Installed package source location depends on install source: your local package path, Pi's git package cache, or Pi's npm package cache. In this repo, the development package lives at `packages/extensions/mcp-tool-loadout/` and its extension entry is `extensions/mcp-tool-loadout/index.ts`.
 - `~/.pi/agent/mcp-tool-loadout.json` — tunables (optional).
-- `~/.pi/agent/mcp-tool-loadout-usage.jsonl` — usage events keyed by repo name (auto-created); the global signal is the pool of all repos' buckets. It is an append-only log, so concurrent sessions never overwrite each other's events and an interrupted write costs only its own line. It keeps the newest 5,000 events per repo and is compacted when it holds 5,000 more lines than that.
+- `~/.pi/agent/mcp-tool-loadout-usage.jsonl` — usage events keyed by repo name (auto-created); the global signal is the pool of all repos' buckets. It is an append-only log, so concurrent sessions never overwrite each other's events and an interrupted write costs only its own line. It keeps the newest 5,000 events per repo and is compacted when it holds 5,000 more lines than that. A compacting session first renames the log to `…usage.jsonl.compacting-<pid>-<time>`; if that session dies, the next session to start after a minute carries the file's events back into the log.
 - `~/.pi/agent/mcp-tool-loadout-stats.json` — the stats file of versions before 0.3.0. It is imported into the log once and renamed to `mcp-tool-loadout-stats.json.imported`; delete that file whenever you like.
 - Reads `~/.pi/agent/mcp-cache.json` (the adapter's metadata cache) for the full tool universe.
 

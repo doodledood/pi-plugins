@@ -19,9 +19,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { loadConfig, type LoadoutConfig } from "./config.ts";
-import { loadMcpUniverse } from "./mcp-detect.ts";
+import { INFRA_TOOLS, isMcpTool, loadMcpUniverse } from "./mcp-detect.ts";
 import { UsageLog, attributeToolNames } from "./stats.ts";
-import { INFRA_TOOLS, isMcpTool } from "./mcp-detect.ts";
 import { planActivation } from "./compute.ts";
 import { performCacheSafeLoadTools, performLoadTools } from "./actions.ts";
 import { resolveProjectKey } from "./project.ts";
