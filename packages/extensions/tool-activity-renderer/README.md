@@ -34,7 +34,7 @@ Every color comes from the active theme's tokens (`text`, `muted`, `dim`, `borde
 
 ## Development
 
-This package typechecks and tests against Pi 1.0.2 through its own `devDependencies`, because it needs `theme.colors` and `theme.style` (Pi 0.99.0+). The rest of the workspace still builds against the root's Pi `^0.80.8`. Once the root moves to 0.99.0 or newer, drop this package's own Pi `devDependencies`.
+This package typechecks and tests against Pi 1.4, like the rest of the workspace. It needs `theme.colors` and `theme.style`, so its peer floor is Pi 0.99.0.
 
 ## Cost
 

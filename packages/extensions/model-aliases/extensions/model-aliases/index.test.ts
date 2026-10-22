@@ -32,6 +32,7 @@ import {
   CHECKER_MODEL_BOOTSTRAP_REQUEST_CHANNEL,
   MODEL_ALIASES_API,
   MODEL_ALIASES_PACKAGE_NAME,
+  assertMinimumPiVersion,
   buildAliasLookup,
   buildProviderRegistrations,
   buildTargetModelLookup,
@@ -1134,4 +1135,9 @@ test("the live alias configuration shape inherits pricing rather than falling ba
   const registration = buildProviderRegistrations(config, existingModels)[0]!;
   const alias = (registration.config.models as unknown as Array<Record<string, unknown>>).find((m) => m.id === "gpt-5.6-sol");
   assert.deepEqual(alias?.cost, { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 });
+});
+
+test("model-aliases refuses a Pi older than the 1.4.0 its peer floor names", () => {
+  assert.throws(() => assertMinimumPiVersion("1.3.9"), /requires pi >= 1\.4\.0/);
+  assert.doesNotThrow(() => assertMinimumPiVersion("1.4.0"));
 });

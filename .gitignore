@@ -46,6 +46,7 @@ mcp-cache.json
 mcp-npx-cache.json
 *-stats.json
 *-stats.json.imported
+*-stats.json.importing-*
 *-usage.jsonl
 *-usage.jsonl.compacting-*
 .cache/

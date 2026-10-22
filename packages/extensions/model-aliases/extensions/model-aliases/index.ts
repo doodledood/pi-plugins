@@ -15,8 +15,8 @@ import type {
 
 import { loadConfig, type ModelAliasConfig, type ModelAliasesConfig } from "./config.ts";
 
-// Pi 0.86+ carries prompts and tool changes in the transcript. Keep the legacy
-// fields optional so the same extension still works on its minimum Pi 0.80.8.
+// Pi carries prompts and tool changes in the transcript's system messages; a raw
+// Context can still carry the plain systemPrompt field, so both are read.
 interface SystemTranscriptMessage {
   role: "system";
   content: string | { type: "text"; text: string }[];
@@ -100,8 +100,10 @@ export function registerCheckerModelBootstrap(
   });
 }
 
-/** Pi 0.80.8 reworked the model/auth runtime (ModelRuntime); older APIs are gone. */
-export function assertMinimumPiVersion(version: string, minimum = "0.80.8"): void {
+/** The alias routing reads Pi 1.4's full model data and summary requests; the package's peer floor says the same. */
+export const MINIMUM_PI_VERSION = "1.4.0";
+
+export function assertMinimumPiVersion(version: string, minimum = MINIMUM_PI_VERSION): void {
   const parse = (v: string) => v.split("-")[0]!.split(".").map((n) => Number.parseInt(n, 10) || 0);
   const [a, b] = [parse(version), parse(minimum)];
   for (let i = 0; i < 3; i++) {
