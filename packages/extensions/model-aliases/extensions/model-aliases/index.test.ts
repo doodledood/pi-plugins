@@ -45,6 +45,12 @@ import {
 } from "./index.ts";
 import type { ModelAliasesConfig } from "./config.ts";
 
+// Keep Pi off the user's real agent directory: everything in this file resolves HOME and the agent dir to a
+// throwaway home. Tests that need their own Pi home still set one and restore back to this.
+const isolatedHome = mkdtempSync(join(tmpdir(), "model-aliases-test-home-"));
+process.env.HOME = isolatedHome;
+process.env.PI_CODING_AGENT_DIR = join(isolatedHome, ".pi", "agent");
+
 type Context = Parameters<typeof estimateAliasRequestTokens>[0];
 
 const existingModels = [

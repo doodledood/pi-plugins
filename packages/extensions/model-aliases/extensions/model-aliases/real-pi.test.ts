@@ -20,6 +20,12 @@ import {
 import { buildAliasLookup, buildProviderRegistrations, buildTargetModelLookup, createAliasStreamSimple } from "./index.ts";
 import type { ModelAliasesConfig } from "./config.ts";
 
+// Keep Pi off the user's real agent directory: everything in this file resolves HOME and the agent dir to a
+// throwaway home. Tests that need their own Pi home still set one and restore back to this.
+const isolatedHome = mkdtempSync(join(tmpdir(), "model-aliases-real-pi-home-"));
+process.env.HOME = isolatedHome;
+process.env.PI_CODING_AGENT_DIR = join(isolatedHome, ".pi", "agent");
+
 process.env.PI_OFFLINE ??= "1";
 
 const EXTENSION_PATH = new URL("./index.ts", import.meta.url).pathname;

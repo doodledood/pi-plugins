@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import cacheOptimization, { activate, COST_RECORD_TYPE } from "../cache-optimization.ts";
 import { CacheKeepalive, MIN_PROMPT_TOKENS, PING_AFTER_IDLE_MS } from "./keepalive.ts";
 import type { SessionEntryLike } from "./cache.ts";
+
+// Keep Pi off the user's real agent directory: everything in this file resolves HOME and the agent dir to a
+// throwaway home. Tests that need their own Pi home still set one and restore back to this.
+const isolatedHome = mkdtempSync(join(tmpdir(), "cache-optimization-wiring-home-"));
+process.env.HOME = isolatedHome;
+process.env.PI_CODING_AGENT_DIR = join(isolatedHome, ".pi", "agent");
 
 type Handler = (event: any, ctx: any) => unknown;
 
