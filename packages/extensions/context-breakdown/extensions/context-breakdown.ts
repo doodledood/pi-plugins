@@ -502,6 +502,24 @@ function withMessages(breakdown: RealBreakdown, messagesTok: number): RealBreakd
   };
 }
 
+/**
+ * Fit an estimated split to a known total. Whatever the estimated system prompt and tools leave of the
+ * total is the conversation. When they alone come to more than the total (the estimate runs high, as with
+ * large tool schemas early in a session), every part is scaled down in proportion instead, and the
+ * conversation keeps a share as long as there is one.
+ */
+function withTotal(breakdown: RealBreakdown, total: number): RealBreakdown {
+  const fixed = breakdown.systemTok + breakdown.systemToolsTok + breakdown.mcpToolsTok;
+  if (total > fixed) return withMessages(breakdown, total - fixed);
+  const estimated = fixed + breakdown.messagesTok;
+  if (estimated <= 0) return withMessages(breakdown, total);
+  const scale = total / estimated;
+  const systemTok = Math.floor(breakdown.systemTok * scale);
+  const systemToolsTok = Math.floor(breakdown.systemToolsTok * scale);
+  const mcpToolsTok = Math.floor(breakdown.mcpToolsTok * scale);
+  return withMessages({ ...breakdown, systemTok, systemToolsTok, mcpToolsTok }, total - systemTok - systemToolsTok - mcpToolsTok);
+}
+
 function fmtTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return `${Math.round(n)}`;
@@ -591,14 +609,8 @@ export default function contextBreakdown(pi: ExtensionAPI) {
 
       // Off Anthropic, Pi's own context usage is the best total there is; the parts it
       // cannot split go to Messages.
-      let totalFromPi = false;
-      if (!isAnthropic && typeof usage?.tokens === "number") {
-        const fixed = breakdown.systemTok + breakdown.systemToolsTok + breakdown.mcpToolsTok;
-        if (usage.tokens > fixed) {
-          breakdown = withMessages(breakdown, usage.tokens - fixed);
-          totalFromPi = true;
-        }
-      }
+      const totalFromPi = !isAnthropic && typeof usage?.tokens === "number";
+      if (totalFromPi) breakdown = withTotal(breakdown, usage.tokens as number);
 
       const totalTokens = breakdown.totalTokens;
       const freeTok = Math.max(0, window - totalTokens - reserve.tokens);

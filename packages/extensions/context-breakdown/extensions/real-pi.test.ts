@@ -277,6 +277,19 @@ test("OpenAI: Messages is non-zero and the total agrees with Pi's context usage"
   });
 });
 
+test("OpenAI: a total smaller than the estimated system prompt and tools still comes from Pi, with Messages kept", { timeout: 30_000 }, async () => {
+  await withPiHome({ usage: { openaiInput: 300 } }, async (home) => {
+    const { session, ui } = await startSession(home, { provider: "openai", id: GPT });
+    await session.prompt("hello there");
+    const usage = session.getContextUsage();
+    assert.equal(usage?.tokens, 300, "Pi's context size is the 300 input tokens the provider reported");
+    const data = await runContext(session, ui);
+    assert.equal(data.totalTokens, usage!.tokens, "the total fell back to the estimate");
+    assert.ok(category(data, "Messages") > 0, `Messages: ${category(data, "Messages")}`);
+    await session.dispose?.();
+  });
+});
+
 // ── AC-6.3 ──────────────────────────────────────────────────────────────────
 
 const MARKER = "STALE-CONTEXT-MARKER ";
