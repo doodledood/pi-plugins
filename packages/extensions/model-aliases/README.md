@@ -16,7 +16,11 @@ This extension makes that split configurable:
 - Streamed/session assistant messages are mapped back to the selected alias identity, so session history still records the visible alias.
 - Visible context-window metadata can differ from the hard target context window used to clamp delegated provider requests; max-token, cost, input, reasoning, and compatibility metadata can also be inherited or overridden per alias.
 - For a dual-window alias, the hidden stream checks every request against the visible window. At the edge it returns a local context-overflow signal instead of sending another oversized request, which lets Pi compact and resume through its native overflow-recovery path.
-- If the configured `provider/id` already exists, the configured entry wins and the provider's other models are preserved.
+- If the configured `provider/id` already exists, the configured entry wins and the provider's other models are preserved — every model type, classifiers and image models included, with every field Pi gives them (prompt-cache lifetimes, input limits, sampling parameters and the rest). Pi's cache warming therefore works on aliased and re-registered models.
+- Routing follows Pi's live provider route. When another extension re-points a provider (a relay or proxy calling `pi.registerProvider(provider, { baseUrl })`), aliased, renamed and same-id models follow it in either load order; only an alias's own `baseUrl` overrides it.
+- A renamed alias (`id` differs from `targetModel`) replays earlier turns to the provider as the target model's own, so thinking and reasoning blocks carry across turns exactly as they do for the target model.
+
+Requires Pi 1.4.0 or newer.
 
 A `before_provider_request` payload rewrite is still registered as a compatibility fallback for call paths that expose Pi's payload hook, but alias routing does not depend on that hook.
 
@@ -118,7 +122,7 @@ If `provider/id` already exists, your configured entry wins and sibling models r
 
 Pi uses `contextWindow` for display and normal automatic-compaction accounting. The alias stream also treats it as an enforced operating boundary: when the estimated next normal agent request reaches that window, the request stays local and Pi receives a context-overflow signal, runs its native compaction, and resumes the interrupted tool loop. This matters because Pi's normal threshold check runs after a complete agent run, while one long run can contain many provider/tool turns.
 
-Pi-owned compaction and branch-summary requests bypass the visible boundary and use the target window: they must be able to read the context they are replacing, and a second synthetic overflow inside summarization cannot compact itself. All other delegated calls below the boundary use `targetContextWindow`, so the provider request clamp still reserves output against the model's real hard capacity. Without the split, an artificially small hard window can reduce `max_output_tokens` to the provider minimum before Pi gets a chance to compact.
+Pi-owned compaction, turn-prefix and branch-summary requests bypass the visible boundary and use the target window: they must be able to read the context they are replacing, and a second synthetic overflow inside summarization cannot compact itself. All other delegated calls below the boundary use `targetContextWindow`, so the provider request clamp still reserves output against the model's real hard capacity. Without the split, an artificially small hard window can reduce `max_output_tokens` to the provider minimum before Pi gets a chance to compact.
 
 Because `targetProvider` defaults to `provider` and `targetModel` defaults to `id`, the upstream request still sends the original model id.
 
@@ -141,7 +145,7 @@ That explicit bootstrap lets the checker subprocess register the same alias mode
 | `targetModel` | no | Upstream model id sent to the target provider, for example `gpt-5.5`. Defaults to `id`. Legacy keys `actualModelId` and `model` are also accepted. |
 | `name` | no | Human-friendly model name. Defaults to `id`. |
 | `api` | no | Target Pi provider API type, such as `openai-responses` or `anthropic-messages`, when it cannot be inherited from `targetProvider` / `targetModel`. |
-| `baseUrl` | no | Target provider base URL when it cannot be inherited. |
+| `baseUrl` | no | Base URL for this alias's upstream calls. When set it wins over every other route; when omitted, calls follow the target provider's live route in Pi, including another extension's override. Needed for a target provider Pi does not know. |
 | `apiKey` | no | Env interpolation, shell command, or literal key using Pi provider config syntax, e.g. `$OPENAI_API_KEY`. This is a fallback; normal auth storage for `provider` wins first. |
 | `headers` | no | Extra provider/model headers. String values only — non-string values are dropped with a warning, because Pi's header resolver rejects them. |
 | `authHeader` | no | Add `Authorization: Bearer <key>` for non-standard providers. |

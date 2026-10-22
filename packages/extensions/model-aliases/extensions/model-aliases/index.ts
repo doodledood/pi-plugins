@@ -1,8 +1,10 @@
 import { fileURLToPath } from "node:url";
-import { ModelRegistry, ModelRuntime, VERSION, type EventBus } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { ModelRuntime, VERSION, type EventBus, type ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import { createAssistantMessageEventStream, isModelType } from "@earendil-works/pi-ai";
 import * as piAiCompat from "@earendil-works/pi-ai";
 import type {
+  AnyModel,
+  Api,
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
@@ -27,29 +29,20 @@ type Context = Omit<PiContext, "messages"> & {
   messages: (PiContext["messages"][number] | SystemTranscriptMessage)[];
 };
 
-interface ExistingModel {
-  id: string;
-  name?: string;
-  api?: string;
-  provider: string;
-  baseUrl?: string;
-  reasoning?: boolean;
-  thinkingLevelMap?: Record<string, string | null>;
-  input?: ("text" | "image")[];
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow?: number;
-  maxTokens?: number;
-  compat?: Record<string, unknown>;
-  headers?: Record<string, string>;
-}
+// Models are Pi's own types end to end: re-registration copies every field Pi
+// gives a model, so a field a later Pi adds is carried through, not dropped.
+type ExistingModel = AnyModel;
+type TargetModel = Model<Api>;
 
 interface ProviderRegistration {
   provider: string;
-  config: Record<string, unknown>;
+  config: Record<string, unknown> & { models: ProviderModelConfig[] };
 }
 
 type AliasLookup = Map<string, ModelAliasConfig>;
-type TargetModelLookup = Map<string, ExistingModel>;
+type TargetModelLookup = Map<string, TargetModel>;
+/** Finds a chat model in Pi's live registry, which carries other extensions' provider overrides. */
+type LiveModelLookup = (provider: string, id: string) => Pick<TargetModel, "baseUrl"> | undefined;
 type AliasStreamDelegate = (
   model: Model<any>,
   context: Context,
@@ -129,11 +122,19 @@ export async function activateModelAliases(pi: any): Promise<void> {
 
   // Async factories are awaited by pi before session_start and before queued
   // pi.registerProvider() registrations are flushed, so this stays safe.
-  const currentRegistry = new ModelRegistry(await ModelRuntime.create());
-  const existingModels = currentRegistry.getAll() as ExistingModel[];
+  // Every model type is kept: a provider re-registration replaces the provider's
+  // whole list, classifiers and image models included.
+  const existingModels = (await ModelRuntime.create()).getAllModels();
   const aliasLookup = buildAliasLookup(config);
   const targetLookup = buildTargetModelLookup(config, existingModels);
-  const aliasStreamSimple = createAliasStreamSimple(aliasLookup, targetLookup);
+  // The snapshot above sees no other extension's registerProvider calls, so
+  // routing is read from Pi's live registry at request time.
+  let liveModels: LiveModelLookup | undefined;
+  pi.on("session_start", (_event: unknown, ctx: { modelRegistry?: { find(provider: string, id: string): TargetModel | undefined } }) => {
+    const registry = ctx.modelRegistry;
+    liveModels = registry ? (provider, id) => registry.find(provider, id) : undefined;
+  });
+  const aliasStreamSimple = createAliasStreamSimple(aliasLookup, targetLookup, undefined, (provider, id) => liveModels?.(provider, id));
 
   // An alias with neither its own price nor a resolvable target price would report
   // real token spend at $0. Pi still needs a cost object, so the zero stays — but it
@@ -174,7 +175,7 @@ export async function activateModelAliases(pi: any): Promise<void> {
  * Aliases whose per-token price cannot be resolved: no explicit `cost`, and no
  * target model in pi's registry to inherit one from. Returned as `provider/id`.
  */
-export function findUnpricedAliases(config: ModelAliasesConfig, existingModels: ExistingModel[] = []): string[] {
+export function findUnpricedAliases(config: ModelAliasesConfig, existingModels: readonly ExistingModel[] = []): string[] {
   if (!config.enabled) return [];
   const targetModelByKey = new Map(existingModels.map((model) => [modelKey(model.provider, model.id), model]));
   const unpriced: string[] = [];
@@ -188,7 +189,7 @@ export function findUnpricedAliases(config: ModelAliasesConfig, existingModels: 
 
 export function buildProviderRegistrations(
   config: ModelAliasesConfig,
-  existingModels: ExistingModel[] = [],
+  existingModels: readonly ExistingModel[] = [],
   aliasStreamSimple: AliasStreamDelegate = createAliasStreamSimple(
     buildAliasLookup(config),
     buildTargetModelLookup(config, existingModels),
@@ -207,33 +208,35 @@ export function buildProviderRegistrations(
 
   return [...grouped.entries()].map(([provider, aliases]) => {
     const providerExistingModels = existingModels.filter((model) => model.provider === provider);
-    const modelById = new Map<string, Record<string, unknown>>();
+    // Keyed by type and id: a classifier may share an id with a chat model.
+    const modelByKey = new Map<string, ProviderModelConfig>();
 
     for (const model of providerExistingModels) {
-      modelById.set(model.id, existingModelToProviderModel(model));
+      modelByKey.set(`${model.type ?? "chat"}/${model.id}`, existingModelToProviderModel(model));
     }
 
     for (const alias of aliases) {
       const inherited = inheritedModelForAlias(alias, targetModelByKey);
-      modelById.set(alias.id, aliasToProviderModel(alias, inherited));
+      modelByKey.set(`chat/${alias.id}`, aliasToProviderModel(alias, inherited));
     }
 
     const firstAlias = aliases[0]!;
-    const firstExisting = providerExistingModels[0];
-    const firstTarget = targetModelByKey.get(modelKey(firstAlias.targetProvider, firstAlias.targetModel));
-    const firstModel = firstTarget ?? firstExisting;
+    const firstTarget = inheritedModelForAlias(firstAlias, targetModelByKey);
 
     return {
       provider,
       config: pruneUndefined({
         name: providerDisplayName(firstAlias),
-        baseUrl: firstAlias.baseUrl ?? firstModel?.baseUrl,
+        // No provider-level baseUrl over Pi's own: the provider's models keep the
+        // base URL Pi composes, so another extension's override of it still
+        // applies. A provider Pi does not know yet needs one to register at all.
+        baseUrl: providerExistingModels.length === 0 ? firstAlias.baseUrl ?? firstTarget?.baseUrl : undefined,
         apiKey: firstAlias.apiKey ?? defaultApiKeyForProvider(firstAlias.targetProvider),
         api: MODEL_ALIASES_API,
         streamSimple: aliasStreamSimple,
         headers: firstAlias.headers,
         authHeader: firstAlias.authHeader,
-        models: [...modelById.values()],
+        models: [...modelByKey.values()],
       }),
     };
   });
@@ -252,7 +255,7 @@ export function buildAliasLookup(config: ModelAliasesConfig): AliasLookup {
 
 export function buildTargetModelLookup(
   config: ModelAliasesConfig,
-  existingModels: ExistingModel[] = [],
+  existingModels: readonly ExistingModel[] = [],
 ): TargetModelLookup {
   const lookup: TargetModelLookup = new Map();
   if (!config.enabled) return lookup;
@@ -275,6 +278,7 @@ export function createAliasStreamSimple(
   aliasLookup: AliasLookup,
   targetLookup: TargetModelLookup,
   delegate: AliasStreamDelegate = defaultAliasStreamDelegate,
+  liveModels: LiveModelLookup = () => undefined,
 ): AliasStreamDelegate {
   return (model, context, options) => {
     const alias = getAliasForModel(aliasLookup, model);
@@ -285,11 +289,31 @@ export function createAliasStreamSimple(
 
     const enforceVisibleWindow = shouldEnforceAliasContextWindow(model, target) && !isPiSummarizationRequest(context);
     const estimatedTokens = enforceVisibleWindow ? estimateAliasRequestTokens(context) : 0;
-    const source = enforceVisibleWindow && estimatedTokens >= model.contextWindow
-      ? createAliasContextOverflowStream(target as Model<any>, estimatedTokens, model.contextWindow)
-      : delegate(target as Model<any>, context, options);
-    return wrapAliasIdentityStream(source, model);
+    if (enforceVisibleWindow && estimatedTokens >= model.contextWindow) {
+      return wrapAliasIdentityStream(createAliasContextOverflowStream(target, estimatedTokens, model.contextWindow), model);
+    }
+    // An alias's own baseUrl wins; otherwise the target's route as Pi resolves
+    // it now, including another extension's override of that provider.
+    const baseUrl = alias.baseUrl ?? liveModels(target.provider, target.id)?.baseUrl ?? target.baseUrl;
+    const routedTarget = baseUrl === target.baseUrl ? target : { ...target, baseUrl };
+    return wrapAliasIdentityStream(delegate(routedTarget, toTargetIdentity(context, model, target), options), model);
   };
+}
+
+/**
+ * The inverse of aliasAssistantMessage. Pi records an alias's replies under the
+ * alias id, and providers replay thinking and reasoning only for turns they
+ * recognize as the same model's, so earlier turns go back as the target's own.
+ */
+function toTargetIdentity(context: Context, aliasModel: Model<any>, target: TargetModel): Context {
+  if (aliasModel.provider === target.provider && aliasModel.id === target.id) return context;
+  let changed = false;
+  const messages = context.messages.map((message) => {
+    if (message.role !== "assistant" || message.provider !== aliasModel.provider || message.model !== aliasModel.id) return message;
+    changed = true;
+    return { ...message, provider: target.provider, model: target.id };
+  });
+  return changed ? { ...context, messages } : context;
 }
 
 /**
@@ -298,9 +322,8 @@ export function createAliasStreamSimple(
  * many provider/tool turns. Stop the next request at the visible edge so Pi's
  * native context-overflow recovery compacts and resumes the tool loop.
  */
-export function shouldEnforceAliasContextWindow(aliasModel: Model<any>, targetModel: ExistingModel): boolean {
-  return aliasModel.contextWindow > 0 &&
-    (targetModel.contextWindow ?? aliasModel.contextWindow) > aliasModel.contextWindow;
+export function shouldEnforceAliasContextWindow(aliasModel: Model<any>, targetModel: TargetModel): boolean {
+  return aliasModel.contextWindow > 0 && targetModel.contextWindow > aliasModel.contextWindow;
 }
 
 /**
@@ -326,7 +349,10 @@ export function isPiSummarizationRequest(context: Context): boolean {
   const text = typeof message.content === "string"
     ? message.content
     : message.content.find((block) => block.type === "text")?.text;
-  return typeof text === "string" && text.startsWith("<conversation>\n") && text.includes("\n</conversation>");
+  if (typeof text !== "string") return false;
+  // History and branch summaries use the XML form; Pi 1.4's turn-prefix summary uses headings.
+  return (text.startsWith("<conversation>\n") && text.includes("\n</conversation>")) ||
+    (text.startsWith("# Conversation\n") && text.includes("\n\n# Instructions\n"));
 }
 
 /** Estimate the request context with the same last-usage-plus-tail shape Pi uses. */
@@ -484,19 +510,31 @@ export function rewriteModelAliasPayload(payload: unknown, targetModel: string):
 function inheritedModelForAlias(
   alias: ModelAliasConfig,
   targetModelByKey: Map<string, ExistingModel>,
-): ExistingModel | undefined {
+): TargetModel | undefined {
+  const chat = (model: ExistingModel | undefined): TargetModel | undefined =>
+    model && isModelType(model, "chat") ? model : undefined;
   return (
-    targetModelByKey.get(modelKey(alias.targetProvider, alias.targetModel)) ??
-    targetModelByKey.get(modelKey(alias.provider, alias.id))
+    chat(targetModelByKey.get(modelKey(alias.targetProvider, alias.targetModel))) ??
+    chat(targetModelByKey.get(modelKey(alias.provider, alias.id)))
   );
 }
 
-function aliasToProviderModel(alias: ModelAliasConfig, inherited: ExistingModel | undefined): Record<string, unknown> {
+/** The fields an alias inherits from its target, minus identity and routing. */
+function inheritableFields(inherited: TargetModel | undefined): Partial<TargetModel> {
+  if (!inherited) return {};
+  const { provider: _provider, baseUrl: _baseUrl, headers: _headers, id: _id, ...fields } = inherited;
+  return fields;
+}
+
+function aliasToProviderModel(alias: ModelAliasConfig, inherited: TargetModel | undefined): ProviderModelConfig {
   return pruneUndefined({
+    ...inheritableFields(inherited),
     id: alias.id,
     name: alias.name ?? inherited?.name ?? alias.id,
     api: MODEL_ALIASES_API,
-    baseUrl: alias.baseUrl ?? inherited?.baseUrl,
+    // Only an explicit alias baseUrl is pinned; otherwise the model follows the
+    // provider's live route. The request itself goes to the target's route.
+    baseUrl: alias.baseUrl,
     reasoning: alias.reasoning ?? inherited?.reasoning ?? false,
     thinkingLevelMap: alias.thinkingLevelMap ?? inherited?.thinkingLevelMap,
     input: alias.input ?? inherited?.input ?? defaultInput(),
@@ -505,16 +543,17 @@ function aliasToProviderModel(alias: ModelAliasConfig, inherited: ExistingModel 
     cost: alias.cost ?? inherited?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     compat: alias.compat ?? inherited?.compat,
     headers: alias.headers,
-  });
+  }) as ProviderModelConfig;
 }
 
-function aliasToTargetModel(alias: ModelAliasConfig, inherited: ExistingModel | undefined): ExistingModel {
+function aliasToTargetModel(alias: ModelAliasConfig, inherited: TargetModel | undefined): TargetModel {
   return pruneUndefined({
+    ...inheritableFields(inherited),
     id: alias.targetModel,
     name: inherited?.name ?? alias.targetModel,
-    api: alias.api ?? inherited?.api,
+    api: (alias.api ?? inherited?.api) as Api,
     provider: alias.targetProvider,
-    baseUrl: alias.baseUrl ?? inherited?.baseUrl,
+    baseUrl: (alias.baseUrl ?? inherited?.baseUrl) as string,
     reasoning: alias.reasoning ?? inherited?.reasoning ?? false,
     thinkingLevelMap: alias.thinkingLevelMap ?? inherited?.thinkingLevelMap,
     input: alias.input ?? inherited?.input ?? defaultInput(),
@@ -526,21 +565,15 @@ function aliasToTargetModel(alias: ModelAliasConfig, inherited: ExistingModel | 
   });
 }
 
-function existingModelToProviderModel(model: ExistingModel): Record<string, unknown> {
-  return pruneUndefined({
-    id: model.id,
-    name: model.name ?? model.id,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    reasoning: model.reasoning ?? false,
-    thinkingLevelMap: model.thinkingLevelMap,
-    input: model.input ?? defaultInput(),
-    contextWindow: model.contextWindow ?? 128_000,
-    maxTokens: model.maxTokens ?? 16_384,
-    cost: model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: model.compat,
-    headers: model.headers,
-  });
+/**
+ * Re-registering a provider replaces its model list, so each model goes back
+ * with every field Pi gave it. The provider id comes from the registration, and
+ * the base URL from Pi's provider layer, so another extension's routing override
+ * of the provider still applies.
+ */
+function existingModelToProviderModel(model: ExistingModel): ProviderModelConfig {
+  const { provider: _provider, baseUrl: _baseUrl, ...definition } = model;
+  return definition as ProviderModelConfig;
 }
 
 function wrapAliasIdentityStream(
@@ -596,9 +629,10 @@ function modelKey(provider: string, id: string): string {
   return `${provider}/${id}`;
 }
 
-function pruneUndefined<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) delete value[key];
+function pruneUndefined<T extends object>(value: T): T {
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (record[key] === undefined) delete record[key];
   }
   return value;
 }

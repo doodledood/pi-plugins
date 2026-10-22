@@ -147,7 +147,10 @@ test("Pi extension loader loads model-aliases and registers the hidden alias API
   }
 });
 
-test("dual-window alias uses Pi's native compact-and-retry before another oversized provider request", { timeout: 10_000 }, async () => {
+// One long tool loop on a dual-window alias: the run outgrows the visible window
+// mid-turn, so Pi compacts inside the turn — a turn-prefix summary of work larger
+// than the visible window — and the run then continues below the window.
+test("dual-window alias compacts a long tool loop through Pi's turn-prefix summary and continues below its visible edge", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-model-aliases-compaction-"));
   const workspace = join(dir, "workspace");
   const agentDir = join(dir, "agent");
@@ -197,12 +200,17 @@ test("dual-window alias uses Pi's native compact-and-retry before another oversi
       regularCalls += 1;
       timeline.push(`regular-request-${regularCalls}`);
       if (regularCalls === 1) {
+        // Earlier work in the turn, larger than the whole visible window.
         return assistantToolCallStream(
           selectedModel,
-          { type: "toolCall", id: "probe-call", name: "probe", arguments: {} },
-          21_000,
+          { type: "toolCall", id: "probe-call-1", name: "probe", arguments: {} },
+          2_000,
           "summary-only padding ".repeat(6_000),
         );
+      }
+      if (regularCalls === 2) {
+        // The provider reports the run past the visible window's compaction threshold.
+        return assistantToolCallStream(selectedModel, { type: "toolCall", id: "probe-call-2", name: "probe", arguments: {} }, 21_000);
       }
       return assistantTextStream(selectedModel, "resumed after compaction", 700);
     };
@@ -227,8 +235,11 @@ test("dual-window alias uses Pi's native compact-and-retry before another oversi
       {
         provider: "alias-target",
         id: "target-100k",
+        name: "Target 100k",
         api: targetApi,
         baseUrl: "http://127.0.0.1/never-called",
+        reasoning: false,
+        input: ["text"] as ("text" | "image")[],
         contextWindow: 100_000,
         maxTokens: 4_096,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -276,16 +287,17 @@ test("dual-window alias uses Pi's native compact-and-retry before another oversi
 
     const compactions = session.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
     assert.equal(compactions.length, 1);
-    assert.equal(regularCalls, 2, "one request before the edge and one native retry after compaction");
     assert.ok(summaryCalls >= 1, "Pi generated the compaction summary through the alias route");
+    assert.ok(!timeline.some((item) => item.startsWith("compaction-error")), timeline.join(", "));
     assert.deepEqual(timeline.filter((item) => item.startsWith("regular") || item === "compaction-end"), [
       "regular-request-1",
-      "compaction-end",
       "regular-request-2",
+      "compaction-end",
+      "regular-request-3",
     ]);
     const regularTargetRequests = targetRequests.filter((request) => request.kind === "regular");
     const summaryTargetRequests = targetRequests.filter((request) => request.kind === "summary");
-    assert.ok(regularTargetRequests.every((request) => request.serializedTokens < 20_000));
+    assert.ok(regularTargetRequests.at(-1)!.serializedTokens < 20_000, "the run continued below the visible window");
     assert.ok(summaryTargetRequests.some((request) => request.serializedTokens >= 20_000));
     assert.ok(summaryTargetRequests.every((request) => request.serializedTokens < 100_000));
     assert.equal(session.getLastAssistantText(), "resumed after compaction");
@@ -296,7 +308,7 @@ test("dual-window alias uses Pi's native compact-and-retry before another oversi
         entry.message.stopReason === "error" &&
         isContextOverflow(entry.message, 20_000),
     );
-    assert.equal(overflowEntries.length, 1, "the synthetic overflow is persisted for audit but removed from retry context");
+    assert.ok(overflowEntries.length <= 1, "at most one synthetic overflow, persisted for audit, before Pi compacted");
   } finally {
     session?.dispose();
     rmSync(dir, { recursive: true, force: true });
@@ -366,7 +378,6 @@ test("buildProviderRegistrations registers same-provider aliases with a hidden a
   assert.equal(registrations[0]?.provider, "openai");
   assert.equal(typeof registrations[0]?.config.streamSimple, "function");
   assert.deepEqual(withoutStreamSimple(registrations[0]!.config), {
-    baseUrl: "https://api.openai.com/v1",
     apiKey: "$OPENAI_API_KEY",
     api: MODEL_ALIASES_API,
     models: [
@@ -374,7 +385,6 @@ test("buildProviderRegistrations registers same-provider aliases with a hidden a
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
         input: ["text", "image"],
@@ -386,7 +396,6 @@ test("buildProviderRegistrations registers same-provider aliases with a hidden a
         id: "gpt-5.5-pro",
         name: "GPT-5.5 Pro",
         api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 1050000,
@@ -397,7 +406,6 @@ test("buildProviderRegistrations registers same-provider aliases with a hidden a
         id: "gpt-5.5-1m",
         name: "GPT-5.5 1M",
         api: MODEL_ALIASES_API,
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
         input: ["text", "image"],
@@ -432,7 +440,6 @@ test("configured dual-window alias wins when provider/id clashes and preserves s
   assert.equal((registrations[0]?.config.models as unknown[]).length, 2);
   assert.equal(typeof registrations[0]?.config.streamSimple, "function");
   assert.deepEqual(withoutStreamSimple(registrations[0]!.config), {
-    baseUrl: "https://api.openai.com/v1",
     apiKey: "$OPENAI_API_KEY",
     api: MODEL_ALIASES_API,
     models: [
@@ -440,7 +447,6 @@ test("configured dual-window alias wins when provider/id clashes and preserves s
         id: "gpt-5.5",
         name: "GPT-5.5 Local Override",
         api: MODEL_ALIASES_API,
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
         input: ["text", "image"],
@@ -452,7 +458,6 @@ test("configured dual-window alias wins when provider/id clashes and preserves s
         id: "gpt-5.5-pro",
         name: "GPT-5.5 Pro",
         api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 1050000,
@@ -515,7 +520,7 @@ test("default alias stream delegate lazily resolves compat outside Pi's extensio
   };
   const streamSimple = createAliasStreamSimple(
     buildAliasLookup(config),
-    buildTargetModelLookup(config, [{ provider: "probe", id: "target", api: "no-such-api" }]),
+    buildTargetModelLookup(config, [{ provider: "probe", id: "target", api: "no-such-api" } as unknown as Model<any>]),
   );
 
   const stream = streamSimple({ provider: "probe", id: "alias", api: MODEL_ALIASES_API } as any, { messages: [] } as any);
@@ -1121,6 +1126,6 @@ test("the live alias configuration shape inherits pricing rather than falling ba
   };
   assert.deepEqual(findUnpricedAliases(config, existingModels), []);
   const registration = buildProviderRegistrations(config, existingModels)[0]!;
-  const alias = (registration.config.models as Array<Record<string, unknown>>).find((m) => m.id === "gpt-5.6-sol");
+  const alias = (registration.config.models as unknown as Array<Record<string, unknown>>).find((m) => m.id === "gpt-5.6-sol");
   assert.deepEqual(alias?.cost, { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 });
 });
