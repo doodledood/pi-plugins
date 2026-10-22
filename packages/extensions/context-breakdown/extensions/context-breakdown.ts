@@ -21,18 +21,20 @@
 // free and fast. There is no exact local tokenizer for Claude, so this API is
 // the only way to get real numbers.
 //
-// For non-Anthropic models (e.g. openai/*) we fall back to a calibrated chars/token
-// estimate (prose /4, tool JSON /2.5), clearly labelled as estimated.
+// For non-Anthropic models (e.g. openai/*) the total is Pi's own context usage and the
+// split is a calibrated chars/token estimate (prose /4, tool JSON /2.5), labelled as such.
 //
-// Install: drop in ~/.pi/agent/extensions/ (global) and run /context.
+// The breakdown describes the last request Pi sent for the current model. Compaction,
+// tree navigation and a model switch change the context without a request, so then the
+// messages part is estimated from the session until the next request, and says so.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  Theme,
-  ToolInfo,
+import {
+  estimateTokens,
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type Theme,
+  type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
@@ -67,9 +69,19 @@ const MCP_SERVER_PREFIXES = [
   "tavily",
 ];
 
-const ANTHROPIC_BASE_URL =
-  process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const FALLBACK_MODEL_ID = "claude-opus-4-20250514";
+
+/** Pi plumbing such as `__pi_deferred_placeholder__`: Pi's own, never an MCP server. */
+function isPiInternalTool(name: string): boolean {
+  return name.startsWith("__pi_");
+}
+
+/** Where count_tokens goes: an explicit override, else wherever Pi routes Anthropic. */
+function anthropicBaseUrl(ctx: ExtensionCommandContext): string {
+  const routed = ctx.model?.provider === "anthropic" ? ctx.model.baseUrl : undefined;
+  return (process.env.ANTHROPIC_BASE_URL || routed || DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, "");
+}
 
 function detectServer(toolName: string): string {
   for (const prefix of MCP_SERVER_PREFIXES) {
@@ -110,6 +122,26 @@ interface AnthropicInputs {
   allTools: AnthropicTool[];
   messages: unknown[];
   haveMessages: boolean;
+  /** Beta features the request was sent with; count_tokens must see the same ones. */
+  betas: string[];
+  /** Tool definitions that reached the model inside the conversation, counted in Messages. */
+  toolsAddedInConversation: number;
+}
+
+function roleOf(item: unknown): unknown {
+  return item && typeof item === "object" ? (item as Record<string, unknown>).role : undefined;
+}
+
+/** Tool definitions carried by a conversation item (Anthropic tool_addition, OpenAI additional_tools). */
+function toolsInItem(item: unknown): unknown[] {
+  if (!item || typeof item !== "object") return [];
+  const record = item as Record<string, unknown>;
+  if (Array.isArray(record.tools)) return record.tools;
+  if (!Array.isArray(record.content)) return [];
+  return record.content.flatMap((block) => {
+    const b = block as Record<string, any> | null;
+    return b?.type === "tool_addition" && b.tool ? [b.tool.definition ?? b.tool] : [];
+  });
 }
 
 function readToolName(tool: unknown): string {
@@ -145,20 +177,25 @@ function toAnthropicTool(tool: unknown): AnthropicTool {
   return { name, description, input_schema, type: "custom" };
 }
 
-// Build the Anthropic-format inputs from the captured request payload when
-// available, otherwise reconstruct from the live system prompt + active tools so
-// /context works before any message is sent.
-function buildAnthropicInputs(
+// Build the inputs from the captured request payload when there is one for the current
+// model, otherwise from the live system prompt and active tools, with no messages.
+//
+// Anthropic payloads keep every message, including Pi 1.4's mid-conversation
+// role:"system" messages (tool additions, effort markers): they are request tokens.
+// Other payloads (OpenAI Responses `input`, chat `messages`) carry the system prompt
+// and tool declarations as system/developer items, which are split out here.
+function buildInputs(
   payload: unknown,
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
+  anthropic: boolean,
 ): AnthropicInputs {
-  const modelFromCtx = ctx.model?.id;
-  let model = modelFromCtx ?? FALLBACK_MODEL_ID;
+  let model = ctx.model?.id ?? FALLBACK_MODEL_ID;
   let system: AnthropicSystem | undefined;
   let rawTools: unknown[] = [];
   let messages: unknown[] = [];
-  let haveMessages = false;
+  let betas: string[] = [];
+  let toolsAddedInConversation = 0;
 
   const p =
     payload && typeof payload === "object"
@@ -166,23 +203,35 @@ function buildAnthropicInputs(
       : undefined;
 
   if (p) {
+    // The payload was captured for the current model, so its id is the one the
+    // provider knows (an alias's target, for instance).
     if (typeof p.model === "string") model = p.model;
-    if (typeof p.system === "string" || Array.isArray(p.system)) {
-      system = p.system as AnthropicSystem;
-    }
-    if (Array.isArray(p.tools)) rawTools = p.tools;
-    if (Array.isArray(p.messages)) {
-      const msgs = p.messages.filter((m) => {
-        const role =
-          m && typeof m === "object"
-            ? (m as Record<string, unknown>).role
-            : undefined;
-        return role !== "system";
-      });
-      messages = msgs;
-      haveMessages = msgs.length > 0;
+    if (Array.isArray(p.tools)) rawTools = [...p.tools];
+    if (Array.isArray(p.betas)) betas = p.betas.filter((b): b is string => typeof b === "string");
+    const conversation = Array.isArray(p.messages) ? p.messages : Array.isArray(p.input) ? p.input : [];
+    if (anthropic) {
+      if (typeof p.system === "string" || Array.isArray(p.system)) system = p.system as AnthropicSystem;
+      messages = conversation;
+      toolsAddedInConversation = conversation.reduce((n: number, item) => n + toolsInItem(item).length, 0);
+    } else {
+      const systemParts: unknown[] = [];
+      if (typeof p.instructions === "string") systemParts.push(p.instructions);
+      for (const item of conversation) {
+        const role = roleOf(item);
+        if (role === "system" || role === "developer") {
+          const tools = toolsInItem(item);
+          if (tools.length > 0) rawTools.push(...tools);
+          else systemParts.push((item as Record<string, unknown>).content);
+        } else {
+          messages.push(item);
+        }
+      }
+      if (systemParts.length > 0) {
+        system = systemParts.map((part) => (typeof part === "string" ? part : JSON.stringify(part))).join("\n\n");
+      }
     }
   }
+  const haveMessages = messages.length > 0;
 
   // Fallbacks from live context (pre-request, or payload missing parts).
   if (system === undefined) system = ctx.getSystemPrompt();
@@ -197,7 +246,7 @@ function buildAnthropicInputs(
   const systemTools: AnthropicTool[] = [];
   const serverMap = new Map<string, AnthropicTool[]>();
   for (const tool of allTools) {
-    if (PI_BUILTIN_TOOLS.has(tool.name)) {
+    if (PI_BUILTIN_TOOLS.has(tool.name) || isPiInternalTool(tool.name)) {
       systemTools.push(tool);
     } else {
       const server = detectServer(tool.name);
@@ -211,7 +260,7 @@ function buildAnthropicInputs(
     tools,
   }));
 
-  return { model, system, systemTools, mcpServers, allTools, messages, haveMessages };
+  return { model, system, systemTools, mcpServers, allTools, messages, haveMessages, betas, toolsAddedInConversation };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,20 +276,25 @@ interface CountBody {
   messages: unknown[];
 }
 
-async function countTokens(
-  apiKey: string,
-  body: CountBody,
-  signal: AbortSignal | undefined,
-): Promise<number> {
-  const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages/count_tokens`, {
+interface CountClient {
+  apiKey: string;
+  baseUrl: string;
+  betas: string[];
+  signal: AbortSignal | undefined;
+}
+
+async function countTokens(client: CountClient, body: CountBody): Promise<number> {
+  const res = await fetch(`${client.baseUrl}/v1/messages/count_tokens`, {
     method: "POST",
     headers: {
-      "x-api-key": apiKey,
+      "x-api-key": client.apiKey,
       "anthropic-version": "2023-06-01",
       "content-type": "application/json",
+      // Mid-conversation system messages exist only under the request's betas.
+      ...(client.betas.length > 0 ? { "anthropic-beta": client.betas.join(",") } : {}),
     },
     body: JSON.stringify(body),
-    signal,
+    signal: client.signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -264,13 +318,13 @@ interface FixedCounts {
 // Cache the fixed (system + tools) measurements; only messages change per turn.
 const fixedCache = new Map<string, FixedCounts>();
 
-async function measureFixed(
-  apiKey: string,
-  inputs: AnthropicInputs,
-  signal: AbortSignal | undefined,
-): Promise<FixedCounts> {
+async function measureFixed(client: CountClient, inputs: AnthropicInputs): Promise<FixedCounts> {
   const key = hash(
-    inputs.model +
+    client.baseUrl +
+      "\u0000" +
+      client.betas.join(",") +
+      "\u0000" +
+      inputs.model +
       "\u0000" +
       JSON.stringify(inputs.system) +
       "\u0000" +
@@ -280,25 +334,13 @@ async function measureFixed(
   if (cached) return cached;
 
   const m = inputs.model;
-  const dot = await countTokens(
-    apiKey,
-    { model: m, messages: PLACEHOLDER_MESSAGES },
-    signal,
-  );
-  const sysOnly = await countTokens(
-    apiKey,
-    { model: m, system: inputs.system, messages: PLACEHOLDER_MESSAGES },
-    signal,
-  );
+  const dot = await countTokens(client, { model: m, messages: PLACEHOLDER_MESSAGES });
+  const sysOnly = await countTokens(client, { model: m, system: inputs.system, messages: PLACEHOLDER_MESSAGES });
   // Cumulative: add builtin tools, then each server in turn, taking exact deltas.
   const cumulative: AnthropicTool[] = [...inputs.systemTools];
   const afterSystemTools =
     cumulative.length > 0
-      ? await countTokens(
-          apiKey,
-          { model: m, system: inputs.system, tools: cumulative, messages: PLACEHOLDER_MESSAGES },
-          signal,
-        )
+      ? await countTokens(client, { model: m, system: inputs.system, tools: cumulative, messages: PLACEHOLDER_MESSAGES })
       : sysOnly;
   const systemToolsTok = afterSystemTools - sysOnly;
 
@@ -306,11 +348,7 @@ async function measureFixed(
   const serverToks: Array<{ server: string; tokens: number; count: number }> = [];
   for (const { server, tools } of inputs.mcpServers) {
     cumulative.push(...tools);
-    const cur = await countTokens(
-      apiKey,
-      { model: m, system: inputs.system, tools: cumulative, messages: PLACEHOLDER_MESSAGES },
-      signal,
-    );
+    const cur = await countTokens(client, { model: m, system: inputs.system, tools: cumulative, messages: PLACEHOLDER_MESSAGES });
     serverToks.push({ server, tokens: cur - prev, count: tools.length });
     prev = cur;
   }
@@ -337,26 +375,18 @@ interface RealBreakdown {
   mcpToolCount: number;
 }
 
-async function measureReal(
-  apiKey: string,
-  inputs: AnthropicInputs,
-  signal: AbortSignal | undefined,
-): Promise<RealBreakdown> {
-  const fixed = await measureFixed(apiKey, inputs, signal);
+async function measureReal(client: CountClient, inputs: AnthropicInputs): Promise<RealBreakdown> {
+  const fixed = await measureFixed(client, inputs);
 
   let totalTokens: number;
   let messagesTok: number;
   if (inputs.haveMessages) {
-    const full = await countTokens(
-      apiKey,
-      {
-        model: inputs.model,
-        system: inputs.system,
-        tools: inputs.allTools,
-        messages: inputs.messages,
-      },
-      signal,
-    );
+    const full = await countTokens(client, {
+      model: inputs.model,
+      system: inputs.system,
+      tools: inputs.allTools,
+      messages: inputs.messages,
+    });
     // full = system + tools + realMessages; fixed.noMsg = system + tools + dot.
     messagesTok = Math.max(0, full - fixed.noMsg + fixed.dot);
     totalTokens = full;
@@ -388,6 +418,28 @@ async function measureReal(
 // would undercount tools by ~1.6x or overcount prose, so we split them.
 const CPT_PROSE = 4;
 const CPT_JSON = 2.5;
+// Pi's own estimate for one image (ESTIMATED_IMAGE_CHARS in Pi's compaction code): an
+// image costs a bounded number of tokens, not its base64 length as prose.
+const IMAGE_CHARS = 4800;
+
+function isImageBlock(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const type = (value as Record<string, unknown>).type;
+  return type === "image" || type === "input_image";
+}
+
+/** Characters of a conversation for estimation, each image counted as one image. */
+function conversationChars(messages: unknown[]): number {
+  let images = 0;
+  const json = JSON.stringify(messages, (_key, value) => {
+    if (isImageBlock(value)) {
+      images += 1;
+      return null;
+    }
+    return value;
+  });
+  return json.length + images * IMAGE_CHARS;
+}
 
 function estimateBreakdown(inputs: AnthropicInputs): RealBreakdown {
   const proseTok = (chars: number) => Math.round(chars / CPT_PROSE);
@@ -407,9 +459,7 @@ function estimateBreakdown(inputs: AnthropicInputs): RealBreakdown {
       count: tools.length,
     }))
     .sort((a, b) => b.tokens - a.tokens);
-  const messagesChars = inputs.haveMessages
-    ? JSON.stringify(inputs.messages).length
-    : 0;
+  const messagesChars = inputs.haveMessages ? conversationChars(inputs.messages) : 0;
   const systemTok = proseTok(sysChars);
   const systemToolsTok = jsonTok(systemToolsChars);
   const mcpToolsTok = serverToks.reduce((s, x) => s + x.tokens, 0);
@@ -426,27 +476,30 @@ function estimateBreakdown(inputs: AnthropicInputs): RealBreakdown {
   };
 }
 
-function readReserveTokens(cwd: string): number {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? ".";
-  const candidates = [
-    join(home, ".pi", "agent", "settings.json"),
-    join(cwd, ".pi", "settings.json"),
-  ];
-  let reserve = 16384;
-  for (const path of candidates) {
-    try {
-      const json = JSON.parse(readFileSync(path, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      const compaction = json.compaction as Record<string, unknown> | undefined;
-      const value = compaction?.reserveTokens;
-      if (typeof value === "number" && value >= 0) reserve = value;
-    } catch {
-      // missing/unreadable settings file — keep default
-    }
+/** Pi's effective compaction reserve for the model: none when compaction is off. */
+function readReserve(pi: ExtensionAPI, ctx: ExtensionCommandContext): { tokens: number; enabled: boolean } {
+  const settings = SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(ctx.model);
+  return { tokens: settings.enabled ? settings.reserveTokens : 0, enabled: settings.enabled };
+}
+
+/**
+ * Pi's estimate of the conversation now, for when the last request no longer describes
+ * it: the non-system messages of the session's context, sized as Pi sizes them.
+ */
+function estimateSessionMessages(ctx: ExtensionCommandContext): number {
+  let tokens = 0;
+  for (const message of ctx.sessionManager.buildSessionProjection().messages) {
+    if (message.role !== "system") tokens += estimateTokens(message);
   }
-  return reserve;
+  return tokens;
+}
+
+function withMessages(breakdown: RealBreakdown, messagesTok: number): RealBreakdown {
+  return {
+    ...breakdown,
+    messagesTok,
+    totalTokens: breakdown.systemTok + breakdown.systemToolsTok + breakdown.mcpToolsTok + messagesTok,
+  };
 }
 
 function fmtTokens(n: number): string {
@@ -465,13 +518,26 @@ interface Category {
   glyph: string;
 }
 
-export default function contextBreakdown(pi: ExtensionAPI) {
-  let lastPayload: unknown;
+interface CapturedRequest {
+  payload: unknown;
+  provider: string | undefined;
+  modelId: string | undefined;
+}
 
-  pi.on("before_provider_request", (event) => {
-    lastPayload = event.payload;
+export default function contextBreakdown(pi: ExtensionAPI) {
+  let captured: CapturedRequest | undefined;
+  const forget = () => {
+    captured = undefined;
+  };
+
+  pi.on("before_provider_request", (event, ctx) => {
+    captured = { payload: event.payload, provider: ctx.model?.provider, modelId: ctx.model?.id };
     // Never mutate the payload — return nothing so pi sends it unchanged.
   });
+  // Each of these changes what the next request will hold without sending one.
+  pi.on("session_compact", forget);
+  pi.on("session_tree", forget);
+  pi.on("model_select", forget);
 
   pi.registerCommand("context", {
     description:
@@ -481,11 +547,17 @@ export default function contextBreakdown(pi: ExtensionAPI) {
       const modelName = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : "unknown model";
-      const window = usage?.contextWindow ?? 200000;
-      const reserve = readReserveTokens(ctx.cwd);
+      const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 200000;
+      const reserve = readReserve(pi, ctx);
 
-      const inputs = buildAnthropicInputs(lastPayload, pi, ctx);
+      const current =
+        captured && captured.provider === ctx.model?.provider && captured.modelId === ctx.model?.id
+          ? captured.payload
+          : undefined;
       const isAnthropic = (ctx.model?.provider ?? "").toLowerCase() === "anthropic";
+      const inputs = buildInputs(current, pi, ctx, isAnthropic);
+      // No request for this context yet: the conversation (if any) comes from the session.
+      const sessionMessages = current === undefined ? estimateSessionMessages(ctx) : 0;
       const apiKey = process.env.ANTHROPIC_API_KEY;
 
       let breakdown: RealBreakdown;
@@ -495,7 +567,10 @@ export default function contextBreakdown(pi: ExtensionAPI) {
       if (isAnthropic && apiKey) {
         ctx.ui.notify("Counting real tokens via Anthropic…", "info");
         try {
-          breakdown = await measureReal(apiKey, inputs, ctx.signal);
+          breakdown = await measureReal(
+            { apiKey, baseUrl: anthropicBaseUrl(ctx), betas: inputs.betas, signal: ctx.signal },
+            inputs,
+          );
           real = true;
         } catch (err) {
           breakdown = estimateBreakdown(inputs);
@@ -511,23 +586,55 @@ export default function contextBreakdown(pi: ExtensionAPI) {
           : `${ctx.model?.provider ?? "provider"} has no exact local tokenizer`;
       }
 
+      const messagesFromSession = sessionMessages > 0;
+      if (messagesFromSession) breakdown = withMessages(breakdown, sessionMessages);
+
+      // Off Anthropic, Pi's own context usage is the best total there is; the parts it
+      // cannot split go to Messages.
+      let totalFromPi = false;
+      if (!isAnthropic && typeof usage?.tokens === "number") {
+        const fixed = breakdown.systemTok + breakdown.systemToolsTok + breakdown.mcpToolsTok;
+        if (usage.tokens > fixed) {
+          breakdown = withMessages(breakdown, usage.tokens - fixed);
+          totalFromPi = true;
+        }
+      }
+
       const totalTokens = breakdown.totalTokens;
-      const freeTok = Math.max(0, window - totalTokens - reserve);
+      const freeTok = Math.max(0, window - totalTokens - reserve.tokens);
 
       const categories: Category[] = [
         { label: "System prompt", tokens: breakdown.systemTok, role: "accent", glyph: "█" },
         { label: "System tools", tokens: breakdown.systemToolsTok, role: "success", glyph: "█" },
         { label: "MCP tools", tokens: breakdown.mcpToolsTok, role: "warning", glyph: "█" },
-        { label: "Messages", tokens: breakdown.messagesTok, role: "mdLink", glyph: "█" },
+        {
+          label: inputs.toolsAddedInConversation > 0
+            ? `Messages (incl. ${inputs.toolsAddedInConversation} tool${inputs.toolsAddedInConversation === 1 ? "" : "s"} added mid-session)`
+            : "Messages",
+          tokens: breakdown.messagesTok,
+          role: "mdLink",
+          glyph: "█",
+        },
         { label: "Free space", tokens: freeTok, role: "dim", glyph: "·" },
-        { label: "Reserve (compaction headroom)", tokens: reserve, role: "muted", glyph: "▒" },
+        {
+          label: reserve.enabled ? "Reserve (compaction headroom)" : "Reserve (compaction off)",
+          tokens: reserve.tokens,
+          role: "muted",
+          glyph: "▒",
+        },
       ];
 
-      const sourceLabel = real
-        ? inputs.haveMessages
-          ? "real · Anthropic count_tokens"
-          : "real · Anthropic count_tokens (no messages yet)"
-        : `estimated (calibrated chars/token) — ${note}`;
+      const pending = "messages estimated from the session until the next request";
+      const sourceLabel = totalFromPi
+        ? `total from Pi's context usage · split estimated (calibrated chars/token)${messagesFromSession ? ` · ${pending}` : ""}`
+        : real
+          ? messagesFromSession
+            ? `system and tools: Anthropic count_tokens · ${pending}`
+            : inputs.haveMessages
+              ? "real · Anthropic count_tokens"
+              : "real · Anthropic count_tokens (no messages yet)"
+          : `estimated (calibrated chars/token) — ${note}${messagesFromSession ? ` · ${pending}` : ""}`;
+      const estimated = !real || messagesFromSession;
 
       await ctx.ui.custom<undefined>(
         (_tui, theme, _keybindings, done) =>
@@ -535,7 +642,7 @@ export default function contextBreakdown(pi: ExtensionAPI) {
             modelName,
             window,
             totalTokens,
-            estimated: !real,
+            estimated,
             sourceLabel,
             categories,
             mcpServers: breakdown.serverToks,
