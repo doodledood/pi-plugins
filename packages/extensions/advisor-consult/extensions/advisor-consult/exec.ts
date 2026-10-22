@@ -31,7 +31,8 @@ export type AdvisorExec = (command: string, args: string[], options: AdvisorExec
  * SIGTERM is delivered, so a child that handles SIGTERM slowly is never killed, and a parent abort after the
  * timeout is ignored. Here a terminate request sends SIGTERM to the advisor's whole process group, a second
  * request (an abort after the timeout) or the end of the grace period sends SIGKILL to the group. The group
- * covers whatever the advisor's tools started, and is cleared when the consult settles.
+ * holds the advisor and the children that stay in it, and is cleared when the consult settles. Pi's bash
+ * tool starts its commands in groups of their own, which the advisor's Pi stops on SIGTERM, not SIGKILL.
  */
 export const runAdvisorProcess: AdvisorExec = (command, args, options) =>
   new Promise((resolve) => {

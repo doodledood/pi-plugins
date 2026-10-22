@@ -318,10 +318,12 @@ function splitModel(value: string): [string | undefined, string] {
  */
 function registryPatternResolver(registry: ExtensionContext["modelRegistry"]): (pattern: string) => string | undefined {
   // resolveCliModel reads only these two runtime methods; the extension API exposes the registry facade.
-  const runtime = {
+  // Both are type-checked against Pi's ModelRuntime; only the widening to the full type is a cast.
+  const members: Pick<ModelRuntime, "getModels" | "hasConfiguredAuth"> = {
     getModels: () => registry.getAll(),
-    hasConfiguredAuth: (provider: string) => registry.getAvailable().some((model) => model.provider === provider),
-  } as unknown as ModelRuntime;
+    hasConfiguredAuth: (provider) => registry.getAvailable().some((model) => model.provider === provider),
+  };
+  const runtime = members as ModelRuntime;
   return (pattern) => {
     const resolved = resolveCliModel({ cliModel: pattern, modelRuntime: runtime });
     return resolved.model ? `${resolved.model.provider}/${resolved.model.id}` : undefined;
