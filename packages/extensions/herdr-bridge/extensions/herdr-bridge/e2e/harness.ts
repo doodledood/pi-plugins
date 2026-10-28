@@ -233,23 +233,71 @@ export function wakeups(sessionPath: string): string[] {
  * Installed packages left out of every run, because they reach the person's live credentials
  * outside the run's agent directory: the MCP adapter connects to servers from the global MCP config
  * and reads and clears OAuth entries in the operating system's credential store; the web-access
- * package reads its key file and, when used, browser cookie keys from the credential store.
+ * package reads browser cookie keys from the credential store when used.
  */
 export const LEFT_OUT = ["pi-mcp-adapter", "pi-web-access"];
 
-/** The person's installed Pi extensions, as files or folders Pi can load read-only from where they are. */
-export function installedExtensions(): string[] {
+/**
+ * Installed packages whose source was read and reaches no credentials outside the run's agent
+ * directory: what they read, such as auth.json, they resolve through PI_CODING_AGENT_DIR.
+ */
+export const CHECKED = [
+  "@gotgenes/pi-subagents",
+  "@juicesharp/rpiv-ask-user-question",
+  "@juicesharp/rpiv-todo",
+  "@amaster.ai/pi-image-gen",
+  "github.com/doodledood/pi-plugins",
+  "github.com/doodledood/manifest-dev",
+];
+
+/** Herdr's own Pi integration, which every run installs into its own agent directory. */
+const HERDR_INTEGRATION = "herdr-agent-state.ts";
+
+/**
+ * Splits installed package sources and local extension files into those a run may load and those
+ * it leaves out. Anything neither checked nor left out fails: a package installed later is read and
+ * classified before any check loads it, so no run reaches credentials by accident.
+ */
+export function classifyInstalled(sources: readonly string[], localFiles: readonly string[]): { load: string[]; leftOut: string[] } {
+  const load: string[] = [];
+  const leftOut: string[] = [];
+  const unknown: string[] = [];
+  for (const source of sources) {
+    if (LEFT_OUT.some((name) => source.includes(name))) leftOut.push(source);
+    else if (CHECKED.some((name) => source.includes(name))) load.push(source);
+    else unknown.push(source);
+  }
+  for (const file of localFiles) {
+    if (file === HERDR_INTEGRATION) continue;
+    unknown.push(`local extension ${file}`);
+  }
+  if (unknown.length) {
+    throw new Failure(`FAIL: installed ${unknown.join(", ")} not classified; read its source, then add it to CHECKED or LEFT_OUT in e2e/harness.ts`);
+  }
+  return { load, leftOut };
+}
+
+/** The person's installed Pi extensions, as files Pi can load read-only from where they are, with the package sources left out. */
+export function installedExtensions(): { paths: string[]; leftOut: string[] } {
   const agent = join(homedir(), ".pi", "agent");
   const settings = JSON.parse(readFileSync(join(agent, "settings.json"), "utf8"));
+  const entries: { source: string; excluded: Set<string> }[] = (settings.packages ?? []).map((entry: any) => ({
+    source: typeof entry === "string" ? entry : entry.source,
+    excluded: new Set<string>((typeof entry === "object" ? entry.extensions ?? [] : []).filter((e: string) => e.startsWith("-")).map((e: string) => e.slice(1))),
+  }));
+  const local = join(agent, "extensions");
+  const localFiles = existsSync(local) ? readdirSync(local).filter((file) => statSync(join(local, file)).isFile() && /\.(ts|js)$/.test(file)) : [];
+  const { load, leftOut } = classifyInstalled(
+    entries.map((e) => e.source),
+    localFiles,
+  );
   const out: string[] = [];
-  for (const entry of settings.packages ?? []) {
-    const source: string = typeof entry === "string" ? entry : entry.source;
-    const excluded = new Set<string>((typeof entry === "object" ? entry.extensions ?? [] : []).filter((e: string) => e.startsWith("-")).map((e: string) => e.slice(1)));
+  for (const { source, excluded } of entries) {
+    if (!load.includes(source)) continue;
     let dir: string | undefined;
     if (source.startsWith("npm:")) dir = join(agent, "npm", "node_modules", source.slice(4).replace(/@[^/@]+$/, ""));
     else if (source.startsWith("git:")) dir = join(agent, "git", source.slice(4).replace(/@[^/]+$/, ""));
     if (!dir || !existsSync(join(dir, "package.json"))) continue;
-    if (LEFT_OUT.some((name) => source.includes(name))) continue;
     const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     for (const rel of manifest.pi?.extensions ?? []) {
       const clean = rel.replace(/^\.\//, "");
@@ -258,13 +306,5 @@ export function installedExtensions(): string[] {
       if (existsSync(path)) out.push(path);
     }
   }
-  const local = join(agent, "extensions");
-  if (existsSync(local)) {
-    for (const file of readdirSync(local)) {
-      if (file === "herdr-agent-state.ts") continue;
-      const path = join(local, file);
-      if (statSync(path).isFile() && /\.(ts|js)$/.test(file)) out.push(path);
-    }
-  }
-  return out;
+  return { paths: out, leftOut };
 }

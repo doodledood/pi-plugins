@@ -4,6 +4,7 @@
 //   npm run e2e --workspace @doodledood/pi-herdr-bridge [-- <scenario> ...]
 //
 // Scenarios: start, real-setup, bridge, wakeups, quiet, reload, answer. With none named, all run.
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -222,7 +223,9 @@ Object.assign(scenarios, {
     await waitFor("later's finished wake-up after the resume", () => wakeups(orchSession).find((w) => w.includes("`later`") && w.includes("finished a turn")), 60_000);
     check(true, "after a resume in a new Pi process, a worker started before still produces a wake-up on its next state change");
     await sleep(5_000);
-    check(wakeups(orchSession).filter((w) => w.includes("`quitter`")).length === 1, "the gone report is not repeated");
+    // quitter answers "hi" at once, so its finished wake-up may land before the orchestrator exits;
+    // only the gone report is checked for repeats.
+    check(wakeups(orchSession).filter((w) => w.includes("`quitter`") && w.includes("has exited")).length === 1, "the gone report is not repeated");
   },
 
   async answer(run: Run) {
@@ -278,9 +281,15 @@ async function main(): Promise<void> {
   for (const name of chosen) if (!scenarios[name]) throw new Error(`unknown scenario ${name}; known: ${Object.keys(scenarios).join(", ")}`);
   let failed = 0;
   for (const name of chosen) {
-    const extensions = name === "real-setup" ? [...installedExtensions(), SCRIPTED_PROVIDER, BRIDGE_EXTENSION, SPY] : BASE;
+    const installed = name === "real-setup" ? installedExtensions() : undefined;
+    const extensions = installed ? [...installed.paths, SCRIPTED_PROVIDER, BRIDGE_EXTENSION, SPY] : BASE;
     const run = new Run({ extensions });
     console.log(`# ${name} (herdr session ${run.id})`);
+    if (installed) {
+      const home = homedir();
+      console.log(`  installed extensions loaded (${installed.paths.length}): ${installed.paths.map((p) => p.replace(home, "~")).join(", ")}`);
+      console.log(`  installed packages left out: ${installed.leftOut.join(", ") || "none"}`);
+    }
     try {
       await run.open();
       await scenarios[name]!(run);

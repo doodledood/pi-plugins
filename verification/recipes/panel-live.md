@@ -28,4 +28,5 @@ Workload: varies
 ## Gotchas
 
 - `PANEL_SMOKE_MODELS` picks the lineup; never point it at the expensive default lineup.
-- Needs provider credentials in the environment.
+- Needs provider credentials in the environment: each scenario runs in a fresh agent directory
+  (`smoke-agent-dir.ts`), so it loads none of the installed extensions and reads no saved login.

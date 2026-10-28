@@ -13,6 +13,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { runPanelCommand } from "./index.ts";
 import { spawnPanelistSession } from "./host.ts";
 import { isThinkingLevel, type PanelistSpec } from "./types.ts";
+import { isolateAgentDir } from "./smoke-agent-dir.ts";
 
 const rawModels = process.env.PANEL_SMOKE_MODELS ?? "anthropic/claude-haiku-4-5:off,openai/gpt-4.1-mini:off";
 const specs: PanelistSpec[] = rawModels.split(",").map((raw) => {
@@ -22,6 +23,7 @@ const specs: PanelistSpec[] = rawModels.split(",").map((raw) => {
 });
 
 const workDir = mkdtempSync(join(tmpdir(), "panel-smoke-"));
+isolateAgentDir(workDir);
 const sessionDir = join(workDir, "sessions");
 const configPath = join(workDir, "panel.json");
 writeFileSync(configPath, JSON.stringify({ panelists: specs, timeoutMs: 180_000 }));

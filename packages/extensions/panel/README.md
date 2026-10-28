@@ -101,7 +101,8 @@ pi install npm:@doodledood/pi-panel
 ```bash
 npm run typecheck --workspace @doodledood/pi-panel
 npm run test --workspace @doodledood/pi-panel
-# live smokes (real providers, cheap models only):
+# live smokes (real providers, cheap models only; each runs in a fresh agent directory,
+# so it loads none of your installed extensions and reads provider keys from the environment):
 PANEL_SMOKE_MODELS="anthropic/claude-haiku-4-5:off,openai/gpt-4.1-mini:off" npm run smoke --workspace @doodledood/pi-panel
 npm run smoke:cancel --workspace @doodledood/pi-panel
 ```
