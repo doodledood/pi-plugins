@@ -120,7 +120,7 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
       if (!active || timer !== undefined || tracked.length === 0) return;
       timer = startTimer(() => {
         poll().catch((error) => {
-          // A poll that throws past its own handling must not take Pi down; the next poll retries.
+          // A poll that throws past its own handling must not take Pi down; polling goes on.
           failures++;
           if (failures === FAILURES_BEFORE_NOTICE) notifyFailure(error);
         });

@@ -134,7 +134,10 @@ const cases: Record<string, () => Promise<number>> = {
       await waitFor("the orchestrator to settle", () => (["idle", "done"].includes(run.status(orchName) ?? "") ? true : undefined), 300_000);
 
       const before = bashCommands(orchSession).length;
-      run.prompt(orchName, "Check in now, as the orchestrate skill's Check in section says, and tell me whether the run's session is alive.");
+      run.prompt(
+        orchName,
+        "Check in now, as the orchestrate skill's Check in section says, and tell me whether the run's session is alive. End your reply with exactly one line: `STATUS: alive` or `STATUS: not alive`.",
+      );
       await waitFor("the check-in to finish", async () => {
         const status = run.status(orchName);
         return bashCommands(orchSession).length > before && (status === "idle" || status === "done") ? true : undefined;
@@ -144,9 +147,8 @@ const cases: Record<string, () => Promise<number>> = {
       const reply = transcript(orchSession).filter((m) => m.role === "assistant" && m.text.trim()).at(-1)!.text;
       const herdrStatus = run.status(started.name!);
       check(herdrStatus !== undefined, "orchestrate: Herdr shows the worker live at check-in", herdrStatus);
-      const saysAlive = /\b(alive|running|live|idle|up)\b/i.test(reply);
-      const saysDead = /\bnot (alive|running|live|up)\b|\b(exited|gone|dead|crashed|stopped)\b/i.test(reply);
-      check(saysAlive && !saysDead, `orchestrate: its report of the worker as alive matches Herdr (${herdrStatus})`, reply);
+      const stated = reply.match(/^STATUS: (alive|not alive)\s*$/m)?.[1];
+      check(stated === "alive", `orchestrate: its report of the worker as alive matches Herdr (${herdrStatus})`, reply);
       modelCheck(orchSession);
       return spend(orchSession);
     } finally {

@@ -42,12 +42,8 @@ export class FakeHerdr {
       case "agent list":
         if (this.brokenAgentList) return ok({ type: "agent_list", items: [] });
         return ok({ type: "agent_list", agents: this.panes.filter((p) => p.agent).map((p) => this.agentJson(p)) });
-      case "workspace list":
-        return ok({ type: "workspace_list", workspaces: this.workspaces.map((w) => ({ workspace_id: w.workspaceId, label: w.label })) });
-      case "pane list": {
-        const workspace = flag("--workspace");
-        return ok({ panes: this.panes.filter((p) => workspace === undefined || p.workspaceId === workspace).map((p) => this.paneJson(p)) });
-      }
+      case "pane list":
+        return ok({ panes: this.panes.map((p) => this.paneJson(p)) });
       case "workspace create": {
         const workspaceId = `w${this.next++}`;
         this.workspaces.push({ workspaceId, label: flag("--label") ?? "" });
@@ -86,6 +82,7 @@ export class FakeHerdr {
         }
         return ok({ type: "agent_prompted" });
       case "agent read":
+        if (this.readGate) await this.readGate;
         return this.screens.get(args[2]!) ?? "";
       default:
         throw new HerdrError(`fake herdr does not know "${args.join(" ")}"`, "unknown_command");
@@ -107,8 +104,10 @@ export class FakeHerdr {
     };
   }
 
-  /** Pane entries Herdr lists, for a test that breaks their shape. */
+  /** When set, `agent list` answers without its `agents` list, as if Herdr's output changed shape. */
   brokenAgentList = false;
+  /** When set, `agent read` waits for this promise before answering. */
+  readGate?: Promise<void>;
 
   /** Commands other than read-only queries (list, read, get). */
   writes(): string[][] {

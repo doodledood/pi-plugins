@@ -49,12 +49,12 @@ export function promptLanded(sessionPath: string | undefined, prompt: string): b
  */
 async function deliverFirstPrompt(
   herdr: Herdr,
+  name: string,
   agent: AgentView,
   prompt: string,
   sessionPath: string | undefined,
   options: { landedTimeoutMs: number; pollMs: number },
 ): Promise<void> {
-  const name = agent.name!;
   const entriesBefore = entryCount(sessionPath);
   try {
     await herdr.prompt(name, prompt);
@@ -202,7 +202,7 @@ export async function startSession(herdr: Herdr, request: StartRequest, options:
     // Herdr reports a fresh Pi ready before its extensions finish loading; its integration reports
     // idle once the session has started, which is when typed input lands.
     baseline = await settle(herdr, name, options.readyTimeoutMs ?? READY_TIMEOUT_MS, pollMs);
-    await deliverFirstPrompt(herdr, baseline, request.prompt, started.sessionPath ?? baseline.sessionPath, {
+    await deliverFirstPrompt(herdr, name, baseline, request.prompt, started.sessionPath ?? baseline.sessionPath, {
       landedTimeoutMs: options.landedTimeoutMs ?? LANDED_TIMEOUT_MS,
       pollMs,
     });

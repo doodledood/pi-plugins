@@ -181,3 +181,48 @@ test("a Pi that exits before its first prompt, or never reports ready, says so",
   );
   onlyStartSequence(unknown);
 });
+
+test("a stalled first prompt that left any trace is not typed again", async () => {
+  const dir = folder();
+  const session = join(dir, "s.jsonl");
+  const withSession = (fake: FakeHerdr) => {
+    const herdr = new Herdr(fake.run);
+    const realStart = herdr.startPi.bind(herdr);
+    herdr.startPi = async (...args) => ({ ...(await realStart(...args)), sessionPath: session });
+    return herdr;
+  };
+
+  // Herdr shows the agent at work after the stall.
+  const working = new FakeHerdr();
+  working.stallPrompts = 1;
+  working.onPrompt = () => setTimeout(() => working.panes.forEach((p) => p.agent && (p.agent.status = "working")), 20);
+  await startSession(withSession(working), { folder: dir, name: "busy", prompt: "go" }, { cwd: "/", env: {}, landedTimeoutMs: 2_000, pollMs: 10 });
+  assert.equal(working.prompts.length, 1, "work shown in Herdr counts as landed");
+
+  // The session file grows with something other than the exact text, as an expanded skill does.
+  const expanded = new FakeHerdr();
+  expanded.stallPrompts = 1;
+  writeFileSync(session, `${JSON.stringify({ type: "session" })}\n`);
+  expanded.onPrompt = () =>
+    setTimeout(() => writeFileSync(session, `${JSON.stringify({ type: "session" })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "<skill>expanded</skill>" } })}\n`), 20);
+  await startSession(withSession(expanded), { folder: dir, name: "skill", prompt: "/skill:x" }, { cwd: "/", env: {}, landedTimeoutMs: 2_000, pollMs: 10 });
+  assert.equal(expanded.prompts.length, 1, "a grown session file counts as landed");
+});
+
+test("a stalled plain prompt whose session file Herdr never reported is reported, not typed again", async () => {
+  const fake = new FakeHerdr();
+  fake.stallPrompts = 1;
+  const herdr = new Herdr(fake.run);
+  const realStart = herdr.startPi.bind(herdr);
+  herdr.startPi = async (...args) => ({ ...(await realStart(...args)), sessionPath: undefined });
+  const realGet = herdr.getAgent.bind(herdr);
+  herdr.getAgent = async (target) => {
+    const agent = await realGet(target);
+    return agent && { ...agent, sessionPath: undefined };
+  };
+  await assert.rejects(
+    startSession(herdr, { folder: folder(), name: "nofile", prompt: "go" }, { cwd: "/", env: {}, landedTimeoutMs: 50, pollMs: 10 }),
+    /cannot be confirmed/,
+  );
+  assert.equal(fake.prompts.length, 1);
+});

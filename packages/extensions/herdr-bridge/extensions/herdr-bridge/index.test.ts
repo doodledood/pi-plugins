@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { FakeHerdr } from "./fake-herdr.ts";
 import { Herdr } from "./herdr.ts";
 import { ENDED_ENTRY, PHASE_ENTRY, STARTED_ENTRY, type BridgeApi, createHerdrBridge, quietIntervalFrom } from "./index.ts";
 import { WAKEUP_TYPE } from "./messages.ts";
 
 const HERDR_ENV = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" };
+
+// A test that fails before its shutdown would otherwise leave the process-wide claim held and
+// fail every bridge test after it.
+afterEach(() => {
+  delete (globalThis as Record<symbol, unknown>)[Symbol.for("@doodledood/pi-herdr-bridge/primary")];
+});
 
 class FakePi {
   handlers = new Map<string, ((event: any, ctx: any) => unknown)[]>();
@@ -268,4 +274,29 @@ test("the quiet interval is ten minutes unless set to a positive number of ms", 
   assert.equal(quietIntervalFrom({}), 10 * 60_000);
   assert.equal(quietIntervalFrom({ HERDR_BRIDGE_QUIET_INTERVAL_MS: "8000" }), 8000);
   for (const bad of ["-5", "0", "soon"]) assert.equal(quietIntervalFrom({ HERDR_BRIDGE_QUIET_INTERVAL_MS: bad }), 10 * 60_000, bad);
+});
+
+test("a wake-up cut off by a shutdown is not recorded, so the reloaded bridge delivers it", async () => {
+  const fake = new FakeHerdr();
+  fake.panes.push({ paneId: "w1:p2", tabId: "w1:t2", workspaceId: "w1", cwd: "/", agent: { name: "w", kind: "pi", status: "working" } });
+  const first = setup(HERDR_ENV, fake);
+  await first.pi.fire("session_start", {}, tui(STARTED));
+  let release!: () => void;
+  fake.readGate = new Promise((done) => (release = done));
+  fake.panes[0]!.agent!.status = "blocked";
+  first.clock.timers[0]!.fn();
+  await new Promise((done) => setTimeout(done, 5));
+  await first.pi.fire("session_shutdown");
+  release();
+  await new Promise((done) => setTimeout(done, 5));
+  assert.equal(first.pi.messages.length, 0, "the shut-down session gets nothing");
+  assert.ok(!first.pi.entries.some((e) => e.customType === PHASE_ENTRY), "and records nothing for the undelivered wake-up");
+
+  fake.readGate = undefined;
+  const reloaded = setup(HERDR_ENV, fake);
+  await reloaded.pi.fire("session_start", { reason: "reload" }, tui([...STARTED, ...first.pi.entries]));
+  await reloaded.clock.tick(2_000);
+  assert.equal(reloaded.pi.messages.length, 1);
+  assert.match(reloaded.pi.messages[0]!.message.content, /waiting at a question/);
+  await reloaded.pi.fire("session_shutdown");
 });
