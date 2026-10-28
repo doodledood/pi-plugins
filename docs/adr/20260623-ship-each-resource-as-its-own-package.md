@@ -12,7 +12,7 @@ The user
 ## Context
 The repository collects Pi extensions and themes that people may want one at a time. Pi installs a Git source as one package, and a package filter in `settings.json` can select individual resource paths from it. The repository was bootstrapped with one package per resource from its first commit.
 
-The wider reasoning, beyond what the repository's guidance states, was not recovered.
+**Rationale not recovered** beyond what the repository's guidance states: the alternatives weighed and the wider reasons were not found and are not reconstructed here.
 
 ## Decision
 Every shareable extension and theme lives in its own package under `packages/`, with its own `package.json`, README and version, and the root `package.json` Pi manifest lists every resource path, so Git package filters can select individual resources from this repository. Global skills are excluded from packages.

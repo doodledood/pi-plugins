@@ -10,7 +10,7 @@ publishing
 The user
 
 ## Context
-The repository is public. Two pieces of employer-specific material had reached the tree — a test fixture using a real work repository path and a pull-request rule naming one employer's security bot — even though "don't commit work material" was already the rule. A term naming a workplace cannot be unpublished once pushed.
+The repository is public. Two pieces of employer-specific material had reached the tree — a test fixture using a real work repository path and a pull-request rule naming one employer's security bot — even though "don't commit work material" was already the rule. As the scan's own comment puts it, a term naming a workplace cannot be unpublished once pushed.
 
 ## Decision
 Employer-specific material lives in the owner's local install, never in this repository. The structure check scans every tracked text file for terms that identify the workplace and fails with the file and line; the check file itself is exempt because it has to name the terms. The two leaked strings were genericized or moved, and history was left intact because they were ordinary strings rather than secrets.
