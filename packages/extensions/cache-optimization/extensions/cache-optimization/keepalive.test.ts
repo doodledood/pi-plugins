@@ -121,6 +121,7 @@ function arm(f: Fixture): void {
   f.clock.now += PING_AFTER_IDLE_MS + 1;
 }
 
+// Holds docs/adr/20260706-cache-optimization-extension.md — weakening this test reverses that decision.
 test("keepalive: pings only when armed — in-flight tool, stale cache, big prompt, key present", async () => {
   const f = createFixture();
   arm(f);

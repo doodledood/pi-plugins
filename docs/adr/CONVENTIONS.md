@@ -84,9 +84,7 @@ Accepted
 - Related: [Supersedes / Superseded by / See also]
 ````
 
-**These sections are what a new record carries. The older records vary, and that is not a defect.**
-Counted across the 23 records the corpus held when `Area` and `Enforced by` were added: `## Status` appears in 22 of 23; `## Context` in 23 of 23; `## Decision` in 23 of 23; `## Alternatives Considered` in 21 of 23; `## Consequences` in 23 of 23; `## Source` in 18 of 23; `### Positive` / `### Negative` subheadings in 22. Every record carries `## Area`, because the index reads it; the other optional sections need no repairing — the index derives around them, and a record is judged by whether it
-tells you what was decided and why, not by which optional sections it happens to carry.
+**These sections are what a new record carries. The older records vary, and that is not a defect.** Every record carries `## Area`, because the index reads it; the other optional sections need no repairing — the index derives around them, and a record is judged by whether it tells you what was decided and why, not by which optional sections it happens to carry.
 
 **Area** is a single short label — reuse an existing one wherever the decision fits it, and mint a new one only when nothing fits. It is read by the index, so keep it stable: renaming a label means editing every record that carries it.
 

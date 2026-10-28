@@ -43,6 +43,7 @@ test("performLoadTools does not call setActiveTools when nothing is loadable", (
   assert.deepEqual(out.unknown, ["ghost"]);
 });
 
+// Holds docs/adr/20260707-cache-optimization-second-wave.md — weakening this test reverses that decision.
 test("performCacheSafeLoadTools returns schemas and proxy examples without changing active tools", () => {
   const calls: string[][] = [];
   const host: ToolHost = {

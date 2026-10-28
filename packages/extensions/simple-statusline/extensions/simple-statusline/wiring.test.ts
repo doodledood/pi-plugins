@@ -110,6 +110,7 @@ function renderFooter(harness: Harness): string {
   return line;
 }
 
+// Holds docs/adr/20260706-cache-efficiency-observability.md — weakening this test reverses that decision.
 test("footer shows the cumulative session cache rate, not the latest turn's rate", () => {
   // turn 1: 0% hit rate (20k prompt, all write); turn 2: 97.5% hit rate.
   // Cumulative: 19500 / 40000 = 49%. Latest-turn would be 98%.

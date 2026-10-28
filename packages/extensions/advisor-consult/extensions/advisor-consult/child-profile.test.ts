@@ -7,6 +7,7 @@ import {
   resolveExcludedTools,
 } from "./child-profile.ts";
 
+// Holds docs/adr/20260709-advisor-consult-independent-subprocess.md — weakening this test reverses that decision.
 test("resolveExcludedTools always includes the hard denylist", () => {
   const resolved = resolveExcludedTools([]);
   for (const name of HARD_DENIED_TOOLS) assert.ok(resolved.includes(name), `missing ${name}`);

@@ -661,6 +661,7 @@ test("parent and BTW child overlap, share the workspace read-only, pull updates,
 
     const parentEntriesBeforeRelay = parent.sessionManager.getEntries();
     await child.prompt(CHILD_RELAY_PROMPT);
+    // Holds docs/adr/20261014-keep-btw-read-only-with-one-relay-to-main.md — weakening this test reverses that decision.
     assert.deepEqual(relayed, [`${SEND_TO_MAIN_PREFIX}\n\n${RELAY_BODY}`], "send_to_main hands one user-voiced message to the parent");
     assert.deepEqual(parent.sessionManager.getEntries(), parentEntriesBeforeRelay, "delivery to main goes only through the parent relay");
 

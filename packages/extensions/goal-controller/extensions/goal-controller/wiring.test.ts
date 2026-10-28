@@ -530,6 +530,7 @@ test("model-facing goal tool supersedes a completed goal with a fresh active goa
   assert.notEqual(nextGoal?.goal?.id, oldGoalId);
 });
 
+// Holds docs/adr/20260629-resume-completed-goals.md — weakening this test reverses that decision.
 test("goal_resume reactivates a completed goal without stale completion verdict", async () => {
   const host = new FakeHost();
   activate(
@@ -867,6 +868,7 @@ test("pending messages after checker suppress continuation", async () => {
   assert.equal(host.sentMessages.length, 1);
 });
 
+// Holds docs/adr/20261022-steer-main-with-extension-sent-user-messages.md — weakening this test reverses that decision.
 test("non-idle state after checker queues steering continuation", async () => {
   let idle = true;
   const host = new FakeHost();

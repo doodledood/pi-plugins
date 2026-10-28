@@ -212,6 +212,7 @@ test("parseCheckerVerdict rejects complete verdict without evidence and requirem
   );
 });
 
+// Holds docs/adr/20260623-use-session-navigation-checker-context.md — weakening this test reverses that decision.
 test("PiSubprocessCheckerRunner resolves inherit model and thinking into subprocess args", async () => {
   let capturedCommand = "";
   let capturedArgs: string[] = [];
