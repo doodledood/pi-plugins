@@ -31,6 +31,7 @@
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/context-breakdown",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/goal-controller",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/gpt-fast-toggle",
+    "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/herdr-bridge",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/mcp-tool-loadout",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/model-aliases",
     "/ABSOLUTE/PATH/TO/pi-plugins/packages/extensions/message-stash",

@@ -282,6 +282,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `context-breakdown` — `/context` command for context-window usage breakdown.
 - `goal-controller` — checker-only long-running goal controller; Aviram's portable config pins its checker to `openai/gpt-6-luna` at `medium` while the extension default remains `inherit`.
 - `gpt-fast-toggle` — OpenAI GPT priority service-tier toggle; Pi prices priority turns itself.
+- `herdr-bridge` — Pi sessions in [Herdr](https://herdr.dev): `start_agent_session` starts a separate interactive Pi session in its own Herdr tab, the session that started it gets a wake-up when it finishes a turn, waits at a question, stays working with no change for 10 minutes, or exits, and any Pi waiting at a dialog shows in Herdr as blocked.
 - `mcp-tool-loadout` — compact MCP catalog and cache-safe schema loading.
 - `message-stash` — single-slot input draft stash.
 - `model-aliases` — selector-visible custom model aliases with separate visible and provider-target context windows; dual-window aliases enforce the visible edge through Pi's native compact-and-retry path. The portable setup defines Astra and Sol as 272K/1.05M aliases, both Luna generations as 270K/1.05M aliases, Opus 5.5 as a 300K/1M alias beside an unrestricted 1M one, Sonnet 5.5 as a 300K/1M alias, and Fable 5.1 as an unrestricted 1M one.

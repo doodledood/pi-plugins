@@ -32,3 +32,4 @@
 | 2026-10-14 | [Use Pi's native fullscreen mouse routing for overlays and observe main-screen clicks through Pi's own handlers](20261014-use-pi-native-mouse-routing-for-overlays.md) | Accepted | btw |
 | 2026-10-22 | [Resume budget-limited goals into a fresh budget window](20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md) | Accepted | goal-controller |
 | 2026-10-22 | [Steer main with user messages that extensions send on the user's behalf](20261022-steer-main-with-extension-sent-user-messages.md) | Accepted | btw |
+| 2026-10-28 | [Host parallel Pi sessions in Herdr and ship a bridge, not a board](20261028-host-pi-in-herdr-and-ship-a-bridge.md) | Accepted | parallel-sessions |
