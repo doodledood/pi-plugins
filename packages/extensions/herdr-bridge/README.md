@@ -82,7 +82,7 @@ npm run contract --workspace @doodledood/pi-herdr-bridge   # real model; spends 
 
 Or through the repository's harness: `scripts/verify drive herdr-bridge`, and `scripts/verify drive herdr-bridge-contract --yes` for the paid contract runs.
 
-The end-to-end run starts a Herdr session of its own and a temporary Pi agent directory outside the repository, and removes both; it never touches your default Herdr session or `~/.pi/agent`. Its Pis run on a scripted fake provider and load Pi's own dialogs and `ask_user_question` from your install, read-only. One scenario also loads your installed packages, except the MCP adapter, which would reach your MCP servers and your operating system's credential store.
+The end-to-end run starts a Herdr session of its own and a temporary Pi agent directory outside the repository, and removes both; it never touches your default Herdr session or `~/.pi/agent`. Its Pis run on a scripted fake provider and load Pi's own dialogs and `ask_user_question` from your install, read-only. One scenario also loads your installed packages, except the MCP adapter and the web-access package, which reach your MCP servers, your key files and your operating system's credential store.
 
 The contract runs put a real orchestrator, on your configured default model, in front of three requests: `/orchestrate`'s own launch and check-in wording (read from the installed skill at run time), "please create 2 sessions in <folder> that tell me a joke", and an explicit request for a background subagent, which must still get a subagent. Each case passes three runs out of three; one run of each costs about $0.10–0.20 of orchestrator spend.
 

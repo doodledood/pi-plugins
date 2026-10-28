@@ -230,11 +230,12 @@ export function wakeups(sessionPath: string): string[] {
 }
 
 /**
- * Installed packages left out of every run: they reach outside the run's agent directory at
- * startup — the MCP adapter connects to servers from the person's global MCP config and reads and
- * clears OAuth entries in the operating system's credential store.
+ * Installed packages left out of every run, because they reach the person's live credentials
+ * outside the run's agent directory: the MCP adapter connects to servers from the global MCP config
+ * and reads and clears OAuth entries in the operating system's credential store; the web-access
+ * package reads its key file and, when used, browser cookie keys from the credential store.
  */
-export const LEFT_OUT = ["pi-mcp-adapter"];
+export const LEFT_OUT = ["pi-mcp-adapter", "pi-web-access"];
 
 /** The person's installed Pi extensions, as files or folders Pi can load read-only from where they are. */
 export function installedExtensions(): string[] {

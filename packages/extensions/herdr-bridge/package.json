@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-herdr-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Pi sessions in Herdr: start a separate interactive Pi session in its own Herdr tab, hear when it finishes, waits at a question, goes quiet or exits, and see dialog waits as blocked in Herdr.",
   "keywords": [
