@@ -4,6 +4,14 @@ A collection of individually installable Pi extensions and themes maintained in 
 
 ## Language
 
+**Resource package**:
+A package under `packages/` that holds exactly one shareable Pi extension or theme and installs on its own, from Git with a package filter or from npm.
+_Avoid_: Plugin (the repository's name), bundle.
+
+**Install surface**:
+Any file that names a resource so it can be installed — the root workspaces and Pi manifest, the resource package's own metadata and README, the root docs, the setup templates, the structure check's lists and the lockfile — all of which change together when a resource is added, removed, renamed or moved.
+_Avoid_: Install docs (only part of the set).
+
 **Tool activity renderer**:
 A Pi extension in this repo that wraps built-in file and shell tools with Graphite-style TUI rows, drives the working line, and keeps thinking and narration beneath the reply by drawing thinking's inline code and all narration in the thinking tone.
 _Avoid_: Tool rendering plugin.

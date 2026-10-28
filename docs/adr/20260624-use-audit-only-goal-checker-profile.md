@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 The goal-controller checker exists to decide whether an active goal's completion contract has been proven. Earlier design exposed configurable checker capability modes. In practice this made the checker capability boundary harder to reason about: the no-tools mode is too weak for the session-navigation checker because it cannot inspect the persisted session file; the unrestricted mode lets the checker become too worker-like; and the read-oriented mode blocks skills while still allowing shell execution.
 
@@ -42,6 +45,9 @@ No compatibility mode is kept for old checker capability-mode values; the modes 
 - Users who intentionally wanted no-tools or full-tools checker modes lose that configuration surface.
 - Some checks that could have been accelerated by `bash` must be delegated back to the worker, which may require another continuation turn.
 - Skill loading increases checker prompt surface compared with the current `--no-skills` subprocess behavior.
+
+## Enforced by
+`packages/extensions/goal-controller/extensions/goal-controller/checker.test.ts` ("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled", "removed checker capability config cannot expand audit-only subprocess tools") — pins the fixed audit-only tool surface.
 
 ## Source
 - Session: figure-out discussion in `pi-plugins` on 2026-06-24

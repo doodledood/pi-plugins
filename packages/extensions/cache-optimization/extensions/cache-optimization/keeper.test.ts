@@ -45,6 +45,7 @@ test("keeper: appends at or under the threshold leave the payload untouched", ()
   assert.equal(result.payload, undefined);
 });
 
+// Holds docs/adr/20260706-cache-optimization-extension.md — weakening this test reverses that decision.
 test("keeper: a burst past the threshold stamps exactly one marker at the previous tail position", () => {
   const state: KeeperState = {};
   applyCacheKeeper(anthropicPayload(30), state);

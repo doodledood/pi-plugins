@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+cache-optimization
+
 ## Context
 `simple-statusline` showed only the latest assistant turn's cache hit rate (`cacheRead / (input + cacheRead + cacheWrite)` for the most recent message). The owner's actual goal is understanding cache inefficiency: an aggregate session-level efficiency signal that converges over time, plus the ability to know when and why prompt cache broke.
 
@@ -42,6 +45,9 @@ Build cache-efficiency observability in two surfaces with a layered attribution 
 - Fingerprinting cannot attribute turns from before the current process started; those fall back to coarser entry correlation.
 - The break-flag heuristic needs threshold tuning to avoid false alarms on small prompts or legitimate first turns.
 - Per-turn in-memory hash state is new mutable state in an otherwise stateless renderer domain.
+
+## Enforced by
+partly — `packages/extensions/cache-optimization/extensions/cache-optimization/cache.test.ts` ("session cache rate is cumulative token-weighted read share of prompt tokens") and `packages/extensions/simple-statusline/extensions/simple-statusline/wiring.test.ts` ("footer shows the cumulative session cache rate, not the latest turn's rate") pin the rate, break detection and footer signal; thresholds and attribution quality stay judgment.
 
 ## Source
 - Session: figure-out investigation, log at `~/.manifest-dev/logs/figure-out-log-20260706-111449.md`

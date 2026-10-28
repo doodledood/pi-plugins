@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+openai-max-output-floor
+
 ## Context
 Regular `openai/gpt-5.5` sessions started failing with a hard provider 400 once
 their history grew close to the model's 272k context window:
@@ -113,3 +116,6 @@ Ship a standalone `openai-max-output-floor` extension that raises
 - Upstream fix: [earendil-works/pi#6265](https://github.com/earendil-works/pi/issues/6265)
   (`2e4ad6a0`, unreleased as of pi v0.80.3).
 - Investigation log: `~/.manifest-dev/logs/figure-out-log-20260708-100813.md`.
+
+## Enforced by
+`packages/extensions/openai-max-output-floor/extensions/openai-max-output-floor/floor.test.ts` ("floors a sub-minimum max_output_tokens up to the provider floor" and the cases after it) — pins the 16-token floor, field-only scoping and that a valid budget is never lowered.

@@ -516,6 +516,7 @@ test("PiSubprocessCheckerRunner accepts the verdict a trailing comma used to tur
   assert.equal(runs(), 1, "a tolerated slip needs no second audit");
 });
 
+// Holds docs/adr/20261006-re-ask-format-invalid-checker-verdicts-once.md — weakening this test reverses that decision.
 test("PiSubprocessCheckerRunner re-asks once when the first answer was prose, then uses the verdict", async () => {
   const { runner, runs } = runnerAnswering("## Audit result\n\nLooks complete to me.", JSON.stringify(COMPLETE_VERDICT));
   const verdict = await runCheckerVerdict(runner, DEFAULT_CONFIG);
@@ -1433,6 +1434,7 @@ test("PiSubprocessCheckerRunner rejects a valid event stream without assistant m
   );
 });
 
+// Holds docs/adr/20260624-use-audit-only-goal-checker-profile.md — weakening this test reverses that decision.
 test("PiSubprocessCheckerRunner always uses audit-only tools with skills enabled", async () => {
   assertAuditOnlyCheckerArgs(await captureCheckerArgs(DEFAULT_CONFIG));
 });

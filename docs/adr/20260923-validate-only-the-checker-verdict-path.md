@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 The goal checker runs `pi --mode json` as a subprocess and reads its verdict from the JSONL event stream. A run of hardening commits (`6c70665` through `e8e5cd7`) made the controller schema-check every record in that stream: every known event type, every message role, every assistant content block and usage field, every session-entry type and every streaming sub-event, each against a closed list. Any record outside the list counted as a "malformed recognized event envelope" and failed the whole checker run, which pauses the goal.
 
@@ -41,6 +44,9 @@ This also closes the diagnosability gap: the old message gave only a count, so e
 ### Negative
 - A corrupted or mis-shaped record off the verdict path (for example a malformed `tool_execution_end`) is no longer reported. It cannot change the verdict, but it is no longer surfaced as a warning sign of a broken Pi build.
 - If Pi ever changes the verdict-path shapes themselves (the `message_end` assistant message, `stopReason` values, or `agent_settled`), the checker still fails loudly and needs an update — intentionally, since that is where a silent misread would cost a wrong verdict.
+
+## Enforced by
+`packages/extensions/goal-controller/extensions/goal-controller/checker.test.ts` ("tolerates … beside a verdict" and the verdict-path cases after it) — pins that only the verdict path is validated and unknown protocol additions pass.
 
 ## Source
 - Session: diagnosis of a goal paused with "Goal checker returned a malformed Pi JSON event stream (3 malformed recognized event envelopes)" on Pi 0.87.1.

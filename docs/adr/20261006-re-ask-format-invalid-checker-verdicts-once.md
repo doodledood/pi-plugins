@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 A goal checker that cannot produce a usable verdict pauses the goal, so an unattended run stops until someone resumes it. Reading 577 recorded checker runs (their sidecar sessions) through the production `parseCheckerVerdict` showed that most failures were not the checker disagreeing, but the checker's answer being written wrongly:
 
@@ -42,6 +45,9 @@ The checker prompt also asks for strict JSON with no trailing commas, comments, 
 ### Negative
 - A format-invalid first answer costs a second full checker run and up to double the wall time (each run keeps its own timeout).
 - The retry rate is not measured: the 2.6% format-failure figure is retrospective, and whether one re-ask clears most of them is an expectation, not an observation.
+
+## Enforced by
+`packages/extensions/goal-controller/extensions/goal-controller/checker.test.ts` ("re-asks once when the first answer was prose", "never re-asks a semantic rejection") — pins the one format-only re-ask and trailing-comma repair.
 
 ## Source
 - Session: investigation of recurring "The checker response was not a JSON verdict object" goal pauses, 2026-10-06.

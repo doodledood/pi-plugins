@@ -1,5 +1,11 @@
 # ADR: Cache-optimization second wave
 
+## Status
+Accepted
+
+## Area
+cache-optimization
+
 - **Date:** 2026-07-07
 - **Status:** Accepted
 - **Supersedes/corrects:** part of [20260706-cache-optimization-extension](20260706-cache-optimization-extension.md)
@@ -65,3 +71,6 @@ Finally, the same research reaffirmed that Anthropic 1h retention is not the rig
 - Unit tests cover cache-safe `load_tools` returning schemas/proxy examples without active-tool mutation, explicit `direct:true` hard activation, and catalog byte-stability after load-like active-set changes.
 - Unit tests cover statusline context percentage computation, threshold hint/tone, and compaction/tree refresh hooks.
 - Repo-level verification is `npm run verify`.
+
+## Enforced by
+partly — `packages/extensions/cache-optimization/extensions/cache-optimization/keepalive.test.ts` ("generic background-launch flag arms idle background work") and `packages/extensions/mcp-tool-loadout/extensions/mcp-tool-loadout/actions.test.ts` ("performCacheSafeLoadTools returns schemas and proxy examples without changing active tools") pin background arming and cache-safe loading; the deliberate non-actions stay judgment.

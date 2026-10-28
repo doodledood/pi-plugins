@@ -3,6 +3,9 @@
 ## Status
 Accepted; narrowed by 20261022-resume-budget-limited-goals-into-a-fresh-budget-window (budgets on a budget-limited resume apply to a fresh window)
 
+## Area
+goal-controller
+
 ## Context
 The goal controller already treats a checker-completed goal as non-live: starting a new goal after `complete` is accepted, while active, checking, and waiting-for-user goals remain protected from replacement. A separate usability need emerged: a user should also be able to resume a completed goal when the same objective needs more work or follow-up.
 
@@ -33,6 +36,9 @@ The model-callable `goal` tool should continue to create a fresh goal only when 
 - A completed goal is no longer a final-only terminal state; it can become active again by explicit user command.
 - Summaries of a resumed goal will not show the prior checker verdict in `lastCheckerVerdict`; historical completions remain only in `checkerHistory` unless a future UI exposes that history.
 - The implementation needs tests for both controller-level state semantics and command/tool-facing behavior so prompt or wiring drift does not reintroduce stale-completion leakage.
+
+## Enforced by
+partly — `packages/extensions/goal-controller/extensions/goal-controller/controller.test.ts` ("resumeGoal reactivates completed goals while making prior completion historical") and `packages/extensions/goal-controller/extensions/goal-controller/wiring.test.ts` ("goal_resume reactivates a completed goal without stale completion verdict") pin reactivation and historical verdicts; budget windows follow the narrowing record.
 
 ## Source
 - Session: figure-out discussion in `pi-plugins` on 2026-06-29

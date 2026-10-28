@@ -586,6 +586,7 @@ test("hidden alias stream delegates with the target context window without paylo
   assert.equal(result.api, "openai-responses");
 });
 
+// Holds docs/adr/20260803-enforce-dual-window-alias-boundary.md — weakening this test reverses that decision.
 test("dual-window alias stops the next request at its visible context edge", async () => {
   const config: ModelAliasesConfig = {
     enabled: true,

@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+cost-accounting
+
 ## Context
 Pi reports session cost by scanning one session file's own entries: assistant messages, `toolResult.usage`, compaction usage, and branch-summary usage. It does not aggregate related child session files.
 
@@ -51,6 +54,9 @@ Deduplication spans the tree rather than following file identity, because a fork
 - Pi's built-in footer and `/session` still report parent-only totals, so two visible numbers can disagree unless the built-in surfaces are also addressed.
 - Live cost lags provider reporting: a child's spend appears only once that turn's usage is written, not continuously during a long turn.
 - Non-session paid calls remain a special case that must be recorded deliberately, and any request billed without returned usage stays invisible.
+
+## Enforced by
+`packages/extensions/simple-statusline/extensions/simple-statusline/session-cost.test.ts` ("all four of Pi's usage sources are counted, over every entry", "grandchildren at depth are counted") — pins recursive child-session discovery and every usage source.
 
 ## Source
 - Session: figure-out investigation, log at `~/.manifest-dev/logs/figure-out-log-20260728-082100.md`

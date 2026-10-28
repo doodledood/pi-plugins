@@ -493,6 +493,7 @@ test("a scan failure leaves the previous total rather than blanking the footer",
   assert.match(renderFooter(harness), /\$0\.500/, "last known total survives a failed scan");
 });
 
+// Holds docs/adr/20260624-keep-goal-statusline-separate.md — weakening this test reverses that decision.
 test("statusline remains footer-only and owns no model-context mutation surfaces", () => {
   const harness = createHarness([assistantEntry(1_000, 1_000, 1_000, 0)]);
   assert.equal(harness.commands.get("cache"), undefined, "no /cache command registered");

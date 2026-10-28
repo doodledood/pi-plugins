@@ -593,6 +593,7 @@ test("bare goal_edit opens editor prefilled with current goal and replaces on su
   assert.equal(latestGoal(host)?.status, "active");
 });
 
+// Holds docs/adr/20260623-use-session-navigation-checker-context.md — weakening this test reverses that decision.
 test("command start, checker continuation, and no-tool threshold are wired", async () => {
   const host = new FakeHost();
   const checker = new FakeChecker([

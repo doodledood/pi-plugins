@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 The goal controller currently allows only one non-terminal goal in a session. `startGoal` rejects a new goal whenever the existing goal has any non-terminal status, including `paused`, `blocked`, and `budget_limited`. That means a user who paused an old goal and moved on has to run `/goal_clear` before starting a new goal, even though no goal work is actively continuing.
 
@@ -32,6 +35,9 @@ This applies to goal start entrypoints generally, including the model-callable `
 - A stopped goal can be superseded without an explicit clear action, so the latest controller state no longer represents that older stopped goal.
 - The implementation needs a more precise predicate than the current `isNonTerminalGoal` block: live statuses and stopped statuses must be distinguished.
 - If a user wants to replace a `waiting_for_user` goal, they still need to pause or clear first because it remains a live goal state.
+
+## Enforced by
+`packages/extensions/goal-controller/extensions/goal-controller/controller.test.ts` ("startGoal accepts any non-empty goal when no live goal exists" and the cases after it) — pins that paused, blocked, budget-limited and completed goals allow a fresh start while active, checking and waiting goals refuse it.
 
 ## Source
 - Session: figure-out discussion in `pi-plugins` on 2026-06-24

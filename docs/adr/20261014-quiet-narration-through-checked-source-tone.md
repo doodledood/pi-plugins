@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+tool-activity-renderer
+
 ## Context
 Between tool calls, Claude often writes visible text instead of a thinking block. Some of it is a one-line status; some reads like reasoning ("Relevant sections to touch: … I need to add …"). In one manifest-dev session, 56 assistant messages had text plus a tool call and no thinking block. Pi draws that text at reply brightness, so it sits bright between receded tool rows and gray, italic thinking. That breaks the Graphite rule that brightness carries hierarchy, and users take it for thinking that failed to gray out.
 
@@ -32,6 +35,9 @@ The tool activity renderer treats the text of an assistant message that also cal
 - The transformer keys texts by content, so a text first seen as a reply keeps reply brightness wherever the same text was narration, and a transformer from another extension that runs first and rewrites the text hides it from this one.
 - Links keep their link color, and a few words stay bright where the check rejects a block (for example a link with a title). In about 3,300 narration texts from recent sessions, about 0.8% of visible characters stayed outside the tone, mostly list bullets and table borders.
 - The first draw of a very long narration text can take tens of milliseconds while the checks run. Results are cached per text, width and tone.
+
+## Enforced by
+`packages/extensions/tool-activity-renderer/extensions/tool-activity-renderer/narration.test.ts` ("counts the text of a message that calls a tool as narration, and only that") — pins narration classification and the checked tone rewrite.
 
 ## Source
 - Session: user report of "thinking not grayed out" in a manifest-dev session screenshot. The session records showed the bright paragraphs were `text` blocks in tool-calling messages.

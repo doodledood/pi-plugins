@@ -1,3 +1,4 @@
+# Holds part of docs/adr/20260706-track-main-for-installs-without-release-tags.md: versions still bump on every package change.
 name: Version bump check
 
 on:

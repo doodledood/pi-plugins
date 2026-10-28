@@ -101,6 +101,7 @@ test("the turn that uses up a budget is still checked", { timeout: 10_000 }, asy
   assert.equal(h.goalState().status, "complete");
 });
 
+// Holds docs/adr/20261022-resume-budget-limited-goals-into-a-fresh-budget-window.md — weakening this test reverses that decision.
 test("resuming a budget-limited goal opens a fresh budget window and can complete", { timeout: 10_000 }, async () => {
   const checker = new ScriptedChecker([continueVerdict("not yet"), completeVerdict("all proven")]);
   const h = await createHarness({

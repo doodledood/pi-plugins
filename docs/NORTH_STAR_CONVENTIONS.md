@@ -1,0 +1,247 @@
+# North Star Conventions
+
+A North Star is a project's standing statement of what it is for: one short document holding
+its purpose, its goal, the principles it holds, how it measures progress, and the bets it rests
+on. It lives in the project's own repository so every session and every contributor — with or
+without any particular tooling — starts from the same base when it decides anything a task's
+own contract does not settle. It is the project-level counterpart of a task-level spec: a task
+contract governs one piece of work and resets when it ends; the North Star persists across all
+of them and is edited on purpose.
+
+**It holds what decisions are judged against, never what they chose.** A decision weighs the
+project's ends (what it is for), measures, principles and bets and picks an option; that chosen option is the
+decision's output, and it lives in the project's decision records. Kept to those inputs, the
+document changes only when the purpose, a principle or a bet changes, and a later session never
+mistakes a tactic for the mission.
+
+**It informs; it never binds.** A boundary that must be enforced on a piece of work is
+encoded in that work's own binding contract (for manifest-dev users: `/define` routes a
+"never" whose violation would be unsafe or irreversible to a Global Invariant). Keeping
+that line is what stops the document becoming a rulebook nobody reads.
+
+**A line gives grounds for a second look, never a silent veto.** When a line seems to cut
+against an option, first check that the line covers this case: most apparent conflicts come
+from reading a line wider than it was written. Where it does not cover the case, the option
+stands, and the session says why the line does not apply. Where it does, a person decides. A
+run with no person present follows the line, brings the challenge to the owner and carries on;
+it never departs from an end or a principle by itself. No session drops an option unseen because
+a line cuts against it. The same holds for a `Strategy` decision record, whose guiding choice the
+*Strategy choices in force* list shows, except that a run whose assignment explicitly delegates
+that decision may reopen one that covers its case.
+
+## Ownership
+
+This file is this project's North Star convention, and it governs the form of `NORTH_STAR.md`. It is self-contained: a contributor with no tooling can learn from it alone how the document looks and works. Tooling that carries its own default defers to this file, which makes this copy a fork no sync updates: keeping it current is this project's job, and re-running the setup that installed it is one way to see what the current default carries.
+
+## Where it lives
+
+`NORTH_STAR.md` at the repository root, made resident so sessions meet it without being
+told to look: import it from the project context file where the host supports imports,
+and state the instruction to read it at session start regardless. One document per
+repository; comparisons *across* projects belong to whoever owns the portfolio, not to
+any one repo.
+
+Keep it standalone-first: detail moves to an adjacent linked document only when a section
+outgrows the page, never pre-emptively.
+
+## Positions and their states
+
+A **section** is one of the six below. A **position** is one claim carrying one
+state: a section written as prose holds one position per claim, and a section written as a
+list holds one per entry. Every position carries its state as a dated provenance note — for example,
+`— hypothesis: matches ourselves; no outside user has confirmed it. 2026-08` or
+`— empty: no audience named. What would fill it: a person with a situation. 2026-08`.
+Without the state, a measurement, a guess, and a decision all read as equally settled.
+A provenance note is short: the state, its grounding (for an `empty` position, what would fill
+it), its date, and the titles of any records behind it. How a position came to read as it does
+is history, and history lives in those records.
+The following table defines the four states:
+
+| State | Means | What moves it |
+|-------|-------|---------------|
+| `evidence` | Something happened in the world, dated | New evidence |
+| `hypothesis` | Best current thinking, untested | A test |
+| `ruled` | An authorized choice, naming its decider and any delegation | A new authorized ruling within its scope |
+| `empty` | Nobody has answered — written **with what would fill it** | Whoever answers it |
+
+`ruled` is separate from `evidence` because evidence is about the world and a ruling is
+a choice: one is falsifiable, the other is not, and a form that calls both "evidence"
+cannot say which positions a measurement could ever move. An `empty` position is never
+left bare — without its filling condition it reads as an oversight instead of an open
+question.
+
+A position also goes stale without anything contradicting it. When the work a project
+actually does drifts away from what a position says — every piece of it defensible on its
+own, none of it contradicting the text — the position keeps steering at a shape the project
+has left. Divergence is as much staleness as contradiction, and it is quieter: nobody meets
+it, because no single session is inconsistent with the text. A session that notices a
+mismatch notes it — a note, never a question — and leaves the position alone; what makes it
+actionable is a run of them, which no one session can see. Treat the accumulation as a signal
+for the owner or an explicitly assigned delegate to weigh within their authority. It does not
+itself authorize a change or a scheduled review.
+
+**The update asymmetry — the one rule every maintainer needs:** new evidence may *lower*
+a position's state (an `evidence` position whose grounding stops holding drops to
+`hypothesis`, with one line naming what would settle it). The position text itself
+changes only by an authorized ruling, and each position change is remembered in the project's
+decision records — the North Star states current direction; the records remember why it moved.
+The owner may explicitly delegate specified decisions or record maintenance within an assignment.
+The record names the decider, the delegation, and its bounds; it never represents an agent's
+choice as the owner's own ruling. Owner-retained ends and bounds stay with the owner. Reading
+contrary evidence, running unattended, or holding write access grants no authority to change them.
+Without applicable delegation, lower states and flag or ask; with it, make only the assigned
+change. Mechanical maintenance of an index is not a new strategic decision.
+
+## What a line may be
+
+Every position in *Purpose*, *Goal*, *Principles*, *How we know* and *What this rests on* is one
+of four kinds, and nothing else; *Open* holds questions, and the strategy list holds titles and
+their signposts:
+
+- **An end** — what the project is for, or whom it serves. Asked "why does this matter?", it
+  has no deeper answer inside the document.
+- **A measure** — how the project measures progress on one part of its goal: what is counted,
+  which way it should move, and a floor where the floor is itself something the owner holds,
+  such as "never worse than what people do by hand today".
+- **A principle** — a limit or a trade-off the owner holds even when evidence says crossing it
+  would pay. That is what separates it from a choice.
+- **A bet** — a belief about the world that, if false, would change the goal or end one part
+  of the project. A bet the owner states is still a `hypothesis` until something tests it.
+
+**The test for any line.** Would the owner re-tune it when evidence moves? Then it is a chosen
+option, not one of the four: it belongs in a decision record, and a dated target — a value a
+measure should reach by a date — belongs with the work pursuing it: the destination of the effort
+(the named body of work) that pursues it, where the project tracks work that way, or else the
+decision record of the choice it serves. A bet differs: evidence tests it and may lower its
+state, but nobody tunes it for a better result, the way a price or a channel is tuned. The
+choices themselves can matter a great deal; they leave because they are outputs of the
+document's inputs, and a copy here would make a later session protect a tactic as if it were
+the purpose. A line that names one example, setting, number or path is nearly always a choice,
+however stable it has been; name the shape it serves instead, and let the provenance note
+point to the record that holds the specifics.
+
+Live metric readings never enter the North Star: states carry dates, and staleness is read
+from them.
+
+## The sections
+
+Throughout these sections, *they* is the person the project serves — never the tooling,
+agents, or sessions that operate it. Where a project's users are its own maintainers, the
+machinery is the most visible thing arriving and is still not the audience.
+
+The following table names each section, what it holds, and the trap that most often ruins it:
+
+| Section | What it holds | The trap |
+|---------|---------------|----------|
+| **Purpose** | The end first: what the person the project serves is after, found by asking "why does that matter?" of each answer until the document has no deeper one. Then what is in the way of it, one barrier or several; then who the project is for — a person with a situation, named narrowly enough to exclude someone — and an explicit not-for | Stating the problem the project's first feature solves, so the purpose is only as wide as that feature; writing the user's complaint instead of the barrier behind it; or a segment so broad it cannot be wrong |
+| **Goal** | Where the project is headed — what reaching that end looks like — in the sentence that person reads when deciding to rely on it, and what reaching it means for the project itself | A feature list, including features written as outcomes, which reads as a goal while the end they serve goes unstated; or a quality claim nobody can check |
+| **Principles** | The limits and trade-offs held even against evidence — what the project never does, what it never trades away, and what it feeds instead of money where money is not the point — one per entry, each phrased as what it rules out | A tactic phrased as a principle: if evidence would move it, it is a choice |
+| **How we know** | One measure for each part of the goal, the end's own measure among them, with its direction and any floor; a part nothing measures yet is `empty` with what would fill it | One number for a goal with several parts, which lets the unmeasured part drop out of every decision; or counts of how much the features are used standing in for progress on the end, while the end's own measure stays missing |
+| **What this rests on** | A handful of live, falsifiable bets, the main one first: the sentence that changes everything if false | Letting it grow past a handful, or filling it with task facts, which belong in that task's own spec |
+| **Open** | Questions none of the sections above holds, each with what would fill it | Repeating an `empty` position, which already carries its own filling condition |
+
+After the sections comes **Strategy choices in force**: one line for each decision record in
+effect that carries the area `Strategy` — the few guiding choices the project pursues its goal
+through, which other decisions derive from. A record may carry a signpost, its `Revisit when`
+field: the observable condition that would reopen the choice, and where it is read. The list is
+derived, never edited alone: it is rebuilt from those records in the same act that writes,
+supersedes or retires one, or edits its signpost, and the record holds the choice and its
+reasons. Following these rules twice produces the same bytes:
+
+- **Lines**: one per record in effect — its Status begins with `Accepted`, including one a
+  later record narrows or amends — whose `Area` is `Strategy`, in ascending order of filename.
+- **Each line**: `- `, then the record's title, which is its `# ADR: ` heading with that prefix removed; where
+  the record has a `Revisit when` field, then ` — revisit when: ` and the field's text, each of its
+  lines trimmed, blank lines dropped, and the rest joined by single spaces.
+- **Nothing else**: the section holds no other line.
+
+A reader that finds a signpost's condition met checks its assignment and authority. Reopen the
+choice only when both cover it; otherwise bring the evidence and a recommendation to its owner.
+A changed choice is a new decision record, followed by the derived list rebuild. The observation
+alone changes neither the old decision nor the signpost.
+
+Belief height decides what may enter *What this rests on*: if this bet turned out false, how
+much dies? The purpose false means pivot or stop; a bet false means one part of the project
+ends; anything smaller is a task fact and belongs in that task's own spec.
+
+## What it anchors
+
+The North Star is what a decision is checked against, never where work is done. Who it is for
+sets who copy is written to — the copy is not in here. The goal and the principles bound what
+marketing may claim — the campaigns are not in here. The measures say which way to push — the
+dated targets live with the work that pursues them.
+
+## Document skeleton
+
+```markdown
+# North Star — {project}
+
+What this project is for, for whom, and how it measures progress — the base every session and
+contributor decides from. This document informs; it never binds: a boundary that must be
+enforced on a piece of work is encoded in that work's own binding contract. A line gives grounds
+for a second look: before it cuts an option, check that it covers the case.
+
+Every position below carries a state, rendered as a dated provenance note:
+
+- **evidence** — something happened in the world, dated; new evidence moves it.
+- **hypothesis** — best current thinking, untested; a test moves it.
+- **ruled** — an authorized choice; its decider and any delegation are named.
+- **empty** — nobody has answered yet, written with what would fill it.
+
+New evidence may lower a position's state. Position changes need an authorized ruling, remembered
+as a decision record. Explicit delegation can cover specified changes within an assignment;
+owner-retained ends and bounds stay with the owner.
+
+## Purpose
+{the end the person is after; then what is in the way of it; then "For: …" and "Not for: …"}
+{— state: grounding. date}
+
+## Goal
+{where the project is headed, in the sentence the person reads when deciding to rely on it}
+{what reaching it means for the project itself}
+
+## Principles
+{one limit or trade-off per entry, held even against evidence}
+
+## How we know
+{one measure per part of the goal, the end's own among them: what is counted, its direction, any floor}
+
+## What this rests on
+{one bet per entry, the main bet first, each with its own state}
+
+## Open
+{one question per entry, each with what would fill it}
+
+## Strategy choices in force
+{one line per decision record in effect with area Strategy: its title, then " — revisit when: " and its signpost where it has one — rebuilt from them, never edited alone}
+```
+
+## Produce it honestly
+
+Seed only what the repository's own artifacts evidence — a README's stated audience, a
+published tagline, a stated principle. Each seeded position carries `hypothesis` or
+`evidence` per its actual grounding, with the artifact named in the provenance note. A
+section no artifact answers stays `empty` with its filling condition; a strategy position
+the artifacts don't support is fiction with a state on it, and inventing it wrongs every
+session that later anchors there.
+
+Put every candidate line through the test in *What a line may be* before it is seeded. The
+history of a project is full of choices — a price, a launch plan, a chosen integration — and
+each one that matters is seeded as a decision record, or left out, never as a position.
+
+*Purpose* is the section the rest are derived from, so a seed narrower than the project
+propagates into all of them. Open it with the end, never with the barrier: a README usually
+names the barrier its first feature removes, and a Purpose built from that is only as wide as
+that feature. Ask the owner, in their own words, what the person is after, and of each answer
+ask "why does that matter?" until there is no deeper answer inside the document. Then compare
+that end with the stated barrier, and keep the barrier as one of the things in its way. Read what
+the project does — its practice, its live work — alongside what it says about itself, and where
+the stated purpose and the practice diverge, put both to the owner rather than picking one. The
+same test reaches the *Goal* and its measures: each part of the goal serves the end, and the end
+has a measure of its own — `empty` with what would fill it where nothing counts it yet — rather
+than counts of use standing in for it.
+
+Sections that need working out rather than stating — who it's really for, the goal, the
+measures — are investigations run when assigned by the owner or an authorized caller. Use
+already supplied direction before asking again; missing retained ends stay unanswered. The `empty` and
+`hypothesis` positions are the doc's own to-do list.

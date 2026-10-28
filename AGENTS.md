@@ -4,7 +4,7 @@
 - Keep the root `package.json` Pi manifest in sync with all included extension/theme resource paths so Git package filters can select individual resources from this repo.
 - Do not commit live Pi runtime state, credentials, OAuth material, session logs, caches, `node_modules`, raw `auth.json`, or unredacted API keys.
 - Put Aviram's portable setup in top-level `setup/`; make it merge-oriented and template secrets/placeholders.
-- Run `npm run verify:structure`, plus package tests/typechecks when changing package code.
+- Verify changes through `scripts/verify` (see *Project surfaces*); its `project-checks` recipe runs the structure check, every typecheck and every test.
 
 ## Sync checklist for resource changes
 
@@ -20,13 +20,51 @@ When adding, removing, renaming, or moving an extension/theme, keep all install 
 
 If an extension starts reading or writing local files, env vars, credentials, browser profiles, caches, or generated state, document that in its package README and add/verify matching `.gitignore` coverage. Do not leave stale install paths such as `~/.pi/agent/extensions/<name>` unless that is truly the supported install mode.
 
-## Project Language and Decision Records
+## Project surfaces
 
-**The glossary is not optional reading.** `CONTEXT.md` is this project's language. Read it at the start of every session before doing anything else — it exists to stop silent misreading, and nobody looks up a term they already believe they understand.
+<!-- setup-project surfaces v11 -->
 
-**Read `docs/adr/README.md` before re-deciding something** — before settling a question this project may already have settled, and when a change contradicts or narrows an existing decision. Outside those two moments, leave it closed.
+This project keeps its direction, vocabulary, and decision memory in the repo — shared
+ground for every contributor and agent, regardless of tooling. Read `NORTH_STAR.md` and
+`CONTEXT.md` at the start of every session.
 
-**Writing a decision record is one act, not three** — the record, the restatus of anything whose standing it changes, and the index, in one change. Step two is the one that gets dropped, and dropping any of them leaves the corpus asserting something untrue. The index is rebuilt from the records rather than edited beside them, so it can never assert something they do not. `docs/adr/CONVENTIONS.md` carries the bar, the template, and the rebuild rules — open it before you start.
+- **NORTH_STAR.md** — what this project is for and for whom, the principles it holds, how it
+  measures progress, and the bets it rests on. Anchor on it scope, priority, outward claims, and
+  any call the work's own contract does not settle — a mid-run pivot, whether to act on a
+  review comment, what to leave alone. The choices made along the way live in `docs/adr/`,
+  never in it. Each position carries a dated state
+  (evidence / hypothesis / ruled / empty): new evidence may lower a state, but a
+  position changes only by an authorized ruling, recorded with its decider and any explicit
+  delegation. Owner-retained ends and bounds stay with the owner. A line gives grounds for a
+  second look, not a veto: before it cuts an option, check that it covers the case. Where it
+  does, a person decides; a run with no person present follows it and raises the challenge. The full form is `docs/NORTH_STAR_CONVENTIONS.md` — it is self-contained.
+- **Scoped instructions** — coordinating Tickets in this repository follows
+  `tickets/store-config.md`, which names the venue, the automation identity unattended runs
+  need, and the escalation recipient. These apply within assigned work; they do not start work.
+  Personal restrictions stay in the existing private instructions.
+- **CONTEXT.md** — what words mean here. It is not optional reading: it exists to stop silent
+  misreading, and nobody looks up a term they already believe they understand. Read it before
+  naming things; add a term when the project settles one.
+- **docs/adr/** — why decisions went the way they did. Open `docs/adr/README.md` before
+  deciding a question a record may already cover, and when a change contradicts or narrows
+  one; outside those two moments, leave it closed. A record gives grounds, not a veto: follow
+  it where its reasons still hold, and reopen it where a premise no longer holds or a need it
+  did not weigh makes sense. Outside the `Strategy` area, a run with no
+  person present decides for itself and lists each record it reopened first in its report
+  and pull request. Write new records per
+  `docs/adr/CONVENTIONS.md` — it is self-contained, and writing one is one act: the
+  record, the restatus of what it changes, and the index rebuild together. The restatus is the
+  step that gets dropped; the index is rebuilt from the records, never edited beside them.
+- **Verification** — `scripts/verify`: how this project checks that its work still does its job.
+  Run it before saying a change works, when reproducing a reported problem, and when a change
+  touches something one of its recipes covers (`scripts/verify list` shows them); a change that
+  needs a check no recipe has adds one. Every check this project keeps is a recipe, the checks it
+  runs across the whole tree among them: call their commands directly while iterating, and drive the recipe for the
+  evidence a change rests on. Recipes without the ask-first mark are free: run them as often as
+  they help.
+  Recipes marked ask-first cost money, quota, load on shared systems or effects outside the
+  repository: run those only when a person runs them or has agreed. `scripts/verify --help` gives the
+  rest.
 
 ## Version and install-ref policy
 

@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+model-aliases
+
 ## Context
 
 `model-aliases` can expose one context window to Pi while delegating requests with
@@ -114,3 +117,6 @@ Coverage proves that:
 - a deterministic AgentSession tool loop blocks the oversized request, delegates
   an over-visible-window summary under the target hard window, records one
   compaction, and resumes successfully through Pi's native retry path.
+
+## Enforced by
+`packages/extensions/model-aliases/extensions/model-aliases/index.test.ts` ("dual-window alias stops the next request at its visible context edge") — pins that the visible edge is enforced before the provider request.

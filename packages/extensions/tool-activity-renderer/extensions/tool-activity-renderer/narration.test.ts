@@ -52,6 +52,7 @@ describe("narration tracking", () => {
 	const text = (value: string) => ({ type: "text", text: value });
 	const call = { type: "toolCall", id: "t1", name: "bash", arguments: {} };
 
+	// Holds docs/adr/20261014-quiet-narration-through-checked-source-tone.md — weakening this test reverses that decision.
 	it("counts the text of a message that calls a tool as narration, and only that", () => {
 		const narration = new Narration();
 		narration.ingest(assistant(text("  Checking the tests next. "), call), true);

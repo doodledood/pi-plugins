@@ -311,6 +311,7 @@ test("serialized fork restores Pi's compaction-aware context", async () => {
   }
 });
 
+// Holds docs/adr/20261014-keep-btw-read-only-with-one-relay-to-main.md — weakening this test reverses that decision.
 test("inherited runtime spec keeps cwd, model and thinking, withholds edit/write/goal, and adds the child tools", () => {
   const spec = inheritedRuntimeSpec(snapshot([]));
   assert.equal(spec.cwd, "/tmp/btw-workspace");
@@ -330,6 +331,7 @@ function customState(id: string, parentId: string, customType: string, data: unk
   };
 }
 
+// Holds docs/adr/20261014-fork-btw-without-parent-extension-state.md — weakening this test reverses that decision.
 test("child fork drops parent extension state, re-chains the path, and remaps compaction", () => {
   const entries: SessionEntry[] = [
     user("01", null, "old user"),

@@ -1127,6 +1127,7 @@ function overlayHostUI(tui: TuiAltScreen, onHandle: (handle: OverlayHandle) => v
   } as unknown as ExtensionUIContext;
 }
 
+// Holds docs/adr/20261014-use-pi-native-mouse-routing-for-overlays.md — weakening this test reverses that decision.
 test("fullscreen Pi: wheel scrolls BTW, clicks move focus both ways and it sticks, and submit stays in BTW", async () => {
   const { tui, terminalWrites, input } = realTui(30, 100);
   const { mainEditor, mainSubmissions } = mountPiLikeMainScreen(tui);

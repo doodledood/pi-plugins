@@ -38,6 +38,7 @@ function fakeExec(result: ExecResult, capture?: { args?: string[] }): AdvisorExe
   };
 }
 
+// Holds docs/adr/20260709-advisor-consult-independent-subprocess.md — weakening this test reverses that decision.
 test("advisorArgs builds the expected subprocess invocation", () => {
   const args = advisorArgs(baseInput({ sessionDir: "/sessions/--proj--/parent/advisor" }));
   assert.ok(args.includes("--mode") && args.includes("json"));

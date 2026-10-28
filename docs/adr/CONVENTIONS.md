@@ -2,7 +2,7 @@
 
 Architecture Decision Records capture significant decisions with their context, alternatives, and consequences. Based on the MADR (Markdown Any Decision Records) standard.
 
-**This file is this project's ADR convention, and it governs.** Everything needed to decide whether a decision deserves a record and to write one correctly is here — no tool, plugin, or prior knowledge required. Any tooling that carries its own ADR defaults defers to this file; edit it when the project's practice should change, and the tooling follows.
+**This file is this project's ADR convention, and it governs.** Everything needed to decide whether a decision deserves a record and to write one correctly is here — no tool, plugin, or prior knowledge required. Any tooling that carries its own ADR defaults defers to this file. That deference makes this copy a fork that no sync updates: keeping it current is this project's job — edit it when the project's practice should change — and re-running the setup that installed it is one way to see what a current default carries.
 
 ## When a decision deserves a record
 
@@ -30,6 +30,17 @@ The threshold is **downstream architectural impact** — decisions that shape th
 
 **Decision Test** (when uncertain): *"Would someone joining in six months benefit from knowing WHY this was decided this way?"* If yes, write one. If they would just accept it as obvious, skip it.
 
+## What a record is for
+
+A record gives grounds, not a veto. It keeps the reasons for a choice so that a later session thinks twice before it decides differently; it does not stop that session from deciding differently. A session whose work a record bears on weighs the record's reasons against the case:
+
+- Where the reasons still hold, it follows the record and names the reason that holds. "A record says so" is never the whole reason.
+- Where a premise no longer holds, or the case has a need the record did not weigh and that need makes sense, the choice is open again. The session shows the option beside the record's reasons, and never drops an option because a record cuts against it.
+- A person can reopen a choice at any time. Outside the `Strategy` area, a run with no person present decides for itself: where a premise no longer holds or such a need makes sense, it reopens the choice and writes the new record, naming itself as decider (see **Decided by** below). Its report, and any pull request it opens, then lists each reopened record first among its decisions. Each entry gives the reason set aside and what reversing would cost, counted by what depends on the change after it lands rather than by the effort to redo it.
+- Reopening is a new record that supersedes or narrows the old one, under the lifecycle below.
+
+Reopening a record grants no authority to publish, spend or delete. A `Strategy` record (see **Area** below) is different: other decisions derive from it, so a person reopens it. A run with no person present follows one that covers its case and raises the challenge with its owner, unless its assignment explicitly delegates that decision.
+
 ## Template
 
 ````markdown
@@ -37,6 +48,12 @@ The threshold is **downstream architectural impact** — decisions that shape th
 
 ## Status
 Accepted
+
+## Area
+[One short label naming the part of the system this decision governs.]
+
+## Decided by
+[The user | An agent in an unattended run, with no review]
 
 ## Context
 [What situation motivated this decision? What constraints, requirements, or tensions existed?]
@@ -56,14 +73,32 @@ Accepted
 ### Negative
 - [What becomes harder or is traded away]
 
+## Enforced by
+[The strongest check that holds the decision, and what it pins | partly — <check>; <what stays judgment> | not yet — <the check that would hold it> | none — <why no check can hold it>]
+
+## Revisit when
+[Optional; expected on a `Strategy` record. The observable condition that would reopen this choice, and where it is read.]
+
 ## Source
 - Session: [transcript / conversation reference]
 - Related: [Supersedes / Superseded by / See also]
 ````
 
-**These sections are what a new record carries. The existing 13 vary, and that is not a defect.**
-Counted across the corpus: `## Status` appears in 12 of 13; `## Context` appears in 13 of 13; `## Decision` appears in 13 of 13; `## Alternatives Considered` appears in 11 of 13; `## Consequences` appears in 13 of 13; `## Source` appears in 8 of 13; `### Positive` / `### Negative` subheadings in 12. None of that needs repairing — the index derives around it, and a record is judged by whether it
+**These sections are what a new record carries. The older records vary, and that is not a defect.**
+Counted across the 23 records the corpus held when `Area` and `Enforced by` were added: `## Status` appears in 22 of 23; `## Context` in 23 of 23; `## Decision` in 23 of 23; `## Alternatives Considered` in 21 of 23; `## Consequences` in 23 of 23; `## Source` in 18 of 23; `### Positive` / `### Negative` subheadings in 22. Every record carries `## Area`, because the index reads it; the other optional sections need no repairing — the index derives around them, and a record is judged by whether it
 tells you what was decided and why, not by which optional sections it happens to carry.
+
+**Area** is a single short label — reuse an existing one wherever the decision fits it, and mint a new one only when nothing fits. It is read by the index, so keep it stable: renaming a label means editing every record that carries it.
+
+One label is reserved. A record of a guiding choice — one the project pursues its goal through, and that other decisions derive from — carries the area `Strategy`. Where the project's North Star (its standing statement of what it is for, `NORTH_STAR.md`) keeps a *Strategy choices in force* list, that list is derived from the `Strategy` records in effect — each one's title, with its `Revisit when` where it has one — and holds nothing else, so writing, superseding or retiring such a record, or editing its `Revisit when`, rebuilds that list in the same act, as the index is rebuilt. The exact rebuild rule is in the project's North Star conventions file where it keeps one, otherwise in the shipped North Star format. A North Star in an older form without that list gains none from it.
+
+**Decided by** names who made the decision, so a later reader can tell a person's ruling from an agent's. Write `The user` when a person decided it or reviewed the record before it was accepted. Write `An agent in an unattended run, with no review` when a run with no person present accepts its own record. When an agent decides under explicit delegation, keep the agent as decider and name that delegation and its bounds beside it; delegation is not personal review. When a person later reviews such a record and keeps its decision, change the value to `The user` in place; a person who changes the decision writes a new record instead.
+
+**Context**, where the project keeps a North Star, also carries one check: compare the decision's subject with what the North Star's *Purpose* names, and where the decision sits outside it, say so in one line of the context. In a North Star of the older nine-field form, compare with its Diagnosis instead. This is how a North Star going stale without contradiction becomes visible: every record is locally consistent with the text, so nobody meets the mismatch. One decision outside the Purpose means nothing, so the line is a note — never a question to the owner, never an edit to the North Star — and what makes it actionable is a run of them across records, which the notes let a later reader see. Every writer of a record applies it, whichever workflow writes the record.
+
+**Enforced by** names what makes the decision hold for contributors who never read the record. Name the strongest rung that applies: a type or structure that makes the wrong code fail to compile; a lint or architecture test that fails the build; an invariant test that states a property; one owning site that every caller goes through. Name the check by file and test or rule, and what it pins. Where a check holds only part of the decision, write `partly —` with the check and the part that stays judgment. Where a check could hold it but none does yet, write `not yet —` with the check that would; the run that implements or touches the decision builds it and replaces the line. Where no check can hold it — metric design, a deliberate non-action, a one-time operational choice — write `none —` with the reason. The check carries a comment citing the record, so someone about to weaken it meets the decision first. The line records current enforcement, not the decision, so it is editable in place.
+
+**Revisit when** is the record's signpost: the observable condition in the world that would reopen the choice, and where it is read — for example, "the second channel brings more than a third of new sign-ups, read on the weekly funnel report". It is optional on any record and expected on a `Strategy` record, because a guiding choice made on today's evidence is the one most worth reopening when the evidence moves. Name a source a reader can open; a condition nobody can read is a reminder, not a signpost. A met condition is one named reason to look again, not the only one: a reader reopens the record as *What a record is for* above says. On a `Strategy` record, a reader that finds the condition met may reopen the choice only within an assignment and explicit authority covering it; otherwise it brings the evidence and a recommendation to the owner. Either way, reopening the choice is a new record, never a rewrite of the old decision, and the observation alone grants no authority. The field says when to look again, not what was decided, so it is editable in place.
 
 ## File Naming and Location
 
@@ -82,13 +117,15 @@ ADRs follow a four-state lifecycle: `Proposed` → `Accepted` → `Deprecated` �
 - **Deprecated**: The decision no longer applies but hasn't been replaced. Use when something was true but the world moved on.
 - **Superseded**: A newer ADR replaces this one. Always paired with `Superseded by [filename]` in the Status field, and the superseding ADR carries a matching `Supersedes [filename]` line.
 
+Only an `Accepted` record is in effect, including one a later record narrows or amends. Whatever acts on records reads only those in effect: backfilling `Enforced by`, building a `not yet` check, citing a record as a binding ruling. A `Deprecated` or `Superseded` record is history; its check is retargeted or retired in the change that deprecated or superseded it, and its `Enforced by` line is not backfilled or kept current.
+
 ## Writing an ADR is one act, not three
 
 Adding a record means doing all three of these in the same change:
 
 1. **Write the new record** per the template above.
-2. **Update every record it changes the standing of** — a superseded decision's Status becomes `Superseded by <filename>`; a decision narrowed, amended, or partly lifted by the new one says so in its own Status line. This is required by the lifecycle above, and it is the step that gets skipped: it means editing a published ADR, which the immutability rule below explicitly permits.
-3. **Refresh the index** per *The index* below.
+2. **Update every record it changes the standing of** — a superseded decision's Status becomes `Superseded by <filename>`; a decision narrowed, amended, or partly lifted by the new one says so in its own Status line. Retarget or retire the check named in the old record's `Enforced by` so it holds the new decision instead of the old one, and update that line. This is required by the lifecycle above, and it is the step that gets skipped: it means editing a published ADR, which the immutability rule below explicitly permits.
+3. **Refresh the index** per *The index* below — and, for a `Strategy` record where the project's North Star keeps a *Strategy choices in force* list, rebuild that list, signposts included, from the `Strategy` records in effect.
 
 Doing one or two of these leaves the corpus asserting something untrue. Treat them as a single act.
 
@@ -107,6 +144,10 @@ When reality shifts, write a new ADR and update the old one's Status:
 **Editable in place** (no new ADR needed):
 - Typo fixes, broken-link repairs, formatting
 - Status changes and cross-references (e.g., `Related: 20260518-foo`)
+- Adding or correcting the `Area` field
+- Changing `Decided by` to `The user` after a person reviews an unattended record and keeps its decision
+- Updating `Enforced by` when the check that holds the decision changes
+- Adding or updating `Revisit when`
 - Clarifying confusing prose without changing the decision
 
 **NOT editable in place** (requires a new ADR):
@@ -175,18 +216,21 @@ Refresh it in the same change that adds or restatuses a record.
 - **Date** column: the filename's `YYYYMMDD` prefix, rendered `YYYY-MM-DD`.
 - **ADR** column: the record's `# ADR: ` heading with that prefix stripped, as a link to its filename.
 - **Status** column: the record's `## Status` line verbatim, with every `YYYYMMDD-kebab-title` token in it rendered as a link to `YYYYMMDD-kebab-title.md`. Do not invent a shorter label for the link — the filename is the label, which is what keeps this derivable. Tokens already inside a markdown link are left exactly as they are. A record with no `## Status` section renders `—`.
+- **Area** column: the record's `## Area` value verbatim.
 
 **The index file is exactly a title, a blank line, and the table** — no preamble prose, so a rebuild from an empty directory listing produces the same bytes as a rebuild over an existing file. Anything worth saying about the corpus belongs in this conventions file, which is where a reader looks for it anyway.
 
 ```markdown
 # Architecture Decision Records
 
-| Date | ADR | Status |
-|------|-----|--------|
+| Date | ADR | Status | Area |
+|------|-----|--------|------|
 ```
 
 The file ends with the last table row and a single trailing newline.
 
 An ADR records why a direction was chosen at the time it was chosen; current implementation state may lag a record when it describes a staged rollout. That is expected, and not a reason to edit the record.
+
+A record missing `## Area` is a defect in that record, not a blank cell to paper over — add the field rather than leaving the column empty.
 
 The index is flat and ordered by filename. It is not grouped: a grouping no record carries cannot be rebuilt from the records, and an index holding information its records do not is the thing this rule exists to prevent.

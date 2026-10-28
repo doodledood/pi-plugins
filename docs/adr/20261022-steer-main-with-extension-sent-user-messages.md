@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+btw
+
 ## Context
 BTW's `send_to_main` relay and the goal controller's goal prompts (the kickoff from `/goal`, `/goal_resume`, or the `goal` tool, and checker continuations) reach the main session through `pi.sendUserMessage`. Both passed `deliverAs: "followUp"` when main was busy, so Pi held the message until the whole run ended. In use that was the wrong trade: a relayed verdict or a newly started goal is direction the user wants main to act on now, and waiting for a long run to finish meant main kept working on stale direction. The goal controller also branched on `ctx.isIdle()` and omitted `deliverAs` when idle, which races a prompt still in Pi's preflight; BTW had already avoided that by always passing `deliverAs`.
 
@@ -25,6 +28,9 @@ Checker continuations sent from `agent_before_settle` behave the same either way
 ### Negative
 - A relay or goal kickoff now redirects main mid-task, which the previous BTW record had avoided on purpose. A user who wants an aside to wait can type it into main with `Alt+Enter` instead.
 - Steering still cannot reach the model between two calls in one tool batch; it lands after the batch.
+
+## Enforced by
+partly — `packages/extensions/btw/test/runtime-integration.test.ts` ("a prompt sent mid-run steers the run instead of waiting for it to end") and `packages/extensions/goal-controller/extensions/goal-controller/wiring.test.ts` ("non-idle state after checker queues steering continuation") pin steering for BTW and the goal controller; other extensions' adoption has no one owning check.
 
 ## Source
 - Session: user request — "when they send to main it uses the follow up … I want them to steer instead".

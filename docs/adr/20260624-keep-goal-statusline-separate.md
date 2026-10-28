@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+simple-statusline
+
 ## Context
 The goal-controller extension publishes goal lifecycle state into Pi's footer/status mechanism with `ctx.ui.setStatus("goal-controller", ...)`. A separate `simple-statusline` extension installs the actual custom footer and renders extension statuses from Pi footer data. During UX discussion, we considered improving the visibility of long-running goal checks now that checker subprocesses can run for up to five minutes. The main tension was whether to change the generic statusline renderer to make goal state more prominent, or keep goal-specific behavior inside goal-controller.
 
@@ -26,6 +29,9 @@ Goal UX improvements will preserve the boundary between goal-controller and the 
 - Goal-controller is limited to compact status strings for always-visible progress.
 - Richer visual affordances require either generic statusline capabilities or a future explicitly-approved goal-specific surface.
 - The statusline may still truncate or style goal text according to generic footer rules.
+
+## Enforced by
+`packages/extensions/simple-statusline/extensions/simple-statusline/wiring.test.ts` ("statusline remains footer-only and owns no model-context mutation surfaces") — pins that the statusline stays a footer and owns no goal state.
 
 ## Source
 - Session: figure-out discussion in `pi-plugins` on 2026-06-24

@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 
 const config = DEFAULT_CONFIG;
 
+// Holds docs/adr/20260624-allow-new-goals-over-stopped-goals.md — weakening this test reverses that decision.
 test("startGoal accepts any non-empty goal when no live goal exists", () => {
   const result = startGoal(undefined, "  implement PLAN.md  ", config, 100);
   assert.equal(result.ok, true);
@@ -122,6 +123,7 @@ test("checker complete verdict records completed state in controller", () => {
   assert.equal(complete.awaitingContinuationTurn, false);
 });
 
+// Holds docs/adr/20260629-resume-completed-goals.md — weakening this test reverses that decision.
 test("resumeGoal reactivates completed goals while making prior completion historical", () => {
   const started = startGoal(undefined, "finish task", { ...config, defaultTokenBudget: 100, defaultTurnBudget: 5, defaultTimeBudgetSeconds: 60 }, 10, 1_000);
   if (!started.ok) throw new Error("expected goal");

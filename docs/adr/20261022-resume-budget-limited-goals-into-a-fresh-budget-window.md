@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 `20260629-resume-completed-goals` keeps a resumed goal's usage counters and budgets as they were, as the audit trail of the earlier run. For a goal stopped *by* its budget that rule leaves `/goal_resume` useless: the counters already sit at the limit, so the resumed goal hits the budget again on its first turn and stops without doing any work. The only way forward was to clear the goal and start over, losing its checker history.
 
@@ -27,6 +30,9 @@ This narrows `20260629-resume-completed-goals`: counters are still preserved, bu
 
 ### Negative
 - A budget no longer caps a goal's total spend across resumes; each resume authorizes up to one more budget.
+
+## Enforced by
+`packages/extensions/goal-controller/extensions/goal-controller/settle-timing.test.ts` ("resuming a budget-limited goal opens a fresh budget window and can complete") — pins the fresh window on resume.
 
 ## Source
 - Session: formal bug hunt of pi-plugins, ruling recorded in the run's Manifest (ASM-5)

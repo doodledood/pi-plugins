@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+goal-controller
+
 ## Context
 The goal-controller checker currently receives an inline transcript generated from the current branch and capped by `continuation.transcriptMaxChars`. This creates two problems: the controller, rather than the checker, decides how much evidence is available; and a fixed character cap can hide earlier goal requirements or verification evidence. The existing continuation config also limits checker history preemptively and blocks after a single automatic continuation turn with no tool use, which is too conservative for long-running agent work.
 
@@ -39,6 +42,9 @@ At the time, keep the old checker capability mode defaulting to read-oriented in
 - In-memory sessions have degraded checker evidence unless a separate fallback is designed.
 - Unbounded checker history can grow persisted goal state; this is accepted until it becomes observable.
 - Existing config/docs/tests must migrate away from the old continuation fields.
+
+## Enforced by
+partly — `packages/extensions/goal-controller/extensions/goal-controller/wiring.test.ts` ("command start, checker continuation, and no-tool threshold are wired") and `packages/extensions/goal-controller/extensions/goal-controller/checker.test.ts` pin the session-navigation envelope, current leaf, branch counts and no-tool threshold; retention and degraded no-session behavior stay judgment.
 
 ## Source
 - Session: figure-out discussion in this repo on 2026-06-23

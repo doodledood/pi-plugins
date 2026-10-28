@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+advisor-consult
+
 ## Context
 We want a Pi advisor capability that the parent model can invoke when a stronger independent read could materially improve a risky or uncertain answer. The intended use cases include validating plans, architecture/design trade-offs, debugging hypotheses, diagnosis reads, security or edge-case concerns, final completion checks, and requests that call for an independent derivation, fresh read, adversarial review, confidence calibration, or second opinion.
 
@@ -42,6 +45,9 @@ Do not pass the parent transcript path to the advisor by default. The parent-aut
 - Prompt-governed side-effect boundaries are softer than a strict tool allowlist, so the prompt and default denylist must be sharp.
 - The parent model must write a good advisory brief; omitted context can still lead to weaker advice.
 - Broad extension/tool inheritance may expose locally risky tools unless the denylist is configured for that setup.
+
+## Enforced by
+partly — `packages/extensions/advisor-consult/extensions/advisor-consult/runner.test.ts` ("advisorArgs builds the expected subprocess invocation") and `child-profile.test.ts` ("resolveExcludedTools always includes the hard denylist") pin the independent subprocess and its denylist; the prompt-governed side-effect boundary stays judgment.
 
 ## Source
 - Session: figure-out log `/Users/aviram.kofman/.manifest-dev/logs/figure-out-log-20260709-080151.md`

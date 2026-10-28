@@ -63,6 +63,7 @@ function turn(args: Partial<TurnCacheStats> & { prompt?: number }): TurnCacheSta
   };
 }
 
+// Holds docs/adr/20260706-cache-efficiency-observability.md — weakening this test reverses that decision.
 test("session cache rate is cumulative token-weighted read share of prompt tokens", () => {
   const stats = computeSessionCacheStats([
     userEntry(),

@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+cache-optimization
+
 ## Context
 The `cache-optimization` extension originally treated all thinking-enabled Anthropic payloads as unpingable. That was safe but too narrow for modern Claude usage: Fable 5, Opus 4.6/4.7/4.8, and Sonnet 5 use adaptive thinking (`thinking: { type: "adaptive" }`) rather than budget-style `thinking.enabled` with `budget_tokens`.
 
@@ -64,3 +67,6 @@ Keep GPT/OpenAI out of this mechanism. OpenAI uses a different prompt-cache and 
 ## Verification
 - Live direct-Anthropic probes recorded in `/Users/aviram.kofman/.manifest-dev/logs/figure-out-log-20260707-133032.md`.
 - Unit tests cover adaptive classification, exact opaque replay, SSE `message_start` usage parsing, cache-read success, cache-creation/miss disarm, error/missing-message-start failure, budget-style rejection, GPT/OpenAI exclusion, direct-route guards, and existing standard keepalive behavior.
+
+## Enforced by
+`packages/extensions/cache-optimization/extensions/cache-optimization/keepalive.test.ts` ("adaptive thinking replays the captured provider payload opaquely and streams for usage proof", "adaptive refresh success requires cache-read usage and no cache creation") — pins opaque payload replay and the fail-closed cache-read proof.

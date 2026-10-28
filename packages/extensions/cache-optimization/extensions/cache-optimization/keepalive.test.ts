@@ -136,6 +136,7 @@ test("keepalive: never pings while idle at the prompt (no tool in flight)", asyn
   assert.equal(f.requests.length, 0);
 });
 
+// Holds docs/adr/20260707-cache-optimization-second-wave.md — weakening this test reverses that decision.
 test("keepalive: generic background-launch flag arms idle background work", async () => {
   const f = createFixture();
   f.keepalive.noteProviderRequest(anthropicPayload(), DIRECT_ROUTE);
@@ -446,6 +447,7 @@ test("keepalive: a disabled-thinking marker rides the ping unchanged (byte-ident
   assert.deepEqual(body.thinking, { type: "disabled" }, "marker preserved so the prefix stays identical");
 });
 
+// Holds docs/adr/20260707-adaptive-thinking-ttl-keepalive.md — weakening this test reverses that decision.
 test("keepalive: adaptive thinking replays the captured provider payload opaquely and streams for usage proof", async () => {
   const clock = { now: 1_700_000_000_000 };
   const requests: Fixture["requests"] = [];

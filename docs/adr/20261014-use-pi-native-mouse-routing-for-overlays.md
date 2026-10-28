@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+btw
+
 ## Context
 BTW and the `/cache` report scrolled with the mouse wheel by turning on SGR mouse reporting themselves (`\x1b[?1000h` / `\x1b[?1006h`), parsing raw sequences in `onTerminalInput`, and sharing the reporting mode through a process-global cooperative lease so overlapping overlays would not switch it off under each other. BTW also used those raw clicks to move focus between its pane and the main session.
 
@@ -32,6 +35,9 @@ For "click on main hands focus back", BTW wraps `handleMouse` on each of Pi's to
 - No mouse in Pi's regular screen mode; keyboard controls remain.
 - The main-click observer relies on Pi mounting its main screen as plain top-level components without their own layout nodes. A Pi layout change could make it miss clicks, and the fullscreen test is the tripwire.
 - Older Pi (0.80.x) is no longer supported by these packages.
+
+## Enforced by
+`packages/extensions/btw/test/ui-controller.test.ts` ("fullscreen Pi: wheel scrolls BTW, clicks move focus both ways and it sticks, and submit stays in BTW") — pins native mouse routing with no extension mouse-mode writes.
 
 ## Source
 - Session: BTW "nicer" work — Pi 1.2.0 in Warp, wheel and submit bugs, click-to-focus regression.

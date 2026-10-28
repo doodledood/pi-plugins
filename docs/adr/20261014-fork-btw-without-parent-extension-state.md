@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+btw
+
 ## Context
 BTW seeds its child session from a copy of the parent's branch entries. That copy included Pi `custom` entries: extension-private state that never reaches the model. Child extensions load in the same process and restore their state from the session on `session_start`, so the child inherited whatever the parent's extensions had stored. With goal-controller that meant a parent's active goal resumed inside the aside and fired continuation turns there, while the user only wanted to ask a question.
 
@@ -22,6 +25,9 @@ The child session file is written from the parent's entries with every `custom` 
 
 ### Negative
 - Child extensions start with fresh state, so an extension whose state the user would have wanted in the aside does not carry over.
+
+## Enforced by
+`packages/extensions/btw/test/fork-updates.test.ts` ("child fork drops parent extension state, re-chains the path, and remaps compaction") — pins that a fork carries no parent extension state.
 
 ## Source
 - Session: BTW "nicer" work — "any active goal must not fire in the side session".

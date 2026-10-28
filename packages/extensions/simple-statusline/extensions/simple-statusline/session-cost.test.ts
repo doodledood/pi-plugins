@@ -84,6 +84,7 @@ function writeSession(path: string, opts: { id: string; parentSession?: string; 
 
 // ── Pi's accounting rules (AC-1.2) ───────────────────────────────────────────
 
+// Holds docs/adr/20260728-session-tree-cost-accounting.md — weakening this test reverses that decision.
 test("all four of Pi's usage sources are counted, over every entry", () => {
   const acc = createAccumulator();
   for (const entry of [assistant(1), toolResult(2), compaction(0.5), branchSummary(0.25)]) accumulateEntry(acc, entry);

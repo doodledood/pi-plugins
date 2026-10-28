@@ -616,6 +616,7 @@ test("parent and BTW child overlap, share the workspace read-only, pull updates,
       "a notice alone stays out of the active child run",
     );
     assert.equal(child.session.pendingMessageCount, 0, "a notice alone is not queued into the run");
+    // Holds docs/adr/20261022-steer-main-with-extension-sent-user-messages.md — weakening this test reverses that decision.
     // Like the main chat, a prompt sent mid-run steers the run instead of waiting for it to end.
     await child.prompt(CHILD_PULL_PROMPT);
     assert.deepEqual(child.session.getSteeringMessages(), [CHILD_PULL_PROMPT], "the later prompt steers the running child");

@@ -3,6 +3,9 @@
 ## Status
 Accepted
 
+## Area
+cache-optimization
+
 ## Context
 A forensic pass over 14 days of Pi session files (~$4,700 spend, 1,359 sessions; investigation log `~/.manifest-dev/logs/figure-out-log-20260706-133500.md`) attributed ~$609 of modeled avoidable waste to named prompt-cache break mechanisms:
 
@@ -42,3 +45,6 @@ A forensic pass over 14 days of Pi session files (~$4,700 spend, 1,359 sessions;
 ## Related
 - `docs/adr/20260706-cache-efficiency-observability.md` — the observability layer (session cache rate, break attribution, fingerprinting) this extension inherits and relocates.
 - `docs/adr/20260624-keep-goal-statusline-separate.md` — the ambient-footer principle that pushed the toolkit out of simple-statusline.
+
+## Enforced by
+partly — `packages/extensions/cache-optimization/extensions/cache-optimization/keeper.test.ts` ("keeper: a burst past the threshold stamps exactly one marker at the previous tail position") and `keepalive.test.ts` (the arming and idle tests) pin the keeper and the bounded keepalive; the package split and retention policy stay judgment.

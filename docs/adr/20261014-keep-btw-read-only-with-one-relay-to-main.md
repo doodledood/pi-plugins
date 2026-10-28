@@ -3,6 +3,9 @@
 ## Status
 Accepted; amended by 20261022-steer-main-with-extension-sent-user-messages (relays steer main's current run instead of queuing as a follow-up)
 
+## Area
+btw
+
 ## Context
 BTW inherited the parent's full active tool set and was told only to "verify shared state before a conflicting write". In practice the side conversation is used to ask questions while the main session works, and an aside that edits the same workspace competes with main. Users also want a way to carry a conclusion reached in BTW back to main without retyping it.
 
@@ -26,6 +29,9 @@ The child-only `send_to_main` tool is the single path by which BTW adds anything
 ### Negative
 - Changes found in BTW need a relay and a main turn to land.
 - A model can still mutate through `bash` against instructions.
+
+## Enforced by
+partly — `packages/extensions/btw/test/fork-updates.test.ts` ("withholds edit/write/goal, and adds the child tools") and `runtime-integration.test.ts` ("send_to_main hands one user-voiced message to the parent") pin the withheld tools and the single relay; read-only use of `bash` stays prompt-governed.
 
 ## Source
 - Session: BTW "nicer" work — "make it read-only, only answer questions" and the `send_to_main` nice-to-have.

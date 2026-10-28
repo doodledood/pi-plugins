@@ -55,6 +55,7 @@ function expectedExtensionPath(name) {
   if (directoryEntryExtensions.has(name)) return `./extensions/${name}/index.ts`;
   return `./extensions/${name}.ts`;
 }
+// Holds docs/adr/20260623-ship-each-resource-as-its-own-package.md: every resource is its own installable package.
 function verifyPackage(pkgDir, resourceType, expectedPath) {
   mustExist(join(pkgDir, "package.json"));
   mustExist(join(pkgDir, "README.md"));
@@ -203,6 +204,7 @@ for (const name of expectedSetupSkills) {
 // new file. Copy one without the other and the reference dangles silently — no
 // install step fails, the rules are just gone. Checked here so it cannot.
 const setupAgentsFile = join(root, "setup", "AGENTS.md");
+// Holds docs/adr/20260820-split-coding-conventions-from-setup-agents.md.
 const setupConventions = join(root, "setup", "CODING_CONVENTIONS.md");
 mustExist(setupAgentsFile);
 mustExist(setupConventions);
@@ -301,6 +303,7 @@ for (const contract of recordTypeContracts) {
   }
 }
 
+// Holds docs/adr/20260811-keep-workplace-material-out-by-a-structure-scan.md.
 // Employer-specific material belongs in the local install, never in this repo. This is
 // published, and a term naming a workplace cannot be unpublished once pushed. A scan is
 // what keeps it out; the rule "don't commit work material" already let a stale test

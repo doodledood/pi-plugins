@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { OPENAI_RESPONSES_MIN_OUTPUT_TOKENS, floorMaxOutputTokens } from "./floor.ts";
 
+// Holds docs/adr/20260708-openai-max-output-floor-extension.md — weakening this test reverses that decision.
 test("floors a sub-minimum max_output_tokens up to the provider floor", () => {
   const result = floorMaxOutputTokens({ model: "gpt-5.5", max_output_tokens: 1 });
   assert.deepEqual(result, { model: "gpt-5.5", max_output_tokens: OPENAI_RESPONSES_MIN_OUTPUT_TOKENS });
