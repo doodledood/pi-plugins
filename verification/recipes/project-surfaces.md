@@ -21,6 +21,12 @@ Run: `node scripts/adr-index.mjs --check`
 Proves: the decision index and the North Star's strategy list are exactly what the records rebuild.
 Line: 0.2 s on darwin-arm64-12cpu
 
+### enforced
+Run: `node --test scripts/adr-enforced.test.mjs`
+Proves: every file a record in effect names under Enforced by exists and carries a comment citing
+that record.
+Line: 0.2 s on darwin-arm64-12cpu
+
 ## Gotchas
 
 - No walk scenario checks that a fresh reader understands these files; the first change that needs
