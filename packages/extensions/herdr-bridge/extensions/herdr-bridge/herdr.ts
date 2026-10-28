@@ -30,11 +30,6 @@ export interface PaneView {
   cwd?: string;
 }
 
-export interface WorkspaceView {
-  workspaceId: string;
-  label?: string;
-}
-
 /** Runs one `herdr` command and returns its standard output, or throws a {@link HerdrError}. */
 export type HerdrRunner = (args: readonly string[], options?: { timeoutMs?: number }) => Promise<string>;
 
@@ -103,6 +98,21 @@ function resultOf(stdout: string, command: string): Json {
   return parsed.result;
 }
 
+/**
+ * The parsed items of a list result. A missing list, or an item without its pane, tab and
+ * workspace ids, means Herdr's output changed shape: that fails loudly rather than reading as an
+ * empty session.
+ */
+function listOf<T>(result: Json, key: string, parse: (value: unknown) => T | undefined, command: string): T[] {
+  const items = result[key];
+  if (!Array.isArray(items)) throw new HerdrError(`herdr ${command} returned no ${key} list; Herdr's output may have changed shape`);
+  return items.map((item) => {
+    const parsed = parse(item);
+    if (!parsed) throw new HerdrError(`herdr ${command} listed an entry without pane, tab and workspace ids: ${JSON.stringify(item).slice(0, 200)}`);
+    return parsed;
+  });
+}
+
 function parseAgent(value: unknown): AgentView | undefined {
   if (!isObject(value)) return undefined;
   const paneId = str(value.pane_id);
@@ -133,26 +143,25 @@ function parsePane(value: unknown): PaneView | undefined {
   return { paneId, tabId, workspaceId, cwd: str(value.cwd) };
 }
 
+/** How long a typed prompt may take to show as work, or a question, in Herdr. */
+const PROMPT_TIMEOUT_MS = 20_000;
+
+/** Herdr refuses a new pane until its shell reaches its prompt; that refusal is worth waiting out. */
+export function isShellNotReady(error: unknown): boolean {
+  return error instanceof HerdrError && /not an available shell/i.test(error.message);
+}
+
 /** Typed Herdr commands over a runner. */
 export class Herdr {
   constructor(private readonly run: HerdrRunner) {}
 
   async listAgents(): Promise<AgentView[]> {
-    const result = resultOf(await this.run(["agent", "list"]), "agent list");
-    const agents = Array.isArray(result.agents) ? result.agents : [];
-    return agents.map(parseAgent).filter((agent): agent is AgentView => agent !== undefined);
+    return listOf(resultOf(await this.run(["agent", "list"]), "agent list"), "agents", parseAgent, "agent list");
   }
 
-  async listWorkspaces(): Promise<WorkspaceView[]> {
-    const result = resultOf(await this.run(["workspace", "list"]), "workspace list");
-    const workspaces = Array.isArray(result.workspaces) ? result.workspaces : [];
-    return workspaces.flatMap((w) => (isObject(w) && str(w.workspace_id) ? [{ workspaceId: str(w.workspace_id)!, label: str(w.label) }] : []));
-  }
-
-  async listPanes(workspaceId: string): Promise<PaneView[]> {
-    const result = resultOf(await this.run(["pane", "list", "--workspace", workspaceId]), "pane list");
-    const panes = Array.isArray(result.panes) ? result.panes : [];
-    return panes.map(parsePane).filter((pane): pane is PaneView => pane !== undefined);
+  /** Every pane in this Herdr session. */
+  async listPanes(): Promise<PaneView[]> {
+    return listOf(resultOf(await this.run(["pane", "list"]), "pane list"), "panes", parsePane, "pane list");
   }
 
   /** Creates a workspace for `cwd` and returns its first pane. */
@@ -176,8 +185,9 @@ export class Herdr {
    * pane's shell takes a moment to reach its prompt; until it does, Herdr refuses the pane as not an
    * available shell, so that refusal is retried for up to `shellWaitMs`.
    */
-  async startPi(name: string, paneId: string, timeoutMs: number, shellWaitMs = 20_000, retryMs = 250): Promise<AgentView> {
-    const deadline = Date.now() + shellWaitMs;
+  async startPi(name: string, paneId: string, options: { timeoutMs: number; retryMs: number; shellWaitMs?: number }): Promise<AgentView> {
+    const { timeoutMs, retryMs } = options;
+    const deadline = Date.now() + (options.shellWaitMs ?? 20_000);
     for (;;) {
       try {
         const stdout = await this.run(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", String(timeoutMs)], {
@@ -187,8 +197,7 @@ export class Herdr {
         if (!agent) throw new HerdrError("herdr agent start returned no agent");
         return agent;
       } catch (error) {
-        const shellNotReady = error instanceof HerdrError && /not an available shell/i.test(error.message);
-        if (!shellNotReady || Date.now() >= deadline) throw error;
+        if (!isShellNotReady(error) || Date.now() >= deadline) throw error;
         await new Promise((done) => setTimeout(done, retryMs));
       }
     }
@@ -198,9 +207,9 @@ export class Herdr {
    * Types `text` into an agent and submits it, returning once Herdr sees the agent start working on
    * it (or stop at a question), never waiting for the turn to end.
    */
-  async prompt(target: string, text: string, timeoutMs = 20_000): Promise<void> {
-    await this.run(["agent", "prompt", target, text, "--wait", "--until", "working", "--until", "blocked", "--timeout", String(timeoutMs)], {
-      timeoutMs: timeoutMs + 10_000,
+  async prompt(target: string, text: string): Promise<void> {
+    await this.run(["agent", "prompt", target, text, "--wait", "--until", "working", "--until", "blocked", "--timeout", String(PROMPT_TIMEOUT_MS)], {
+      timeoutMs: PROMPT_TIMEOUT_MS + 10_000,
     });
   }
 

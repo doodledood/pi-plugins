@@ -50,6 +50,14 @@ test("names: one asked for is checked; none asked for comes from the folder, avo
   assert.throws(() => chooseName("taken", "/x", new Set(["taken"])), /already named "taken"/);
 });
 
+/** A failed start ran a prefix of the start sequence and nothing else: no close, no keys. */
+function onlyStartSequence(fake: FakeHerdr): void {
+  const allowed = ["workspace create", "tab create", "agent start", "agent prompt"];
+  const writes = fake.writes().map((c) => `${c[0]} ${c[1]}`);
+  assert.ok(writes.every((w) => allowed.includes(w)), `only start-sequence commands, got ${writes.join(", ")}`);
+  assert.ok(writes.filter((w) => w === "agent prompt").length <= 2, "at most two prompt attempts");
+}
+
 test("failures name the cause, and a failed start names what it left and how to close it", async () => {
   const dir = folder();
   await assert.rejects(startSession(new Herdr(new FakeHerdr().run), { folder: join(dir, "nope"), prompt: "go" }, { cwd: "/", env: {} }), /does not exist/);
@@ -64,6 +72,7 @@ test("failures name the cause, and a failed start names what it left and how to 
     startSession(new Herdr(notReady.run), { folder: dir, prompt: "go" }, { cwd: "/", env: {} }),
     /stopped at a startup prompt.*left workspace w1 open; close it with `herdr workspace close w1`/s,
   );
+  onlyStartSequence(notReady);
 
   const existing = new FakeHerdr();
   existing.workspaces.push({ workspaceId: "w3", label: "p" });
@@ -73,6 +82,7 @@ test("failures name the cause, and a failed start names what it left and how to 
     startSession(new Herdr(existing.run), { folder: dir, name: "x", prompt: "go" }, { cwd: "/", env: {} }),
     /first prompt was not delivered: blocked.*close it with `herdr pane close w3:p\d+`/s,
   );
+  onlyStartSequence(existing);
 
   const unreachable = new FakeHerdr();
   unreachable.failures.set("agent list", { code: "herdr_not_found", message: "the `herdr` command was not found on PATH" });
@@ -111,6 +121,16 @@ test("a stalled first prompt that lands late is not typed again; one that never 
     /first prompt was not delivered/,
   );
   assert.equal(stuck.prompts.length, 2, "never more than two attempts");
+  onlyStartSequence(stuck);
+
+  const slash = new FakeHerdr();
+  slash.stallPrompts = 1;
+  await assert.rejects(
+    startSession(new Herdr(slash.run), { folder: dir, name: "slash", prompt: "/orchestrate" }, { cwd: "/", env: {}, landedTimeoutMs: 50, pollMs: 10 }),
+    /cannot be confirmed; check it with `herdr agent read slash --source visible`/,
+  );
+  assert.equal(slash.prompts.length, 1, "a slash command is never typed twice");
+  onlyStartSequence(slash);
 });
 
 test("promptLanded reads the user messages of a session file", () => {
@@ -145,6 +165,7 @@ test("a Pi that exits before its first prompt, or never reports ready, says so",
     startSession(herdr, { folder: dir, name: "brief", prompt: "go" }, { cwd: "/", env: {}, pollMs: 10 }),
     /Pi exited before it was ready for its first prompt.*close it with `herdr workspace close w1`/s,
   );
+  onlyStartSequence(gone);
 
   const unknown = new FakeHerdr();
   const herdr2 = new Herdr(unknown.run);
@@ -158,4 +179,5 @@ test("a Pi that exits before its first prompt, or never reports ready, says so",
     startSession(herdr2, { folder: dir, name: "blind", prompt: "go" }, { cwd: "/", env: {}, pollMs: 10, readyTimeoutMs: 50 }),
     /Herdr cannot read its state.*herdr integration install pi/s,
   );
+  onlyStartSequence(unknown);
 });

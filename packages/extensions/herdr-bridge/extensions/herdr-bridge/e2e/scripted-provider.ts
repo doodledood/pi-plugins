@@ -22,7 +22,7 @@ const ONE = {
       header: "Topic",
       options: [
         { label: "Software", description: "A joke about programmers." },
-        { label: "Insurance", description: "A joke about claims." },
+        { label: "Cooking", description: "A joke about kitchens." },
       ],
     },
   ],

@@ -7,6 +7,7 @@
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { WAKEUP_TYPE } from "../messages.ts";
 import {
   BRIDGE_EXTENSION,
   Failure,
@@ -34,7 +35,7 @@ const notBlocked = (run: Run, name: string) => {
 /** The wake-up arrival time from its session entry, in ms. */
 function wakeupTimes(session: string, match: (text: string) => boolean): number[] {
   return entries(session)
-    .filter((e) => e.type === "custom_message" && e.customType === "herdr-bridge-wakeup" && match(typeof e.content === "string" ? e.content : JSON.stringify(e.content)))
+    .filter((e) => e.type === "custom_message" && e.customType === WAKEUP_TYPE && match(typeof e.content === "string" ? e.content : JSON.stringify(e.content)))
     .map((e) => Date.parse(e.timestamp));
 }
 
@@ -77,7 +78,6 @@ async function orchestrate(run: Run, workerPrompt: string, opts: { worker?: stri
 }
 
 const scenarios: Record<string, (run: Run) => Promise<void>> = {
-  // AC-1.1 and the finished/idle half of AC-3.1 and AC-3.2.
   async start(run) {
     const { orchName, orchSession, worker, folder } = await orchestrate(run, "hello worker");
     check(worker.agent === "pi", "the started pane runs an interactive Pi that Herdr recognizes as kind pi", worker.agent);
@@ -117,7 +117,6 @@ const scenarios: Record<string, (run: Run) => Promise<void>> = {
 };
 
 Object.assign(scenarios, {
-  // AC-1.5: a worker that loads the person's installed packages comes up and gets its first prompt.
   async "real-setup"(run: Run) {
     const { worker } = await orchestrate(run, "hello real setup", { worker: "realworker" });
     const session = await waitFor("the real-setup worker's session file", () => {
@@ -130,7 +129,6 @@ Object.assign(scenarios, {
     check(worker.agent === "pi", "Herdr recognizes the worker on the person's real setup as an idle Pi");
   },
 
-  // AC-2.1: Herdr reports blocked exactly while a dialog is open.
   async bridge(run: Run) {
     const spy = join(run.root, "blocked-events.jsonl");
     run.startPi("dlg", run.folder("dlg"), { HERDR_BRIDGE_SPY: spy });
@@ -161,7 +159,6 @@ Object.assign(scenarios, {
     check(await waitFor("unblocked after the outer dialog", () => notBlocked(run, "dlg")), "and is no longer blocked once the outer one closes");
   },
 
-  // AC-3.1 (blocked, gone, untracked, latency) and AC-3.2 (mid-turn delivery).
   async wakeups(run: Run) {
     const { orchName, orchSession } = await orchestrate(run, "SLOW 5000", { worker: "slow" });
     run.prompt(orchName, "SLOW 12000");
@@ -176,7 +173,7 @@ Object.assign(scenarios, {
 
     run.prompt(orchName, call("start_agent_session", { folder: run.folder("asker"), name: "asker", prompt: "ASK_ONE" }));
     const blocked = await waitFor("the blocked wake-up for asker", () => wakeups(orchSession).find((w) => w.includes("`asker`") && w.includes("waiting at a question")), 60_000);
-    check(blocked.includes("Which joke topic should I use?") && blocked.includes("Software") && blocked.includes("Insurance"), "the blocked wake-up names the worker and carries its question and options", blocked);
+    check(blocked.includes("Which joke topic should I use?") && blocked.includes("Software") && blocked.includes("Cooking"), "the blocked wake-up names the worker and carries its question and options", blocked);
 
     run.startPi("loner", run.folder("loner"));
     run.prompt("loner", "hello from a session nobody started through the tool");
@@ -193,7 +190,6 @@ Object.assign(scenarios, {
     check(wakeups(orchSession).filter((w) => w.includes("`slow`") && w.includes("has exited")).length === 1, "the exit is reported once");
   },
 
-  // AC-3.4: a started session that stays working wakes the orchestrator each quiet interval.
   async quiet(run: Run) {
     const { orchSession } = await orchestrate(run, "SLOW 27000", { worker: "plodder", orchEnv: { HERDR_BRIDGE_QUIET_INTERVAL_MS: "8000" } });
     await waitFor("the finished wake-up after the quiet ones", () => wakeups(orchSession).find((w) => w.includes("`plodder`") && w.includes("finished a turn")), 60_000);
@@ -203,7 +199,6 @@ Object.assign(scenarios, {
     check(wakeups(orchSession).filter((w) => w.includes("`plodder`") && w.includes("with no change")).length === quiet.length, "none once it changed state");
   },
 
-  // AC-3.3: wake-ups continue after a reload and after a resume in a new Pi process.
   async reload(run: Run) {
     const { orchName, orchSession } = await orchestrate(run, "SLOW 15000", { worker: "steady" });
     run.herdr(["agent", "prompt", orchName, "/reload"]);
@@ -230,7 +225,6 @@ Object.assign(scenarios, {
     check(wakeups(orchSession).filter((w) => w.includes("`quitter`")).length === 1, "the gone report is not repeated");
   },
 
-  // AC-4.1: the blocked wake-up carries the question and steps that answer it.
   async answer(run: Run) {
     const cases = [
       { worker: "pick", prompt: "ASK_ONE", expect: ["Software"] },
@@ -246,7 +240,7 @@ Object.assign(scenarios, {
         run.prompt(orchName, call("start_agent_session", { folder: run.folder(c.worker), name: c.worker, prompt: c.prompt }));
       }
       const wakeup = await waitFor(`the blocked wake-up for ${c.worker}`, () => wakeups(orchSession).find((w) => w.includes(`\`${c.worker}\``) && w.includes("waiting at a question")), 90_000);
-      check(wakeup.includes("Which joke topic should I use?") && wakeup.includes("1. Software") && wakeup.includes("2. Insurance"), `${c.worker}: the wake-up carries the question and every option label`, wakeup);
+      check(wakeup.includes("Which joke topic should I use?") && wakeup.includes("1. Software") && wakeup.includes("2. Cooking"), `${c.worker}: the wake-up carries the question and every option label`, wakeup);
       check(wakeup.includes("Bring a call that needs the person to them"), `${c.worker}: it says to bring a call that needs the person to them`);
       const numbered = commandsIn(stepTemplate(wakeup, "numbered option N"))[0]!;
       if (c.worker === "pick") {
@@ -285,9 +279,10 @@ async function main(): Promise<void> {
   let failed = 0;
   for (const name of chosen) {
     const extensions = name === "real-setup" ? [...installedExtensions(), SCRIPTED_PROVIDER, BRIDGE_EXTENSION, SPY] : BASE;
-    const run = await new Run({ extensions }).open();
+    const run = new Run({ extensions });
     console.log(`# ${name} (herdr session ${run.id})`);
     try {
+      await run.open();
       await scenarios[name]!(run);
     } catch (error) {
       failed++;

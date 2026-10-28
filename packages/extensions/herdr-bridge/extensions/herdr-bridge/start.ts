@@ -16,6 +16,12 @@ const READY_POLL_MS = 250;
 /** How long a stalled first prompt may take to show up in the session file before it is typed again. */
 export const LANDED_TIMEOUT_MS = 15_000;
 
+/** The number of entries a session file holds, 0 when it does not exist yet. */
+function entryCount(sessionPath: string | undefined): number {
+  if (!sessionPath || !existsSync(sessionPath)) return 0;
+  return readFileSync(sessionPath, "utf8").split("\n").filter(Boolean).length;
+}
+
 /** True once the session file records `prompt` as a user message. */
 export function promptLanded(sessionPath: string | undefined, prompt: string): boolean {
   if (!sessionPath || !existsSync(sessionPath)) return false;
@@ -36,20 +42,35 @@ export function promptLanded(sessionPath: string | undefined, prompt: string): b
 
 /**
  * Types the first prompt. A Pi still busy with its own startup can let Herdr's five-second check
- * pass before it starts working, so a stalled prompt is not typed again until the session file has
- * had time to show it landed; only a prompt that never landed is typed a second time.
+ * pass before it starts working, so a stalled prompt counts as delivered once the session file
+ * records it, grows at all, or Herdr shows the agent at work or finished since. Only a plain prompt
+ * that shows none of that is typed a second time: a slash command may run without leaving a trace,
+ * and without a session file there is nothing to check, so those are reported instead of retyped.
  */
-async function deliverFirstPrompt(herdr: Herdr, name: string, prompt: string, sessionPath: string | undefined, landedTimeoutMs: number, pollMs: number): Promise<void> {
+async function deliverFirstPrompt(
+  herdr: Herdr,
+  agent: AgentView,
+  prompt: string,
+  sessionPath: string | undefined,
+  options: { landedTimeoutMs: number; pollMs: number },
+): Promise<void> {
+  const name = agent.name!;
+  const entriesBefore = entryCount(sessionPath);
   try {
     await herdr.prompt(name, prompt);
     return;
   } catch (error) {
     if (!(error instanceof HerdrError && error.code === "agent_prompt_stalled")) throw error;
   }
-  const deadline = Date.now() + landedTimeoutMs;
+  const deadline = Date.now() + options.landedTimeoutMs;
   while (Date.now() < deadline) {
-    if (promptLanded(sessionPath, prompt)) return;
-    await new Promise((done) => setTimeout(done, pollMs));
+    if (promptLanded(sessionPath, prompt) || entryCount(sessionPath) > entriesBefore) return;
+    const now = await herdr.getAgent(name);
+    if (now && (now.status === "working" || now.status === "blocked" || (now.completionSeq ?? 0) > (agent.completionSeq ?? 0))) return;
+    await new Promise((done) => setTimeout(done, options.pollMs));
+  }
+  if (!sessionPath || prompt.trimStart().startsWith("/")) {
+    throw new Error(`Herdr saw no work start within ${Math.round(options.landedTimeoutMs / 1000)} s and the prompt cannot be confirmed; check it with \`herdr agent read ${name} --source visible\` before sending it again`);
   }
   await herdr.prompt(name, prompt);
 }
@@ -95,7 +116,6 @@ export interface StartOptions {
   cwd: string;
   /** Environment the new tab gets, such as the agent directory this session runs with. */
   env: Record<string, string>;
-  timeoutMs?: number;
   readyTimeoutMs?: number;
   landedTimeoutMs?: number;
   /** How often the start sequence re-checks a pane, an agent or a session file while it waits. */
@@ -142,11 +162,7 @@ function sameFolder(cwd: string | undefined, folder: string): boolean {
 
 /** A workspace already holding a pane in `folder`, if Herdr has one. */
 async function workspaceFor(herdr: Herdr, folder: string): Promise<string | undefined> {
-  for (const workspace of await herdr.listWorkspaces()) {
-    const panes = await herdr.listPanes(workspace.workspaceId);
-    if (panes.some((pane) => sameFolder(pane.cwd, folder))) return workspace.workspaceId;
-  }
-  return undefined;
+  return (await herdr.listPanes()).find((pane) => sameFolder(pane.cwd, folder))?.workspaceId;
 }
 
 function leftBehind(pane: PaneView, createdWorkspace: boolean): string {
@@ -177,7 +193,7 @@ export async function startSession(herdr: Herdr, request: StartRequest, options:
 
   let started: AgentView;
   try {
-    started = await herdr.startPi(name, pane.paneId, options.timeoutMs ?? START_TIMEOUT_MS, undefined, pollMs);
+    started = await herdr.startPi(name, pane.paneId, { timeoutMs: START_TIMEOUT_MS, retryMs: pollMs });
   } catch (error) {
     throw new Error(`Pi did not come up in the new pane: ${describe(error)}. ${leftBehind(pane, createdWorkspace)}`);
   }
@@ -186,7 +202,10 @@ export async function startSession(herdr: Herdr, request: StartRequest, options:
     // Herdr reports a fresh Pi ready before its extensions finish loading; its integration reports
     // idle once the session has started, which is when typed input lands.
     baseline = await settle(herdr, name, options.readyTimeoutMs ?? READY_TIMEOUT_MS, pollMs);
-    await deliverFirstPrompt(herdr, name, request.prompt, started.sessionPath ?? baseline.sessionPath, options.landedTimeoutMs ?? LANDED_TIMEOUT_MS, pollMs);
+    await deliverFirstPrompt(herdr, baseline, request.prompt, started.sessionPath ?? baseline.sessionPath, {
+      landedTimeoutMs: options.landedTimeoutMs ?? LANDED_TIMEOUT_MS,
+      pollMs,
+    });
   } catch (error) {
     throw new Error(`Pi started as "${name}" but its first prompt was not delivered: ${describe(error)}. ${leftBehind(pane, createdWorkspace)}`);
   }

@@ -21,15 +21,10 @@ export interface TrackedSession {
 /** What a started session is doing, as far as its starter cares. */
 export type Phase = "working" | "finished" | "blocked";
 
-export type WakeupKind = "finished" | "blocked" | "quiet" | "gone";
-
-export interface Wakeup {
-  kind: WakeupKind;
-  name: string;
-  paneId: string;
-  /** Minutes it has stayed working, for a quiet wake-up. */
-  quietMinutes?: number;
-}
+export type Wakeup =
+  | { kind: "finished" | "blocked" | "gone"; name: string; paneId: string }
+  /** `quietMinutes`: how long it has stayed working. */
+  | { kind: "quiet"; name: string; paneId: string; quietMinutes: number };
 
 function phaseOf(status: AgentStatus): Phase | undefined {
   switch (status) {

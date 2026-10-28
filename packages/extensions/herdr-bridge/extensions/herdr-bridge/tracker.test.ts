@@ -38,6 +38,12 @@ test("a turn that finished and restarted between two looks still wakes, through 
   assert.deepEqual(kinds(step.wakeups), ["finished"]);
 });
 
+test("leaving a question back to work after finishing a turn between two looks still wakes as finished", () => {
+  const blocked = observe([track("worker", "w1:p2", 0, 1)], [agent("blocked", 1)], 1_000);
+  const step = observe(blocked.tracked, [agent("working", 2)], 2_000);
+  assert.deepEqual(kinds(step.wakeups), ["finished"]);
+});
+
 test("blocking wakes once, and unblocking back to work adds nothing", () => {
   let step = observe([track("worker", "w1:p2", 0, 1)], [agent("blocked", 1)], 1_000);
   assert.deepEqual(kinds(step.wakeups), ["blocked"]);
@@ -68,12 +74,12 @@ test("a session working with no change wakes after each quiet interval, and not 
   assert.deepEqual(kinds(step.wakeups), []);
   step = observe(step.tracked, [agent("working", 1)], 10 * MIN);
   assert.deepEqual(kinds(step.wakeups), ["quiet"]);
-  assert.equal(step.wakeups[0]!.quietMinutes, 10);
+  assert.deepEqual(step.wakeups[0], { kind: "quiet", name: "worker", paneId: "w1:p2", quietMinutes: 10 });
   step = observe(step.tracked, [agent("working", 1)], 15 * MIN);
   assert.deepEqual(kinds(step.wakeups), []);
   step = observe(step.tracked, [agent("working", 1)], 20 * MIN);
   assert.deepEqual(kinds(step.wakeups), ["quiet"]);
-  assert.equal(step.wakeups[0]!.quietMinutes, 20);
+  assert.deepEqual(step.wakeups[0], { kind: "quiet", name: "worker", paneId: "w1:p2", quietMinutes: 20 });
   step = observe(step.tracked, [agent("idle", 2)], 21 * MIN);
   assert.deepEqual(kinds(step.wakeups), ["finished"]);
   step = observe(step.tracked, [agent("idle", 2)], 40 * MIN);
@@ -85,7 +91,7 @@ test("only tracked sessions wake: another agent's changes add nothing", () => {
   assert.deepEqual(kinds(step.wakeups), []);
 });
 
-test("generated sequences: one wake-up per real change, never two in a row for the same state", () => {
+test("generated sequences: blocked is never reported twice without a change between", () => {
   const statuses: AgentStatus[] = ["working", "idle", "done", "blocked", "unknown"];
   let seed = 7;
   const rand = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;

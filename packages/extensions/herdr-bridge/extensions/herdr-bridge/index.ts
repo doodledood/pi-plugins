@@ -7,7 +7,8 @@
 //
 // It does nothing outside the primary interactive Pi of a Herdr pane, and it never closes,
 // types into or answers another session: those stay with the agent, through Herdr's own commands.
-import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import { Herdr, cliRunner, type AgentView } from "./herdr.ts";
 import { SCREEN_LINES, WAKEUP_TYPE, wakeupText } from "./messages.ts";
 import { type StartedSession, startSession } from "./start.ts";
@@ -45,32 +46,33 @@ export function eligible(env: NodeJS.ProcessEnv, mode: string | undefined): bool
   return env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && mode === "tui";
 }
 
-/** The slice of Pi's extension API this package uses; the real API satisfies it. */
-export interface BridgeApi {
-  on(event: string, handler: (event: any, ctx: any) => unknown): unknown;
-  registerTool(tool: any): void;
-  sendMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void;
-  appendEntry(customType: string, data?: unknown): void;
-  events: { emit(channel: string, data: unknown): void };
-}
+/** The slice of Pi's extension API this package uses. */
+export type BridgeApi = Pick<ExtensionAPI, "on" | "registerTool" | "sendMessage" | "appendEntry" | "events">;
 
 export interface BridgeDeps {
   herdr?: Herdr;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  pollMs?: number;
-  quietIntervalMs?: number;
   setInterval?: (fn: () => void, ms: number) => unknown;
   clearInterval?: (handle: unknown) => void;
 }
 
+/** The quiet interval: HERDR_BRIDGE_QUIET_INTERVAL_MS when it is a positive number of ms, else ten minutes. */
+export function quietIntervalFrom(env: NodeJS.ProcessEnv): number {
+  const configured = Number(env.HERDR_BRIDGE_QUIET_INTERVAL_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_QUIET_INTERVAL_MS;
+}
+
+const minutes = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)} seconds`);
+
 const StartParams = Type.Object({
   folder: Type.String({ description: "The folder the session works in; a relative path resolves against this session's folder." }),
   prompt: Type.String({ description: "The session's first message, sent as if typed." }),
-  name: Type.Optional(Type.String({ description: "Herdr agent name: 1-32 lowercase letters, digits, - or _. Defaults to one made from the folder name." })),
+  name: Type.Optional(Type.String({ description: "Herdr agent name: 1-32 lowercase letters, digits, - or _, starting with a letter. Defaults to one made from the folder name." })),
 });
 
-type Entry = { type?: string; customType?: string; data?: any };
+/** A session entry as this extension reads its own: only custom entries matter. */
+type Entry = { type: string; customType?: string; data?: any };
 
 /** Started sessions still to follow, from this session's own entries on its current branch. */
 export function trackedFromEntries(entries: readonly Entry[], now: number): TrackedSession[] {
@@ -96,8 +98,7 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
     const env = deps.env ?? process.env;
     const herdr = deps.herdr ?? new Herdr(cliRunner());
     const now = deps.now ?? Date.now;
-    const pollMs = deps.pollMs ?? POLL_MS;
-    const quietMs = deps.quietIntervalMs ?? (Number(env.HERDR_BRIDGE_QUIET_INTERVAL_MS) || DEFAULT_QUIET_INTERVAL_MS);
+    const quietMs = quietIntervalFrom(env);
     const startTimer = deps.setInterval ?? ((fn, ms) => setInterval(fn, ms));
     const stopTimer = deps.clearInterval ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
     const owner = {};
@@ -117,7 +118,32 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
 
     function ensurePolling(): void {
       if (!active || timer !== undefined || tracked.length === 0) return;
-      timer = startTimer(() => void poll(), pollMs);
+      timer = startTimer(() => {
+        poll().catch((error) => {
+          // A poll that throws past its own handling must not take Pi down; the next poll retries.
+          failures++;
+          if (failures === FAILURES_BEFORE_NOTICE) notifyFailure(error);
+        });
+      }, POLL_MS);
+    }
+
+    function notifyFailure(error: unknown): void {
+      if (!active) return;
+      // It wakes the session: an idle orchestrator would otherwise wait forever for wake-ups that
+      // cannot arrive. One turn, once per run of failures.
+      pi.sendMessage(
+        {
+          customType: WAKEUP_TYPE,
+          content: `herdr-bridge cannot read Herdr, so wake-ups for the sessions you started are not arriving: ${error instanceof Error ? error.message : String(error)}. It keeps trying; check the sessions with \`herdr agent list\` meanwhile.`,
+          display: true,
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    }
+
+    /** Records where a started session stands, so a reload or resume continues from there. */
+    function persist(session: TrackedSession): void {
+      pi.appendEntry(PHASE_ENTRY, { paneId: session.paneId, phase: session.phase, completionSeq: session.completionSeq });
     }
 
     async function deliver(wakeup: Wakeup): Promise<void> {
@@ -145,16 +171,7 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
           agents = await herdr.listAgents();
         } catch (error) {
           failures++;
-          if (failures === FAILURES_BEFORE_NOTICE && active) {
-            pi.sendMessage(
-              {
-                customType: WAKEUP_TYPE,
-                content: `herdr-bridge cannot read Herdr, so wake-ups for the sessions you started are not arriving: ${error instanceof Error ? error.message : String(error)}. It keeps trying; check the sessions with \`herdr agent list\` meanwhile.`,
-                display: true,
-              },
-              { triggerTurn: false },
-            );
-          }
+          if (failures === FAILURES_BEFORE_NOTICE) notifyFailure(error);
           return;
         }
         failures = 0;
@@ -162,15 +179,23 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
         const previous = new Map(tracked.map((session) => [session.paneId, session]));
         const result = observe(tracked, agents, now(), quietMs);
         tracked = result.tracked;
-        for (const session of tracked) {
-          const before = previous.get(session.paneId);
-          if (before && (before.phase !== session.phase || before.completionSeq !== session.completionSeq)) {
-            pi.appendEntry(PHASE_ENTRY, { paneId: session.paneId, phase: session.phase, completionSeq: session.completionSeq });
+        const byPane = new Map(tracked.map((session) => [session.paneId, session]));
+        const persisted = new Set<string>();
+        // Each wake-up is delivered before its session's new state is recorded: if the session
+        // shuts down mid-delivery, a reload repeats the wake-up rather than losing it.
+        for (const wakeup of result.wakeups) {
+          await deliver(wakeup);
+          if (!active) return;
+          if (wakeup.kind === "gone") pi.appendEntry(ENDED_ENTRY, { paneId: wakeup.paneId });
+          else if (byPane.has(wakeup.paneId)) {
+            persist(byPane.get(wakeup.paneId)!);
+            persisted.add(wakeup.paneId);
           }
         }
-        for (const wakeup of result.wakeups) {
-          if (wakeup.kind === "gone") pi.appendEntry(ENDED_ENTRY, { paneId: wakeup.paneId });
-          await deliver(wakeup);
+        for (const session of tracked) {
+          const before = previous.get(session.paneId);
+          const changed = before && (before.phase !== session.phase || before.completionSeq !== session.completionSeq);
+          if (changed && !persisted.has(session.paneId)) persist(session);
         }
         if (tracked.length === 0) stopPolling();
       } finally {
@@ -191,28 +216,28 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
         name: "start_agent_session",
         label: "Start agent session",
         description:
-          "Start a separate, interactive Pi agent session in its own Herdr tab, working in a folder, with a first prompt. The person can switch to it and type in it, and it keeps running on its own; this session gets a message when it finishes a turn, waits at a question, stays working for 10 minutes with no change, or exits. A subagent is different: a child task inside this session.",
+          `Start a separate, interactive Pi agent session in its own Herdr tab, working in a folder, with a first prompt. The person can switch to it and type in it, and it keeps running on its own; this session gets a message when it finishes a turn, waits at a question, stays working for ${minutes(quietMs)} with no change, or exits. A subagent is different: a child task inside this session.`,
         promptSnippet: "Start a separate, interactive Pi session in its own Herdr tab, in a folder, with a first prompt.",
         promptGuidelines: [
-          "Use start_agent_session when the user or a skill asks to start, spin up, open or create a new session, agent session or run; use a subagent only when a child task inside this session is asked for.",
+          "Use start_agent_session when the user or a skill asks to start, spin up, open or create a new session, agent session or run; when a request could mean either, a subagent is a child task inside this session.",
           "Follow sessions you started with Herdr's agent commands: `herdr agent list` and `herdr agent get <name>` for their state, `herdr agent read <name> --source recent --lines 80` for their output, `herdr agent prompt <name> \"<text>\"` to message one, and `herdr pane close <pane>` to stop one you started.",
         ],
         parameters: StartParams,
-        async execute(_toolCallId: string, params: { folder: string; prompt: string; name?: string }) {
+        async execute(_toolCallId: string, params: Static<typeof StartParams>) {
           const agentDir = env.PI_CODING_AGENT_DIR;
           const session = await startSession(herdr, params, { cwd, env: agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {} });
           follow(session);
           const lines = [
             `Started Pi session "${session.name}" in ${session.folder}: Herdr pane ${session.paneId}, tab ${session.tabId}, workspace ${session.workspaceId}.`,
             session.sessionPath ? `Its Pi session file: ${session.sessionPath}` : "Herdr did not report its Pi session file yet.",
-            `The first prompt was sent. You will get a message when it finishes a turn, waits at a question, stays working for ${Math.round(quietMs / 60_000)} minutes with no change, or exits.`,
+            `The first prompt was sent. You will get a message when it finishes a turn, waits at a question, stays working for ${minutes(quietMs)} with no change, or exits.`,
           ];
           return { content: [{ type: "text", text: lines.join("\n") }], details: session };
         },
       });
     }
 
-    pi.on("ui_prompt_start", (event: { title?: string }) => {
+    pi.on("ui_prompt_start", (event) => {
       if (!active) return;
       pi.events.emit("herdr:blocked", { active: true, label: event.title || "waiting for an answer" });
     });
@@ -222,13 +247,13 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
       pi.events.emit("herdr:blocked", { active: false });
     });
 
-    pi.on("session_start", (_event: unknown, ctx: { mode?: string; cwd?: string; sessionManager?: { getBranch(): Entry[] } }) => {
+    pi.on("session_start", (_event, ctx) => {
       stopPolling();
       active = eligible(env, ctx.mode) && claimPrimary(owner);
       if (!active) return;
-      cwd = ctx.cwd ?? cwd;
+      cwd = ctx.cwd;
       registerTool();
-      tracked = trackedFromEntries(ctx.sessionManager?.getBranch() ?? [], now());
+      tracked = trackedFromEntries(ctx.sessionManager.getBranch() as Entry[], now());
       failures = 0;
       ensurePolling();
     });

@@ -5,12 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { FakeHerdr } from "./fake-herdr.ts";
 import { Herdr } from "./herdr.ts";
-import { ENDED_ENTRY, PHASE_ENTRY, STARTED_ENTRY, type BridgeApi, createHerdrBridge, releasePrimary } from "./index.ts";
+import { ENDED_ENTRY, PHASE_ENTRY, STARTED_ENTRY, type BridgeApi, createHerdrBridge, quietIntervalFrom } from "./index.ts";
 import { WAKEUP_TYPE } from "./messages.ts";
 
 const HERDR_ENV = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" };
 
-class FakePi implements BridgeApi {
+class FakePi {
   handlers = new Map<string, ((event: any, ctx: any) => unknown)[]>();
   tools: any[] = [];
   messages: { message: any; options: any }[] = [];
@@ -53,24 +53,29 @@ class Clock {
   }
 }
 
-function setup(env: NodeJS.ProcessEnv = HERDR_ENV) {
-  const fake = new FakeHerdr();
+function setup(env: NodeJS.ProcessEnv = HERDR_ENV, fake = new FakeHerdr()) {
   const clock = new Clock();
   const pi = new FakePi();
-  createHerdrBridge({ herdr: new Herdr(fake.run), env, now: clock.now, setInterval: clock.setInterval, clearInterval: clock.clearInterval, quietIntervalMs: 60_000 })(pi);
+  const bridgeEnv = { HERDR_BRIDGE_QUIET_INTERVAL_MS: "60000", ...env };
+  createHerdrBridge({ herdr: new Herdr(fake.run), env: bridgeEnv, now: clock.now, setInterval: clock.setInterval, clearInterval: clock.clearInterval })(pi as unknown as BridgeApi);
   return { fake, clock, pi };
 }
+
+/** A branch holding one started session, so a gated-off bridge would have something to poll. */
+const STARTED = [{ type: "custom", customType: STARTED_ENTRY, data: { name: "w", paneId: "w1:p2" } }];
 
 const tui = (entries: any[] = [], cwd = "/") => ({ mode: "tui", cwd, sessionManager: { getBranch: () => entries } });
 
 test("outside the primary interactive Pi of a Herdr pane it registers nothing, emits nothing, runs nothing", async () => {
   const conditions: [string, NodeJS.ProcessEnv, any][] = [
-    ["no HERDR_ENV", {}, tui()],
-    ["print mode", HERDR_ENV, { ...tui(), mode: "print" }],
-    ["json mode", HERDR_ENV, { ...tui(), mode: "json" }],
-    ["rpc mode", HERDR_ENV, { ...tui(), mode: "rpc" }],
-    // In-process children: pi-subagents and panel panelists bind no terminal UI, so Pi reports print.
-    ["subagent or panelist", HERDR_ENV, { ...tui(), mode: undefined }],
+    ["no HERDR_ENV", { HERDR_PANE_ID: "w1:p1" }, tui(STARTED)],
+    ["print mode", HERDR_ENV, { ...tui(STARTED), mode: "print" }],
+    ["json mode", HERDR_ENV, { ...tui(STARTED), mode: "json" }],
+    ["rpc mode", HERDR_ENV, { ...tui(STARTED), mode: "rpc" }],
+    // In-process children bind no terminal UI: pi-subagents calls bindExtensions({}) and panel
+    // panelists never bind, so Pi reports its default mode, print.
+    ["pi-subagents subagent", HERDR_ENV, { ...tui(STARTED), mode: "print" }],
+    ["panel panelist", HERDR_ENV, { ...tui(STARTED), mode: "print" }],
   ];
   for (const [label, env, ctx] of conditions) {
     const { fake, clock, pi } = setup(env);
@@ -88,10 +93,12 @@ test("outside the primary interactive Pi of a Herdr pane it registers nothing, e
   const primary = setup();
   await primary.pi.fire("session_start", {}, tui());
   const btw = setup();
-  await btw.pi.fire("session_start", {}, tui());
+  await btw.pi.fire("session_start", {}, tui(STARTED));
   await btw.pi.fire("ui_prompt_start", { title: "Pick" });
+  await btw.clock.tick(10_000);
   assert.equal(btw.pi.tools.length, 0, "btw child: no tools");
   assert.equal(btw.pi.emitted.length, 0, "btw child: no events");
+  assert.equal(btw.clock.timers.length, 0, "btw child: no timers");
   assert.equal(btw.fake.commands.length, 0, "btw child: no herdr command");
   assert.equal(primary.pi.tools.length, 1, "the primary session has the tool");
   await primary.pi.fire("session_shutdown");
@@ -196,18 +203,69 @@ test("a reload or resume picks the started sessions up again from the session's 
   await pi.fire("session_shutdown");
 });
 
-test("a poller that keeps failing says so once in the session and keeps trying", async () => {
+test("a poller that keeps failing wakes the session once to say so, and keeps trying", async () => {
   const { fake, clock, pi } = setup();
-  const entries = [{ type: "custom", customType: STARTED_ENTRY, data: { name: "w", paneId: "w1:p2" } }];
-  await pi.fire("session_start", {}, tui(entries));
+  await pi.fire("session_start", {}, tui(STARTED));
   fake.failures.set("agent list", { code: "server_unreachable", message: "no server" });
   for (let i = 0; i < 6; i++) await clock.tick(2_000);
   assert.equal(pi.messages.length, 1);
   assert.match(pi.messages[0]!.message.content, /cannot read Herdr.*no server/);
-  assert.equal(pi.messages[0]!.options.triggerTurn, false);
+  assert.deepEqual(pi.messages[0]!.options, { triggerTurn: true, deliverAs: "followUp" }, "an idle orchestrator must hear it");
   assert.equal(clock.timers.length, 1, "still polling");
   await pi.fire("session_shutdown");
   assert.equal(clock.timers.length, 0, "shutdown stops polling");
 });
 
-test.after(() => releasePrimary({}));
+test("Herdr output that changed shape fails loudly instead of reporting every session gone", async () => {
+  const fake = new FakeHerdr();
+  fake.panes.push({ paneId: "w1:p2", tabId: "w1:t2", workspaceId: "w1", cwd: "/", agent: { name: "w", kind: "pi", status: "working" } });
+  const { clock, pi } = setup(HERDR_ENV, fake);
+  await pi.fire("session_start", {}, tui(STARTED));
+  fake.brokenAgentList = true;
+  for (let i = 0; i < 3; i++) await clock.tick(2_000);
+  assert.equal(pi.messages.length, 1);
+  assert.match(pi.messages[0]!.message.content, /returned no agents list.*changed shape/);
+  assert.ok(!pi.entries.some((e) => e.customType === ENDED_ENTRY), "nothing is recorded as gone");
+  await pi.fire("session_shutdown");
+});
+
+test("a finish already reported is not reported again after a reload", async () => {
+  const fake = new FakeHerdr();
+  fake.panes.push({ paneId: "w1:p2", tabId: "w1:t2", workspaceId: "w1", cwd: "/", agent: { name: "w", kind: "pi", status: "working", completionSeq: 1 } });
+  const first = setup(HERDR_ENV, fake);
+  await first.pi.fire("session_start", {}, tui([{ type: "custom", customType: STARTED_ENTRY, data: { name: "w", paneId: "w1:p2", completionSeq: 1 } }]));
+  fake.panes[0]!.agent!.status = "idle";
+  fake.panes[0]!.agent!.completionSeq = 2;
+  await first.clock.tick(2_000);
+  assert.equal(first.pi.messages.length, 1, "the finish is reported once");
+  const kept = [{ type: "custom", customType: STARTED_ENTRY, data: { name: "w", paneId: "w1:p2", completionSeq: 1 } }, ...first.pi.entries];
+  await first.pi.fire("session_shutdown");
+
+  const reloaded = setup(HERDR_ENV, fake);
+  await reloaded.pi.fire("session_start", { reason: "reload" }, tui(kept));
+  await reloaded.clock.tick(2_000);
+  await reloaded.clock.tick(2_000);
+  assert.equal(reloaded.pi.messages.length, 0, "the reloaded bridge picks up where it was and repeats nothing");
+  await reloaded.pi.fire("session_shutdown");
+});
+
+test("a waiting session whose screen cannot be read still wakes, with the command to read it", async () => {
+  const fake = new FakeHerdr();
+  fake.panes.push({ paneId: "w1:p2", tabId: "w1:t2", workspaceId: "w1", cwd: "/", agent: { name: "w", kind: "pi", status: "working" } });
+  const { clock, pi } = setup(HERDR_ENV, fake);
+  await pi.fire("session_start", {}, tui(STARTED));
+  fake.failures.set("agent read", { code: "agent_not_found", message: "gone" });
+  fake.panes[0]!.agent!.status = "blocked";
+  await clock.tick(2_000);
+  assert.equal(pi.messages.length, 1);
+  assert.match(pi.messages[0]!.message.content, /screen could not be read; read it with `herdr agent read w --source visible`/);
+  assert.match(pi.messages[0]!.message.content, /herdr agent send-keys w N/);
+  await pi.fire("session_shutdown");
+});
+
+
+test("the quiet interval is ten minutes unless set to a positive number of ms", () => {
+  assert.equal(quietIntervalFrom({}), 10 * 60_000);
+  assert.equal(quietIntervalFrom({ HERDR_BRIDGE_QUIET_INTERVAL_MS: "8000" }), 8000);
+  for (const bad of ["-5", "0", "soon"]) assert.equal(quietIntervalFrom({ HERDR_BRIDGE_QUIET_INTERVAL_MS: bad }), 10 * 60_000, bad);
+});

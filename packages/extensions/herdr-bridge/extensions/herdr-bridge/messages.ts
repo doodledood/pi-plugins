@@ -53,7 +53,7 @@ export function wakeupText(wakeup: Wakeup, screen?: string): string {
     }
     case "quiet":
       return [
-        `Herdr session ${who}, which you started, has been working for ${wakeup.quietMinutes ?? 10} minutes with no change.`,
+        `Herdr session ${who}, which you started, has been working for ${wakeup.quietMinutes} minutes with no change.`,
         `Check on it with \`herdr agent read ${wakeup.name} --source recent --lines 80\`; if it is stuck past its timeout, stop it with \`herdr pane close ${wakeup.paneId}\`.`,
       ].join("\n");
     case "gone":

@@ -60,12 +60,23 @@ function assistantModels(session: string): string[] {
   return [...new Set(entries(session).flatMap((e) => (e.type === "message" && e.message.role === "assistant" ? [`${e.message.provider}/${e.message.model}`] : [])))];
 }
 
+/** Opens a run and its orchestrator; the run is closed here if either fails, so nothing is left behind. */
 async function openRun(): Promise<{ run: Run; orchName: string; orchSession: string; orchFolder: string }> {
   const { provider, model } = configuredModel();
-  const run = await new Run({
+  const run = new Run({
     extensions: [SCRIPTED_PROVIDER, BRIDGE_EXTENSION, RPIV_DIALOG, SUBAGENTS, MODEL_ALIASES_EXTENSION],
     settings: { skills: [ORCHESTRATE_SKILL, USER_SKILLS] },
-  }).open();
+  });
+  try {
+    await run.open();
+    return startOrchestrator(run, provider, model);
+  } catch (error) {
+    run.close();
+    throw error;
+  }
+}
+
+function startOrchestrator(run: Run, provider: string, model: string) {
   // The alias file is configuration, read here; credentials come from the environment only.
   const aliases = join(AGENT, "model-aliases.json");
   if (existsSync(aliases)) copyFileSync(aliases, join(run.agentDir, "model-aliases.json"));
@@ -114,8 +125,12 @@ const cases: Record<string, () => Promise<number>> = {
         const at = lines.findIndex((m) => m.role === "custom" && m.text.includes("finished a turn"));
         return at >= 0 ? lines.slice(at + 1).find((m) => m.role === "assistant" && m.text.trim()) : undefined;
       }, 300_000);
-      const turnText = JSON.stringify(entries(orchSession).slice(-12));
-      check(turnText.includes(runId) || turnText.includes(started.name!), "orchestrate: the turn after the wake-up names that run", afterWake.text);
+      const after = (() => {
+        const all = entries(orchSession);
+        const at = all.findIndex((e) => e.type === "custom_message" && JSON.stringify(e.content).includes("finished a turn"));
+        return JSON.stringify(all.slice(at + 1).filter((e) => e.type === "message" && e.message.role === "assistant"));
+      })();
+      check(after.includes(runId) || after.includes(started.name!), "orchestrate: the turn after the wake-up names that run (its run ID or its session)", afterWake.text);
       await waitFor("the orchestrator to settle", () => (["idle", "done"].includes(run.status(orchName) ?? "") ? true : undefined), 300_000);
 
       const before = bashCommands(orchSession).length;
@@ -127,7 +142,11 @@ const cases: Record<string, () => Promise<number>> = {
       const checkCommands = bashCommands(orchSession).slice(before);
       check(checkCommands.some((c) => /herdr (agent (get|list)|api snapshot)/.test(c) && (c.includes(started.name!) || /agent list|api snapshot/.test(c))), "orchestrate: the check-in read the worker's state from Herdr", checkCommands);
       const reply = transcript(orchSession).filter((m) => m.role === "assistant" && m.text.trim()).at(-1)!.text;
-      check(/alive|running|idle|live/i.test(reply) && !/\bnot alive\b|\bdead\b/i.test(reply), "orchestrate: its report of the worker as alive matches Herdr", reply);
+      const herdrStatus = run.status(started.name!);
+      check(herdrStatus !== undefined, "orchestrate: Herdr shows the worker live at check-in", herdrStatus);
+      const saysAlive = /\b(alive|running|live|idle|up)\b/i.test(reply);
+      const saysDead = /\bnot (alive|running|live|up)\b|\b(exited|gone|dead|crashed|stopped)\b/i.test(reply);
+      check(saysAlive && !saysDead, `orchestrate: its report of the worker as alive matches Herdr (${herdrStatus})`, reply);
       modelCheck(orchSession);
       return spend(orchSession);
     } finally {
@@ -162,8 +181,8 @@ const cases: Record<string, () => Promise<number>> = {
       );
       await waitFor("the blocked wake-up", () => wakeups(orchSession).find((w) => w.includes(`\`${asker.name}\``) && w.includes("waiting at a question")), 60_000);
       const askerSession = run.agent(asker.name!)!.agent_session!.value!;
-      const result = await waitFor("the asker's answered question", () => transcript(askerSession).find((m) => m.role === "toolResult" && /Software|Insurance/.test(m.text)), 300_000);
-      check(/"Software"|"Insurance"/.test(result.text), "joke: the orchestrator answered the routine question through Herdr, and the worker's tool result carries an offered label", result.text);
+      const result = await waitFor("the asker's answered question", () => transcript(askerSession).find((m) => m.role === "toolResult" && /Software|Cooking/.test(m.text)), 300_000);
+      check(/"Software"|"Cooking"/.test(result.text), "joke: the orchestrator answered the routine question through Herdr, and the worker's tool result carries an offered label", result.text);
       check(bashCommands(orchSession).some((c) => /herdr (agent send-keys|pane send-text)/.test(c)), "joke: it answered with Herdr's agent commands", bashCommands(orchSession));
       modelCheck(orchSession);
       return spend(orchSession);

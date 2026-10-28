@@ -9,6 +9,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HerdrError, isShellNotReady } from "../herdr.ts";
+import { WAKEUP_TYPE } from "../messages.ts";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const BRIDGE_EXTENSION = resolve(HERE, "..", "index.ts");
@@ -58,9 +60,6 @@ export interface Agent {
 export interface RunOptions {
   /** Extension files or folders every Pi in this run loads, besides Herdr's integration. */
   extensions: string[];
-  /** Model to start Pi on; defaults to the scripted provider. */
-  provider?: string;
-  model?: string;
   /** Extra settings for the run's agent directory. */
   settings?: Record<string, unknown>;
 }
@@ -83,8 +82,8 @@ export class Run {
       join(this.agentDir, "settings.json"),
       JSON.stringify(
         {
-          defaultProvider: this.options.provider ?? "hbfake",
-          defaultModel: this.options.model ?? "scripted",
+          defaultProvider: "hbfake",
+          defaultModel: "scripted",
           // Pi's built-in MCP is off in every run, and the MCP adapter is never loaded (see
           // installedExtensions): both reach MCP servers from global config and OAuth entries in the
           // operating system's credential store, which no check may touch.
@@ -150,7 +149,7 @@ export class Run {
       } catch (error: any) {
         if (error instanceof Failure) throw error;
         const text = String(error.stdout || error.stderr || error.message);
-        if (attempt >= 20 || !/not available|not at|shell|busy|not ready for/i.test(text)) throw new Failure(`FAIL: herdr agent start ${name} failed: ${text}`);
+        if (attempt >= 20 || !isShellNotReady(new HerdrError(text))) throw new Failure(`FAIL: herdr agent start ${name} failed: ${text}`);
         execFileSync("sleep", ["0.5"]);
       }
     }
@@ -226,7 +225,7 @@ export function transcript(sessionPath: string): { role: string; text: string; c
 
 export function wakeups(sessionPath: string): string[] {
   return transcript(sessionPath)
-    .filter((m) => m.role === "custom" && m.customType === "herdr-bridge-wakeup")
+    .filter((m) => m.role === "custom" && m.customType === WAKEUP_TYPE)
     .map((m) => m.text);
 }
 

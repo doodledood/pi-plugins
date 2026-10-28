@@ -40,11 +40,14 @@ export class FakeHerdr {
     const ok = (result: unknown) => JSON.stringify({ id: `cli:${key}`, result });
     switch (key) {
       case "agent list":
+        if (this.brokenAgentList) return ok({ type: "agent_list", items: [] });
         return ok({ type: "agent_list", agents: this.panes.filter((p) => p.agent).map((p) => this.agentJson(p)) });
       case "workspace list":
         return ok({ type: "workspace_list", workspaces: this.workspaces.map((w) => ({ workspace_id: w.workspaceId, label: w.label })) });
-      case "pane list":
-        return ok({ panes: this.panes.filter((p) => p.workspaceId === flag("--workspace")).map((p) => this.paneJson(p)) });
+      case "pane list": {
+        const workspace = flag("--workspace");
+        return ok({ panes: this.panes.filter((p) => workspace === undefined || p.workspaceId === workspace).map((p) => this.paneJson(p)) });
+      }
       case "workspace create": {
         const workspaceId = `w${this.next++}`;
         this.workspaces.push({ workspaceId, label: flag("--label") ?? "" });
@@ -103,6 +106,9 @@ export class FakeHerdr {
       agent_session: p.agent!.sessionPath ? { kind: "path", value: p.agent!.sessionPath, source: "herdr:pi", agent: "pi" } : undefined,
     };
   }
+
+  /** Pane entries Herdr lists, for a test that breaks their shape. */
+  brokenAgentList = false;
 
   /** Commands other than read-only queries (list, read, get). */
   writes(): string[][] {
