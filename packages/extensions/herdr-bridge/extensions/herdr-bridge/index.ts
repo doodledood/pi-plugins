@@ -5,12 +5,15 @@
 // - Wake-ups: the session that started one hears when it finishes a turn, waits at a question,
 //   stays working with no change for a quiet interval, or exits.
 //
+// - Orchestrator role: while sessions it started are open, its system prompt names it their
+//   orchestrator and lists them, so work and questions on their tasks go to them.
+//
 // It does nothing outside the primary interactive Pi of a Herdr pane, and it never closes,
 // types into or answers another session: those stay with the agent, through Herdr's own commands.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Herdr, cliRunner, type AgentView } from "./herdr.ts";
-import { SCREEN_LINES, WAKEUP_TYPE, wakeupText } from "./messages.ts";
+import { ORCHESTRATOR_SECTION, SCREEN_LINES, WAKEUP_TYPE, orchestratorSection, taskSummary, wakeupText } from "./messages.ts";
 import { type StartedSession, startSession } from "./start.ts";
 import { DEFAULT_QUIET_INTERVAL_MS, type Phase, type TrackedSession, type Wakeup, observe, track } from "./tracker.ts";
 
@@ -81,7 +84,11 @@ export function trackedFromEntries(entries: readonly Entry[], now: number): Trac
     if (entry.type !== "custom" || !entry.data) continue;
     const data = entry.data;
     if (entry.customType === STARTED_ENTRY && typeof data.paneId === "string" && typeof data.name === "string") {
-      byPane.set(data.paneId, track(data.name, data.paneId, now, typeof data.completionSeq === "number" ? data.completionSeq : undefined));
+      const about = {
+        folder: typeof data.folder === "string" ? data.folder : undefined,
+        task: typeof data.task === "string" ? data.task : undefined,
+      };
+      byPane.set(data.paneId, track(data.name, data.paneId, now, typeof data.completionSeq === "number" ? data.completionSeq : undefined, about));
     } else if (entry.customType === PHASE_ENTRY && byPane.has(data.paneId)) {
       const session = byPane.get(data.paneId)!;
       if (data.phase === "working" || data.phase === "finished" || data.phase === "blocked") session.phase = data.phase as Phase;
@@ -203,9 +210,10 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
       }
     }
 
-    function follow(session: StartedSession): void {
-      tracked = [...tracked.filter((t) => t.paneId !== session.paneId), track(session.name, session.paneId, now(), session.completionSeq)];
-      pi.appendEntry(STARTED_ENTRY, { name: session.name, paneId: session.paneId, completionSeq: session.completionSeq, startedAt: now() });
+    function follow(session: StartedSession, prompt: string): void {
+      const about = { folder: session.folder, task: taskSummary(prompt) };
+      tracked = [...tracked.filter((t) => t.paneId !== session.paneId), track(session.name, session.paneId, now(), session.completionSeq, about)];
+      pi.appendEntry(STARTED_ENTRY, { name: session.name, paneId: session.paneId, completionSeq: session.completionSeq, ...about, startedAt: now() });
       ensurePolling();
     }
 
@@ -219,23 +227,33 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
           `Start a separate, interactive Pi agent session in its own Herdr tab, working in a folder, with a first prompt. The person can switch to it and type in it, and it keeps running on its own; this session gets a message when it finishes a turn, waits at a question, stays working for ${minutes(quietMs)} with no change, or exits. A subagent is different: a child task inside this session.`,
         promptSnippet: "Start a separate, interactive Pi session in its own Herdr tab, in a folder, with a first prompt.",
         promptGuidelines: [
-          "Use start_agent_session when the user or a skill asks to start, spin up, open or create a new session, agent session or run; when a request could mean either, a subagent is a child task inside this session.",
+          "Start every new Pi session with start_agent_session, whenever the user or a skill asks to start, spin up, open or create a session, agent session or run. Only a session it starts reports back to you when it finishes a turn, waits at a question, goes quiet or exits; one started with `herdr agent start`, `herdr tab create` or `pi` typed into a pane never does. When a request could mean either, a subagent is a child task inside this session.",
           "Follow sessions you started with Herdr's agent commands: `herdr agent list` and `herdr agent get <name>` for their state, `herdr agent read <name> --source recent --lines 80` for their output, `herdr agent prompt <name> \"<text>\"` to message one, and `herdr pane close <pane>` to stop one you started.",
         ],
         parameters: StartParams,
         async execute(_toolCallId: string, params: Static<typeof StartParams>) {
           const agentDir = env.PI_CODING_AGENT_DIR;
           const session = await startSession(herdr, params, { cwd, env: agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {} });
-          follow(session);
+          follow(session, params.prompt);
           const lines = [
             `Started Pi session "${session.name}" in ${session.folder}: Herdr pane ${session.paneId}, tab ${session.tabId}, workspace ${session.workspaceId}.`,
             session.sessionPath ? `Its Pi session file: ${session.sessionPath}` : "Herdr did not report its Pi session file yet.",
             `The first prompt was sent. You will get a message when it finishes a turn, waits at a question, stays working for ${minutes(quietMs)} with no change, or exits.`,
+            `You are its orchestrator: send work and questions that belong to its task to it with \`herdr agent prompt ${session.name} "<text>"\` rather than doing them yourself, and end your turn while it works.`,
           ];
           return { content: [{ type: "text", text: lines.join("\n") }], details: session };
         },
       });
     }
+
+    pi.on("before_agent_start", (event) => {
+      if (!active) return;
+      const sections = event.systemPromptOptions.sections ?? {};
+      const role = orchestratorSection(tracked, minutes(quietMs));
+      if (role) sections[ORCHESTRATOR_SECTION] = role;
+      else delete sections[ORCHESTRATOR_SECTION];
+      event.systemPromptOptions.sections = sections;
+    });
 
     pi.on("ui_prompt_start", (event) => {
       if (!active) return;

@@ -300,3 +300,61 @@ test("a wake-up cut off by a shutdown is not recorded, so the reloaded bridge de
   assert.match(reloaded.pi.messages[0]!.message.content, /waiting at a question/);
   await reloaded.pi.fire("session_shutdown");
 });
+
+/** Fires before_agent_start the way Pi does and returns the prompt sections the bridge left. */
+async function sectionsBeforeRun(pi: FakePi): Promise<Record<string, string>> {
+  const event = { type: "before_agent_start", messageType: "user", prompt: "hi", systemPrompt: "", systemPromptOptions: { cwd: "/", sections: {} as Record<string, string> } };
+  await pi.fire("before_agent_start", event);
+  return event.systemPromptOptions.sections;
+}
+
+// Holds docs/adr/20261101-derive-the-orchestrator-role-from-started-sessions.md — weakening this test reverses that decision.
+test("while sessions it started are open, the session's prompt names it their orchestrator and lists them", async () => {
+  const { fake, clock, pi } = setup();
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "herdr-bridge-role-")));
+  await pi.fire("session_start", {}, tui([], dir));
+  assert.equal((await sectionsBeforeRun(pi)).herdr_orchestrator, undefined, "no role before it starts a session");
+
+  const long = `Review the auth module\n\nand ${"x".repeat(300)}`;
+  const result = await pi.tools[0].execute("call-1", { folder: dir, name: "auth", prompt: long });
+  assert.match(result.content[0].text, /You are its orchestrator: send work and questions that belong to its task to it with `herdr agent prompt auth/);
+  const started = pi.entries.find((e) => e.customType === STARTED_ENTRY)!.data;
+  assert.equal(started.folder, dir);
+  assert.ok(started.task.startsWith("Review the auth module and xxx") && started.task.endsWith("…") && started.task.length === 200, "the task is the prompt's start, on one line, cut short");
+
+  const role = (await sectionsBeforeRun(pi)).herdr_orchestrator!;
+  assert.match(role, /are their orchestrator/);
+  assert.match(role, /Send work and questions that belong to a session's task to that session with `herdr agent prompt/);
+  assert.match(role, /end your turn rather than polling/);
+  assert.ok(role.includes(`- \`auth\` (pane ${started.paneId}), in ${dir}: "${started.task}"`), role);
+
+  fake.panes = fake.panes.filter((p) => p.agent?.name !== "auth");
+  await clock.tick(2_000);
+  assert.equal((await sectionsBeforeRun(pi)).herdr_orchestrator, undefined, "the role ends when its last session exits");
+  await pi.fire("session_shutdown");
+});
+
+test("after a reload the role lists the sessions still followed, including ones recorded before folders and tasks were", async () => {
+  const { fake, pi } = setup();
+  fake.panes.push({ paneId: "w1:p2", tabId: "w1:t2", workspaceId: "w1", cwd: "/", agent: { name: "w", kind: "pi", status: "working" } });
+  const entries = [
+    { type: "custom", customType: STARTED_ENTRY, data: { name: "w", paneId: "w1:p2" } },
+    { type: "custom", customType: STARTED_ENTRY, data: { name: "api", paneId: "w1:p3", folder: "/code/api", task: "Fix the login bug" } },
+  ];
+  await pi.fire("session_start", { reason: "reload" }, tui(entries));
+  const role = (await sectionsBeforeRun(pi)).herdr_orchestrator!;
+  assert.ok(role.includes("- `w` (pane w1:p2)\n"), role);
+  assert.ok(role.endsWith('- `api` (pane w1:p3), in /code/api: "Fix the login bug"'), role);
+  await pi.fire("session_shutdown");
+});
+
+// Holds docs/adr/20261101-derive-the-orchestrator-role-from-started-sessions.md.
+test("the tool's guidance routes every new Pi session through it, since only those report back", async () => {
+  const { pi } = setup();
+  await pi.fire("session_start", {}, tui());
+  const [start] = pi.tools[0].promptGuidelines as string[];
+  assert.match(start!, /Start every new Pi session with start_agent_session/);
+  assert.match(start!, /`herdr agent start`, `herdr tab create` or `pi` typed into a pane never does/);
+  assert.match(start!, /a subagent is a child task inside this session/);
+  await pi.fire("session_shutdown");
+});

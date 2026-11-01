@@ -4,6 +4,7 @@ Run several Pi sessions side by side in [Herdr](https://herdr.dev) and let one o
 
 - **`start_agent_session`** starts a separate, interactive Pi session in a folder, in its own Herdr tab, with a first prompt. You can switch to it and type in it like any session you opened yourself.
 - **Wake-ups.** The session that started it gets a message when the started session finishes a turn, stops at a question, stays working for 10 minutes with no change, or exits. A message that arrives while the starting session is busy waits until its turn ends.
+- **Orchestrator role.** While sessions it started are open, the starting session's system prompt names it their orchestrator and lists them, each with its folder and what it was started to do. Work and questions that belong to a session's task go to that session through `herdr agent prompt`, and the starting session coordinates instead of doing that work itself. Nothing has to be switched on: the role starts with the first started session and ends when the last one exits.
 - **Accurate status.** Any Pi waiting at a dialog — `ask_user_question`, a select, a confirm — shows in Herdr as **blocked**, so you can see it needs you, and Herdr refuses `herdr agent prompt` to it instead of typing into the dialog.
 
 Listing, reading, messaging and stopping sessions stay with Herdr's own agent commands, which Herdr's agent skill documents. The package never closes a pane, types into another session, or answers a dialog on its own: a blocked wake-up gives the starting session the question, its options and the exact Herdr commands that answer it, and the model decides.
@@ -57,7 +58,9 @@ The starting session then hears about each one:
 | still working | the session stays working with no change for 10 minutes, and every 10 minutes after | how to check on it and stop it past its timeout |
 | exited | the session's Pi exits or its pane closes | that its session file stays on disk |
 
-Only sessions this session started wake it; one you started by hand never does. Each quiet-interval wake-up costs one turn of the starting session. While any started session is open, the bridge reads `herdr agent list` every 2 seconds; a session stays followed until it exits or its pane closes, so close finished sessions you no longer need. If Herdr cannot be read three times in a row, the starting session is woken once to say wake-ups are not arriving.
+Only sessions this session started wake it; one you started by hand never does. The same holds for one the model starts with Herdr's own commands (`herdr agent start`, `herdr tab create`, or `pi` typed into a pane), so the tool's guidance routes every new Pi session through `start_agent_session`.
+
+While any started session is open, the starting session is their orchestrator. Its system prompt carries a `herdr_orchestrator` section listing them; it tells the model to send follow-ups, corrections and status questions about a session's task to that session and relay the answer, to do itself only work that belongs to no session plus the coordination, and to end its turn while sessions work rather than poll. The section changes only when a session starts or exits, so it does not churn the prompt cache on every wake-up. Each quiet-interval wake-up costs one turn of the starting session. While any started session is open, the bridge reads `herdr agent list` every 2 seconds; a session stays followed until it exits or its pane closes, so close finished sessions you no longer need. If Herdr cannot be read three times in a row, the starting session is woken once to say wake-ups are not arriving.
 
 To follow sessions, the model uses Herdr's commands: `herdr agent list`, `herdr agent get <name>`, `herdr agent read <name> --source recent --lines 80`, `herdr agent prompt <name> "<text>"`, `herdr agent send-keys <name> <keys>` for a waiting dialog, and `herdr pane close <pane>` to stop a session it started.
 
@@ -70,7 +73,7 @@ The tool reports why: Herdr not reachable, a folder that does not exist, Pi not 
 - **Environment:** `HERDR_ENV` and `HERDR_PANE_ID`, set by Herdr in its panes, decide whether it acts. `PI_CODING_AGENT_DIR`, when set, is passed to each started session's tab, so it runs with the same agent directory. `HERDR_BRIDGE_QUIET_INTERVAL_MS` overrides the 10-minute quiet interval; the end-to-end checks use it to run fast.
 - **Herdr commands:** `agent list`, `agent get`, `agent read`, `pane list`, and, to start a session, `workspace create` or `tab create`, `agent start --kind pi` and `agent prompt`.
 - **Files read:** when Herdr reports a first prompt stalled, the started session's own Pi session file (its path comes from Herdr), read-only, to see whether the prompt landed before typing it again. A slash-command prompt, or one whose session file Herdr does not report, is never typed twice.
-- **Its own session:** custom entries `herdr-bridge-started`, `herdr-bridge-phase` and `herdr-bridge-ended` in the starting session, so a `/reload` or a resume keeps following the sessions it started, and a session that exited meanwhile is reported once. Nothing is written anywhere else.
+- **Its own session:** custom entries `herdr-bridge-started`, `herdr-bridge-phase` and `herdr-bridge-ended` in the starting session, so a `/reload` or a resume keeps following the sessions it started, and a session that exited meanwhile is reported once. `herdr-bridge-started` keeps each session's folder and the first 200 characters of its first prompt, for the orchestrator section. Nothing is written anywhere else.
 
 ## Verify it
 

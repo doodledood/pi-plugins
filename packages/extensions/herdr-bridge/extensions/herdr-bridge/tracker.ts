@@ -9,6 +9,10 @@ export const DEFAULT_QUIET_INTERVAL_MS = 10 * 60 * 1000;
 export interface TrackedSession {
   name: string;
   paneId: string;
+  /** The folder it works in, when recorded. */
+  folder?: string;
+  /** The start of its first prompt, when recorded: what it was started to do. */
+  task?: string;
   /** The status class last reported for it; `unknown` reports nothing and keeps the previous class. */
   phase: Phase;
   completionSeq?: number;
@@ -40,9 +44,15 @@ function phaseOf(status: AgentStatus): Phase | undefined {
   }
 }
 
+/** What a started session was started for, as its starter recorded it. */
+export interface SessionAbout {
+  folder?: string;
+  task?: string;
+}
+
 /** A session just started: it is working on its first prompt. */
-export function track(name: string, paneId: string, now: number, completionSeq?: number): TrackedSession {
-  return { name, paneId, phase: "working", completionSeq, changedAt: now };
+export function track(name: string, paneId: string, now: number, completionSeq?: number, about: SessionAbout = {}): TrackedSession {
+  return { name, paneId, ...about, phase: "working", completionSeq, changedAt: now };
 }
 
 /**

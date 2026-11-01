@@ -96,6 +96,10 @@ _Avoid_: Orchestrator (the role a session plays, not this package), board, missi
 A Pi session another Pi session started through `start_agent_session`; only a started session sends wake-ups to the session that started it, and one a person opened by hand never does.
 _Avoid_: Subagent (a child task inside one session), worker when the hand-started case is meant.
 
+**Orchestrator**:
+The role a Pi session plays while sessions it started through the Herdr bridge are open: work and questions that belong to a started session's task go to that session, and it does only the remaining work and the coordination. The Herdr bridge derives the role from the open started sessions and states it in the session's system prompt; no command sets it.
+_Avoid_: Herdr bridge (the package), dispatcher, manager.
+
 **Wake-up**:
 A message the Herdr bridge adds to the starting session when a started session finishes a turn, stops at a question, stays working with no change for the quiet interval, or exits; delivered as a follow-up, so it never cuts into a turn in progress.
 _Avoid_: Notification (Herdr's and Pi's own), escalation.
@@ -171,6 +175,7 @@ _Avoid_: Terminal goal when resumability matters.
 ## Relationships
 
 - A **Started session** sends **Wake-ups** only to the session that started it, through the **Herdr bridge**; listing, reading, messaging and stopping it go through Herdr's own agent commands.
+- A session is an **Orchestrator** exactly while at least one **Started session** of its own is open.
 
 - A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.
 

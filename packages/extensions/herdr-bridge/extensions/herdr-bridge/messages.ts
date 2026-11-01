@@ -1,6 +1,6 @@
 // The words a wake-up says. Each message is read by the model in the session that started the
 // work, so it states what happened and the exact commands that act on it.
-import type { Wakeup } from "./tracker.ts";
+import type { TrackedSession, Wakeup } from "./tracker.ts";
 
 export const WAKEUP_TYPE = "herdr-bridge-wakeup";
 
@@ -59,4 +59,39 @@ export function wakeupText(wakeup: Wakeup, screen?: string): string {
     case "gone":
       return `Herdr session ${who}, which you started, has exited or its pane closed. Its Pi session file stays on disk.`;
   }
+}
+
+/** How much of a started session's first prompt its starter keeps, to recognise what it is for. */
+export const TASK_CHARS = 200;
+
+/** The start of a first prompt on one line, cut at TASK_CHARS. */
+export function taskSummary(prompt: string): string {
+  const line = prompt.replace(/\s+/g, " ").trim();
+  return line.length > TASK_CHARS ? `${line.slice(0, TASK_CHARS - 1).trimEnd()}…` : line;
+}
+
+/** The prompt section name that carries the orchestrator role while started sessions are open. */
+export const ORCHESTRATOR_SECTION = "herdr_orchestrator";
+
+/**
+ * The orchestrator role, as a system-prompt section, for a session following the sessions it
+ * started; undefined when it follows none. It depends only on which sessions are open and what
+ * they were started for, so it changes when one starts or exits, not on every wake-up.
+ */
+export function orchestratorSection(sessions: readonly TrackedSession[], quiet: string): string | undefined {
+  if (sessions.length === 0) return undefined;
+  const listed = sessions.map((s) => {
+    const where = s.folder ? `, in ${s.folder}` : "";
+    const task = s.task ? `: "${s.task}"` : "";
+    return `- \`${s.name}\` (pane ${s.paneId})${where}${task}`;
+  });
+  return [
+    "You started the Pi sessions below in Herdr and are their orchestrator: each one owns its task, and you coordinate.",
+    "- Send work and questions that belong to a session's task to that session with `herdr agent prompt <name> \"<text>\"`, the person's follow-ups, corrections and status questions included, and relay what it reports. Its investigating, editing and answering stay with it.",
+    "- Do yourself only work that belongs to no session, and the coordination: reading their output, answering their questions or bringing them to the person, comparing results, and starting, messaging and closing sessions.",
+    `- After sending, end your turn rather than polling or sleeping: a message reaches you when a session finishes a turn, waits at a question, stays working for ${quiet} with no change, or exits.`,
+    "",
+    "Sessions:",
+    ...listed,
+  ].join("\n");
 }
