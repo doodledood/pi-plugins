@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { afterEach } from "node:test";
 import { FakeHerdr } from "./fake-herdr.ts";
 import { Herdr } from "./herdr.ts";
-import { ENDED_ENTRY, PHASE_ENTRY, STARTED_ENTRY, type BridgeApi, createHerdrBridge, quietIntervalFrom } from "./index.ts";
+import { ENDED_ENTRY, ORCHESTRATOR_FLAG, PHASE_ENTRY, STARTED_ENTRY, type BridgeApi, createHerdrBridge, quietIntervalFrom } from "./index.ts";
 import { WAKEUP_TYPE } from "./messages.ts";
 
 const HERDR_ENV = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" };
@@ -22,9 +22,18 @@ class FakePi {
   messages: { message: any; options: any }[] = [];
   entries: { type: string; customType: string; data: any }[] = [];
   emitted: { channel: string; data: any }[] = [];
+  flags = new Map<string, any>();
+  /** Flag values from the command line, as Pi applies them before the session starts. */
+  flagValues = new Map<string, string | boolean>();
   events = { emit: (channel: string, data: unknown) => void this.emitted.push({ channel, data }) };
   on(event: string, handler: (event: any, ctx: any) => unknown) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+  }
+  registerFlag(name: string, options: any) {
+    this.flags.set(name, options);
+  }
+  getFlag(name: string) {
+    return this.flags.has(name) ? (this.flagValues.get(name) ?? this.flags.get(name).default) : undefined;
   }
   registerTool(tool: any) {
     this.tools.push(tool);
@@ -357,4 +366,34 @@ test("the tool's guidance routes every new Pi session through it, since only tho
   assert.match(start!, /`herdr agent start`, `herdr tab create` or `pi` typed into a pane never does/);
   assert.match(start!, /a subagent is a child task inside this session/);
   await pi.fire("session_shutdown");
+});
+
+// Holds docs/adr/20261101-only-a-main-session-orchestrates.md — weakening this test reverses that decision.
+test("a session it starts is launched naming its orchestrator, and such a session gets no start tool and is told to report back", async () => {
+  const { fake, pi } = setup();
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "herdr-bridge-started-")));
+  await pi.fire("session_start", {}, tui([], dir));
+  await pi.tools[0].execute("call-1", { folder: dir, name: "worker", prompt: "do it" });
+  const start = fake.commands.find((c) => c[0] === "agent" && c[1] === "start")!;
+  assert.deepEqual(start.slice(-3), ["--", `--${ORCHESTRATOR_FLAG}`, HERDR_ENV.HERDR_PANE_ID], "Pi's command line carries the starter's pane");
+  await pi.fire("session_shutdown");
+
+  const started = setup({ HERDR_ENV: "1", HERDR_PANE_ID: "w2:p1" });
+  started.pi.flagValues.set(ORCHESTRATOR_FLAG, "w1:p1");
+  await started.pi.fire("session_start", {}, tui(STARTED));
+  assert.equal(started.pi.tools.length, 0, "a started session cannot start sessions");
+  assert.equal(started.clock.timers.length, 0, "and follows none, even with started entries on its branch");
+  const sections = await sectionsBeforeRun(started.pi);
+  assert.equal(sections.herdr_orchestrator, undefined);
+  assert.match(sections.herdr_started_session!, /orchestrator Pi session in Herdr \(pane w1:p1\) started you/);
+  assert.match(sections.herdr_started_session!, /End each turn with a self-contained report/);
+  assert.match(sections.herdr_started_session!, /Leave starting other sessions to the orchestrator/);
+  await started.pi.fire("ui_prompt_start", { title: "Pick" });
+  assert.deepEqual(started.pi.emitted, [{ channel: "herdr:blocked", data: { active: true, label: "Pick" } }], "its dialogs still show as blocked");
+  await started.pi.fire("session_shutdown");
+});
+
+test("the flag is registered wherever the package loads, so Pi accepts a started session's command line", async () => {
+  const { pi } = setup({});
+  assert.equal(pi.flags.get(ORCHESTRATOR_FLAG)?.type, "string");
 });

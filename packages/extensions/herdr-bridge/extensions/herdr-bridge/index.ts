@@ -7,13 +7,15 @@
 //
 // - Orchestrator role: while sessions it started are open, its system prompt names it their
 //   orchestrator and lists them, so work and questions on their tasks go to them.
+// - Started-session role: a session it starts carries a flag naming its orchestrator's pane; that
+//   session gets no start tool, so only a main session orchestrates, and reports back instead.
 //
 // It does nothing outside the primary interactive Pi of a Herdr pane, and it never closes,
 // types into or answers another session: those stay with the agent, through Herdr's own commands.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Herdr, cliRunner, type AgentView } from "./herdr.ts";
-import { ORCHESTRATOR_SECTION, SCREEN_LINES, WAKEUP_TYPE, orchestratorSection, taskSummary, wakeupText } from "./messages.ts";
+import { ORCHESTRATOR_SECTION, SCREEN_LINES, STARTED_SECTION, WAKEUP_TYPE, orchestratorSection, startedSection, taskSummary, wakeupText } from "./messages.ts";
 import { type StartedSession, startSession } from "./start.ts";
 import { DEFAULT_QUIET_INTERVAL_MS, type Phase, type TrackedSession, type Wakeup, observe, track } from "./tracker.ts";
 
@@ -21,6 +23,9 @@ import { DEFAULT_QUIET_INTERVAL_MS, type Phase, type TrackedSession, type Wakeup
 export const STARTED_ENTRY = "herdr-bridge-started";
 export const PHASE_ENTRY = "herdr-bridge-phase";
 export const ENDED_ENTRY = "herdr-bridge-ended";
+
+/** The Pi flag a started session is launched with: the Herdr pane of the session that started it. */
+export const ORCHESTRATOR_FLAG = "herdr-orchestrator";
 
 /** How often Herdr is read while a started session is live. */
 export const POLL_MS = 2_000;
@@ -50,7 +55,7 @@ export function eligible(env: NodeJS.ProcessEnv, mode: string | undefined): bool
 }
 
 /** The slice of Pi's extension API this package uses. */
-export type BridgeApi = Pick<ExtensionAPI, "on" | "registerTool" | "sendMessage" | "appendEntry" | "events">;
+export type BridgeApi = Pick<ExtensionAPI, "on" | "registerTool" | "registerFlag" | "getFlag" | "sendMessage" | "appendEntry" | "events">;
 
 export interface BridgeDeps {
   herdr?: Herdr;
@@ -111,6 +116,8 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
     const owner = {};
 
     let active = false;
+    /** The orchestrator's pane when this session was started by one; such a session never orchestrates. */
+    let startedBy: string | undefined;
     let toolRegistered = false;
     let tracked: TrackedSession[] = [];
     let timer: unknown;
@@ -233,7 +240,11 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
         parameters: StartParams,
         async execute(_toolCallId: string, params: Static<typeof StartParams>) {
           const agentDir = env.PI_CODING_AGENT_DIR;
-          const session = await startSession(herdr, params, { cwd, env: agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {} });
+          const session = await startSession(herdr, params, {
+            cwd,
+            env: agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {},
+            piArgs: [`--${ORCHESTRATOR_FLAG}`, env.HERDR_PANE_ID!],
+          });
           follow(session, params.prompt);
           const lines = [
             `Started Pi session "${session.name}" in ${session.folder}: Herdr pane ${session.paneId}, tab ${session.tabId}, workspace ${session.workspaceId}.`,
@@ -246,9 +257,21 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
       });
     }
 
+    // Registered wherever the package loads: Pi refuses a command line with an unknown flag, and a
+    // started session must accept the one its starter launched it with.
+    pi.registerFlag(ORCHESTRATOR_FLAG, {
+      type: "string",
+      description: "Set by herdr-bridge on a session it starts: the Herdr pane of the orchestrator that started it.",
+    });
+
     pi.on("before_agent_start", (event) => {
       if (!active) return;
       const sections = event.systemPromptOptions.sections ?? {};
+      if (startedBy) {
+        sections[STARTED_SECTION] = startedSection(startedBy);
+        event.systemPromptOptions.sections = sections;
+        return;
+      }
       const role = orchestratorSection(tracked, minutes(quietMs));
       if (role) sections[ORCHESTRATOR_SECTION] = role;
       else delete sections[ORCHESTRATOR_SECTION];
@@ -270,6 +293,9 @@ export function createHerdrBridge(deps: BridgeDeps = {}) {
       active = eligible(env, ctx.mode) && claimPrimary(owner);
       if (!active) return;
       cwd = ctx.cwd;
+      const flag = pi.getFlag(ORCHESTRATOR_FLAG);
+      startedBy = typeof flag === "string" && flag ? flag : undefined;
+      if (startedBy) return;
       registerTool();
       tracked = trackedFromEntries(ctx.sessionManager.getBranch() as Entry[], now());
       failures = 0;

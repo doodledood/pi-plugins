@@ -95,3 +95,16 @@ export function orchestratorSection(sessions: readonly TrackedSession[], quiet: 
     ...listed,
   ].join("\n");
 }
+
+/** The prompt section name that carries the started-session role. */
+export const STARTED_SECTION = "herdr_started_session";
+
+/** The started-session role, as a system-prompt section, for a session an orchestrator started. */
+export function startedSection(orchestratorPane: string): string {
+  return [
+    `An orchestrator Pi session in Herdr (pane ${orchestratorPane}) started you and coordinates your work. The person can also switch in and type to you, so a message may come from either.`,
+    "- End each turn with a self-contained report of where your task stands: what you did, what you found, and what you need. The orchestrator reads only the end of your screen.",
+    "- When you need a decision, ask it as a question with options (ask_user_question where you have it); it reaches the orchestrator with the options intact.",
+    "- Leave starting other sessions to the orchestrator: when the work needs another session, say so in your report.",
+  ].join("\n");
+}

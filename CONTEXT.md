@@ -175,7 +175,7 @@ _Avoid_: Terminal goal when resumability matters.
 ## Relationships
 
 - A **Started session** sends **Wake-ups** only to the session that started it, through the **Herdr bridge**; listing, reading, messaging and stopping it go through Herdr's own agent commands.
-- A session is an **Orchestrator** exactly while at least one **Started session** of its own is open.
+- A session is an **Orchestrator** exactly while at least one **Started session** of its own is open, and only a main session (one a person opened) can be: a **Started session** never starts sessions.
 
 - A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.
 

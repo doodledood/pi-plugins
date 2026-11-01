@@ -48,4 +48,4 @@ The owner wants a session to dispatch new work to new sessions before any exist,
 
 ## Source
 - Session: Pi session in pi-plugins, 2026-11-01, the owner's request to fix the Herdr bridge's start guidance and make the starting session act as orchestrator.
-- Related: 20261028-host-pi-in-herdr-and-ship-a-bridge
+- Related: 20261028-host-pi-in-herdr-and-ship-a-bridge, 20261101-only-a-main-session-orchestrates

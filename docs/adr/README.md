@@ -34,3 +34,4 @@
 | 2026-10-22 | [Steer main with user messages that extensions send on the user's behalf](20261022-steer-main-with-extension-sent-user-messages.md) | Accepted | btw |
 | 2026-10-28 | [Host parallel Pi sessions in Herdr and ship a bridge, not a board](20261028-host-pi-in-herdr-and-ship-a-bridge.md) | Accepted | parallel-sessions |
 | 2026-11-01 | [Derive the orchestrator role from started sessions, with no command to set it](20261101-derive-the-orchestrator-role-from-started-sessions.md) | Accepted | parallel-sessions |
+| 2026-11-01 | [Only a main session orchestrates; a started session knows it was started](20261101-only-a-main-session-orchestrates.md) | Accepted | parallel-sessions |

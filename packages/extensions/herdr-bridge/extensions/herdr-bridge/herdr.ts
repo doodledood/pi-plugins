@@ -183,14 +183,19 @@ export class Herdr {
   /**
    * Starts Pi in a shell pane under `name` and returns the agent once Herdr sees it ready. A new
    * pane's shell takes a moment to reach its prompt; until it does, Herdr refuses the pane as not an
-   * available shell, so that refusal is retried for up to `shellWaitMs`.
+   * available shell, so that refusal is retried for up to `shellWaitMs`. `piArgs` go on Pi's command line.
    */
-  async startPi(name: string, paneId: string, options: { timeoutMs: number; retryMs: number; shellWaitMs?: number }): Promise<AgentView> {
+  async startPi(
+    name: string,
+    paneId: string,
+    options: { timeoutMs: number; retryMs: number; shellWaitMs?: number; piArgs?: readonly string[] },
+  ): Promise<AgentView> {
     const { timeoutMs, retryMs } = options;
+    const piArgs = options.piArgs?.length ? ["--", ...options.piArgs] : [];
     const deadline = Date.now() + (options.shellWaitMs ?? 20_000);
     for (;;) {
       try {
-        const stdout = await this.run(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", String(timeoutMs)], {
+        const stdout = await this.run(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--timeout", String(timeoutMs), ...piArgs], {
           timeoutMs: timeoutMs + 15_000,
         });
         const agent = parseAgent(resultOf(stdout, "agent start").agent);

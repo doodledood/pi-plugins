@@ -114,6 +114,13 @@ const scenarios: Record<string, (run: Run) => Promise<void>> = {
     run.prompt(orchName, call("start_agent_session", { folder, name: "worker-two", prompt: "hi" }));
     const second = await waitFor("worker-two", () => run.agent("worker-two"), 120_000);
     check(second.workspace_id === worker.workspace_id && second.tab_id !== worker.tab_id, "a folder that already has a workspace gets a new tab in it", second);
+
+    // Only the main session orchestrates: Pi accepted the flag naming the starter, and the started
+    // session has no start tool, so its attempt starts nothing.
+    run.herdr(["agent", "prompt", "worker", call("start_agent_session", { folder, name: "nested", prompt: "hi" })]);
+    const refused = await waitFor("the worker's start attempt to come back", () => transcript(workerSession!).find((m) => m.role === "toolResult" && m.text.includes("start_agent_session")), 60_000);
+    await sleep(3_000);
+    check(/not found/i.test(refused.text) && !run.agent("nested"), "a started session has no start_agent_session: its call is refused and starts nothing", refused.text);
   },
 };
 

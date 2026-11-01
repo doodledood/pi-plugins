@@ -116,6 +116,8 @@ export interface StartOptions {
   cwd: string;
   /** Environment the new tab gets, such as the agent directory this session runs with. */
   env: Record<string, string>;
+  /** Arguments for the new session's Pi command line, such as the flag naming who started it. */
+  piArgs?: readonly string[];
   readyTimeoutMs?: number;
   landedTimeoutMs?: number;
   /** How often the start sequence re-checks a pane, an agent or a session file while it waits. */
@@ -193,7 +195,7 @@ export async function startSession(herdr: Herdr, request: StartRequest, options:
 
   let started: AgentView;
   try {
-    started = await herdr.startPi(name, pane.paneId, { timeoutMs: START_TIMEOUT_MS, retryMs: pollMs });
+    started = await herdr.startPi(name, pane.paneId, { timeoutMs: START_TIMEOUT_MS, retryMs: pollMs, piArgs: options.piArgs });
   } catch (error) {
     throw new Error(`Pi did not come up in the new pane: ${describe(error)}. ${leftBehind(pane, createdWorkspace)}`);
   }
