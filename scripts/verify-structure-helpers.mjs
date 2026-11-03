@@ -43,3 +43,11 @@ export function validateEmbeddedConventions({ agentsText, conventionsText }) {
   }
   return [];
 }
+
+/**
+ * Whether a file or directory name is live Pi runtime state: the session log directory, MCP auth and caches, debug
+ * and crash logs. Matched on the whole name, so a document whose name merely mentions sessions is not caught.
+ */
+export function isRuntimeStateName(name) {
+  return name === "sessions" || /^(mcp-oauth|mcp-cache|mcp-npx-cache|pi-debug|pi-crash)/.test(name);
+}

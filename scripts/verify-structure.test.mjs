@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
+import { isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const rootBundleSource = "git:github.com/doodledood/pi-plugins@main";
 const portablePackage = "git:github.com/doodledood/manifest-dev@main";
@@ -54,4 +54,9 @@ test("embedded conventions section that drifted from the source fails", () => {
 
 test("missing embedded conventions section fails", () => {
   assert.equal(validateEmbeddedConventions({ agentsText: "# Repo\n", conventionsText }).length, 1);
+});
+
+test("runtime state is caught by its name, not by a document that mentions it", () => {
+  for (const name of ["sessions", "mcp-oauth", "mcp-cache", "mcp-npx-cache", "pi-debug.log", "pi-crash-2026.log"]) assert.equal(isRuntimeStateName(name), true, name);
+  for (const name of ["20261101-derive-the-orchestrator-role-from-started-sessions.md", "sessions.md", "my-sessions"]) assert.equal(isRuntimeStateName(name), false, name);
 });

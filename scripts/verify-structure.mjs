@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
+import { isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const root = process.cwd();
 const errors = [];
@@ -10,7 +10,7 @@ const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi", "graphite"];
 const expectedSetupAgents = ["Explore"];
-const expectedSetupSkills = ["deletion-pass"];
+const expectedSetupSkills = ["deletion-pass", "telegram"];
 const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
   "anthropic/claude-opus-5-5-full:high",
@@ -45,7 +45,7 @@ function ensureNoForbiddenNames(dir = root) {
     const rel = path.slice(root.length + 1);
     if (["node_modules", ".git"].includes(entry)) continue;
     if (["auth.json", "trust.json"].includes(entry)) errors.push(`${rel}: forbidden live Pi state file`);
-    if (/mcp-oauth|sessions|mcp-cache|mcp-npx-cache|pi-debug|pi-crash/.test(rel)) errors.push(`${rel}: forbidden runtime state`);
+    if (isRuntimeStateName(entry)) errors.push(`${rel}: forbidden runtime state`);
     const st = statSync(path);
     if (st.isDirectory()) ensureNoForbiddenNames(path);
   }
@@ -199,6 +199,7 @@ if (JSON.stringify(actualSetupAgents) !== JSON.stringify([...expectedSetupAgents
 for (const name of expectedSetupSkills) {
   mustExist(join(root, "setup", "skills", name, "SKILL.md"));
 }
+mustExist(join(root, "setup", "skills", "telegram", "scripts", "telegram.py"));
 
 // The coding conventions were split out of setup/AGENTS.md, which now names the
 // new file. Copy one without the other and the reference dangles silently — no
