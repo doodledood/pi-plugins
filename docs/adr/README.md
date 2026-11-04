@@ -35,7 +35,8 @@
 | 2026-10-28 | [Host parallel Pi sessions in Herdr and ship a bridge, not a board](20261028-host-pi-in-herdr-and-ship-a-bridge.md) | Accepted | parallel-sessions |
 | 2026-11-01 | [Derive the orchestrator role from started sessions, with no command to set it](20261101-derive-the-orchestrator-role-from-started-sessions.md) | Accepted | parallel-sessions |
 | 2026-11-01 | [Only a main session orchestrates; a started session knows it was started](20261101-only-a-main-session-orchestrates.md) | Accepted | parallel-sessions |
-| 2026-11-04 | [Hold Slack conversations in a read-only fork of the main session, with changes behind the owner's approval](20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md) | Accepted | slack-companion |
+| 2026-11-04 | [Hold Slack conversations in a read-only fork of the main session, with changes behind the owner's approval](20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md) | Accepted; amended by [20261104-keep-the-owners-own-slack-out-of-the-helpers-reach](20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md) (the owner's own Slack tools only when he lists them) | slack-companion |
+| 2026-11-04 | [Keep the owner's own Slack out of the Slack helper's reach unless he lists its tools](20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md) | Accepted | slack-companion |
 | 2026-11-04 | [Let Slack input only narrow what sessions may do](20261104-let-slack-input-only-narrow-what-sessions-may-do.md) | Accepted | slack-companion |
 | 2026-11-04 | [Let the agent carry Slack conversations on by itself, speaking only when addressed or useful](20261104-let-the-agent-carry-slack-conversations-on-by-itself.md) | Accepted | slack-companion |
 | 2026-11-04 | [Rule that this repository is also for Pi users beyond the owner](20261104-rule-pi-users-beyond-the-owner-into-the-north-star.md) | Accepted | north-star |

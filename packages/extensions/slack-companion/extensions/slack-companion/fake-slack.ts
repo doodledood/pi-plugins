@@ -27,6 +27,8 @@ export interface FakeSlackOptions {
   /** The gateway variant redacts emails; the official server shows them. */
   redactEmails?: boolean;
   appId?: string;
+  /** False: a thread read with no reply prints no "No thread messages" trailer (a server unlike the real one). */
+  emptyTrailer?: boolean;
 }
 
 type Listener = (request: any) => void;
@@ -47,13 +49,16 @@ export class FakeSlack {
   /**
    * What the next calls of a tool do, in order: "ok" (answer normally), "error" (ok:false, the
    * adapter's generic code), "post-then-error" (a send that posted, then failed), "truncate",
-   * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting), "auth" (the login expired).
+   * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting), "auth" (the login expired), "disabled" (the server is
+   * disabled), "ansi-error" (an error whose text carries terminal control sequences).
    */
-  failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready" | "auth">>();
+  failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready" | "auth" | "disabled" | "ansi-error">>();
   /** Page size the fake uses regardless of the requested limit, to force pagination. */
   pageSize = 100;
   /** Channel names the listing header shows (a channel not here shows "general"). */
   readonly channelNames = new Map<string, string>();
+  /** Runs after each call is answered, before the answer returns: lets a test change Slack between two reads. */
+  afterCall: ((tool: string, args: Record<string, unknown>) => void) | undefined;
   /** Seconds the fake clock moves per message. */
   secondsPerMessage = 1;
 
@@ -62,7 +67,11 @@ export class FakeSlack {
     this.ownerName = options.ownerName ?? "Dana Owner";
     this.redactEmails = options.redactEmails ?? false;
     this.appId = options.appId ?? "A0FAKEAPP";
+    this.emptyTrailer = options.emptyTrailer ?? true;
   }
+
+  /** Whether a thread read with no reply ends with the server's "No thread messages" trailer (the real one does). */
+  private readonly emptyTrailer: boolean;
 
   /** Wall-clock milliseconds matching the fake's newest ts (tests pass this as the engine's now). */
   nowMs(): number {
@@ -133,10 +142,13 @@ export class FakeSlack {
     let text: string;
     try {
       text = this.respond(tool, args);
+      this.afterCall?.(tool, args);
     } catch (error) {
       const code = /no tool/.test((error as Error).message) ? "tool_not_found" : "tool_error";
       return { ok: false, error: new Error(`MCP tool call failed: ${code}`) };
     }
+    if (failure === "disabled") return { ok: false, error: new Error("MCP tool call failed: server_disabled") };
+    if (failure === "ansi-error") return { ok: false, error: new Error("MCP tool call failed: tool_error \u001b[2J\u001b]0;pwned\u0007") };
     if (failure === "auth") return { ok: false, error: new Error("MCP tool call failed: auth_required") };
     if (failure === "not-ready") return { ok: false, error: new Error("MCP initialization is still in progress") };
     if (failure === "garbage") return { ok: true, result: { content: [{ type: "text", text: "<html>Service Unavailable</html>" }] } };
@@ -202,7 +214,7 @@ export class FakeSlack {
         const parent = `=== THREAD PARENT MESSAGE ===\nFrom: ${this.header(root)}\nTime: ${this.time(root.ts)}\nMessage TS: ${root.ts}\n${root.text}\n\n`;
         const body = page.length
           ? `=== THREAD REPLIES (${replies.length} total) ===\n\n${page.map((m, i) => `--- Reply ${offset + i + 1} of ${replies.length} ---\nFrom: ${this.header(m)}\nTime: ${this.time(m.ts)}\nMessage TS: ${m.ts}\n${m.text}`).join("\n\n")}\n`
-          : "No thread messsages\n";
+          : this.emptyTrailer ? "No thread messsages\n" : "";
         return JSON.stringify({
           messages: `${parent}${body}`,
           pagination_info: more ? `There are more messages in this thread. To view the next page, use cursor: \`${offset + limit}\`\n` : "There are no more messages in this thread.\n",

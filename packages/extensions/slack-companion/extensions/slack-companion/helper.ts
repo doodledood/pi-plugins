@@ -46,6 +46,8 @@ export interface HelperBatch {
   messages: readonly SlackMessage[];
   /** Requests already waiting for the owner, so the helper does not ask twice. */
   waitingApprovals: readonly string[];
+  /** How many more requests may wait for the owner from this conversation. */
+  requestRoom: number;
 }
 
 export interface HelperOutcome {
@@ -94,7 +96,7 @@ export function batchPrompt(batch: HelperBatch): string {
   ];
   if (batch.context.length) parts.push(`Earlier in the conversation:\n${batch.context.map(quoteSlackMessage).join("\n")}`);
   parts.push(`New:\n${batch.messages.map(quoteSlackMessage).join("\n")}`);
-  if (batch.waitingApprovals.length) parts.push(`Already waiting for ${batch.ownerName}'s approval:\n${batch.waitingApprovals.map((t) => `- ${t}`).join("\n")}`);
+  if (batch.waitingApprovals.length) parts.push(`Already waiting for ${batch.ownerName}'s approval:\n${batch.waitingApprovals.map((t) => `- ${neutralize(t)}`).join("\n")}`);
   if (batch.inChannel) parts.push("This is a channel thread: reply only if you were addressed or have something the readers need.");
   return parts.join("\n\n");
 }
@@ -166,7 +168,7 @@ function guardedReadTools(cwd: string, secrets: SecretPolicy): AnyTool[] {
 }
 
 /** The helper's whole tool set. Nothing else exists in the helper. */
-export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome): AnyTool[] {
+export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome, requestRoom = Number.POSITIVE_INFINITY): AnyTool[] {
   const tools: AnyTool[] = guardedReadTools(env.cwd, env.secrets);
   if (env.sandbox.ok) {
     tools.push(createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false }) as unknown as AnyTool);
@@ -249,6 +251,9 @@ export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome)
     async execute(_id, params) {
       const text = params.text.trim();
       if (!text) throw new Error("The hand-off is empty.");
+      if (params.kind === "action" && outcome.handoffs.filter((h) => h.kind === "action").length >= requestRoom) {
+        throw new Error("No more requests can wait for the owner from this conversation now. Tell the person to ask again after the owner answers the ones waiting.");
+      }
       outcome.handoffs.push({ kind: params.kind, text });
       return textResult(params.kind === "action"
         ? "Queued for the owner's approval. Tell the person it is waiting on the owner."
@@ -317,7 +322,7 @@ export async function runHelper(env: HelperEnvironment, batch: HelperBatch, sign
   await loader.reload();
   throwIfAborted(signal);
 
-  const tools = buildHelperTools(env, outcome);
+  const tools = buildHelperTools(env, outcome, batch.requestRoom);
   const { session } = await createAgentSession({
     cwd: env.cwd,
     agentDir: env.agentDir,

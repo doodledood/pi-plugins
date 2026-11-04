@@ -22,7 +22,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test extensions/slack-companion/*.test.ts"
+    "test": "tsx --test --test-timeout=60000 extensions/slack-companion/*.test.ts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^1.4.0",

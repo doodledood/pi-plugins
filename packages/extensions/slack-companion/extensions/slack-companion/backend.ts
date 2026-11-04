@@ -9,6 +9,7 @@ import {
   compareTs,
   parseChannelListing,
   parseChannelName,
+  parseEnvelope,
   parseLookup,
   parseProfile,
   parseSendResult,
@@ -111,7 +112,20 @@ export async function runMcpTool(events: EventBus, tool: string, args: Record<st
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 50;
 /** Failures that retrying cannot fix: a misconfigured tool or server, or a result the package cannot use whole. */
-const LASTING_CODES = new Set(["tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable", "auth_required"]);
+const LASTING_CODES = new Set([
+  "tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool",
+  "no_adapter", "truncated", "too_many_pages", "unreadable", "auth_required", "url_elicitation_required",
+]);
+
+/** What the owner can do about a lasting failure, by the adapter's code. */
+export const FAILURE_HINTS: Readonly<Record<string, string>> = {
+  auth_required: "Slack needs you to sign in again (run /mcp-auth for your Slack server)",
+  server_disabled: "your Slack MCP server is disabled; enable it in /mcp-adapter",
+  ambiguous_tool: "more than one MCP server has this tool; set \"server\" in slack-companion.json",
+  url_elicitation_required: "your Slack MCP server asks you to open a link; use one of its tools in Pi once to answer it",
+  tool_not_found: "the tool name is wrong; set the right name under \"tools\" in slack-companion.json",
+  server_not_found: "the server name is wrong; check \"server\" in slack-companion.json",
+};
 
 /**
  * Is this a failure that may pass on its own (a rate limit, a dropped connection, the adapter's
@@ -122,7 +136,13 @@ export function isPassingFailure(error: unknown): boolean {
   return error instanceof BackendNotReadyError || (error instanceof BackendError && !LASTING_CODES.has(error.code ?? ""));
 }
 
+/** The server's own line ending a thread read that holds no reply (the real server spells it "messsages"). */
+const NO_REPLIES_TRAILER = /\n*No thread mess+ages\s*$/;
+
 export class McpSlackBackend implements SlackBackend {
+  /** The server was seen ending an empty thread read with its trailer. */
+  private trailerConfirmed = false;
+
   constructor(
     private readonly events: EventBus,
     private readonly tools: ToolNames,
@@ -168,16 +188,27 @@ export class McpSlackBackend implements SlackBackend {
     const { before, after } = tsNeighbors(ts);
     if (conversation.kind === "thread") {
       if (ts === conversation.threadTs) return true;
-      const occurrences = async (oldest: string, latest: string) => parseThreadListing(await this.call(this.tools.readThread, {
-        channel_id: conversation.channelId, message_ts: conversation.threadTs, oldest, latest, limit: 2, response_format: "detailed",
-      })).messages.filter((m) => m.ts === ts).length;
-      const inWindow = await occurrences(before, after);
-      if (!inWindow) return false;
+      const read = async (oldest: string, latest: string) => {
+        const text = await this.call(this.tools.readThread, {
+          channel_id: conversation.channelId, message_ts: conversation.threadTs, oldest, latest, limit: 2, response_format: "detailed",
+        });
+        return { count: parseThreadListing(text).messages.filter((m) => m.ts === ts).length, empty: NO_REPLIES_TRAILER.test(parseEnvelope(text, "messages").body) };
+      };
       // The thread's first message comes with every read, and its own text could imitate a reply
-      // block naming any id. A control read whose range holds no reply shows what that first
-      // message alone produces; only an occurrence beyond it is a real reply.
-      const control = await occurrences(after, tsNeighbors(after).after);
-      return inWindow > control;
+      // block naming any id. The window spans one microsecond either side of the id, so the only
+      // reply it can hold is that message itself. The server ends a read that holds no reply with
+      // its own "No thread messages" trailer, after everything the first message says: a window
+      // read ending so holds no reply, whatever named the id.
+      const inWindow = await read(before, after);
+      if (!inWindow.count || inWindow.empty) return false;
+      // That reading needs a server that prints the trailer: confirmed once, with a read whose range
+      // can hold no reply. A server that does not is a format the package cannot check: it fails closed.
+      if (!this.trailerConfirmed) {
+        const control = await read(after, tsNeighbors(after).after);
+        if (!control.empty) throw new BackendError("this Slack server's thread format does not mark an empty read, so thread replies cannot be confirmed", "unreadable");
+        this.trailerConfirmed = true;
+      }
+      return true;
     }
     // A top-level message: the first block of a one-message channel read around its ts is genuine.
     const listing = parseChannelListing(await this.call(this.tools.readChannel, {

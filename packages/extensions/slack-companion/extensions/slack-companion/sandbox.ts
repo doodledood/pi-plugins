@@ -25,8 +25,15 @@ export interface SandboxOptions {
 export function denyReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
-  const roots = [...new Set([home, options.cwd])];
-  return [...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
+  // Secret file names are denied at any depth from the filesystem root, so a .env or an auth file
+  // outside the home and the project (another checkout, an agent folder elsewhere) is covered too;
+  // the agent folder's own files are also named outright, for platforms that match no patterns.
+  const roots = [...new Set(["", home, options.cwd, agentDir])];
+  return [
+    ...secretDirectories(home, agentDir),
+    ...["auth.json", "mcp.json", "mcp-adapter.json"].map((name) => join(agentDir, name)),
+    ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`)),
+  ];
 }
 
 /** The part of sandbox-runtime's SandboxManager the package uses; tests pass a recording one. */

@@ -28,7 +28,8 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   watch (an expired login says how to sign in); reads survive pages, truncation, failures and
   restarts (property test).
 - The helper: it loads no extension (no factory runs), has only its allowlisted tools (every
-  read-only MCP tool, main's active ones shown directly, never the send tool), reaches the model
+  read-only MCP tool, main's active ones shown directly, the owner's own Slack only when he lists
+  it, never the send tool), reaches the model
   with main's credential, stops when stopped and at its turn limit; its file tools and its
   sandboxed shell refuse secrets in every path form and through symlinks; the real wiring builds
   that policy.
@@ -36,7 +37,7 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   held replies, limits and their daily reset, stopping, locks and routing between sessions,
   resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and
   helper and cost records.
-Line: 6.0 s on darwin-arm64-12cpu; raised: the suite grew from 85 to 136 tests in review rounds 2 and 3 (forgery, crash, lock, triage, wiring and layout coverage)
+Line: 6.0 s on darwin-arm64-12cpu; raised: the suite grew in review rounds 2 to 4 (forgery, crash, lock, triage, wiring and layout coverage)
 
 ### types
 Run: `npm run typecheck --workspace @doodledood/pi-slack-companion`

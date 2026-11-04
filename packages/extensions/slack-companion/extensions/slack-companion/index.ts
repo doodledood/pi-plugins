@@ -13,12 +13,12 @@ import { Type } from "typebox";
 import { McpSlackBackend, RUNTIME_TOOL_CALL_EVENT, type SlackBackend } from "./backend.ts";
 import { ConfigError, DEFAULT_CONFIG, enableInConfig, loadConfig, type SlackCompanionConfig } from "./config.ts";
 import { parseSlackLink } from "./conversation.ts";
-import { Engine, type EngineDeps, emptyState, type EngineState, watchLabel } from "./engine.ts";
+import { Engine, type EngineDeps, emptyState, type EngineState, StoppedConversationError, watchLabel } from "./engine.ts";
 import { parseSendResult } from "./format.ts";
 import { selectForkBranch } from "./fork.ts";
 import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache } from "./mcp-tools.ts";
+import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
@@ -123,8 +123,6 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   let warnedCache = false;
   // Send calls this package marked, so the nested call a proxy makes for one is not marked again.
   const markedCalls = new Set<string>();
-  // Error stops the owner has seen in the panel (rendered there), by errorId.
-  const seenErrors = new Set<string>();
   // The main session's prompt options as of its last turn: the helper rebuilds the same skills and context files.
   let lastPromptOptions: BuildSystemPromptOptions | undefined;
 
@@ -136,7 +134,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       engine: engineState,
       panelKey: config.panelKey,
       answering: new Set(engineState.watches.filter((w) => engine?.isAnswering(w.key)).map((w) => w.key)),
-      seenErrors,
+      seenErrors: new Set(engineState.seenErrors ?? []),
       now: now(),
     };
   };
@@ -150,7 +148,13 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   /** The helper's MCP reach: every read-only tool and the owner's investigative list; main's active ones shown directly. */
   const mcpToolsForHelper = (): HelperMcpReach => {
     try {
-      return helperMcpTools(readMcpCache(cachePath), new Set(pi.getActiveTools()), config.investigativeTools, [config.tools.sendMessage]);
+      const cache = readMcpCache(cachePath);
+      return helperMcpTools(cache, new Set(pi.getActiveTools()), config.investigativeTools, {
+        blocked: [config.tools.sendMessage],
+        // The owner's own Slack (search, other channels, private messages) is not read for people in
+        // a watched conversation unless he lists those tools: his other conversations are his.
+        privateServers: slackServers(cache, Object.values(config.tools), config.server),
+      });
     } catch (error) {
       if (!warnedCache) {
         warnedCache = true;
@@ -280,7 +284,8 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       if (!restored.ok) {
         const lost = restored.lostWatches.length ? `: ${restored.lostWatches.join(", ")}. Watch them again with /slack <link>` : "";
         const kept = restored.keptRequests ? ` The ${restored.keptRequests} request${restored.keptRequests === 1 ? "" : "s"} waiting for you ${restored.keptRequests === 1 ? "was" : "were"} kept.` : "";
-        notify("warning", `slack-companion: this session's saved Slack watches came from another version of the package and were not restored${lost}.${kept}`);
+        const off = restored.autoStart ? "" : " Automatic starts are off until you run /slack on.";
+        notify("warning", `slack-companion: this session's saved Slack watches came from another version of the package and were not restored${lost}.${kept}${off}`);
       }
     }
     overrides.onEngine?.(engine);
@@ -303,7 +308,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     requestRender = undefined;
   });
 
-  // The owner typing in main is owner input: counts reset, paused watches resume.
+  // The owner typing in main is owner input: send counts reset, and watches paused for the send limit resume.
   pi.on("input", (event) => {
     if (event.source === "interactive") engine?.ownerInput();
   });
@@ -361,11 +366,11 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (!config.enabled) return "slack-companion is off; /slack on turns it on.";
     const parsed = parseSlackLink(link);
     if (!parsed) return `Not a Slack message link: ${link}`;
-    if (!byOwner && engine?.isStoppedLink(parsed)) return "Someone stopped that conversation. Only the owner can watch it again: /slack <link>, or w in the Slack panel.";
     let watch;
     try {
-      watch = await engine?.attach(parsed);
+      watch = await engine?.attach(parsed, { byOwner });
     } catch (error) {
+      if (error instanceof StoppedConversationError) return error.message;
       return `Could not watch that conversation: ${(error as Error).message}`;
     }
     if (!watch) return "Could not watch that conversation (see the notice).";
@@ -401,10 +406,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       if (!engine) return;
       void applyPanelAction(engine, action).catch((e) => notify("error", `Slack: ${action.kind} failed: ${(e as Error).message}`));
       tui.requestRender();
-    }, () => done(), tui, () => panelRows(tui.terminal.rows), (ids) => {
-      for (const id of ids) seenErrors.add(id);
-      requestRender?.();
-    }), { overlay: true, overlayOptions: { maxHeight: `${PANEL_HEIGHT_PERCENT}%` } });
+    }, () => done(), tui, () => panelRows(tui.terminal.rows), (ids) => engine?.markErrorsSeen(ids)), { overlay: true, overlayOptions: { maxHeight: `${PANEL_HEIGHT_PERCENT}%` } });
   };
 
   pi.registerCommand("slack", {

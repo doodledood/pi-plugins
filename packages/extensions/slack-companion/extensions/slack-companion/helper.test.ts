@@ -8,7 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { selectForkBranch } from "./fork.ts";
+import { forkEntriesForChild, selectForkBranch } from "./fork.ts";
 import { HelperAbortedError, MAX_HELPER_TURNS, runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
 import { helperMcpTools, mcpCachePathIn, readMcpCache } from "./mcp-tools.ts";
 import { createHarness, textOf, type Reply } from "./pi-harness.ts";
@@ -22,6 +22,7 @@ const batch: HelperBatch = {
   context: [],
   messages: [{ ts: "1793700100.000001", userId: "U0COLL0001", userName: "Robin Colleague", text: "can you check?", agentFooter: false }],
   waitingApprovals: [],
+  requestRoom: 1,
 };
 
 /** A home folder of the test's own, with a key in ~/.ssh and an OAuth token under the agent folder. */
@@ -65,7 +66,7 @@ async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cw
     branch: selectForkBranch(h.session.sessionManager.getBranch() as SessionEntry[], true),
     systemPromptOptions: { cwd: h.workspace },
     events: h.events,
-    mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], ["slack_send_message"]),
+    mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], { blocked: ["slack_send_message"] }),
     sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
     secrets: defaultSecretPolicy(join(home, ".pi", "agent"), home),
   };
@@ -184,6 +185,16 @@ test("the sandboxed shell writes only to scratch, reads no secrets and reaches n
   assert.match(outputs[4]!, /\bPATH=/, "the environment was printed");
   assert.equal(outputs.some((o) => /TOKEN-FROM-ENVIRONMENT/.test(o)), false, "credential variables are not passed to commands");
   assert.match(outputs[6]!, /SCRATCH-OK/, "the scratch folder is writable");
+  // Secrets outside the home and the project: another checkout's .env, an agent folder elsewhere.
+  const outside = mkdtempSync(join(tmpdir(), "outside-"));
+  writeFileSync(join(outside, ".env"), "OUTSIDE-ENV-SECRET");
+  const outsideAgent = mkdtempSync(join(tmpdir(), "agent-elsewhere-"));
+  writeFileSync(join(outsideAgent, "auth.json"), "OUTSIDE-AUTH-SECRET");
+  const { results: more } = await helperRun([
+    { kind: "tool", name: "bash", args: { command: `cat ${join(outside, ".env")}; cat ${join(outsideAgent, "auth.json")}; echo END` } },
+  ], { home, sandbox: (cwd, h2) => startShellSandbox({ cwd, allowedDomains: [], home: h2, agentDir: outsideAgent }) });
+  assert.equal(more.some((r) => /OUTSIDE-ENV-SECRET|OUTSIDE-AUTH-SECRET/.test(r.text)), false, "denied outside the home and the project too");
+  assert.match(more[0]!.text, /END/, "the command ran");
 });
 
 test("a sandbox that cannot start leaves the helper without a shell", async () => {
@@ -253,4 +264,33 @@ test("every file tool and the shell are denied Pi's auth file, cloud credentials
   assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret");
   assert.ok(results.filter((r) => r.tool === "ls" || r.tool === "find").every((r) => r.isError), "find and ls refuse secret folders, through a symlink too");
   if (!probe.ok) t.diagnostic(`shell part not run: ${probe.reason}`);
+});
+
+test("the helper is told when no more requests can wait, so it never tells the person one waits", async () => {
+  const { outcome, results } = await helperRun([
+    { kind: "tool", name: "hand_off_to_main", args: { kind: "action", text: "first" } },
+    { kind: "tool", name: "hand_off_to_main", args: { kind: "action", text: "second" } },
+  ]);
+  assert.deepEqual(outcome.handoffs.map((h) => h.text), ["first"], "room for one");
+  assert.match(results[1]!.text, /No more requests can wait/);
+});
+
+test("one reply per batch: a second reply is refused; main's custom entries never reach the helper", async () => {
+  const { outcome, results } = await helperRun([
+    { kind: "tool", name: "reply_in_slack", args: { text: "first" } },
+    { kind: "tool", name: "reply_in_slack", args: { text: "second" } },
+  ]);
+  assert.equal(outcome.reply!.text, "first");
+  assert.match(results[1]!.text, /already has its reply/);
+  const custom = { type: "custom", customType: "slack-companion-state", data: { secret: "state" }, id: "c1", parentId: null, timestamp: new Date().toISOString() };
+  assert.equal(forkEntriesForChild([custom as any]).some((e: any) => e.type === "custom"), false);
+});
+
+test("grep and find refuse a secret folder reached through a symlink", async () => {
+  const home = fakeHome();
+  const { results } = await helperRun([
+    { kind: "tool", name: "grep", args: { pattern: "CONTENT", path: "linked-ssh" } },
+    { kind: "tool", name: "find", args: { pattern: "*", path: "linked-ssh" } },
+  ], { home, sandbox: async (cwd, h2) => { symlinkSync(join(home, ".ssh"), join(cwd, "linked-ssh")); return realSandbox(cwd, h2); } });
+  assert.ok(results.every((r) => r.isError && /secret location/.test(r.text)), JSON.stringify(results));
 });

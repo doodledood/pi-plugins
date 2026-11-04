@@ -34,6 +34,9 @@ export function secretDirectories(home = homedir(), agentDir = join(home, ".pi",
     join(home, ".docker"),
     join(home, ".mcp-auth"),
     join(home, ".config", "telegram-notify"),
+    join(home, ".config", "gh"),
+    join(home, ".password-store"),
+    join(home, ".local", "share", "keyrings"),
     join(agentDir, "mcp-oauth"),
     join(agentDir, "mcp-oauth-encrypted"),
   ];
@@ -59,6 +62,8 @@ export const SECRET_FILE_GLOBS: readonly string[] = [
   "id_ed25519",
   "mcp.json",
   "mcp-adapter.json",
+  ".git-credentials",
+  ".*_history",
 ];
 
 const SECRET_FILE_NAMES = SECRET_FILE_GLOBS.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`));
@@ -81,7 +86,9 @@ export interface SecretPolicy {
 }
 
 export function defaultSecretPolicy(agentDir?: string, home = homedir()): SecretPolicy {
-  return { directories: secretDirectories(home, agentDir), home };
+  // /proc holds every process's environment (Pi's own API keys among them). Only the file tools
+  // deny it; the shell runs with a cleaned environment, and denying /proc there breaks commands.
+  return { directories: [...secretDirectories(home, agentDir), "/proc"], home };
 }
 
 function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {

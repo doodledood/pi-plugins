@@ -2,7 +2,8 @@
 // helper's file tools, what counts as owner input, its poll timer, and how it marks main's sends.
 // Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md (the policy the real path builds),
 // docs/adr/20261104-let-slack-input-only-narrow-what-sessions-may-do.md (only the owner's own
-// input resets the send count) and docs/adr/20261104-start-watching-when-the-session-messages-someone.md.
+// input resets the send count), docs/adr/20261104-start-watching-when-the-session-messages-someone.md and
+// docs/adr/20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md (the helper's real MCP reach).
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -114,12 +115,14 @@ test("the real triage call: NO stays silent, a failed call stops the watch loudl
   const failed = await oneReply({ kind: "error", message: "quota exceeded" });
   assert.equal(failed.h.engine().watch(failed.key)!.status, "error");
   assert.match(failed.h.engine().watch(failed.key)!.reason!, /triage model failed: quota exceeded/);
+  const cheapest = await oneReply({ kind: "text", text: "YES" });
+  assert.deepEqual(cheapest.h.calls.filter((c) => c.role === "triage").map((c) => c.model), ["scripted-slack/cheap"], "by default the cheapest priced model");
+  assert.ok(cheapest.h.calls.filter((c) => c.role === "helper").every((c) => c.model === "scripted-slack/det"), "the helper runs on the session's model");
   const configured = await oneReply({ kind: "text", text: "YES" }, { triageModel: "scripted-slack/det" });
-  assert.deepEqual(configured.h.calls.filter((c) => c.role === "triage").map((c) => c.model), ["scripted-slack/det"]);
-  assert.equal(configured.h.calls.filter((c) => c.role === "helper").length > 0, true);
+  assert.deepEqual(configured.h.calls.filter((c) => c.role === "triage").map((c) => c.model), ["scripted-slack/det"], "a configured model wins");
 });
 
-test("the real helper gets every read-only tool and the owner's listed ones, never the send tool", async () => {
+test("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed", async () => {
   const h = await createHarness({
     config: { investigativeTools: ["slack_send_message", "data/data_write"] },
     replies: script("question", (_c, call) => (call === 1 ? { kind: "tool", name: "call_read_only_tool", args: { tool: "slack_send_message", arguments: { channel_id: DM, message: "x" } } } : { kind: "text", text: "done" })),
@@ -130,10 +133,13 @@ test("the real helper gets every read-only tool and the owner's listed ones, nev
   await h.engine().poll();
   await h.engine().idle();
   const names = h.calls.find((c) => c.role === "helper")!.tools;
-  for (const name of ["data_lookup", "data_write", "search_read_only_tools", "call_read_only_tool"]) assert.ok(names.includes(name), name);
-  assert.equal(names.includes("slack_send_message"), false);
-  const result = h.calls.filter((c) => c.role === "helper").at(-1)!.context.messages.find((m: any) => m.role === "toolResult" && m.toolName === "call_read_only_tool") as any;
-  assert.match(textOf(result.content), /not a read-only tool/);
+  for (const name of ["data_lookup", "data_write"]) assert.ok(names.includes(name), name);
+  for (const name of ["slack_send_message", "slack_read_thread", "slack_read_channel", "search_read_only_tools", "call_read_only_tool"]) {
+    assert.equal(names.includes(name), false, `${name}: the send tool never; the owner's own Slack only when he lists it`);
+  }
+  const result = h.calls.filter((c) => c.role === "helper").at(-1)!.context.messages.filter((m: any) => m.role === "toolResult").at(-1) as any;
+  assert.equal(result.toolName, "call_read_only_tool");
+  assert.equal(result.isError, true, "the call had nothing to reach");
   assert.equal(h.slack.messages(DM).filter((m) => m.userId === h.slack.ownerId).length, 1, "only main's question was ever posted as the owner");
 
 });
@@ -160,4 +166,67 @@ test("a session that ends releases its locks", async () => {
   writeFileSync(join(h.agentDir, "slack-companion.json"), JSON.stringify({ enabled: false }));
   await h.session.reload(); // the old session's runtime shuts down; the new one, disabled, takes nothing
   assert.deepEqual(readdirSync(locks), []);
+});
+
+test("the panel opened through Pi fits the overlay it asks for, gates approval on reading, and records seen stops", async () => {
+  const long = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`).join("\n");
+  const h = await createHarness({
+    ui: { rows: 20 },
+    replies: script("question", (c) => ((c.messages.at(-1) as any)?.role === "toolResult" ? { kind: "text", text: "done" } : { kind: "tool", name: "hand_off_to_main", args: { kind: "action", text: long } })),
+  });
+  await h.session.prompt("ask Robin");
+  const [question] = h.slack.messages(DM);
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "please migrate", question!.ts);
+  await h.engine().poll();
+  await h.engine().idle();
+  assert.equal(h.engine().pendingApprovals().length, 1);
+  const closed = h.session.prompt("/slack");
+  while (!h.opened.length) await new Promise((r) => setTimeout(r, 5));
+  const { component, options, close } = h.opened[0]!;
+  try {
+    assert.equal(options.overlayOptions.maxHeight, "80%");
+    assert.ok(component.render(80).length <= Math.floor(20 * 0.8), "no row the overlay would cut");
+    component.handleInput("a");
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(h.engine().pendingApprovals().length, 1, "not approvable before the end was shown");
+    for (let i = 0; i < 20 && !component.render(80).join("\n").includes("(end of this item)"); i += 1) component.handleInput(" ");
+    assert.match(component.render(80).join("\n"), /Step 40: migrate shard 40\./);
+    component.handleInput("a");
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(h.engine().pendingApprovals().length, 0, "approved once read");
+  } finally {
+    close();
+    await closed;
+  }
+});
+
+test("an information hand-off steers main while it is busy, and main stays usable while a request waits", async () => {
+  let release!: () => void;
+  const dataGate = new Promise<void>((r) => (release = r));
+  const h = await createHarness({
+    dataGate,
+    replies: (context: Context, role: Role): Reply => {
+      if (role === "triage") return { kind: "text", text: "YES" };
+      if (role === "helper") return (context.messages.at(-1) as any)?.role === "toolResult" ? { kind: "text", text: "done" } : { kind: "tool", name: "hand_off_to_main", args: { kind: "info", text: "Robin: staging is fine" } };
+      const last = context.messages.filter((m: any) => m.role !== "system").at(-1) as any;
+      if (/ask Robin/.test(textOf(last?.content))) return { kind: "tool", name: "slack_send_message", args: { channel_id: DM, message: "question" } };
+      if (/look it up/.test(textOf(last?.content))) return { kind: "tool", name: "data_lookup", args: { q: "x" } };
+      return { kind: "text", text: "ok" };
+    },
+  });
+  await h.session.prompt("ask Robin");
+  const [question] = h.slack.messages(DM);
+  const busy = h.session.prompt("look it up"); // main waits on the data tool
+  while (!h.dataCalls.length) await new Promise((r) => setTimeout(r, 5));
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "staging is fine", question!.ts);
+  await h.engine().poll();
+  await h.engine().idle();
+  release();
+  await busy;
+  await h.session.agent.waitForIdle?.();
+  const afterTool = h.calls.filter((c) => c.role === "main").find((c) => c.context.messages.some((m: any) => m.role === "toolResult" && m.toolName === "data_lookup"))!;
+  assert.ok(afterTool.context.messages.some((m: any) => /\[Slack hand-off\][\s\S]*staging is fine/.test(textOf(m.content))), "the hand-off reached main within its running turn");
+  const before = h.calls.filter((c) => c.role === "main").length;
+  await h.session.prompt("anything else?");
+  assert.equal(h.calls.filter((c) => c.role === "main").length, before + 1, "main answers while nothing waits on it");
 });

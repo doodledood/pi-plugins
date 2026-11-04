@@ -125,7 +125,7 @@ test("a request taller than the panel scrolls inside itself, keeps its header in
   const actions: PanelAction[] = [];
   const panel = new Panel(() => surface(state), plain, (a) => actions.push(a), () => {}, undefined, () => 20);
   let rendered = panel.render(80).join("\n");
-  assert.match(rendered, /more lines · read to the end to approve · 1 more below/);
+  assert.match(rendered, /more lines · read to the end to approve · space next page/);
   assert.match(rendered, /d deny · ↑↓ move · esc close/);
   assert.equal(/a approve/.test(rendered), false, "the keys do not offer approval yet");
   panel.handleInput("a");
@@ -237,4 +237,41 @@ test("panel keys map to owner actions only", () => {
   assert.deepEqual(actions, [{ kind: "approve", id: "a1" }, { kind: "resume", key: "D1/1.000001" }, { kind: "rewatch", key: "C2/1.0" }]);
   assert.equal(closed, true);
   assert.equal(layoutPanel(state, { selected: 0, offset: 0, allEnded: false, read: new Set() }, plain, 80, 0, 40).selectedEndInView, true);
+});
+
+test("every key is safe in the panel's message states: off, a problem, nothing watched", () => {
+  const states = [surface({}, { enabled: false }), surface({}, { problem: { title: "t", detail: "d ".repeat(400) } }), surface({})];
+  for (const state of states) {
+    const panel = new Panel(() => state, plain, () => { throw new Error("no action expected"); }, () => {}, undefined, () => 12);
+    for (const key of [DOWN, "\u001b[A", " ", "\u001b[6~", "\u001b[5~", "\r", "a", "d", "s", "r", "w"]) {
+      panel.handleInput(key);
+      assert.ok(panel.render(60).length <= 12, "a long message is cut to the panel's height");
+    }
+  }
+});
+
+test("a stop is reported seen once; rendering again asks for nothing", () => {
+  const watches = [channelWatch(1, { status: "error", reason: "tool_error", endedAt: 1 })];
+  const seen = new Set<string>();
+  let calls = 0;
+  const panel = new Panel(() => surface({ watches }, { seenErrors: seen }), plain, () => {}, () => {}, undefined, () => 40, (ids) => { calls += 1; ids.forEach((id) => seen.add(id)); });
+  for (let i = 0; i < 5; i += 1) panel.render(80);
+  assert.equal(calls, 1);
+});
+
+test("the long-item marker offers paging, and asks to read to the end only while that is true", () => {
+  const long = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}.`).join("\n");
+  const read = layoutPanel(surface({ approvals: [approval({ text: long })] }), { selected: 0, offset: 0, allEnded: false, read: new Set(["a1"]) }, plain, 80, 0, 20);
+  assert.match(read.lines.join("\n"), /more lines · space next page/);
+  assert.equal(/read to the end/.test(read.lines.join("\n")), false, "already read");
+  const approved = layoutPanel(surface({ approvals: [approval({ text: long, status: "approved", resolvedAt: 5 })] }), { selected: 0, offset: 0, allEnded: false, read: new Set() }, plain, 80, 0, 20);
+  assert.equal(/read to the end/.test(approved.lines.join("\n")), false, "approved");
+});
+
+test("when the line is very narrow, it drops the lowest count before the word slack", () => {
+  const engine = { watches: [channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 })], approvals: [approval(), approval({ id: "a2" })] };
+  for (let width = 40; width < 50; width += 1) {
+    const [line] = renderLine(surface(engine), plain, width);
+    assert.match(line!, /^ ● slack · 2 waiting/, `at ${width}: ${line}`);
+  }
 });

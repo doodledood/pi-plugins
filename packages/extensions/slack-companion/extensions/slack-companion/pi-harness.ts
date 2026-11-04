@@ -102,6 +102,8 @@ export interface Harness {
   /** Main's registered tools, as an extension sees them. */
   allTools: () => import("@earendil-works/pi-coding-agent").ToolInfo[];
   events: import("./backend.ts").EventBus;
+  /** Components the package opened with ctx.ui.custom (only with the fake UI). */
+  opened: Array<{ component: any; options: any; close: () => void }>;
   /** The poll timers the package has started and not stopped, by id (ids rise). */
   runningTimers: () => number[];
   /** The fake home folder the package's secret policy and sandbox are built for. */
@@ -123,6 +125,10 @@ export interface HarnessOptions {
   noAdapter?: boolean;
   /** Raw text of pi-mcp-adapter's tool cache, to test a broken one. */
   mcpCacheText?: string;
+  /** Data tool calls wait for this before answering (to keep main's turn busy). */
+  dataGate?: Promise<void>;
+  /** Bind a fake UI so commands that open the panel run; it records what they open. */
+  ui?: { rows: number };
   /** Raw config file text, to test a broken file. */
   rawConfig?: string;
 }
@@ -158,7 +164,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     pi.events.on(RUNTIME_TOOL_CALL_EVENT, (request: any) => {
       if (request.result !== undefined || !String(request.tool).startsWith("data_")) return;
       dataCalls.push(request.tool);
-      request.result = Promise.resolve({ ok: true, result: { content: [{ type: "text", text: `rows for ${JSON.stringify(request.args)}` }] } });
+      request.result = (options.dataGate ?? Promise.resolve()).then(() => ({ ok: true, result: { content: [{ type: "text", text: `rows for ${JSON.stringify(request.args)}` }] } }));
     });
     for (const proxy of ["mcp", "mcp__slack"]) {
       pi.registerTool(defineTool({ name: proxy, label: proxy, description: "MCP gateway proxy", parameters: Type.Object({ tool: Type.String(), args: Type.Optional(Type.Any()) }), async execute(_id, params: any) {
@@ -171,7 +177,14 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       } }));
     }
     for (const [name, readOnlyHint] of [["data_lookup", true], ["data_write", false]] as const) {
-      pi.registerTool({ ...defineTool({ name, label: name, description: `${name} tool`, parameters: Type.Object({ q: Type.String() }), async execute() { throw new Error("direct call not used"); } }), annotations: { readOnlyHint } } as any);
+      // As the adapter's direct tools do: the call goes through its runtime event.
+      pi.registerTool({ ...defineTool({ name, label: name, description: `${name} tool`, parameters: Type.Object({ q: Type.String() }), async execute(_id, params) {
+        const request: any = { version: 1, tool: name, args: params };
+        pi.events.emit(RUNTIME_TOOL_CALL_EVENT, request);
+        const outcome = await request.result;
+        if (!outcome.ok) throw outcome.error;
+        return outcome.result;
+      } }), annotations: { readOnlyHint } } as any);
     }
     // The send tool by its own name (direct) and by its deferred name, as the adapter registers them.
     for (const name of ["slack_send_message", "mcp__slack__slack_send_message"]) {
@@ -235,6 +248,12 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   const calls: Harness["calls"] = [];
   registry.registerProvider(PROVIDER, {
     api: API,
+    baseUrl: model.baseUrl,
+    // The session's model and a cheaper one, so the triage call's model choice is observable.
+    models: [
+      { id: model.id, name: model.name, reasoning: false, input: ["text"], cost: model.cost, contextWindow: model.contextWindow, maxTokens: model.maxTokens },
+      { id: "cheap", name: "cheap", reasoning: false, input: ["text"], cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100_000, maxTokens: 1_000 },
+    ],
     streamSimple: (selected: Model<any>, context: Context, streamOptions?: SimpleStreamOptions) => {
       const role = roleOf(context);
       calls.push({ role, context: { ...context, messages: [...context.messages] }, apiKey: streamOptions?.apiKey, model: `${selected.provider}/${selected.id}`, tools: toolsOf(context) });
@@ -271,9 +290,25 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     tools: ["read", "mcp", "mcp__slack", "slack_send_message", "mcp__slack__slack_send_message", "data_lookup", "data_write", "foreign_tool", "slack_watch"],
     sessionManager, settingsManager, modelRuntime, resourceLoader,
   });
-  await session.bindExtensions({});
+  const opened: Harness["opened"] = [];
+  if (options.ui) {
+    const rows = options.ui.rows;
+    const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+    const tui = { terminal: { rows, columns: 120 }, requestRender() {} };
+    // Every method a test does not need is a no-op; custom() records what it opens and keeps it open.
+    const uiContext = new Proxy({
+      custom: (factory: any, opts: any) => new Promise<void>((resolve) => {
+        const component = factory(tui, theme, {}, () => resolve());
+        opened.push({ component, options: opts, close: () => resolve() });
+      }),
+      notify: (text: string, level: string) => notices.push({ level, text }),
+    } as Record<string, unknown>, { get: (target, prop) => (prop in target ? target[prop as string] : () => undefined) });
+    await session.bindExtensions({ uiContext: uiContext as any });
+  } else {
+    await session.bindExtensions({});
+  }
   const harness: Harness = {
-    session, slack, calls, workspace, agentDir, home, sandboxConfigs, runningTimers: () => [...timers], foreign, dataCalls, notices,
+    session, slack, calls, workspace, agentDir, home, sandboxConfigs, opened, runningTimers: () => [...timers], foreign, dataCalls, notices,
     allTools: () => piRef!.getAllTools(),
     registry,
     events: piRef!.events,

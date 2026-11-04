@@ -49,13 +49,17 @@ test("every spelling Pi's tools accept for a secret path is caught: ~, @, file:/
     "~/.pi/agent/mcp-adapter.json",
   ]) assert.equal(isSecretPath(policy, cwd, spelling), true, spelling);
   for (const spelling of ["~", "@~", "~/.pi", pathToFileURL(root).href]) assert.equal(walksIntoSecrets(policy, cwd, spelling), true, spelling);
+  for (const path of ["/proc/self/environ", "~/.config/gh/hosts.yml", "~/.git-credentials", "~/.zsh_history"]) assert.equal(isSecretPath(policy, cwd, path), true, path);
   assert.equal(isSecretPath(policy, cwd, "@app.ts"), false);
 });
 
-test("the shell sandbox denies reading every secret folder and file name, anchored under the home and the project", () => {
+test("the shell sandbox denies every secret folder, and secret file names at any depth from the root", () => {
   const { root, policy } = home();
   const entries = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir: join(root, ".pi", "agent"), allowedDomains: [] });
-  for (const dir of policy.directories) assert.ok(entries.includes(dir), `${dir} is denied`);
+  for (const dir of policy.directories.filter((d) => d !== "/proc")) assert.ok(entries.includes(dir), `${dir} is denied`);
+  assert.equal(entries.includes("/proc"), false, "/proc is for the file tools only");
+  for (const name of [".env", "auth.json", ".git-credentials", ".*_history"]) assert.ok(entries.includes(`/**/${name}`), `${name} anywhere`);
+  assert.ok(entries.includes(join(root, ".pi", "agent", "auth.json")), "the agent folder's auth file, named outright");
   for (const name of [".env", ".env.*", "auth.json", ".netrc", ".npmrc", "credentials", "id_ed25519", "mcp.json", "mcp-adapter.json"]) {
     assert.ok(entries.includes(`${root}/**/${name}`), `${name} is denied under the home`);
     assert.ok(entries.includes(`${join(root, "project")}/**/${name}`), `${name} is denied under the project`);

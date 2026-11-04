@@ -94,7 +94,7 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
 }
 
 /** Characters of a note an entry must show to be worth showing. */
-const NOTE_MIN = 12;
+const NOTE_MIN = 16;
 const SEP = " · ";
 
 export function renderLine(surface: SurfaceState, paint: Paint, width: number): string[] {
@@ -145,10 +145,17 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
     let spare = room - used() - fold(chosen.length) - countsWidth(shownPausedOf(chosen));
     if (spare < 0 && chosen.length === 0 && !long) {
       // Too narrow even for the counts in full: keep them in priority order until they fit.
-      let kept = counts(true, 0);
-      while (kept.length > 1 && !fits([` ${paint.fg(dot, "●")}`, ...kept].join(sep), false)) kept = kept.slice(0, -1);
-      const bare = [head(dot), ...kept].join(sep);
-      return [compose(fits(bare, false) ? bare : [` ${paint.fg(dot, "●")}`, ...kept].join(sep), false)];
+      const all = counts(true, 0);
+      // Keep "slack" and drop the lowest count first; only then drop the word.
+      for (let k = all.length; k >= 1; k -= 1) {
+        const left = [head(dot), ...all.slice(0, k)].join(sep);
+        if (fits(left, false)) return [compose(left, false)];
+      }
+      for (let k = all.length; k >= 1; k -= 1) {
+        const left = [` ${paint.fg(dot, "●")}`, ...all.slice(0, k)].join(sep);
+        if (fits(left, false)) return [compose(left, false)];
+      }
+      return [compose(head(dot), false)];
     }
     if (spare < 0) continue;
     const parts = chosen.map((e) => {
@@ -268,7 +275,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     stopped: paint.fg("muted", "· ended"),
     error: paint.fg("error", "× stopped"),
   }[watch.status];
-  const labelRoom = Math.max(10, inner - 14);
+  const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   let label = watchLabel(watch);
   if (isDirectMessage(watch.conversation.channelId)) {
     // The kind tells a DM's rows apart, so the name gives way to it.
@@ -281,7 +288,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", truncateToWidth(`${clock(entry.at)}  ${entry.text}`, inner - 3, "…"))]));
   const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts) && !m.agentFooter);
   if (last && isLive(watch) && !answering) rows.push(...indent([paint.fg("muted", truncateToWidth(`${last.userName}: ${last.text.replace(/\s+/g, " ")}`, inner - 3, "…"))]));
-  return { rows, pinned: rows.length };
+  return { rows, pinned: 1 };
 }
 
 /** The selection column in front of every item row ("› " or two spaces). */
@@ -334,7 +341,8 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   const wrapped = (text: string, color: PaintColor) => wrapTextWithAnsi(text, inner).map((r) => paint.fg(color, r));
   const items = surface.problem || !surface.enabled ? [] : panelItems(surface, openedAt, view.allEnded);
   const message = (rows: string[]): PanelRender => ({
-    lines: frame([...rows, "", paint.fg("muted", "esc close")], width, title, paint),
+    // A message longer than the panel is cut with a mark; the panel never grows past its rows.
+    lines: frame([...(rows.length > Math.max(1, maxRows - CHROME_ROWS) ? [...rows.slice(0, Math.max(1, maxRows - CHROME_ROWS) - 1), paint.fg("muted", "…")] : rows), "", paint.fg("muted", "esc close")], width, title, paint),
     items, selected: 0, offset: 0, selectedEndInView: true, selectedRowsBelow: 0, pageRows: 0, shown: [],
   });
   if (surface.problem) return message([paint.fg("error", `Can't watch: ${surface.problem.title}`), "", ...wrapped(surface.problem.detail, "text")]);
@@ -365,8 +373,18 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     below = scrolling.length - offset - pageRows;
     if (above) content.push(paint.fg("muted", `↑ ${above} more`));
     content.push(...sel.rows.slice(0, sel.pinned), ...scrolling.slice(offset, offset + pageRows));
-    const after = belowItems ? ` · ${belowItems} more below` : "";
-    content.push(paint.fg("muted", below > 0 ? `  ↓ ${below} more line${below === 1 ? "" : "s"}${items[selected]!.kind === "approval" ? " · read to the end to approve" : ""}${after}` : `  (end of this item)${after}`));
+    const selItem = items[selected]!;
+    const unread = selItem.kind === "approval" && selItem.approval.status === "pending" && !view.read.has(selItem.approval.id);
+    // The marker row: what is left of this item, how to page, and why; optional parts give way to fit.
+    const parts = below > 0
+      ? [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page", belowItems ? `${belowItems} more below` : ""]
+      : ["(end of this item)", belowItems ? `${belowItems} more below` : ""];
+    let marker = parts.filter(Boolean);
+    for (const optional of [belowItems ? `${belowItems} more below` : "", "space next page"]) {
+      if (2 + visibleWidth(marker.join(" · ")) <= inner - POINTER_WIDTH) break;
+      marker = marker.filter((p) => p !== optional);
+    }
+    content.push(paint.fg("muted", `  ${marker.join(" · ")}`));
     shown = [items[selected]!];
   } else {
     // Whole items around the selection; the ↑/↓ markers count toward the budget.
@@ -463,7 +481,9 @@ export class Panel implements Component {
     this.selectedId = render.items[render.selected] ? itemId(render.items[render.selected]!) : undefined;
     const item = render.items[render.selected];
     if (render.selectedEndInView && item?.kind === "approval") this.read.add(item.approval.id);
-    const seen = render.shown.flatMap((i) => (i.kind === "watch" && i.watch.status === "error" ? [errorId(i.watch)] : []));
+    // Only stops not seen before: telling the owner's surface again would ask for another frame, forever.
+    const known = this.surface().seenErrors;
+    const seen = render.shown.flatMap((i) => (i.kind === "watch" && i.watch.status === "error" && !known.has(errorId(i.watch)) ? [errorId(i.watch)] : []));
     if (seen.length) this.markSeen(seen);
     return render;
   }
@@ -477,7 +497,7 @@ export class Panel implements Component {
     const before = this.layout();
     const item = before.items[before.selected];
     const select = (index: number, atEnd = false) => {
-      if (index === this.view.selected) return;
+      if (index < 0 || index >= before.items.length || index === this.view.selected) return;
       // Entering a tall item from below lands at its end, the way it was left.
       this.view = { ...this.view, selected: index, offset: atEnd ? Number.MAX_SAFE_INTEGER : 0 };
       this.selectedId = itemId(before.items[index]!);
@@ -485,6 +505,7 @@ export class Panel implements Component {
     };
     const tall = before.pageRows > 0;
     if (matchesKey(data, Key.escape) || data === "q") return this.close();
+    if (!before.items.length) return; // a message state (off, a problem, nothing watched) has nothing to move to
     if (matchesKey(data, Key.up)) {
       if (tall && this.view.offset > 0) this.view.offset -= 1;
       else select(Math.max(0, this.view.selected - 1), true);

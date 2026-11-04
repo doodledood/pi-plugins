@@ -1,7 +1,7 @@
 # ADR: Hold Slack conversations in a read-only fork of the main session, with changes behind the owner's approval
 
 ## Status
-Accepted
+Accepted; amended by 20261104-keep-the-owners-own-slack-out-of-the-helpers-reach (the owner's own Slack tools only when he lists them)
 
 ## Area
 slack-companion

@@ -121,7 +121,7 @@ test("/slack <link> attaches a colleague's thread and the state is saved in the 
   const h = await createHarness({ replies: script("direct") });
   const root = h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "it still doesn't work for me");
   const { slack } = h;
-  await h.engine().attach({ channelId: DM, messageTs: root.ts });
+  await h.engine().attach({ channelId: DM, messageTs: root.ts }, { byOwner: true });
   await h.engine().idle();
   const reply = slack.messages(DM).find((m) => m.threadTs === root.ts && m.userId === slack.ownerId);
   assert.match(reply!.text, /^🤖 \*\*Dana Owner's agent\*\*/);

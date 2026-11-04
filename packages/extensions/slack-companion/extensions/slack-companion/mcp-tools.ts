@@ -99,13 +99,20 @@ export interface HelperMcpReach {
  * the rest are found and called through two package tools, so the helper's prompt stays small.
  * A tool named in `blocked` (the Slack send tool) is never reachable, whatever its marks or listing.
  */
-export function helperMcpTools(cache: McpCache | undefined, activeMain: ReadonlySet<string>, investigative: readonly string[], blocked: readonly string[]): HelperMcpReach {
+export function helperMcpTools(
+  cache: McpCache | undefined,
+  activeMain: ReadonlySet<string>,
+  investigative: readonly string[],
+  limits: { blocked: readonly string[]; privateServers?: readonly string[] },
+): HelperMcpReach {
   if (!cache) return { catalog: [], direct: [] };
   const chosen: Array<Omit<McpToolInfo, "exposedName"> & { shown: boolean }> = [];
   for (const [server, tools] of cache) {
     for (const tool of tools) {
-      if (blocked.includes(tool.name)) continue;
+      if (limits.blocked.includes(tool.name)) continue;
       const listed = investigative.includes(tool.name) || investigative.includes(`${server}/${tool.name}`);
+      // A private server's tools (the owner's own Slack) are reachable only when listed by name.
+      if (limits.privateServers?.includes(server) && !listed) continue;
       if (!listed && !tool.readOnly) continue;
       const active = exposedNamesFor(server, tool.name).some((name) => activeMain.has(name));
       chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema, shown: listed || active });
@@ -115,6 +122,13 @@ export function helperMcpTools(cache: McpCache | undefined, activeMain: Readonly
   for (const tool of chosen) count.set(tool.name, (count.get(tool.name) ?? 0) + 1);
   const catalog = chosen.map(({ shown: _shown, ...tool }) => ({ ...tool, exposedName: (count.get(tool.name) ?? 0) > 1 ? `${tool.server}__${tool.name}` : tool.name }));
   return { catalog, direct: catalog.filter((_tool, i) => chosen[i]!.shown) };
+}
+
+/** The servers that serve the configured Slack tools: the configured `server`, else every server listing one of them. */
+export function slackServers(cache: McpCache | undefined, names: readonly string[], server: string | undefined): string[] {
+  if (server) return [server];
+  if (!cache) return [];
+  return [...cache].filter(([, tools]) => tools.some((t) => names.includes(t.name))).map(([s]) => s);
 }
 
 /**

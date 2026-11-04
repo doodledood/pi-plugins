@@ -7,7 +7,7 @@
 // created from a helper's hand-off but resolved only through approve()/deny(), which only the
 // owner's panel calls; nothing read from Slack resolves, removes or hides one.
 import { randomUUID } from "node:crypto";
-import { BackendNotReadyError, isPassingFailure, SendUncertainError, type Identity, type SlackBackend } from "./backend.ts";
+import { BackendError, BackendNotReadyError, FAILURE_HINTS, isPassingFailure, SendUncertainError, type Identity, type SlackBackend } from "./backend.ts";
 import type { SlackCompanionConfig } from "./config.ts";
 import { type Conversation, conversationKey, conversationsForLink, conversationsForSend, isDirectMessage, type ParsedLink } from "./conversation.ts";
 import { type HelperBatch, type HelperOutcome, MAX_HELPER_TURNS } from "./helper.ts";
@@ -90,6 +90,8 @@ export interface EngineState {
   tombstones: string[];
   /** Direct-message channel of each user id the session sent to by user id. */
   dmChannels: Record<string, string>;
+  /** Error stops the owner has seen in the panel (by ui's errorId), so they stay seen across a reload. */
+  seenErrors?: string[];
 }
 
 export type SendOutcome = "sent" | "paused" | "blocked" | "revoked" | "uncertain" | "failed";
@@ -103,7 +105,7 @@ const MAX_CONTEXT_TEXT = 1000;
 const MAX_RESOLVED_TEXT = 400;
 const MAX_ACTIVITY = 5;
 /** Owner lines checked when attaching, to find the owner's last genuine message in a thread. */
-const BOUNDARY_CHECKS = 8;
+const BOUNDARY_CHECKS = 25;
 /** Messages waiting to be answered in one conversation; older ones beyond it stay as context only. */
 const MAX_INBOX = 20;
 /** Characters of a waiting message kept. */
@@ -118,8 +120,9 @@ const MAX_TOMBSTONES = 200;
 const MAX_ENDED_WATCHES = 20;
 const MAX_RESOLVED_APPROVALS = 10;
 const MAX_DM_CHANNELS = 200;
+const MAX_SEEN_ERRORS = 100;
 
-export type RestoreOutcome = { ok: true } | { ok: false; keptRequests: number; lostWatches: string[] };
+export type RestoreOutcome = { ok: true } | { ok: false; keptRequests: number; lostWatches: string[]; autoStart: boolean };
 
 export function emptyState(): EngineState {
   return { version: STATE_VERSION, autoStart: true, watches: [], approvals: [], ledger: [], tombstones: [], dmChannels: {} };
@@ -138,14 +141,19 @@ export function parseEngineState(data: unknown): EngineState | undefined {
   return structuredClone(data) as EngineState;
 }
 
-/** What a snapshot that cannot be restored still holds for the owner: requests waiting on him, and which watches were lost. */
-export function salvageState(data: unknown): { approvals: Approval[]; lostWatches: string[] } {
+/**
+ * What a snapshot that cannot be restored still holds for the owner: the requests waiting on him,
+ * every stop (so a stopped conversation does not restart), whether automatic starts were on (off
+ * when unreadable: the owner turns them back on), and which watches were lost.
+ */
+export function salvageState(data: unknown): { approvals: Approval[]; tombstones: string[]; autoStart: boolean; lostWatches: string[] } {
   const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
-  const approvals = (Array.isArray(d.approvals) ? d.approvals : []).filter((a: any) => approvalOk(a) && a.status === "pending" && typeof a.watchKey === "string" && typeof a.requester === "string") as Approval[];
+  const approvals = (Array.isArray(d.approvals) ? d.approvals : []).filter(approvalOk).filter((a) => a.status === "pending");
+  const tombstones = (Array.isArray(d.tombstones) ? d.tombstones : []).filter((t): t is string => typeof t === "string");
   const lostWatches = (Array.isArray(d.watches) ? d.watches : [])
     .filter((w: any) => w && (w.status === "active" || w.status === "paused"))
-    .map((w: any) => (typeof w?.partner?.name === "string" ? clean(w.partner.name) : typeof w?.key === "string" ? w.key : "a conversation"));
-  return { approvals: structuredClone(approvals), lostWatches };
+    .map((w: any) => (typeof w?.partner?.name === "string" ? clean(w.partner.name) : "a conversation"));
+  return { approvals: structuredClone(approvals), tombstones, autoStart: d.autoStart === true, lostWatches };
 }
 
 function watchOk(w: any): boolean {
@@ -153,8 +161,11 @@ function watchOk(w: any): boolean {
     && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox));
 }
 
-function approvalOk(a: any): boolean {
-  return Boolean(a && typeof a.id === "string" && typeof a.text === "string" && typeof a.label === "string" && ["pending", "approved", "denied"].includes(a.status));
+function approvalOk(a: any): a is Approval {
+  return Boolean(a && typeof a.id === "string" && typeof a.text === "string" && typeof a.label === "string"
+    && typeof a.watchKey === "string" && typeof a.requester === "string" && typeof a.at === "number"
+    && (a.resolvedAt === undefined || typeof a.resolvedAt === "number")
+    && ["pending", "approved", "denied"].includes(a.status));
 }
 
 /** A display name or message from Slack, as the package keeps it: no terminal control sequences, no package markers. */
@@ -213,6 +224,14 @@ function dayOf(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/** Only the owner restarts a conversation someone stopped; the model-callable tool may not. */
+export class StoppedConversationError extends Error {
+  override name = "StoppedConversationError";
+  constructor() {
+    super("Someone stopped that conversation. Only the owner can watch it again: /slack <link>, or w in the Slack panel.");
+  }
+}
+
 export class Engine {
   private state: EngineState = emptyState();
   private lastPersisted = "";
@@ -240,10 +259,10 @@ export class Engine {
     if (data === undefined) return { ok: true };
     const state = parseEngineState(data);
     if (!state) {
-      const { approvals, lostWatches } = salvageState(data);
-      this.state = { ...emptyState(), approvals };
+      const { approvals, tombstones, autoStart, lostWatches } = salvageState(data);
+      this.state = { ...emptyState(), approvals, tombstones, autoStart };
       this.save();
-      return { ok: false, keptRequests: approvals.length, lostWatches };
+      return { ok: false, keptRequests: approvals.length, lostWatches, autoStart };
     }
     this.state = { ...emptyState(), ...state };
     this.lastPersisted = JSON.stringify(this.state);
@@ -280,8 +299,18 @@ export class Engine {
     }
     this.state.ledger = this.state.ledger.filter((e) => e.status === "sending" || e.status === "uncertain").slice(-MAX_LEDGER);
     this.state.tombstones = this.state.tombstones.slice(-MAX_TOMBSTONES);
+    if (this.state.seenErrors && this.state.seenErrors.length > MAX_SEEN_ERRORS) this.state.seenErrors = this.state.seenErrors.slice(-MAX_SEEN_ERRORS);
     const dm = Object.entries(this.state.dmChannels);
     if (dm.length > MAX_DM_CHANNELS) this.state.dmChannels = Object.fromEntries(dm.slice(-MAX_DM_CHANNELS));
+  }
+
+  /** The owner saw these error stops in the panel. */
+  markErrorsSeen(ids: readonly string[]): void {
+    const seen = new Set(this.state.seenErrors ?? []);
+    const fresh = ids.filter((id) => !seen.has(id));
+    if (!fresh.length) return;
+    this.state.seenErrors = [...seen, ...fresh];
+    this.save();
   }
 
   liveWatches(): WatchState[] {
@@ -397,8 +426,9 @@ export class Engine {
    * read (it belongs to the thread, its lookup names the owner, it is not in the future); a forged
    * owner line is skipped, and with no confirmed one the whole thread is the unanswered part.
    */
-  async attach(link: ParsedLink): Promise<WatchState | undefined> {
+  async attach(link: ParsedLink, options: { byOwner: boolean }): Promise<WatchState | undefined> {
     if (this.disposed) return undefined;
+    if (!options.byOwner && this.isStoppedLink(link)) throw new StoppedConversationError();
     let primary: WatchState | undefined;
     for (const conversation of conversationsForLink(link)) {
       const key = conversationKey(conversation);
@@ -410,6 +440,8 @@ export class Engine {
       let from: string | undefined = conversation.kind === "dm-top" ? link.messageTs : undefined;
       if (conversation.kind === "thread") from = await this.ownerBoundary(conversation);
       if (this.disposed) return undefined; // the session ended while Slack was read: take no lock
+      // Checked again after reading Slack: a stop that arrived meanwhile holds unless the owner asked.
+      if (!options.byOwner && this.isTombstoned(key)) throw new StoppedConversationError();
       this.state.tombstones = this.state.tombstones.filter((t) => t !== key);
       const watch = this.startWatch(conversation, "attach", from);
       primary ??= watch;
@@ -432,6 +464,9 @@ export class Engine {
       if (!(await this.deps.backend.belongsTo(conversation, candidate.ts))) continue;
       const genuine = await this.deps.backend.lookupMessage(conversation.channelId, candidate.ts);
       if (genuine.ts === candidate.ts && genuine.userId === owner.userId) return candidate.ts;
+    }
+    if (candidates.length === BOUNDARY_CHECKS) {
+      this.deps.notify("warning", `Slack: could not confirm your last reply in ${watchLabel({ conversation })}; the helper sees the whole thread.`);
     }
     return undefined;
   }
@@ -520,15 +555,18 @@ export class Engine {
    */
   private end(watch: WatchState, status: "stopped" | "error", reason: string, explicit: boolean): void {
     watch.status = status;
-    watch.reason = reason;
+    watch.reason = stripControl(reason);
     watch.endedAt = this.deps.now();
     watch.inbox = [];
     delete watch.pause;
     delete watch.readFailures;
-    // An ended watch keeps what the panel and watching again need, not its conversation.
-    const root = watch.conversation.kind === "thread" ? watch.conversation.threadTs : undefined;
-    watch.context = watch.context.filter((m) => m.ts === root);
-    watch.ownPosts = watch.ownPosts.filter((ts) => !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
+    // A conversation that ended quietly keeps what the panel needs, not its conversation; one that
+    // stopped with an error keeps its context, since it is usually watched again (w).
+    if (status === "stopped") {
+      const root = watch.conversation.kind === "thread" ? watch.conversation.threadTs : undefined;
+      watch.context = watch.context.filter((m) => m.ts === root);
+      watch.ownPosts = watch.ownPosts.filter((ts) => !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
+    }
     if (watch.heldReply) {
       delete watch.heldReply;
       this.note(watch, "a held reply was not sent");
@@ -647,8 +685,8 @@ export class Engine {
         this.save();
         return;
       }
-      const auth = error instanceof Error && (error as { code?: string }).code === "auth_required";
-      this.end(watch, "error", auth ? "Slack needs you to sign in again (run /mcp-auth for your Slack server)" : message, false);
+      const hint = error instanceof BackendError ? FAILURE_HINTS[error.code ?? ""] : undefined;
+      this.end(watch, "error", hint ? `${hint} (${firstLine(message, 80)})` : message, false);
       this.save();
       return;
     }
@@ -690,9 +728,10 @@ export class Engine {
       watch.inbox = [...watch.inbox, kept];
       queued.add(message.ts);
       if (watch.inbox.length > MAX_INBOX) {
-        // While paused, a busy conversation could queue without end: the newest wait, the rest stay context.
+        // While paused, a busy conversation could queue without end: the newest wait, older ones are dropped.
+        const dropped = watch.inbox.length - MAX_INBOX;
         watch.inbox = watch.inbox.slice(-MAX_INBOX);
-        this.note(watch, `more than ${MAX_INBOX} messages waiting; the oldest are kept as context only`);
+        this.note(watch, `${dropped} older waiting message${dropped === 1 ? " was" : "s were"} dropped; ${MAX_INBOX} wait for you`);
       }
     }
   }
@@ -705,8 +744,9 @@ export class Engine {
 
   /** What the helper did, for the line (last note) and the panel (the last few, with times). */
   private note(watch: WatchState, text: string): void {
-    watch.lastNote = text;
-    watch.activity = [...(watch.activity ?? []), { at: this.deps.now(), text }].slice(-MAX_ACTIVITY);
+    const clean = stripControl(text);
+    watch.lastNote = clean;
+    watch.activity = [...(watch.activity ?? []), { at: this.deps.now(), text: clean }].slice(-MAX_ACTIVITY);
   }
 
   private schedule(watch: WatchState): void {
@@ -742,7 +782,10 @@ export class Engine {
       // Written before the pause: sent as written, so its hand-offs and requests are not made twice.
       const held = watch.heldReply;
       const sent = await this.sendTracked(watch, held, { commit: () => delete watch.heldReply });
-      if (sent === "paused" || this.disposed || !isLive(watch)) {
+      // Every outcome but a pause settles the held reply (sent, blocked as secret-shaped, or the
+      // conversation ended); keeping it would schedule the same attempt again without end.
+      if (sent !== "paused") delete watch.heldReply;
+      if (sent === "paused" || this.disposed || signal.aborted || !isLive(watch)) {
         this.save();
         return;
       }
@@ -782,6 +825,7 @@ export class Engine {
       context: watch.context.filter((m) => !taken.has(m.ts)),
       messages: batch,
       waitingApprovals: pendingApprovals(this.state, watch.key).map((a) => a.text),
+      requestRoom: Math.max(0, MAX_PENDING_PER_WATCH - pendingApprovals(this.state, watch.key).length),
     };
     const outcome = await this.deps.runHelper({ watch, batch: helperBatch, signal });
     if (this.disposed || signal.aborted || !isLive(watch)) return;
@@ -808,6 +852,12 @@ export class Engine {
     }
     const reply = parts.join("\n\n");
     const sent = await this.sendTracked(watch, reply, { commit: () => { watch.inbox = watch.inbox.filter((m) => !taken.has(m.ts)); } });
+    if (this.disposed || signal.aborted) {
+      // Stopped during the send (and perhaps watched again since): this run's step is settled by
+      // the commit; it must not end, note or finish a watch that is no longer its own.
+      this.save();
+      return;
+    }
     if (sent === "paused") {
       // The batch is handled; only its reply waits, and goes out as written on resume.
       watch.heldReply = reply;
@@ -890,14 +940,15 @@ export class Engine {
     const messages = await this.deps.backend.readSince(watch.conversation, watch.point.checkpoint);
     const known = new Set(watch.ownPosts);
     // A listed match is confirmed like any message read: it belongs here and its lookup names the owner.
-    const confirmed = async (ts: string) => {
+    const confirmed = async (ts: string, text: string) => {
       if (!(await this.deps.backend.belongsTo(watch.conversation, ts))) return false;
-      return (await this.deps.backend.lookupMessage(watch.conversation.channelId, ts)).userId === owner.userId;
+      const genuine = await this.deps.backend.lookupMessage(watch.conversation.channelId, ts);
+      return genuine.userId === owner.userId && genuine.text.trim() === text.trim();
     };
     for (const entry of pending) {
       let found: (typeof messages)[number] | undefined;
       for (const m of messages) {
-        if (m.userId === owner.userId && !known.has(m.ts) && m.text.trim() === entry.text.trim() && (await confirmed(m.ts))) {
+        if (m.userId === owner.userId && !known.has(m.ts) && m.text.trim() === entry.text.trim() && (await confirmed(m.ts, entry.text))) {
           found = m;
           break;
         }

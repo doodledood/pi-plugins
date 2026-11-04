@@ -1,11 +1,13 @@
 // Holds docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md: the helper's
-// MCP tools are only read-only ones main has active, or ones the owner listed; never the send tool.
+// MCP reach is every read-only tool or one the owner listed; never the send tool. Holds
+// docs/adr/20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md: the owner's own Slack
+// server's tools only when he lists them.
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { exposedNamesFor, helperMcpTools, missingSlackTools, readMcpCache, type McpCache } from "./mcp-tools.ts";
+import { exposedNamesFor, helperMcpTools, missingSlackTools, readMcpCache, slackServers, type McpCache } from "./mcp-tools.ts";
 
 const tool = (name: string, readOnly: boolean) => ({ name, description: name, inputSchema: { type: "object" }, readOnly });
 
@@ -17,7 +19,7 @@ const cache: McpCache = new Map([
 
 test("every read-only tool, or one the owner listed, is reachable; main's active ones are shown directly; the send tool never", () => {
   const active = new Set(["slack_read_thread", "slack_send_message", "data_lookup", "other_lookup"]);
-  const reach = (investigative: string[]) => helperMcpTools(cache, active, investigative, ["slack_send_message"]);
+  const reach = (investigative: string[]) => helperMcpTools(cache, active, investigative, { blocked: ["slack_send_message"] });
   const names = (tools: Array<{ exposedName: string }>) => tools.map((t) => t.exposedName).sort();
   const plain = reach([]);
   assert.deepEqual(names(plain.catalog), ["data-mcp__lookup", "other__lookup", "slack_read_thread", "slack_search_public_and_private"], "all read-only reach; shared names get <server>__");
@@ -25,7 +27,15 @@ test("every read-only tool, or one the owner listed, is reachable; main's active
   const listed = reach(["slack_send_message", "data-mcp/write_row"]);
   assert.ok(names(listed.catalog).includes("write_row") && names(listed.direct).includes("write_row"), "a listed tool is reachable and shown");
   for (const r of [plain, listed]) assert.equal(r.catalog.some((t) => t.name === "slack_send_message"), false, "the send tool never, even marked read-only or listed");
-  assert.deepEqual(helperMcpTools(undefined, active, ["x"], []), { catalog: [], direct: [] });
+  assert.deepEqual(helperMcpTools(undefined, active, ["x"], { blocked: [] }), { catalog: [], direct: [] });
+});
+
+test("the owner's own Slack server is private: its tools are reachable only when he lists them", () => {
+  const active = new Set(["slack_read_thread"]);
+  const names = (investigative: string[]) => helperMcpTools(cache, active, investigative, { blocked: ["slack_send_message"], privateServers: slackServers(cache, ["slack_read_thread", "slack_send_message"], undefined) }).catalog.map((t) => t.name).sort();
+  assert.deepEqual(names([]), ["lookup", "lookup"], "no Slack search or reads by default");
+  assert.deepEqual(names(["slack/slack_read_thread"]), ["lookup", "lookup", "slack_read_thread"]);
+  assert.deepEqual(slackServers(cache, ["x"], "configured"), ["configured"]);
 });
 
 test("every name the adapter can give a tool is recognized", () => {
