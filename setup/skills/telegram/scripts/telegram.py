@@ -40,12 +40,21 @@ def api(token, method, payload):
         # Do not expose an exception's URL: it contains the bot token.
         if exc.code >= 500:
             raise Failure('Telegram server error; outcome uncertain. Do not automatically retry.') from None
-        raise Failure(f'Telegram rejected the request (HTTP {exc.code}).') from None
+        raise Failure(f'Telegram rejected the request (HTTP {exc.code}){reason(exc)}.') from None
     except (OSError, ValueError, urllib.error.URLError):
         raise Failure('Network or response failure; outcome uncertain. Do not automatically retry.') from None
     if not isinstance(result, dict) or result.get('ok') is not True or 'result' not in result:
         raise Failure('Telegram did not confirm success. Do not automatically retry.')
     return result['result']
+
+
+def reason(exc):
+    """Telegram's own words for a rejection, e.g. ': Bad Request: PHOTO_INVALID_DIMENSIONS'. The body never holds the token."""
+    try:
+        description = json.loads(exc.read()).get('description')
+    except (OSError, ValueError, AttributeError):
+        return ''
+    return f': {description}' if isinstance(description, str) else ''
 
 
 def validate(config):
@@ -118,46 +127,90 @@ def send(config, text):
 
 
 UPLOAD_LIMIT = 50 * 1024 * 1024  # the Bot API's limit on any uploaded file
-PHOTO_LIMIT = 10 * 1024 * 1024  # and on a photo, which Telegram recompresses
+PHOTO_LIMIT = 10 * 1024 * 1024  # and on a photo, which Telegram recompresses to a JPEG
 # How each kind is sent: the Bot API method, its file field, and the extensions sent that way by default.
+# Only formats Telegram plays inline are listed; anything else (WebM, WAV, FLAC, ...) goes as a document.
 KINDS = {
     'photo': ('sendPhoto', 'photo', {'.jpg', '.jpeg', '.png', '.webp'}),
     'animation': ('sendAnimation', 'animation', {'.gif'}),
-    'video': ('sendVideo', 'video', {'.mp4', '.mov', '.m4v', '.webm'}),
-    'audio': ('sendAudio', 'audio', {'.mp3', '.m4a', '.flac', '.wav', '.aac'}),
+    'video': ('sendVideo', 'video', {'.mp4', '.mov', '.m4v'}),
+    'audio': ('sendAudio', 'audio', {'.mp3', '.m4a'}),
     'voice': ('sendVoice', 'voice', {'.ogg', '.oga', '.opus'}),
     'document': ('sendDocument', 'document', set()),
 }
+VOICE_CODECS = {'opus', 'mp3', 'aac'}  # a voice note in any other codec does not play
+
+
+def info(path):
+    """The file's first video and audio streams and its length, read with ffprobe."""
+    if not shutil.which('ffprobe'):
+        raise Failure('Sending a video, animation, audio or voice note needs ffprobe (ffmpeg) to read its shape and '
+                      'length; without them Telegram guesses, stretching a picture or showing 0:00. '
+                      'Install ffmpeg, or send it --as document.')
+    out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries',
+                          'stream=codec_type,codec_name,width,height,sample_aspect_ratio:stream_side_data=rotation'
+                          ':format=duration', '-of', 'json', path], capture_output=True, text=True)
+    try:
+        data = json.loads(out.stdout)
+        streams = data['streams']
+    except (ValueError, KeyError):
+        raise Failure(f'ffprobe could not read {path}.') from None
+    first = lambda kind: next((x for x in streams if x.get('codec_type') == kind), None)
+    try:
+        duration = max(1, round(float(data.get('format', {}).get('duration', 0))))
+    except ValueError:
+        duration = 1
+    return first('video'), first('audio'), duration
+
+
+def aspect(stream):
+    """A sample aspect ratio as a number, 1 for square pixels."""
+    num, _, den = (stream.get('sample_aspect_ratio') or '1:1').partition(':')
+    return int(num) / int(den) if num.isdigit() and den.isdigit() and int(num) and int(den) else 1
+
+
+def shape(stream):
+    """A video's width and height as players show it, sample aspect and rotation applied."""
+    width, height = round(int(stream['width']) * aspect(stream)), int(stream['height'])
+    rotation = next((d['rotation'] for d in stream.get('side_data_list', []) if 'rotation' in d), 0)
+    return (height, width) if abs(int(rotation)) % 180 == 90 else (width, height)
 
 
 def kind_of(path, size):
     ext = os.path.splitext(path)[1].lower()
     kind = next((k for k, (_, _, exts) in KINDS.items() if ext in exts), 'document')
-    return 'document' if kind == 'photo' and size > PHOTO_LIMIT else kind
+    if kind == 'photo' and (size > PHOTO_LIMIT or not photo_fits(path)):
+        return 'document'
+    if kind == 'voice' and (info(path)[1] or {}).get('codec_name') not in VOICE_CODECS:
+        return 'document'
+    return kind
 
 
-def probe(path):
-    """A video's shape as players show it (sample aspect and rotation applied) and its length, read with ffprobe."""
+def photo_fits(path):
+    """Whether Telegram takes it as a photo: width plus height at most 10,000 and sides at most 20 to 1.
+    Unknown without ffprobe; Telegram then says so itself."""
     if not shutil.which('ffprobe'):
-        raise Failure('Sending a video needs ffprobe (ffmpeg) to read its shape; without it Telegram guesses and '
-                      'can squeeze the picture. Install ffmpeg, or send it --as document.')
-    out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
-                          'stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format=duration',
-                          '-of', 'json', path], capture_output=True, text=True)
-    try:
-        info = json.loads(out.stdout)
-        stream = info['streams'][0]
-        width, height = int(stream['width']), int(stream['height'])
-        duration = float(info['format']['duration'])
-    except (ValueError, KeyError, IndexError, TypeError):
-        raise Failure(f'ffprobe could not read the video shape of {path}.') from None
-    num, _, den = (stream.get('sample_aspect_ratio') or '1:1').partition(':')
-    if num.isdigit() and den.isdigit() and int(num) and int(den):
-        width = round(width * int(num) / int(den))
-    rotation = next((d.get('rotation') for d in stream.get('side_data_list', []) if 'rotation' in d), 0)
-    if abs(int(rotation)) % 180 == 90:
-        width, height = height, width
-    return width, height, max(1, round(duration))
+        return True
+    video = info(path)[0]
+    if not video:
+        return True
+    w, h = int(video['width']), int(video['height'])
+    return w + h <= 10000 and max(w, h) <= 20 * min(w, h)
+
+
+def square_pixels(path, folder):
+    """A copy with square pixels: Telegram files a video by its stored size, so wide pixels show squeezed."""
+    if not shutil.which('ffmpeg'):
+        raise Failure(f'{path} has non-square pixels, which Telegram shows squeezed; converting it needs ffmpeg.')
+    out = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + '.mp4')
+    r = subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', path, '-vf', 'scale=trunc(iw*sar/2)*2:ih:flags=lanczos,setsar=1',
+                        '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'copy',
+                        '-movflags', '+faststart', out], capture_output=True)
+    if r.returncode != 0:
+        raise Failure(f'ffmpeg could not convert {path} to square pixels.')
+    if os.path.getsize(out) > UPLOAD_LIMIT:
+        raise Failure(f'{path} with square pixels is over 50 MB. Send a smaller copy.')
+    return out
 
 
 def thumbnail(path, duration, folder):
@@ -171,7 +224,7 @@ def thumbnail(path, duration, folder):
     return out if r.returncode == 0 and os.path.getsize(out) < 200 * 1024 else None
 
 
-def send_file(config, path, caption, kind=None):
+def send_file(config, path, caption, kind=None, silent=False):
     """Upload a file to the configured user, sent as the kind Telegram shows best (a photo, video, ...) or as asked."""
     size = os.path.getsize(path)
     if size > UPLOAD_LIMIT:
@@ -182,17 +235,30 @@ def send_file(config, path, caption, kind=None):
     if len(caption.encode('utf-16-le')) // 2 > 1024:
         raise Failure('Caption must fit within 1,024 UTF-16 units.')
     method, field, _ = KINDS[kind]
-    fields = {'chat_id': str(config['chat_id']), 'caption': caption}
+    fields = {'chat_id': str(config['chat_id']), 'caption': caption, 'disable_notification': str(silent).lower()}
     files = {field: path}
     with tempfile.TemporaryDirectory() as folder:
-        if kind in ('video', 'animation'):
-            # Without its shape Telegram guesses one, and shows the picture stretched to it.
-            width, height, duration = probe(path)
-            fields.update(width=str(width), height=str(height), duration=str(duration))
-            thumb = thumbnail(path, duration, folder)
-            if thumb:
-                fields['thumbnail'] = 'attach://thumbnail'
-                files['thumbnail'] = thumb
+        if kind in ('video', 'animation', 'audio', 'voice'):
+            # Without these Telegram guesses: a picture stretched to the wrong frame, a length of 0:00.
+            video, audio, duration = info(path)
+            fields['duration'] = str(duration)
+            if kind in ('video', 'animation'):
+                if not video:
+                    raise Failure(f'{path} has no picture to send as a {kind}.')
+                if kind == 'video' and aspect(video) != 1:
+                    files[field] = square_pixels(path, folder)
+                    video = info(files[field])[0]
+                width, height = shape(video)
+                fields.update(width=str(width), height=str(height))
+                thumb = thumbnail(files[field], duration, folder)
+                if thumb:
+                    fields['thumbnail'] = 'attach://thumbnail'
+                    files['thumbnail'] = thumb
+            elif not audio:
+                raise Failure(f'{path} has no sound to send as {kind}.')
+            elif kind == 'voice' and audio.get('codec_name') not in VOICE_CODECS:
+                raise Failure(f'{path} is {audio.get("codec_name")}; a voice note plays only as Opus, MP3 or AAC. '
+                              'Send it --as document.')
         if kind == 'video':
             fields['supports_streaming'] = 'true'
         boundary = uuid.uuid4().hex
@@ -214,15 +280,22 @@ def send_file(config, path, caption, kind=None):
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         # Do not expose an exception's URL: it contains the bot token.
-        raise Failure(f'Telegram rejected the upload (HTTP {exc.code}).' if exc.code < 500 else
+        raise Failure(f'Telegram rejected the upload (HTTP {exc.code}){reason(exc)}.' if exc.code < 500 else
                       'Telegram server error; outcome uncertain. Do not automatically retry.') from None
     except (OSError, ValueError, urllib.error.URLError):
         raise Failure('Network or response failure; outcome uncertain. Do not automatically retry.') from None
     if not isinstance(result, dict) or result.get('ok') is not True or not result.get('result', {}).get('message_id'):
         raise Failure('Telegram did not confirm the upload. Do not automatically retry.')
-    sent = result['result'].get(field) or {}
-    print(json.dumps({'accepted': True, 'kind': kind, 'message_id': result['result']['message_id'],
-                      **({'shown': f'{sent["width"]}x{sent["height"]}'} if 'width' in sent else {})}))
+    message = result['result']
+    # How Telegram filed it: a video it cannot play inline comes back as a document, for one.
+    shown = next(k for k in ('animation', 'video', 'voice', 'audio', 'photo', 'document') if k in message)
+    media = message[shown][-1] if shown == 'photo' else message[shown]
+    receipt = {'accepted': True, 'kind': kind, 'shown_as': shown, 'message_id': message['message_id'],
+               **{k: media[k] for k in ('width', 'height', 'duration') if k in media}}
+    print(json.dumps(receipt))
+    if shown != kind:
+        print(f'Note: sent as {kind}, but Telegram filed it as {shown}.', file=sys.stderr)
+    return receipt
 
 
 def main():
@@ -236,6 +309,7 @@ def main():
     sender_file.add_argument('--file', required=True, help='The file to send')
     sender_file.add_argument('--caption', default='', help='Plain-text caption, at most 1,024 characters')
     sender_file.add_argument('--as', dest='kind', choices=list(KINDS), help='How to send it (default: by its extension)')
+    sender_file.add_argument('--silent', action='store_true', help='Deliver without a notification sound')
     args = parser.parse_args()
     try:
         if args.command == 'setup':
@@ -245,7 +319,7 @@ def main():
             print(json.dumps({'configured': True, 'bot_username': config.get('bot_username'),
                               'chat_id': config['chat_id']}))
         elif args.command == 'send-file':
-            send_file(load(), args.file, args.caption, args.kind)
+            send_file(load(), args.file, args.caption, args.kind, args.silent)
         else:
             if args.text is None and sys.stdin.isatty():
                 raise Failure('Supply --text or pipe a message through standard input.')
