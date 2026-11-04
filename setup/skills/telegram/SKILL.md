@@ -14,7 +14,7 @@ python3 scripts/telegram.py status
 python3 scripts/telegram.py send --text 'Your report is ready.'
 ```
 
-`send-file --file <path> --caption '...'` uploads a file, sent by its extension as a photo, animation (GIF), video, audio, voice note or document, so it shows inline where Telegram can; `--as` picks the kind. Bots upload at most 50 MB, and a photo at most 10 MB (a larger one goes as a document); send a smaller copy of anything larger.
+`send-file --file <path> --caption '...'` uploads a file, sent by its extension as a photo, animation (GIF), video, audio, voice note or document, so it shows inline where Telegram can; `--as` picks the kind. Bots upload at most 50 MB, and a photo at most 10 MB (a larger one goes as a document); send a smaller copy of anything larger. A video or animation also needs `ffprobe` (ffmpeg): its shape and length go with it, since Telegram otherwise guesses and shows the picture stretched.
 
 For multiline text, use `send` with standard input from a safely quoted heredoc or a file. Text is sent literally, with notifications enabled and link previews disabled. Keep it within 4,096 UTF-16 units. The destination is fixed during setup; sending accepts no recipient override.
 
