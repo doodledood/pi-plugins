@@ -39,8 +39,9 @@
 | 2026-11-04 | [Let Slack input only narrow what sessions may do](20261104-let-slack-input-only-narrow-what-sessions-may-do.md) | Accepted | slack-companion |
 | 2026-11-04 | [Let the agent carry Slack conversations on by itself, speaking only when addressed or useful](20261104-let-the-agent-carry-slack-conversations-on-by-itself.md) | Accepted | slack-companion |
 | 2026-11-04 | [Rule that this repository is also for Pi users beyond the owner](20261104-rule-pi-users-beyond-the-owner-into-the-north-star.md) | Accepted | north-star |
-| 2026-11-04 | [Run Slack helpers in memory and keep only what each one adds](20261104-run-slack-helpers-in-memory.md) | Accepted | slack-companion |
+| 2026-11-04 | [Run Slack helpers in memory and keep only what each one adds](20261104-run-slack-helpers-in-memory.md) | Accepted; amended by [20261104-show-slack-activity-in-a-dock-line](20261104-show-slack-activity-in-a-dock-line.md) (exchanges show in one line above the editor and a panel, not in main's transcript) | slack-companion |
 | 2026-11-04 | [Run the Slack helper's shell in an OS sandbox with no network](20261104-sandbox-the-slack-helpers-shell.md) | Accepted | slack-companion |
 | 2026-11-04 | [Serve anyone in a watched Slack conversation](20261104-serve-anyone-in-a-watched-conversation.md) | Accepted | slack-companion |
+| 2026-11-04 | [Show Slack activity in one line above the editor with a panel on demand, not in main's transcript](20261104-show-slack-activity-in-a-dock-line.md) | Accepted | slack-companion |
 | 2026-11-04 | [Start watching a Slack conversation when the session messages someone](20261104-start-watching-when-the-session-messages-someone.md) | Accepted | slack-companion |
 | 2026-11-04 | [Watch Slack by polling from code through the MCP adapter, behind a swappable backend](20261104-watch-slack-by-polling-through-the-mcp-adapter.md) | Accepted | slack-companion |

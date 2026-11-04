@@ -1,7 +1,7 @@
 # ADR: Run Slack helpers in memory and keep only what each one adds
 
 ## Status
-Accepted
+Accepted; amended by 20261104-show-slack-activity-in-a-dock-line (exchanges show in one line above the editor and a panel, not in main's transcript)
 
 ## Area
 slack-companion
