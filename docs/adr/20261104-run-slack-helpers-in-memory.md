@@ -31,7 +31,7 @@ A Slack helper is forked from the main session for each batch of new messages. 2
 - A helper's file is not a complete session: it cannot be resumed on its own, and reading it needs the parent for context.
 
 ## Enforced by
-not yet — the package's tests that pin: a helper's file holds only its own entries and links to its parent; the session-tree total counts it.
+`packages/extensions/slack-companion/extensions/slack-companion/records.test.ts` ("a helper's record holds only its own entries, links to the parent, and the tree total counts helpers and triage") — pins the thin record and that session-tree cost accounting counts every helper and triage call.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

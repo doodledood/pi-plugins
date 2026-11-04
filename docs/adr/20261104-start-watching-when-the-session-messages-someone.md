@@ -32,7 +32,7 @@ Watching must begin without a step the owner has to remember, or the owner is th
 - A one-off post, such as an announcement, also starts a watch, until it goes quiet or is stopped.
 
 ## Enforced by
-not yet — the package's tests that pin: a sent message starts a watch; "stop" ends it and a queued send cannot restart it; two sessions in one direct message never receive each other's replies.
+`packages/extensions/slack-companion/extensions/slack-companion/integration.test.ts` ("a send by the mcp route starts a watch, is marked, and a reply is answered in its thread", and the direct and mcp__slack routes) and `engine.test.ts` ("stop from anyone ends the watch without a model, and a later send does not restart it", "two sessions on one machine never answer each other's conversations; a dead holder's lock is reclaimed") — pin automatic starts on every send route, stopping, tombstones and routing.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

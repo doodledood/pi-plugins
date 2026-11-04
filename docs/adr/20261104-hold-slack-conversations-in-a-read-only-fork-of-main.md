@@ -39,7 +39,7 @@ The first design delivered colleagues' messages to the main session itself, behi
 - Replies can share what is in the session's context with the people in the conversation; only text shaped like a secret is blocked.
 
 ## Enforced by
-not yet — the package's tests that pin: a helper session holds no edit or write tool and cannot call main's tools; an action request produces a pending approval and reaches main only after the owner approves it.
+partly — `packages/extensions/slack-companion/extensions/slack-companion/helper.test.ts` ("the helper's runtime: no extension, no handler, only the allowlisted tools, and those tools work") pins that the helper loads no extension, runs none of the parent's handlers and holds only its allowlisted tools; `engine.test.ts` ("an action waits for the owner: the person is told, approval delivers exactly the text, denial delivers nothing") pins that an action reaches main only after the owner approves it. Whether the helper sorts a request into `info` or `action` correctly stays the model's judgment, bounded by main's prompt that hand-offs authorize nothing.
 
 ## Revisit when
 A fork per batch costs more than the owner accepts, read in the session-tree cost of a watched conversation.

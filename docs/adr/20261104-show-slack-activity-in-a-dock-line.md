@@ -30,7 +30,7 @@ When the owner comes back to a session, he needs to see what the Slack helper di
 - Seeing what happened takes one key; it is not in the scrollback.
 
 ## Enforced by
-not yet — the package's tests that pin: a helper's exchange adds no entry to main's transcript; the line shows the number of waiting approvals; the panel lists them.
+`packages/extensions/slack-companion/extensions/slack-companion/ui.test.ts` ("the line names the watch, what the helper last did, and how many approvals wait", "the panel lists approvals first with their full text, then watches, with the keys that apply") and `integration.test.ts` ("a helper exchange adds nothing to main's transcript; an info hand-off arrives as the sender's words and starts a turn") — pin the line, the panel and the clean transcript.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`; mock `~/.manifest-dev/drafts/slack-companion-mock/index.html`.

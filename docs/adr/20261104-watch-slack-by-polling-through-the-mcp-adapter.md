@@ -37,7 +37,7 @@ Pi lets extension code call another tool only inside a tool's own execution, and
 - A read a minute per watch shows in the workspace's MCP audit logs.
 
 ## Enforced by
-not yet — parser tests on captured server output, including message text that imitates the format; an integration test with a fake backend that pins the checkpoint never passing unread messages.
+`packages/extensions/slack-companion/extensions/slack-companion/reader.test.ts` ("property: every message is delivered exactly once across pages, late visibility, failures and restarts", "a result the adapter truncated is read whole from its spill file, never as complete") — pins that reads through the adapter's runtime event never lose, repeat or invent a message and that a failed or truncated read never counts as complete.
 
 ## Revisit when
 Pi exposes code calls for its built-in MCP tools, or Slack's MCP server returns structured messages; read in Pi's extension documentation and in the server's tool results.

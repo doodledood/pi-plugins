@@ -37,7 +37,7 @@ The owner wanted to stop being both the doorbell and the send button for convers
 - The pause can stop a conversation that would have finished on its own.
 
 ## Enforced by
-not yet — the package's tests that pin: the agent's own posts, reactions and "stop" never wake a model; one reply per batch; the pause after the configured number of sends.
+partly — `packages/extensions/slack-companion/extensions/slack-companion/engine.test.ts` ("own posts, other agents' posts and duplicates wake no model; triage NO stays silent but keeps context", "a burst becomes one batch and at most one reply; replies wait while a helper runs", "after the configured sends without the owner the watch pauses; owner input resets and resumes", "concurrent sends reserve their slot first, so they cannot pass the pause") pins the filter, one reply per batch and the pause; whether a reply was worth sending stays the models' judgment.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

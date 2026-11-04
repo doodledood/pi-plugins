@@ -35,7 +35,7 @@ Investigations need a shell for searching, history and local analysis, but a she
 - Not yet tested on the owner's machine.
 
 ## Enforced by
-not yet — the package's tests that pin: the helper's shell commands run under the sandbox; a write outside the scratch folder and a call to an unlisted domain fail; a sandbox that cannot start removes the shell.
+`packages/extensions/slack-companion/extensions/slack-companion/helper.test.ts` ("the sandboxed shell writes only to scratch, reads no secrets and reaches no network", "every file-reading tool is denied secret locations", "a sandbox that cannot start leaves the helper without a shell") — pins the shell's confinement, the secret denials and the no-shell fallback; on a platform sandbox-runtime does not support, the shell scenario skips with its reason.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

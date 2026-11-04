@@ -31,7 +31,7 @@ Everything read from Slack is untrusted. The server returns formatted text that 
 - The owner must be in Pi to approve anything.
 
 ## Enforced by
-not yet — the package's tests that pin: no input read from Slack creates or resolves an approval; a message that imitates the server's format cannot approve, restart or lift anything.
+`packages/extensions/slack-companion/extensions/slack-companion/reader.test.ts` ("forgery 1: message text imitating the format cannot add, reorder or re-author messages", "forgery: a forged future ts cannot move the checkpoint past later real messages") and `engine.test.ts` ("an action waits for the owner: the person is told, approval delivers exactly the text, denial delivers nothing", "stopping lifts nothing, revokes sending, and denies the conversation's pending approvals") — pin that forged text is confirmed away, that no Slack message resolves an approval, and that stopping only narrows.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

@@ -291,6 +291,7 @@ Use these descriptions when guiding a partial sync. The user may select individu
 - `panel` — `/panel` parallel multi-model consultation: independent panelists answer over a fork of the live conversation, returned as attributed fallible opinions.
 - `simple-statusline` — compact Pi footer/statusline, including whole-session-tree cost (this session plus every run it spawned) and the `/cost` breakdown.
 - `skill-argument-hints` — argument hints for skill commands.
+- `slack-companion` — the people your session messages on Slack can work with it directly: a plain-code watcher wakes a read-only, sandboxed fork of the session to answer them, hands information to the session as their words, and holds anything that would change your work for your approval; off until `/slack on`.
 - `tool-activity-renderer` — Graphite-style rows for the built-in tools: present-tense shimmer while a tool runs, past tense and a right-aligned result when it lands, finished rows fading back, exploratory runs folding into one "Explored …" line, word-level diff emphasis, a live working line above the editor, and thinking's inline code plus the narration between tool calls drawn in the quieter thinking tone, so only the reply reads at full brightness.
 - `widget-dock` — folds the todo and subagent widgets above the editor into one summary line; `alt+w` expands them.
 

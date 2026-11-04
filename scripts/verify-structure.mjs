@@ -4,8 +4,8 @@ import { isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings 
 
 const root = process.cwd();
 const errors = [];
-const expectedExtensions = ["advisor-consult", "btw", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "herdr-bridge", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "panel", "simple-statusline", "skill-argument-hints", "tool-activity-renderer", "widget-dock"];
-const directoryEntryExtensions = new Set(["advisor-consult", "btw", "goal-controller", "herdr-bridge", "mcp-tool-loadout", "model-aliases", "openai-tts", "panel"]);
+const expectedExtensions = ["advisor-consult", "btw", "cache-optimization", "goal-controller", "mcp-tool-loadout", "context-breakdown", "gpt-fast-toggle", "herdr-bridge", "model-aliases", "message-stash", "openai-max-output-floor", "openai-tts", "panel", "simple-statusline", "skill-argument-hints", "slack-companion", "tool-activity-renderer", "widget-dock"];
+const directoryEntryExtensions = new Set(["advisor-consult", "btw", "goal-controller", "herdr-bridge", "mcp-tool-loadout", "model-aliases", "openai-tts", "panel", "slack-companion"]);
 const packageRootEntryExtensions = new Set(["btw"]);
 const expectedSkills = ["sync-pi-setup"];
 const expectedThemes = ["deep-focus-pi", "graphite"];

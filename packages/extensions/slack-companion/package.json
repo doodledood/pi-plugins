@@ -1,0 +1,57 @@
+{
+  "name": "@doodledood/pi-slack-companion",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Let the people your Pi session messages on Slack work with it directly: a plain-code watcher wakes a read-only, sandboxed fork of your session to answer them, hands information to your session, and holds every change to your work for your approval.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "slack"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/slack-companion/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.81"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "typebox": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test extensions/slack-companion/*.test.ts",
+    "live": "tsx extensions/slack-companion/live/run.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
+    "@types/node": "*",
+    "tsx": "^4.22.4",
+    "typebox": "*",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doodledood/pi-plugins.git",
+    "directory": "packages/extensions/slack-companion"
+  },
+  "homepage": "https://github.com/doodledood/pi-plugins/tree/main/packages/extensions/slack-companion#readme",
+  "bugs": {
+    "url": "https://github.com/doodledood/pi-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}
