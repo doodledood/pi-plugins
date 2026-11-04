@@ -1,7 +1,7 @@
 # ADR: Session-tree cost accounting via persistent parent-linked child sessions
 
 ## Status
-Accepted
+Accepted; narrowed by 20261104-run-slack-helpers-in-memory (a Slack helper's session file keeps only its own entries, not a copy of its parent's)
 
 ## Area
 cost-accounting

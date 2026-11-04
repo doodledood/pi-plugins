@@ -20,7 +20,7 @@
 - **Related:** [20260706-cache-efficiency-observability](20260706-cache-efficiency-observability.md), [20260624-keep-goal-statusline-separate](20260624-keep-goal-statusline-separate.md) |
 | 2026-07-08 | [openai-max-output-floor extension](20260708-openai-max-output-floor-extension.md) | Accepted | openai-max-output-floor |
 | 2026-07-09 | [Advisor Consult Uses an Independent Subprocess](20260709-advisor-consult-independent-subprocess.md) | Accepted | advisor-consult |
-| 2026-07-28 | [Session-tree cost accounting via persistent parent-linked child sessions](20260728-session-tree-cost-accounting.md) | Accepted | cost-accounting |
+| 2026-07-28 | [Session-tree cost accounting via persistent parent-linked child sessions](20260728-session-tree-cost-accounting.md) | Accepted; narrowed by [20261104-run-slack-helpers-in-memory](20261104-run-slack-helpers-in-memory.md) (a Slack helper's session file keeps only its own entries, not a copy of its parent's) | cost-accounting |
 | 2026-08-03 | [enforce the dual-window alias boundary before provider requests](20260803-enforce-dual-window-alias-boundary.md) | Accepted | model-aliases |
 | 2026-08-11 | [Keep workplace material out of the repository with a structure scan](20260811-keep-workplace-material-out-by-a-structure-scan.md) | Accepted | publishing |
 | 2026-08-20 | [Split the coding conventions out of setup/AGENTS.md](20260820-split-coding-conventions-from-setup-agents.md) | Accepted | setup |
@@ -35,3 +35,12 @@
 | 2026-10-28 | [Host parallel Pi sessions in Herdr and ship a bridge, not a board](20261028-host-pi-in-herdr-and-ship-a-bridge.md) | Accepted | parallel-sessions |
 | 2026-11-01 | [Derive the orchestrator role from started sessions, with no command to set it](20261101-derive-the-orchestrator-role-from-started-sessions.md) | Accepted | parallel-sessions |
 | 2026-11-01 | [Only a main session orchestrates; a started session knows it was started](20261101-only-a-main-session-orchestrates.md) | Accepted | parallel-sessions |
+| 2026-11-04 | [Hold Slack conversations in a read-only fork of the main session, with changes behind the owner's approval](20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md) | Accepted | slack-companion |
+| 2026-11-04 | [Let Slack input only narrow what sessions may do](20261104-let-slack-input-only-narrow-what-sessions-may-do.md) | Accepted | slack-companion |
+| 2026-11-04 | [Let the agent carry Slack conversations on by itself, speaking only when addressed or useful](20261104-let-the-agent-carry-slack-conversations-on-by-itself.md) | Accepted | slack-companion |
+| 2026-11-04 | [Rule that this repository is also for Pi users beyond the owner](20261104-rule-pi-users-beyond-the-owner-into-the-north-star.md) | Accepted | north-star |
+| 2026-11-04 | [Run Slack helpers in memory and keep only what each one adds](20261104-run-slack-helpers-in-memory.md) | Accepted | slack-companion |
+| 2026-11-04 | [Run the Slack helper's shell in an OS sandbox with no network](20261104-sandbox-the-slack-helpers-shell.md) | Accepted | slack-companion |
+| 2026-11-04 | [Serve anyone in a watched Slack conversation](20261104-serve-anyone-in-a-watched-conversation.md) | Accepted | slack-companion |
+| 2026-11-04 | [Start watching a Slack conversation when the session messages someone](20261104-start-watching-when-the-session-messages-someone.md) | Accepted | slack-companion |
+| 2026-11-04 | [Watch Slack by polling from code through the MCP adapter, behind a swappable backend](20261104-watch-slack-by-polling-through-the-mcp-adapter.md) | Accepted | slack-companion |

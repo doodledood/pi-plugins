@@ -88,6 +88,18 @@ _Avoid_: Fact-checker, reviewer agent.
 The investigation-log entry (heading contains `PRE-READ CHECKPOINT`) a watched figure-out driver appends before naming its read; the watcher always answers it with an explicit verdict interject, and in autonomous runs the driver blocks on that verdict.
 _Avoid_: Gate tool (deleted design), sign-off.
 
+**Watched conversation**:
+A Slack direct message or thread that one Pi session follows and answers in on its owner's behalf, from the session's first message there or the owner's `/slack <link>` until it is stopped, goes quiet or the session closes.
+_Avoid_: Subscription, channel (a watched conversation is one direct message or one thread, never a whole channel).
+
+**Slack helper**:
+The read-only fork of the main session that Pi starts for a batch of new messages in a watched conversation, which answers and investigates there but never changes the owner's work.
+_Avoid_: BTW (the owner's own side conversation), bot, companion (the package).
+
+**Hand-off**:
+What a Slack helper passes to the main session: information the session asked for, delivered as data attributed to its sender, or a requested action, delivered only after the owner approves it in Pi.
+_Avoid_: Relay (BTW's `send_to_main`, which speaks in the owner's voice), steer.
+
 **Herdr bridge**:
 The herdr-bridge extension in this repo that lets one Pi session in a Herdr pane start other interactive Pi sessions in their own Herdr tabs and hear about them, and shows any Pi waiting at a dialog as blocked in Herdr; it never closes, types into or answers another session.
 _Avoid_: Orchestrator (the role a session plays, not this package), board, mission control.
@@ -175,6 +187,8 @@ _Avoid_: Terminal goal when resumability matters.
 ## Relationships
 
 - A **Started session** sends **Wake-ups** only to the session that started it, through the **Herdr bridge**; listing, reading, messaging and stopping it go through Herdr's own agent commands.
+- A **Watched conversation** belongs to exactly one session, and each batch of new messages in it gets at most one **Slack helper**; nothing read from Slack can widen what any session may do.
+- A **Hand-off** of an action reaches the main session only after the owner approves it in Pi; a **Hand-off** of information needs no approval.
 - A session is an **Orchestrator** exactly while at least one **Started session** of its own is open, and only a main session (one a person opened) can be: a **Started session** never starts sessions.
 
 - A **Figure-out watcher** audits the driver's discipline against the live figure-out skill files; the driver remains the sole fact-verifier, and a **Pre-read checkpoint** is the one beat where the watcher must respond rather than stay silent.

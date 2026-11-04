@@ -28,7 +28,7 @@ In the way: Pi's stock behavior leaves daily agent work with friction the owner 
 — hypothesis: most of the history is extensions addressing the owner's own daily work; the README does not state this as the purpose. 2026-10
 
 For: the owner, running Pi daily across several machines; and Pi users who install one extension or theme from this repository on its own.
-— hypothesis: the README names the owner's portable setup; AGENTS.md keeps every shareable resource individually installable and the packages carry npm publish metadata; no outside user is recorded. 2026-10
+— ruled: the owner — resources here are built to work in other people's Pi setups, not only in his ("it should work in other setups as well, that's my point"); record: Rule that this repository is also for Pi users beyond the owner. 2026-11
 
 Not for: nobody is named.
 — empty: no artifact excludes anyone. What would fill it: the owner naming whom this setup is deliberately not built for. 2026-10
