@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -134,6 +136,41 @@ def kind_of(path, size):
     return 'document' if kind == 'photo' and size > PHOTO_LIMIT else kind
 
 
+def probe(path):
+    """A video's shape as players show it (sample aspect and rotation applied) and its length, read with ffprobe."""
+    if not shutil.which('ffprobe'):
+        raise Failure('Sending a video needs ffprobe (ffmpeg) to read its shape; without it Telegram guesses and '
+                      'can squeeze the picture. Install ffmpeg, or send it --as document.')
+    out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                          'stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format=duration',
+                          '-of', 'json', path], capture_output=True, text=True)
+    try:
+        info = json.loads(out.stdout)
+        stream = info['streams'][0]
+        width, height = int(stream['width']), int(stream['height'])
+        duration = float(info['format']['duration'])
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise Failure(f'ffprobe could not read the video shape of {path}.') from None
+    num, _, den = (stream.get('sample_aspect_ratio') or '1:1').partition(':')
+    if num.isdigit() and den.isdigit() and int(num) and int(den):
+        width = round(width * int(num) / int(den))
+    rotation = next((d.get('rotation') for d in stream.get('side_data_list', []) if 'rotation' in d), 0)
+    if abs(int(rotation)) % 180 == 90:
+        width, height = height, width
+    return width, height, max(1, round(duration))
+
+
+def thumbnail(path, duration, folder):
+    """A JPEG frame a tenth of the way in, within 320 px a side as the Bot API asks, or None without ffmpeg."""
+    if not shutil.which('ffmpeg'):
+        return None
+    out = os.path.join(folder, 'thumbnail.jpg')
+    r = subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', str(duration / 10), '-i', path, '-frames:v', '1',
+                        '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-q:v', '4', out],
+                       capture_output=True)
+    return out if r.returncode == 0 and os.path.getsize(out) < 200 * 1024 else None
+
+
 def send_file(config, path, caption, kind=None):
     """Upload a file to the configured user, sent as the kind Telegram shows best (a photo, video, ...) or as asked."""
     size = os.path.getsize(path)
@@ -145,17 +182,30 @@ def send_file(config, path, caption, kind=None):
     if len(caption.encode('utf-16-le')) // 2 > 1024:
         raise Failure('Caption must fit within 1,024 UTF-16 units.')
     method, field, _ = KINDS[kind]
-    boundary = uuid.uuid4().hex
     fields = {'chat_id': str(config['chat_id']), 'caption': caption}
-    if kind == 'video':
-        fields['supports_streaming'] = 'true'
-    mime = mimetypes.guess_type(path)[0] or 'application/octet-stream'
-    name = os.path.basename(path).replace('"', '')
-    head = b''.join(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode() for k, v in fields.items())
-    head += (f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{name}"\r\n'
-             f'Content-Type: {mime}\r\n\r\n').encode()
-    with open(path, 'rb') as f:
-        body = head + f.read() + f'\r\n--{boundary}--\r\n'.encode()
+    files = {field: path}
+    with tempfile.TemporaryDirectory() as folder:
+        if kind in ('video', 'animation'):
+            # Without its shape Telegram guesses one, and shows the picture stretched to it.
+            width, height, duration = probe(path)
+            fields.update(width=str(width), height=str(height), duration=str(duration))
+            thumb = thumbnail(path, duration, folder)
+            if thumb:
+                fields['thumbnail'] = 'attach://thumbnail'
+                files['thumbnail'] = thumb
+        if kind == 'video':
+            fields['supports_streaming'] = 'true'
+        boundary = uuid.uuid4().hex
+        body = b''.join(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                        for k, v in fields.items())
+        for name, file in files.items():
+            mime = mimetypes.guess_type(file)[0] or 'application/octet-stream'
+            filename = os.path.basename(file).replace('"', '')
+            body += (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+                     f'Content-Type: {mime}\r\n\r\n').encode()
+            with open(file, 'rb') as f:
+                body += f.read() + b'\r\n'
+        body += f'--{boundary}--\r\n'.encode()
     request = urllib.request.Request(
         f'https://api.telegram.org/bot{config["token"]}/{method}', data=body,
         headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}, method='POST')
@@ -170,7 +220,9 @@ def send_file(config, path, caption, kind=None):
         raise Failure('Network or response failure; outcome uncertain. Do not automatically retry.') from None
     if not isinstance(result, dict) or result.get('ok') is not True or not result.get('result', {}).get('message_id'):
         raise Failure('Telegram did not confirm the upload. Do not automatically retry.')
-    print(json.dumps({'accepted': True, 'kind': kind, 'message_id': result['result']['message_id']}))
+    sent = result['result'].get(field) or {}
+    print(json.dumps({'accepted': True, 'kind': kind, 'message_id': result['result']['message_id'],
+                      **({'shown': f'{sent["width"]}x{sent["height"]}'} if 'width' in sent else {})}))
 
 
 def main():
