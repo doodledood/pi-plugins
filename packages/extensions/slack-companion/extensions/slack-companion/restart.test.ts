@@ -13,7 +13,7 @@ function replies(context: any, role: string, call: number): Reply {
   return /ask/.test(last) ? { kind: "tool", name: "slack_send_message", args: { channel_id: DM, message: "question" } } : { kind: "text", text: "ok" };
 }
 
-test("resume restores watches and answers what arrived while closed; shutdown leaves no timer or lock behind", async () => {
+test("resume restores watches and answers what arrived while closed", async () => {
   const first = await createHarness({ persistSession: true, replies });
   await first.session.prompt("ask Robin");
   const [question] = first.slack.messages(DM);

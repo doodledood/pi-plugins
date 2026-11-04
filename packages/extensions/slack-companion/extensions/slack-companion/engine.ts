@@ -37,7 +37,8 @@ export interface WatchState {
   lastActivityAt: number;
   lastNote?: string;
   agentLineSent: boolean;
-  spend: { day: string; usd: number };
+  /** Today's spend; `lifted` when the owner resumed past the cap for the rest of the day. */
+  spend: { day: string; usd: number; lifted?: boolean };
   /** The first other person seen here: who a direct message is with, or who a thread is with. */
   partner?: { userId: string; name: string };
   /** At a DM's top level: was the latest agent post there this session's? */
@@ -101,6 +102,14 @@ const MAX_CONTEXT_TEXT = 1000;
 /** Characters of a resolved request kept for the panel. */
 const MAX_RESOLVED_TEXT = 400;
 const MAX_ACTIVITY = 5;
+/** Owner lines checked when attaching, to find the owner's last genuine message in a thread. */
+const BOUNDARY_CHECKS = 8;
+/** Messages waiting to be answered in one conversation; older ones beyond it stay as context only. */
+const MAX_INBOX = 20;
+/** Characters of a waiting message kept. */
+const MAX_INBOX_TEXT = 4000;
+/** Requests from one conversation that may wait for the owner at once. */
+const MAX_PENDING_PER_WATCH = 10;
 /** Reads in a row that may fail for a passing reason before the watch stops. */
 export const MAX_READ_FAILURES = 5;
 const MAX_OWN_POSTS = 200;
@@ -109,6 +118,8 @@ const MAX_TOMBSTONES = 200;
 const MAX_ENDED_WATCHES = 20;
 const MAX_RESOLVED_APPROVALS = 10;
 const MAX_DM_CHANNELS = 200;
+
+export type RestoreOutcome = { ok: true } | { ok: false; keptRequests: number; lostWatches: string[] };
 
 export function emptyState(): EngineState {
   return { version: STATE_VERSION, autoStart: true, watches: [], approvals: [], ledger: [], tombstones: [], dmChannels: {} };
@@ -123,11 +134,27 @@ export function parseEngineState(data: unknown): EngineState | undefined {
   const d = data as Record<string, unknown>;
   if (d.version !== STATE_VERSION || typeof d.autoStart !== "boolean") return undefined;
   if (![d.watches, d.approvals, d.ledger, d.tombstones].every(Array.isArray) || !d.dmChannels || typeof d.dmChannels !== "object") return undefined;
-  const watchOk = (w: any) => w && typeof w.key === "string" && w.conversation && typeof w.conversation.channelId === "string"
-    && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox);
-  const approvalOk = (a: any) => a && typeof a.id === "string" && typeof a.text === "string" && typeof a.label === "string" && ["pending", "approved", "denied"].includes(a.status);
   if (!(d.watches as unknown[]).every(watchOk) || !(d.approvals as unknown[]).every(approvalOk)) return undefined;
   return structuredClone(data) as EngineState;
+}
+
+/** What a snapshot that cannot be restored still holds for the owner: requests waiting on him, and which watches were lost. */
+export function salvageState(data: unknown): { approvals: Approval[]; lostWatches: string[] } {
+  const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  const approvals = (Array.isArray(d.approvals) ? d.approvals : []).filter((a: any) => approvalOk(a) && a.status === "pending" && typeof a.watchKey === "string" && typeof a.requester === "string") as Approval[];
+  const lostWatches = (Array.isArray(d.watches) ? d.watches : [])
+    .filter((w: any) => w && (w.status === "active" || w.status === "paused"))
+    .map((w: any) => (typeof w?.partner?.name === "string" ? clean(w.partner.name) : typeof w?.key === "string" ? w.key : "a conversation"));
+  return { approvals: structuredClone(approvals), lostWatches };
+}
+
+function watchOk(w: any): boolean {
+  return Boolean(w && typeof w.key === "string" && w.conversation && typeof w.conversation.channelId === "string"
+    && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox));
+}
+
+function approvalOk(a: any): boolean {
+  return Boolean(a && typeof a.id === "string" && typeof a.text === "string" && typeof a.label === "string" && ["pending", "approved", "denied"].includes(a.status));
 }
 
 /** A display name or message from Slack, as the package keeps it: no terminal control sequences, no package markers. */
@@ -205,11 +232,19 @@ export class Engine {
     return this.running.has(key);
   }
 
-  /** Restore a persisted snapshot; false when there was one that could not be trusted. */
-  restore(data: unknown): boolean {
-    if (data === undefined) return true;
+  /**
+   * Restore a persisted snapshot. One that cannot be trusted (another version, or damaged) is not
+   * restored, but the requests waiting on the owner in it are kept, and the watches lost are named.
+   */
+  restore(data: unknown): RestoreOutcome {
+    if (data === undefined) return { ok: true };
     const state = parseEngineState(data);
-    if (!state) return false;
+    if (!state) {
+      const { approvals, lostWatches } = salvageState(data);
+      this.state = { ...emptyState(), approvals };
+      this.save();
+      return { ok: false, keptRequests: approvals.length, lostWatches };
+    }
     this.state = { ...emptyState(), ...state };
     this.lastPersisted = JSON.stringify(this.state);
     for (const watch of this.liveWatches()) {
@@ -217,7 +252,7 @@ export class Engine {
       if (!lock.ok) this.end(watch, "error", `another Pi session (pid ${lock.holder.pid}) now answers this conversation`, false);
     }
     this.save();
-    return true;
+    return { ok: true };
   }
 
   /** Persist only when something changed, so idle polls add nothing to the session file. */
@@ -327,6 +362,7 @@ export class Engine {
     const key = conversationKey(conversation);
     const existing = this.watch(key);
     if (existing && isLive(existing)) return existing;
+    if (this.disposed) return undefined;
     const lock = this.deps.locks.acquire(key);
     if (!lock.ok) {
       this.deps.notify("warning", `Slack: another Pi session (pid ${lock.holder.pid}) already answers ${watchLabel({ conversation })}; this session will not.`);
@@ -373,13 +409,14 @@ export class Engine {
       }
       let from: string | undefined = conversation.kind === "dm-top" ? link.messageTs : undefined;
       if (conversation.kind === "thread") from = await this.ownerBoundary(conversation);
+      if (this.disposed) return undefined; // the session ended while Slack was read: take no lock
       this.state.tombstones = this.state.tombstones.filter((t) => t !== key);
       const watch = this.startWatch(conversation, "attach", from);
       primary ??= watch;
     }
     this.save();
-    // A pass already running may have listed its watches before this one existed: wait for it, then read.
-    await this.poll();
+    // A pass already running may have listed its watches before this one existed: let it end, then read.
+    if (this.polling) await this.polling;
     await this.poll();
     return primary;
   }
@@ -389,13 +426,19 @@ export class Engine {
     const owner = await this.owner();
     const nowTs = tsFromMillis(this.deps.now());
     const listed = await this.deps.backend.readSince(conversation, undefined);
-    const candidates = [...listed].reverse().filter((m) => m.userId === owner.userId && compareTs(m.ts, nowTs) <= 0).slice(0, 3);
+    // Newest first, at most BOUNDARY_CHECKS checked: forged owner lines cost a check each and are skipped.
+    const candidates = [...listed].reverse().filter((m) => m.userId === owner.userId && compareTs(m.ts, nowTs) <= 0).slice(0, BOUNDARY_CHECKS);
     for (const candidate of candidates) {
       if (!(await this.deps.backend.belongsTo(conversation, candidate.ts))) continue;
       const genuine = await this.deps.backend.lookupMessage(conversation.channelId, candidate.ts);
       if (genuine.ts === candidate.ts && genuine.userId === owner.userId) return candidate.ts;
     }
     return undefined;
+  }
+
+  /** Did someone stop a conversation this link names (so only the owner may restart it)? */
+  isStoppedLink(link: ParsedLink): boolean {
+    return conversationsForLink(link).some((c) => this.isTombstoned(conversationKey(c)));
   }
 
   /** Stop the conversations a link names (the watch tool's stop). */
@@ -427,9 +470,11 @@ export class Engine {
     for (const watch of this.liveWatches()) this.schedule(watch);
   }
 
+  /** The owner's resume. A spend-cap pause is lifted for the rest of the day: resuming is the owner's OK to spend. */
   resume(key: string): void {
     const watch = this.watch(key);
     if (!watch || watch.status !== "paused") return;
+    if (watch.pause === "spendCap") watch.spend.lifted = true;
     watch.status = "active";
     watch.sendsWithoutOwner = 0;
     delete watch.reason;
@@ -480,6 +525,10 @@ export class Engine {
     watch.inbox = [];
     delete watch.pause;
     delete watch.readFailures;
+    // An ended watch keeps what the panel and watching again need, not its conversation.
+    const root = watch.conversation.kind === "thread" ? watch.conversation.threadTs : undefined;
+    watch.context = watch.context.filter((m) => m.ts === root);
+    watch.ownPosts = watch.ownPosts.filter((ts) => !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
     if (watch.heldReply) {
       delete watch.heldReply;
       this.note(watch, "a held reply was not sent");
@@ -598,7 +647,8 @@ export class Engine {
         this.save();
         return;
       }
-      this.end(watch, "error", message, false);
+      const auth = error instanceof Error && (error as { code?: string }).code === "auth_required";
+      this.end(watch, "error", auth ? "Slack needs you to sign in again (run /mcp-auth for your Slack server)" : message, false);
       this.save();
       return;
     }
@@ -611,7 +661,6 @@ export class Engine {
 
   private ingest(watch: WatchState, fresh: SlackMessage[], owner: Identity): void {
     const own = new Set(watch.ownPosts);
-    for (const sent of this.state.ledger) if (sent.watchKey === watch.key && sent.ts) own.add(sent.ts);
     const queued = new Set(watch.inbox.map((m) => m.ts));
     for (const raw of fresh) {
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text: stripControl(raw.text) };
@@ -637,8 +686,14 @@ export class Engine {
         this.deps.notify("info", `Slack: ${message.userName} wrote at the top level of ${watchLabel(watch)} after another session's message; not answered here: "${firstLine(message.text, 80)}"`);
         continue;
       }
-      watch.inbox = [...watch.inbox, message];
+      const kept = message.text.length > MAX_INBOX_TEXT ? { ...message, text: `${message.text.slice(0, MAX_INBOX_TEXT)}…` } : message;
+      watch.inbox = [...watch.inbox, kept];
       queued.add(message.ts);
+      if (watch.inbox.length > MAX_INBOX) {
+        // While paused, a busy conversation could queue without end: the newest wait, the rest stay context.
+        watch.inbox = watch.inbox.slice(-MAX_INBOX);
+        this.note(watch, `more than ${MAX_INBOX} messages waiting; the oldest are kept as context only`);
+      }
     }
   }
 
@@ -659,7 +714,8 @@ export class Engine {
     const abort = new AbortController();
     const promise = this.process(watch, abort.signal)
       .catch((error) => {
-        if (!this.disposed && isLive(watch)) {
+        // A run this engine stopped (the watch ended, perhaps to be watched again) is not a failure.
+        if (!this.disposed && !abort.signal.aborted && isLive(watch)) {
           this.end(watch, "error", `the helper failed: ${(error as Error).message}`, false);
           this.save();
         }
@@ -678,19 +734,18 @@ export class Engine {
     const cap = this.deps.config().spendCapUsdPerDay;
     const today = dayOf(this.deps.now());
     if (watch.spend.day !== today) watch.spend = { day: today, usd: 0 };
-    return cap !== undefined && watch.spend.usd >= cap;
+    return cap !== undefined && !watch.spend.lifted && watch.spend.usd >= cap;
   }
 
   private async process(watch: WatchState, signal: AbortSignal): Promise<void> {
     if (watch.heldReply) {
       // Written before the pause: sent as written, so its hand-offs and requests are not made twice.
       const held = watch.heldReply;
-      const sent = await this.sendTracked(watch, held);
+      const sent = await this.sendTracked(watch, held, { commit: () => delete watch.heldReply });
       if (sent === "paused" || this.disposed || !isLive(watch)) {
         this.save();
         return;
       }
-      delete watch.heldReply;
       this.note(watch, NOTE_FOR[sent](held));
       this.save();
       if (!watch.inbox.length) return;
@@ -736,6 +791,8 @@ export class Engine {
     for (const handoff of outcome.handoffs) {
       if (handoff.kind === "info") {
         this.deps.deliverInfo({ watch, senders: batch, text: handoff.text });
+      } else if (pendingApprovals(this.state, watch.key).length >= MAX_PENDING_PER_WATCH) {
+        this.deps.notify("warning", `Slack: ${watchLabel(watch)} already has ${MAX_PENDING_PER_WATCH} requests waiting for you; a new one was not added.`);
       } else {
         const requester = [...new Set(batch.map((m) => m.userName))].join(", ");
         const text = stripControl(handoff.text);
@@ -750,7 +807,7 @@ export class Engine {
       return;
     }
     const reply = parts.join("\n\n");
-    const sent = await this.sendTracked(watch, reply);
+    const sent = await this.sendTracked(watch, reply, { commit: () => { watch.inbox = watch.inbox.filter((m) => !taken.has(m.ts)); } });
     if (sent === "paused") {
       // The batch is handled; only its reply waits, and goes out as written on resume.
       watch.heldReply = reply;
@@ -769,7 +826,7 @@ export class Engine {
    * and recorded. A note the owner's own action caused (approved, declined) is not held by a pause
    * and does not count toward it.
    */
-  async sendTracked(watch: WatchState, text: string, options: { fromOwner?: boolean } = {}): Promise<SendOutcome> {
+  async sendTracked(watch: WatchState, text: string, options: { fromOwner?: boolean; commit?: () => void } = {}): Promise<SendOutcome> {
     if (this.disposed || !isLive(watch)) return "revoked";
     const config = this.deps.config();
     const shape = findSecretShape(text);
@@ -790,6 +847,9 @@ export class Engine {
     const owner = await this.owner();
     const marked = markMessage(text, config.marker, owner.name, !watch.agentLineSent);
     const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending" };
+    // The step this send completes is recorded in the same save as the send itself, so a crash
+    // during the send is settled by reconcile and the step is never redone.
+    options.commit?.();
     this.state.ledger.push(entry);
     this.inFlightSends.add(entry.id);
     this.save();
@@ -829,8 +889,19 @@ export class Engine {
     // Everything after the checkpoint: a send made after the last read is in there, whatever the clocks say.
     const messages = await this.deps.backend.readSince(watch.conversation, watch.point.checkpoint);
     const known = new Set(watch.ownPosts);
+    // A listed match is confirmed like any message read: it belongs here and its lookup names the owner.
+    const confirmed = async (ts: string) => {
+      if (!(await this.deps.backend.belongsTo(watch.conversation, ts))) return false;
+      return (await this.deps.backend.lookupMessage(watch.conversation.channelId, ts)).userId === owner.userId;
+    };
     for (const entry of pending) {
-      const found = messages.find((m) => m.userId === owner.userId && !known.has(m.ts) && m.text.trim() === entry.text.trim());
+      let found: (typeof messages)[number] | undefined;
+      for (const m of messages) {
+        if (m.userId === owner.userId && !known.has(m.ts) && m.text.trim() === entry.text.trim() && (await confirmed(m.ts))) {
+          found = m;
+          break;
+        }
+      }
       if (found) {
         known.add(found.ts);
         entry.status = "sent";

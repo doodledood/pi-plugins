@@ -111,7 +111,7 @@ export async function runMcpTool(events: EventBus, tool: string, args: Record<st
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 50;
 /** Failures that retrying cannot fix: a misconfigured tool or server, or a result the package cannot use whole. */
-const LASTING_CODES = new Set(["tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable"]);
+const LASTING_CODES = new Set(["tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable", "auth_required"]);
 
 /**
  * Is this a failure that may pass on its own (a rate limit, a dropped connection, the adapter's
@@ -168,10 +168,16 @@ export class McpSlackBackend implements SlackBackend {
     const { before, after } = tsNeighbors(ts);
     if (conversation.kind === "thread") {
       if (ts === conversation.threadTs) return true;
-      const listing = parseThreadListing(await this.call(this.tools.readThread, {
-        channel_id: conversation.channelId, message_ts: conversation.threadTs, oldest: before, latest: after, limit: 2, response_format: "detailed",
-      }));
-      return listing.messages.some((m) => m.ts === ts);
+      const occurrences = async (oldest: string, latest: string) => parseThreadListing(await this.call(this.tools.readThread, {
+        channel_id: conversation.channelId, message_ts: conversation.threadTs, oldest, latest, limit: 2, response_format: "detailed",
+      })).messages.filter((m) => m.ts === ts).length;
+      const inWindow = await occurrences(before, after);
+      if (!inWindow) return false;
+      // The thread's first message comes with every read, and its own text could imitate a reply
+      // block naming any id. A control read whose range holds no reply shows what that first
+      // message alone produces; only an occurrence beyond it is a real reply.
+      const control = await occurrences(after, tsNeighbors(after).after);
+      return inWindow > control;
     }
     // A top-level message: the first block of a one-message channel read around its ts is genuine.
     const listing = parseChannelListing(await this.call(this.tools.readChannel, {

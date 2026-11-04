@@ -18,14 +18,14 @@ import { parseSendResult } from "./format.ts";
 import { selectForkBranch } from "./fork.ts";
 import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, type McpToolInfo } from "./mcp-tools.ts";
+import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
 import { defaultSecretPolicy } from "./secrets.ts";
 import { sendCallOf } from "./send-route.ts";
 import { chooseTriageModel, triageContext, triageVerdict } from "./triage.ts";
-import { Panel, renderLine, WIDGET_KEY, type Paint, type PanelAction, type SurfaceProblem, type SurfaceState } from "./ui.ts";
+import { Panel, PANEL_HEIGHT_PERCENT, panelRows, renderLine, WIDGET_KEY, type Paint, type PanelAction, type SurfaceProblem, type SurfaceState } from "./ui.ts";
 
 export const STATE_ENTRY = "slack-companion-state";
 export const HANDOFF_MESSAGE = "slack-companion-handoff";
@@ -86,6 +86,10 @@ export async function applyPanelAction(engine: Engine, action: PanelAction): Pro
     case "stop": return engine.stop(action.key);
     case "resume": return engine.resume(action.key);
     case "rewatch": return engine.rewatch(action.key);
+    default: {
+      const unhandled: never = action;
+      throw new Error(`unhandled panel action ${JSON.stringify(unhandled)}`);
+    }
   }
 }
 
@@ -119,7 +123,8 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   let warnedCache = false;
   // Send calls this package marked, so the nested call a proxy makes for one is not marked again.
   const markedCalls = new Set<string>();
-  let panelSeenAt = 0;
+  // Error stops the owner has seen in the panel (rendered there), by errorId.
+  const seenErrors = new Set<string>();
   // The main session's prompt options as of its last turn: the helper rebuilds the same skills and context files.
   let lastPromptOptions: BuildSystemPromptOptions | undefined;
 
@@ -131,7 +136,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       engine: engineState,
       panelKey: config.panelKey,
       answering: new Set(engineState.watches.filter((w) => engine?.isAnswering(w.key)).map((w) => w.key)),
-      seenAt: panelSeenAt,
+      seenErrors,
       now: now(),
     };
   };
@@ -142,8 +147,8 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (ctxRef?.hasUI) ctxRef.ui.notify(text, level);
   };
 
-  /** The MCP tools the helper gets: main's active read-only ones and the owner's investigative list. */
-  const mcpToolsForHelper = (): McpToolInfo[] => {
+  /** The helper's MCP reach: every read-only tool and the owner's investigative list; main's active ones shown directly. */
+  const mcpToolsForHelper = (): HelperMcpReach => {
     try {
       return helperMcpTools(readMcpCache(cachePath), new Set(pi.getActiveTools()), config.investigativeTools, [config.tools.sendMessage]);
     } catch (error) {
@@ -151,7 +156,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         warnedCache = true;
         notify("warning", `Slack helper runs without MCP tools: pi-mcp-adapter's tool cache could not be read (${(error as Error).message}).`);
       }
-      return [];
+      return { catalog: [], direct: [] };
     }
   };
 
@@ -271,8 +276,11 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     // A disabled package holds nothing: no restored watch, no lock.
     if (config.enabled && !problem) {
       const saved = [...(ctx.sessionManager.getBranch() as SessionEntry[])].reverse().find((e) => e.type === "custom" && e.customType === STATE_ENTRY);
-      if (!engine.restore(saved?.type === "custom" ? saved.data : undefined)) {
-        notify("warning", "slack-companion: this session's saved Slack watches were written by another version of the package and were not restored.");
+      const restored = engine.restore(saved?.type === "custom" ? saved.data : undefined);
+      if (!restored.ok) {
+        const lost = restored.lostWatches.length ? `: ${restored.lostWatches.join(", ")}. Watch them again with /slack <link>` : "";
+        const kept = restored.keptRequests ? ` The ${restored.keptRequests} request${restored.keptRequests === 1 ? "" : "s"} waiting for you ${restored.keptRequests === 1 ? "was" : "were"} kept.` : "";
+        notify("warning", `slack-companion: this session's saved Slack watches came from another version of the package and were not restored${lost}.${kept}`);
       }
     }
     overrides.onEngine?.(engine);
@@ -344,18 +352,24 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     await engine.onMainSend({ channelId: sent.channelId, ts: sent.ts, addressedTo: call.channelId, text: call.message, ...(call.threadTs ? { threadTs: call.threadTs } : {}) });
   });
 
-  const attachLink = async (link: string): Promise<string> => {
+  /**
+   * Watch a conversation by its link. The owner's /slack may restart one that someone stopped; the
+   * model-callable tool may not, since main's model can be steered by what a hand-off quotes.
+   */
+  const attachLink = async (link: string, byOwner: boolean): Promise<string> => {
     if (problem) return `slack-companion cannot watch: ${problem.detail}`;
     if (!config.enabled) return "slack-companion is off; /slack on turns it on.";
     const parsed = parseSlackLink(link);
     if (!parsed) return `Not a Slack message link: ${link}`;
+    if (!byOwner && engine?.isStoppedLink(parsed)) return "Someone stopped that conversation. Only the owner can watch it again: /slack <link>, or w in the Slack panel.";
     let watch;
     try {
       watch = await engine?.attach(parsed);
     } catch (error) {
       return `Could not watch that conversation: ${(error as Error).message}`;
     }
-    return watch ? `Watching ${watch.partner?.name ? `the conversation with ${watch.partner.name}` : "that conversation"}.` : "Could not watch that conversation (see the notice).";
+    if (!watch) return "Could not watch that conversation (see the notice).";
+    return byOwner && watch.partner?.name ? `Watching the conversation with ${watch.partner.name}.` : "Watching that conversation.";
   };
 
   pi.registerTool({
@@ -369,7 +383,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     }),
     async execute(_id, params) {
       let text: string;
-      if (params.action === "watch") text = await attachLink(params.link);
+      if (params.action === "watch") text = await attachLink(params.link, false);
       else {
         const parsed = parseSlackLink(params.link);
         text = parsed && engine?.stopLink(parsed, "stopped by the session") ? "Stopped watching." : "That conversation is not being watched.";
@@ -383,15 +397,14 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       notify("info", "The Slack panel needs Pi's interactive screen.");
       return;
     }
-    panelSeenAt = now();
-    requestRender?.();
     await ctx.ui.custom<void>((tui, theme, _kb, done) => new Panel(surface, paintFrom(theme), (action) => {
       if (!engine) return;
       void applyPanelAction(engine, action).catch((e) => notify("error", `Slack: ${action.kind} failed: ${(e as Error).message}`));
       tui.requestRender();
-    }, () => done(), tui), { overlay: true, overlayOptions: { maxHeight: "80%" } });
-    panelSeenAt = now();
-    requestRender?.();
+    }, () => done(), tui, () => panelRows(tui.terminal.rows), (ids) => {
+      for (const id of ids) seenErrors.add(id);
+      requestRender?.();
+    }), { overlay: true, overlayOptions: { maxHeight: `${PANEL_HEIGHT_PERCENT}%` } });
   };
 
   pi.registerCommand("slack", {
@@ -419,7 +432,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         notify("info", "Stopped watching every Slack conversation in this session.");
         return;
       }
-      notify("info", await attachLink(arg));
+      notify("info", await attachLink(arg, true));
     },
   });
 

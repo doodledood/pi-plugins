@@ -2,7 +2,7 @@
 // adapter's `mcp` proxy installed. Holds docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md
 // (no extension, allowlisted tools) and docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -51,6 +51,7 @@ async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cw
   writeFileSync(join(h.agentDir, "extensions", "installed-elsewhere.ts"), [
     'import { writeFileSync } from "node:fs";',
     "export default function (pi: any) {",
+    `  writeFileSync(${JSON.stringify(join(h.agentDir, "installed-factory-ran"))}, "yes");`,
     `  pi.on("before_agent_start", () => writeFileSync(${JSON.stringify(join(h.agentDir, "installed-ran"))}, "yes"));`,
     '  pi.registerTool({ name: "installed_tool", label: "installed", description: "installed", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "installed" }], details: {} }; } });',
     "}",
@@ -93,17 +94,20 @@ test("the helper's runtime: no extension, no handler, only the allowlisted tools
   });
   // data_lookup: read-only and active in main. Read-only tools main does not have active (the Slack
   // reads) and data_write (not read-only) are left out.
-  const expected = ["read", "grep", "find", "ls", "data_lookup", "reply_in_slack", "hand_off_to_main"];
+  const expected = ["read", "grep", "find", "ls", "data_lookup", "search_read_only_tools", "call_read_only_tool", "reply_in_slack", "hand_off_to_main"];
   assert.deepEqual(new Set(outcome.toolNames), new Set(scratch ? [...expected, "bash"] : expected));
   for (const forbidden of ["mcp", "mcp__slack", "edit", "write", "goal", "slack_send_message", "mcp__slack__slack_send_message", "foreign_tool", "data_write", "slack_watch", "installed_tool"]) {
     assert.equal(outcome.toolNames.includes(forbidden), false, forbidden);
   }
   assert.match(results.find((r) => r.tool === "read")!.text, /KB as king/);
   assert.deepEqual(h.dataCalls, ["data_lookup"], "the read-only MCP tool ran through the parent's runtime event");
-  assert.ok(results.filter((r) => r.isError).length >= 3, "mcp, foreign_tool and data_write do not exist in the helper");
+  for (const name of ["mcp", "foreign_tool", "data_write"]) {
+    assert.ok(results.some((r) => r.tool === name && r.isError), `${name} does not exist in the helper`);
+  }
   assert.equal(h.foreign.toolRuns, 0);
   assert.equal(h.foreign.handlerRuns, handlerRunsBefore, "the parent's handlers never run in the helper");
   assert.equal(existsSync(join(h.agentDir, "installed-ran")), false, "an installed extension's handler never ran in the helper");
+  assert.equal(existsSync(join(h.agentDir, "installed-factory-ran")), false, "an installed extension's factory never ran while the helper was built");
   assert.equal(h.slack.messages("D0FAKE0001").length, 0, "the helper cannot post through the proxy");
   assert.deepEqual(outcome.reply, { text: "Checked: KB is king.", done: false });
 });
@@ -144,7 +148,10 @@ test("the sandboxed shell writes only to scratch, reads no secrets and reaches n
   const home = fakeHome();
   const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
   if (!probe.ok) {
-    t.skip(`sandbox-runtime unavailable here: ${probe.reason}`);
+    // Skip only where sandbox-runtime does not support the platform; anywhere else, not starting is a failure.
+    const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
+    if (SandboxManager.isSupportedPlatform()) assert.fail(`sandbox-runtime supports this platform but did not start: ${probe.reason}`);
+    t.skip(`sandbox-runtime does not support this platform: ${probe.reason}`);
     return;
   }
   await probe.dispose();
@@ -199,4 +206,51 @@ test("a stopped run does not start, and a run stuck calling tools is stopped at 
   const { outcome, h } = await helperRun(Array.from({ length: MAX_HELPER_TURNS + 10 }, () => ({ kind: "tool", name: "ls", args: {} }) as Reply));
   assert.equal(outcome.stoppedAtTurnLimit, true);
   assert.ok(h.calls.filter((c) => c.role === "helper").length <= MAX_HELPER_TURNS + 1);
+});
+
+test("the helper reaches every read-only tool through search and call, and nothing else", async () => {
+  const { h, results } = await helperRun([
+    { kind: "tool", name: "search_read_only_tools", args: { query: "thread" } },
+    { kind: "tool", name: "call_read_only_tool", args: { tool: "slack_read_user_profile", arguments: { response_format: "detailed" } } },
+    { kind: "tool", name: "call_read_only_tool", args: { tool: "slack_send_message", arguments: { channel_id: "D0FAKE0001", message: "x" } } },
+    { kind: "tool", name: "call_read_only_tool", args: { tool: "data_write", arguments: { q: "x" } } },
+  ]);
+  const [search, profile, send, write] = results;
+  assert.match(search!.text, /slack_read_thread \(slack\)/);
+  assert.equal(profile!.isError, false);
+  assert.match(profile!.text, /Display Name: Dana Owner/);
+  assert.ok(send!.isError && /not a read-only tool/.test(send!.text));
+  assert.ok(write!.isError && /not a read-only tool/.test(write!.text));
+  assert.equal(h.slack.messages("D0FAKE0001").length, 0);
+});
+
+test("every file tool and the shell are denied Pi's auth file, cloud credentials, and secrets reached through a symlink", async (t) => {
+  const home = fakeHome();
+  mkdirSync(join(home, ".aws"), { recursive: true });
+  writeFileSync(join(home, ".aws", "credentials"), "AWS-CREDENTIAL-CONTENT");
+  writeFileSync(join(home, ".pi", "agent", "auth.json"), "PI-AUTH-CONTENT");
+  writeFileSync(join(home, ".ssh", "config"), "SSH-CONFIG-CONTENT");
+  const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
+  if (probe.ok) await probe.dispose();
+  const steps: Reply[] = [];
+  const secrets = [join(home, ".aws", "credentials"), join(home, ".pi", "agent", "auth.json"), "linked-config"];
+  for (const path of secrets) steps.push({ kind: "tool", name: "read", args: { path } });
+  steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: join(home, ".aws") } });
+  steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: "." } });
+  steps.push({ kind: "tool", name: "find", args: { pattern: "*", path: join(home, ".aws") } });
+  steps.push({ kind: "tool", name: "ls", args: { path: "linked-dir" } });
+  if (probe.ok) for (const path of secrets) steps.push({ kind: "tool", name: "bash", args: { command: `cat ${path}; echo END` } });
+  const { results, h } = await helperRun(steps, {
+    home,
+    sandbox: async (cwd, h2) => {
+      symlinkSync(join(home, ".ssh", "config"), join(cwd, "linked-config"));
+      symlinkSync(join(home, ".ssh"), join(cwd, "linked-dir"));
+      return realSandbox(cwd, h2);
+    },
+  });
+  assert.ok(h);
+  assert.equal(results.filter((r) => r.tool === "read").every((r) => r.isError && /secret location/.test(r.text)), true, "read");
+  assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret");
+  assert.ok(results.filter((r) => r.tool === "ls" || r.tool === "find").every((r) => r.isError), "find and ls refuse secret folders, through a symlink too");
+  if (!probe.ok) t.diagnostic(`shell part not run: ${probe.reason}`);
 });

@@ -19,22 +19,24 @@ holds every change to the owner's work for the owner's approval.
 
 ### tests
 Run: `npm run test --workspace @doodledood/pi-slack-companion`
-Proves: in real Pi sessions with a scripted model and a fake Slack server writing the official
-server's formats (both email variants): every send route starts and marks a watch, and main's own
-messages go out whole; replies are answered once, in thread; forged format text cannot add,
-reorder or re-author messages or move the checkpoint, at reads and when attaching; a failed
-lookup never drops a message, passing read failures retry and lasting ones stop the watch; reads
-survive pages, truncation, failures and restarts (property test); the helper loads no extension,
-has only its allowlisted tools (main's active read-only MCP tools), reaches the model with main's
-credential, stops when stopped and at its turn limit; its file tools refuse secret paths in every
-spelling Pi accepts (checked against Pi's own resolver); the sandboxed shell cannot write outside
-scratch, read secrets, see credential variables or reach the network, and the real wiring builds
-that policy; Slack text and display names cannot carry the package's markers; triage verdicts and
-model choice; hand-offs, approvals (which outlive their watch), held replies, limits, stopping,
-locks and routing between two sessions, resume catch-up, a reload during a helper run, the poll
-timer, bounded state that idle reads do not grow, the line and panel at every width and height,
-helper records and cost records.
-Line: 4.5 s on darwin-arm64-12cpu
+Proves: the package works as its README says, in real Pi sessions with a scripted model and a fake Slack server writing the official server's formats (both email variants):
+- Starting and sending: every send route starts and marks a watch; main's own messages go out
+  whole; replies are answered once, in thread.
+- Reading: text imitating the format, in any message or in a thread's first message, cannot
+  add, re-author or pull in a message, move the checkpoint, set the attach boundary or stop a
+  watch; a failed lookup never drops a message; passing failures retry and lasting ones stop the
+  watch (an expired login says how to sign in); reads survive pages, truncation, failures and
+  restarts (property test).
+- The helper: it loads no extension (no factory runs), has only its allowlisted tools (every
+  read-only MCP tool, main's active ones shown directly, never the send tool), reaches the model
+  with main's credential, stops when stopped and at its turn limit; its file tools and its
+  sandboxed shell refuse secrets in every path form and through symlinks; the real wiring builds
+  that policy.
+- Triage, hand-offs, approvals (read to the end before approving; they outlive their watch),
+  held replies, limits and their daily reset, stopping, locks and routing between sessions,
+  resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and
+  helper and cost records.
+Line: 6.0 s on darwin-arm64-12cpu; raised: the suite grew from 85 to 136 tests in review rounds 2 and 3 (forgery, crash, lock, triage, wiring and layout coverage)
 
 ### types
 Run: `npm run typecheck --workspace @doodledood/pi-slack-companion`

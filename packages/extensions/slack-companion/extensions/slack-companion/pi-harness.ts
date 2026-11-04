@@ -37,7 +37,7 @@ export const model: Model<any> = {
   contextWindow: 1_000_000, maxTokens: 1_000,
 };
 
-export type Reply = { kind: "text"; text: string } | { kind: "tool"; name: string; args: Record<string, unknown> };
+export type Reply = { kind: "text"; text: string } | { kind: "tool"; name: string; args: Record<string, unknown> } | { kind: "error"; message: string };
 export type Role = "main" | "helper" | "triage";
 
 export function textOf(content: unknown): string {
@@ -55,6 +55,18 @@ export function systemText(context: Context): string {
     for (const section of Object.values(message.sections ?? {})) if (typeof section === "string") parts.push(section);
   }
   return parts.join("\n");
+}
+
+/** The tools a model call offers: Pi sends them as system messages that add and remove tools. */
+export function toolsOf(context: Context): string[] {
+  const names = new Set((context.tools ?? []).map((t) => t.name));
+  for (const m of context.messages as any[]) {
+    if (m.role !== "system") continue;
+    // A redefinition removes the old declaration and adds the new one in the same message.
+    for (const r of m.toolsRemoved ?? []) names.delete(typeof r === "string" ? r : r.name);
+    for (const t of m.toolsAdded ?? []) names.add(t.name);
+  }
+  return [...names];
 }
 
 export function roleOf(context: Context): Role {
@@ -80,7 +92,7 @@ export interface Harness {
   slack: FakeSlack;
   engine: () => Engine;
   /** Every model call the provider received, with the credential it was given. */
-  calls: Array<{ role: Role; context: Context; apiKey: string | undefined }>;
+  calls: Array<{ role: Role; context: Context; apiKey: string | undefined; model: string; tools: string[] }>;
   workspace: string;
   agentDir: string;
   foreign: { handlerRuns: number; toolRuns: number };
@@ -109,6 +121,8 @@ export interface HarnessOptions {
   reopen?: Harness;
   /** Leave the fake pi-mcp-adapter out, as in a setup without it. */
   noAdapter?: boolean;
+  /** Raw text of pi-mcp-adapter's tool cache, to test a broken one. */
+  mcpCacheText?: string;
   /** Raw config file text, to test a broken file. */
   rawConfig?: string;
 }
@@ -119,7 +133,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   writeFileSync(join(workspace, "notes.md"), "The judge treats the KB as king.\n");
   mkdirSync(join(agentDir, "slack-companion"), { recursive: true });
   // The adapter's metadata cache: each server's tools with the annotations their server declares.
-  writeFileSync(join(agentDir, "mcp-cache.json"), JSON.stringify({ version: 1, servers: {
+  writeFileSync(join(agentDir, "mcp-cache.json"), options.mcpCacheText ?? JSON.stringify({ version: 1, servers: {
     slack: { tools: [
       { name: "slack_send_message", description: "send", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } },
       { name: "slack_read_thread", description: "read thread", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
@@ -223,15 +237,19 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     api: API,
     streamSimple: (selected: Model<any>, context: Context, streamOptions?: SimpleStreamOptions) => {
       const role = roleOf(context);
-      calls.push({ role, context: { ...context, messages: [...context.messages] }, apiKey: streamOptions?.apiKey });
+      calls.push({ role, context: { ...context, messages: [...context.messages] }, apiKey: streamOptions?.apiKey, model: `${selected.provider}/${selected.id}`, tools: toolsOf(context) });
       const reply = options.replies(context, role, calls.filter((c) => c.role === role).length);
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         const out: AssistantMessage = {
           role: "assistant", content: [], api: selected.api, provider: selected.provider, model: selected.id,
-          usage, stopReason: reply.kind === "tool" ? "toolUse" : "stop", timestamp: Date.now(),
+          usage, stopReason: reply.kind === "tool" ? "toolUse" : reply.kind === "error" ? "error" : "stop", timestamp: Date.now(),
         };
-        if (reply.kind === "tool") {
+        if (reply.kind === "error") {
+          out.errorMessage = reply.message;
+          stream.push({ type: "start", partial: out });
+          stream.push({ type: "error", reason: "error", error: out });
+        } else if (reply.kind === "tool") {
           const call = { type: "toolCall" as const, id: `call-${calls.length}`, name: reply.name, arguments: reply.args as JsonObject };
           out.content.push(call);
           stream.push({ type: "start", partial: out });

@@ -15,13 +15,17 @@ const cache: McpCache = new Map([
   ["other", [tool("lookup", true)]],
 ]);
 
-test("only read-only tools active in main, or listed by the owner; the send tool never, even if marked read-only or listed", () => {
+test("every read-only tool, or one the owner listed, is reachable; main's active ones are shown directly; the send tool never", () => {
   const active = new Set(["slack_read_thread", "slack_send_message", "data_lookup", "other_lookup"]);
-  const names = (investigative: string[]) => helperMcpTools(cache, active, investigative, ["slack_send_message"]).map((t) => t.exposedName).sort();
-  assert.deepEqual(names([]), ["data-mcp__lookup", "other__lookup", "slack_read_thread"], "two servers sharing a name get <server>__ names");
-  assert.deepEqual(names(["slack_send_message", "data-mcp/write_row"]), ["data-mcp__lookup", "other__lookup", "slack_read_thread", "write_row"]);
-  assert.equal(names([]).includes("slack_search_public_and_private"), false, "read-only but not active in main");
-  assert.deepEqual(helperMcpTools(undefined, active, ["x"], []), []);
+  const reach = (investigative: string[]) => helperMcpTools(cache, active, investigative, ["slack_send_message"]);
+  const names = (tools: Array<{ exposedName: string }>) => tools.map((t) => t.exposedName).sort();
+  const plain = reach([]);
+  assert.deepEqual(names(plain.catalog), ["data-mcp__lookup", "other__lookup", "slack_read_thread", "slack_search_public_and_private"], "all read-only reach; shared names get <server>__");
+  assert.deepEqual(names(plain.direct), ["data-mcp__lookup", "other__lookup", "slack_read_thread"], "shown directly: main's active ones");
+  const listed = reach(["slack_send_message", "data-mcp/write_row"]);
+  assert.ok(names(listed.catalog).includes("write_row") && names(listed.direct).includes("write_row"), "a listed tool is reachable and shown");
+  for (const r of [plain, listed]) assert.equal(r.catalog.some((t) => t.name === "slack_send_message"), false, "the send tool never, even marked read-only or listed");
+  assert.deepEqual(helperMcpTools(undefined, active, ["x"], []), { catalog: [], direct: [] });
 });
 
 test("every name the adapter can give a tool is recognized", () => {
@@ -42,6 +46,10 @@ test("the cache is read whole; a missing cache is no cache, a broken one is an e
   assert.equal(readMcpCache(join(dir, "none.json")), undefined);
   writeFileSync(join(dir, "c.json"), JSON.stringify({ version: 1, servers: { s: { tools: [{ name: "t", annotations: { readOnlyHint: true } }, { bad: 1 }] } } }));
   assert.deepEqual(readMcpCache(join(dir, "c.json"))!.get("s"), [{ name: "t", description: "", inputSchema: { type: "object", properties: {} }, readOnly: true }]);
+  writeFileSync(join(dir, "failed.json"), JSON.stringify({ version: 1, servers: { slack: { tools: [], discoveryFailed: true } } }));
+  const failed = readMcpCache(join(dir, "failed.json"));
+  assert.equal(failed!.has("slack"), false, "a server whose discovery failed is not listed yet");
+  assert.deepEqual(missingSlackTools(failed, ["slack_read_thread"], "slack"), [], "so its tool names are not judged");
   writeFileSync(join(dir, "broken.json"), "{");
   assert.throws(() => readMcpCache(join(dir, "broken.json")));
   writeFileSync(join(dir, "shape.json"), JSON.stringify({ version: 2, tools: [] }));

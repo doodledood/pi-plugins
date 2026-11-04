@@ -29,7 +29,7 @@ function approval(over: Partial<Approval> = {}): Approval {
 }
 
 function surface(engine: Partial<EngineState>, over: Partial<SurfaceState> = {}): SurfaceState {
-  return { enabled: true, engine: { ...emptyState(), ...engine }, panelKey: "alt+s", answering: new Set(), seenAt: 0, now: 31 * 60_000, ...over };
+  return { enabled: true, engine: { ...emptyState(), ...engine }, panelKey: "alt+s", answering: new Set(), seenErrors: new Set(), now: 31 * 60_000, ...over };
 }
 
 const flat = (lines: string[]) => lines.join(" ").replace(/[│\s]+/g, " ");
@@ -56,17 +56,33 @@ test("at every width the line fits, keeps the waiting count, the stops and the k
       const waiting = engine.approvals?.length;
       if (waiting) assert.match(line!, new RegExp(`${waiting} waiting`), `waiting at ${width}`);
       if (engine.watches.some((w) => w.status === "error")) assert.match(line!, /1 stopped/, `stopped at ${width}`);
-      if (engine.watches.some((w) => w.status === "paused")) assert.match(line!, /1 paused/, `paused at ${width}`);
+      if (engine.watches.some((w) => w.status === "paused")) assert.match(line!, /paused/, `paused at ${width}`);
       assert.equal(/\+\d*…|\+\d+ watch…/.test(line!), false, `the folded count is never cut, at ${width}: ${line}`);
+    }
+  }
+  for (let width = 40; width <= 220; width += 1) {
+    for (const engine of states) {
+      const [line] = renderLine(surface(engine), plain, width);
+      assert.equal(/(Person \d+|#team-\d*)…/.test(line!), false, `no label is cut, at ${width}: ${line}`);
     }
   }
   for (let width = 120; width <= 220; width += 10) {
     const [line] = renderLine(surface(states[2]!), plain, width);
-    assert.match(line!, /Person \d.*\+\d+ watching/, `watches shown, the rest folded, at ${width}: ${line}`);
+    assert.match(line!, /Person \d #team-\d.*\+\d+ watching/, `watches shown whole, the rest folded, at ${width}: ${line}`);
   }
   const [wide] = renderLine(surface(states[3]!), plain, 200);
   assert.match(wide!, /^ ● slack · Person 2 #team-2 paused/, "the paused watch leads");
-  for (const width of [100, 120, 140]) assert.match(renderLine(surface(states[3]!), plain, width)[0]!, /paused · /, `the state word survives at ${width}`);
+  for (const width of [100, 120, 140]) {
+    const [line] = renderLine(surface(states[3]!), plain, width);
+    assert.match(line!, /Person 2 #team-2 paused/, `the paused watch leads with its state at ${width}`);
+    assert.equal(/1 paused/.test(line!), false, "not counted again when shown by name");
+  }
+  const narrow = { watches: [channelWatch(1), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 })], approvals: [approval(), approval({ id: "a2" })] };
+  for (let width = 40; width < 60; width += 1) assert.match(renderLine(surface(narrow), plain, width)[0]!, /2 waiting/, `the waiting count first, at ${width}`);
+  const colors: string[] = [];
+  const recording: Paint = { fg: (c, t) => { colors.push(`${c}:${t}`); return t; }, bold: (t) => t };
+  renderLine(surface({ watches: [watch({ lastNote: "replied: Checked" })] }), recording, 120);
+  assert.ok(colors.includes("muted:replied: Checked"), "a note is quiet: muted, like the dock");
   const [dm] = renderLine(surface({ watches: [watch({ lastNote: "replied: ok" }), watch({ key: "D1/top", conversation: { kind: "dm-top", channelId: "D1" } })] }), plain, 200);
   assert.equal((dm!.match(/Robin Colleague/g) ?? []).length, 1, "one DM, one entry");
   const [answering] = renderLine(surface({ watches: [watch()] }, { answering: new Set(["D1/1.000001"]) }), plain, 200);
@@ -97,47 +113,85 @@ test("the panel never exceeds its height, keeps its frame and keys, and shows a 
   assert.match(text, /╭─ Slack · 1 waiting/);
   assert.match(text, /◐ waiting for your OK · 31 min ago/);
   assert.match(text, /from Robin Colleague \(DM\)/);
+  const channelRequest = flat(renderPanel(surface({ approvals: [approval({ label: "Taylor QA's thread in #release-train", requester: "Taylor QA" })] }), 0, plain, 80, 0, 40));
+  assert.match(channelRequest, /from Taylor QA in #release-train/, "the person is named once");
   assert.match(flat(text.split("\n")).replace(/ /g, ""), /be\/cut\/off\/anywhere/, "a long word is wrapped, not cut");
 });
 
-test("a request taller than the panel scrolls inside itself, and cannot be approved before its last line was shown", () => {
+test("a request taller than the panel scrolls inside itself, keeps its header in view, and cannot be approved before its last line was shown", () => {
   const steps = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`);
   const long = [...steps, "Finally: drop the old results table."].join("\n");
-  const state: EngineState = { ...emptyState(), approvals: [approval({ text: long })] };
+  const state: EngineState = { ...emptyState(), approvals: [approval({ text: long }), approval({ id: "a2", text: "short one" })] };
   const actions: PanelAction[] = [];
   const panel = new Panel(() => surface(state), plain, (a) => actions.push(a), () => {}, undefined, () => 20);
-  let rendered = panel.render(80);
-  assert.ok(rendered.length <= 20);
-  assert.match(rendered.join("\n"), /more lines of this item/);
-  assert.match(rendered.join("\n"), /read to the end to approve/);
+  let rendered = panel.render(80).join("\n");
+  assert.match(rendered, /more lines · read to the end to approve · 1 more below/);
+  assert.match(rendered, /d deny · ↑↓ move · esc close/);
+  assert.equal(/a approve/.test(rendered), false, "the keys do not offer approval yet");
   panel.handleInput("a");
   assert.deepEqual(actions, [], "not approvable yet");
-  let sawEnd = false;
-  for (let i = 0; i < 60; i += 1) {
-    panel.handleInput(DOWN);
-    rendered = panel.render(80);
-    sawEnd ||= rendered.join("\n").includes("Finally: drop the old results table.");
-  }
-  assert.ok(sawEnd, "the request's last line was shown");
-  assert.match(rendered.join("\n"), /a approve · d deny/);
+  for (let i = 0; i < 3; i += 1) panel.handleInput(" "); // a page at a time
+  rendered = panel.render(80).join("\n");
+  assert.match(rendered, /Finally: drop the old results table\./);
+  assert.match(rendered, /◐ waiting for your OK · 31 min ago[\s\S]*from Robin Colleague \(DM\)/, "who asked stays in view at the end");
+  assert.match(rendered, /a approve · d deny/);
+  panel.handleInput(DOWN); // held once at the end
+  assert.match(panel.render(80).join("\n"), /Finally: drop/);
+  panel.handleInput(DOWN); // then moves on
+  panel.handleInput("\u001b[A"); // and back: lands at the end, still approvable
+  rendered = panel.render(80).join("\n");
+  assert.match(rendered, /Finally: drop the old results table\.[\s\S]*a approve · d deny/);
   panel.handleInput("a");
   assert.deepEqual(actions, [{ kind: "approve", id: "a1" }]);
 });
 
-test("ended watches: newest first, every error listed, the rest folded and expandable", () => {
-  const ended = [
-    channelWatch(1, { status: "error", reason: "tool_error", endedAt: 1 }),
-    ...[2, 3, 4, 5].map((i) => channelWatch(i, { status: "stopped", reason: "no messages for 24 h", endedAt: 10 + i })),
-  ];
+test("the selection follows its item when the list changes, so a key acts on what the owner chose", () => {
+  const state: EngineState = { ...emptyState(), watches: [channelWatch(1, { lastActivityAt: 1 }), channelWatch(2, { lastActivityAt: 2 })] };
   const actions: PanelAction[] = [];
-  const panel = new Panel(() => surface({ watches: ended }), plain, (a) => actions.push(a), () => {}, undefined, () => 40);
-  const text = flat(panel.render(80));
-  assert.ok(text.indexOf("Person 1's thread in #team-1 × stopped") < text.indexOf("Person 5"), "the error is listed first");
-  assert.ok(text.indexOf("Person 5") < text.indexOf("Person 4"), "newest quiet end first");
-  assert.match(text, /1 more ended/);
+  const panel = new Panel(() => surface(state), plain, (a) => actions.push(a), () => {}, undefined, () => 40);
+  panel.render(80);
+  panel.handleInput(DOWN); // Person 1 (the older one)
+  state.approvals = [approval()]; // a request arrives at the top
+  panel.render(80);
+  panel.handleInput("s");
+  assert.deepEqual(actions, [{ kind: "stop", key: "C1/1.0" }]);
+});
+
+test("the panel orders by need: requests, paused, unseen stops, answering, the rest; ended ones newest first", () => {
+  const watches = [
+    channelWatch(1, { lastActivityAt: 9 }),
+    channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }),
+    channelWatch(3, { status: "error", reason: "tool_error", endedAt: 1 }),
+    channelWatch(4),
+    ...[5, 6, 7, 8].map((i) => channelWatch(i, { status: "stopped", reason: "no messages for 24 h", endedAt: 10 + i })),
+  ];
+  const text = flat(renderPanel(surface({ watches, approvals: [approval()] }, { answering: new Set(["C4/1.0"]) }), 0, plain, 100, 0, 60));
+  const order = ["waiting for your OK", "Person 2's", "Person 3's", "Person 4's", "Person 1's", "Person 8's", "Person 7's", "Person 6's", "1 more ended"].map((t) => text.indexOf(t));
+  assert.deepEqual([...order].sort((a, b) => a - b), order, text);
+  assert.ok(order.every((i) => i >= 0));
+});
+
+test("a stop counts as seen only once its row was on screen, and every error stays reachable", () => {
+  const errors = [1, 2, 3, 4, 5, 6].map((i) => channelWatch(i, { status: "error", reason: "tool_error", endedAt: i }));
+  const seen = new Set<string>();
+  const actions: PanelAction[] = [];
+  const panel = new Panel(() => surface({ watches: errors }, { seenErrors: seen }), plain, (a) => actions.push(a), () => {}, undefined, () => 12, (ids) => ids.forEach((id) => seen.add(id)));
+  panel.render(80);
+  assert.ok(seen.size > 0 && seen.size < 6, `only the rows shown (${seen.size})`);
+  for (let i = 0; i < 6; i += 1) panel.handleInput(DOWN);
+  panel.render(80);
+  assert.equal(seen.size, 6);
   panel.handleInput("w");
-  assert.deepEqual(actions, [{ kind: "rewatch", key: "C1/1.0" }], "w on the error watch");
-  for (let i = 0; i < 4; i += 1) panel.handleInput(DOWN);
+  assert.equal(actions.length, 1);
+  const [line] = renderLine(surface({ watches: errors }, { seenErrors: seen }), plain, 120);
+  assert.equal(/stopped/.test(line ?? ""), false, "nothing unseen left on the line");
+});
+
+test("ended watches fold into an expandable count", () => {
+  const ended = [2, 3, 4, 5].map((i) => channelWatch(i, { status: "stopped", reason: "no messages for 24 h", endedAt: 10 + i }));
+  const panel = new Panel(() => surface({ watches: ended }), plain, () => {}, () => {}, undefined, () => 40);
+  assert.match(flat(panel.render(80)), /1 more ended/);
+  for (let i = 0; i < 3; i += 1) panel.handleInput(DOWN);
   panel.handleInput("\r");
   assert.match(flat(panel.render(80)), /Person 2's thread in #team-2/, "enter shows all ended");
 });
@@ -182,5 +236,5 @@ test("panel keys map to owner actions only", () => {
   panel.handleInput("\u001b");
   assert.deepEqual(actions, [{ kind: "approve", id: "a1" }, { kind: "resume", key: "D1/1.000001" }, { kind: "rewatch", key: "C2/1.0" }]);
   assert.equal(closed, true);
-  assert.equal(layoutPanel(state, { selected: 0, offset: 0, allEnded: false }, plain, 80, 0, 40).selectedFullySeen, true);
+  assert.equal(layoutPanel(state, { selected: 0, offset: 0, allEnded: false, read: new Set() }, plain, 80, 0, 40).selectedEndInView, true);
 });

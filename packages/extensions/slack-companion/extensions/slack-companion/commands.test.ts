@@ -67,6 +67,13 @@ test("the model-callable tool watches a conversation by link and stops it", asyn
   assert.equal(h.engine().watch(`${DM}/${root.ts}`)?.status, "active");
   await h.session.prompt("stop that thread");
   assert.equal(h.engine().watch(`${DM}/${root.ts}`)?.status, "stopped");
+  // Stopped: the model-callable tool may not restart it (a hand-off could steer main to); the owner may.
+  await h.session.prompt("handle this thread");
+  assert.equal(h.engine().watch(`${DM}/${root.ts}`)?.status, "stopped");
+  const refusal = h.calls.filter((c) => c.role === "main").at(-1)!.context.messages.filter((m: any) => m.role === "toolResult").at(-1) as any;
+  assert.match(textOf(refusal.content), /Only the owner can watch it again/);
+  await h.session.prompt(`/slack https://ws.slack.com/archives/${DM}/p${root.ts.replace(".", "")}`);
+  assert.equal(h.engine().watch(`${DM}/${root.ts}`)?.status, "active");
 });
 
 test("without pi-mcp-adapter the package loads, says why it cannot watch, and touches no send", async () => {

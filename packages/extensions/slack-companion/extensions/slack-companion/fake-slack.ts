@@ -47,9 +47,9 @@ export class FakeSlack {
   /**
    * What the next calls of a tool do, in order: "ok" (answer normally), "error" (ok:false, the
    * adapter's generic code), "post-then-error" (a send that posted, then failed), "truncate",
-   * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting).
+   * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting), "auth" (the login expired).
    */
-  failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready">>();
+  failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready" | "auth">>();
   /** Page size the fake uses regardless of the requested limit, to force pagination. */
   pageSize = 100;
   /** Channel names the listing header shows (a channel not here shows "general"). */
@@ -137,6 +137,7 @@ export class FakeSlack {
       const code = /no tool/.test((error as Error).message) ? "tool_not_found" : "tool_error";
       return { ok: false, error: new Error(`MCP tool call failed: ${code}`) };
     }
+    if (failure === "auth") return { ok: false, error: new Error("MCP tool call failed: auth_required") };
     if (failure === "not-ready") return { ok: false, error: new Error("MCP initialization is still in progress") };
     if (failure === "garbage") return { ok: true, result: { content: [{ type: "text", text: "<html>Service Unavailable</html>" }] } };
     if (failure === "post-then-error") return { ok: false, error: new Error("MCP tool call failed: tool_error") };

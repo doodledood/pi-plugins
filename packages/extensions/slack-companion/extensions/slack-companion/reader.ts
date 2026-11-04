@@ -40,6 +40,8 @@ export interface ReadOutcome {
 
 /** How far behind the read's start the checkpoint stays, to absorb late visibility and clock skew. */
 export const CHECKPOINT_LAG_MS = 2 * 60 * 1000;
+/** How far past the read's start an id may be and still be kept as seen (clock skew, not forgery). */
+export const FUTURE_HORIZON_MS = 60 * 60 * 1000;
 /** New messages confirmed per poll (two Slack reads each), to stay well inside Slack's read allowance. */
 export const MAX_CONFIRMATIONS_PER_POLL = 15;
 
@@ -89,6 +91,9 @@ export function advance(point: ReadPoint, settledNow: readonly string[], readSta
     if (firstUnsettled && compareTs(ts, firstUnsettled) >= 0) break;
     if (!checkpoint || compareTs(ts, checkpoint) > 0) checkpoint = ts;
   }
-  const seen = all.filter((ts) => !checkpoint || compareTs(ts, checkpoint) > 0);
+  // An id far in the future is no message yet: text named it. It is not kept, so `seen` stays
+  // bounded; if a listing names it again before the checkpoint passes that text, it is rejected again.
+  const horizon = tsFromMillis(readStartedAtMs + FUTURE_HORIZON_MS);
+  const seen = all.filter((ts) => (!checkpoint || compareTs(ts, checkpoint) > 0) && compareTs(ts, horizon) <= 0);
   return { checkpoint, seen };
 }

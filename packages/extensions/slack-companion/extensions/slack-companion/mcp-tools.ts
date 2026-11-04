@@ -43,6 +43,9 @@ export function readMcpCache(cachePath: string): McpCache | undefined {
   if (!servers || typeof servers !== "object") throw new Error(`${cachePath} has no "servers" object; pi-mcp-adapter's cache format changed`);
   const cache = new Map<string, CachedTool[]>();
   for (const [server, entry] of Object.entries(servers as Record<string, unknown>)) {
+    // An entry whose discovery failed (for example a login that expired) has no catalog: the
+    // server is not listed yet, rather than a server with no tools.
+    if (entry && typeof entry === "object" && (entry as { discoveryFailed?: unknown }).discoveryFailed === true) continue;
     const tools = entry && typeof entry === "object" && Array.isArray((entry as { tools?: unknown }).tools) ? (entry as { tools: unknown[] }).tools : [];
     cache.set(server, tools.flatMap((tool): CachedTool[] => {
       if (!tool || typeof tool !== "object" || typeof (tool as { name?: unknown }).name !== "string") return [];
@@ -81,27 +84,37 @@ export function exposedNamesFor(server: string, tool: string): string[] {
   ])];
 }
 
+/** What the helper can reach over MCP: every tool it may call, and the few shown to it as tools of their own. */
+export interface HelperMcpReach {
+  /** Every tool the helper may call: marked read-only by its server, or listed by the owner as investigative. */
+  catalog: McpToolInfo[];
+  /** The part of the catalog the helper gets as tools of their own: main's active ones, and the listed ones. */
+  direct: McpToolInfo[];
+}
+
 /**
- * The MCP tools the helper may use: the ones the main session has active right now (so the helper
- * follows the owner's tool loadout and its prompt stays small) whose server marks them read-only,
- * plus the ones the owner listed as investigative (`tool` or `server/tool`), active or not.
- * A tool named in `blocked` (the Slack send tool) is never included, whatever its marks or listing.
+ * The helper's MCP reach (the owner's call: all read-only reach). Every tool its server marks
+ * read-only, plus the ones the owner listed as investigative (`tool` or `server/tool`), can be
+ * called; the ones main has active right now, and the listed ones, are tools of their own, and
+ * the rest are found and called through two package tools, so the helper's prompt stays small.
+ * A tool named in `blocked` (the Slack send tool) is never reachable, whatever its marks or listing.
  */
-export function helperMcpTools(cache: McpCache | undefined, activeMain: ReadonlySet<string>, investigative: readonly string[], blocked: readonly string[]): McpToolInfo[] {
-  if (!cache) return [];
-  const chosen: Omit<McpToolInfo, "exposedName">[] = [];
+export function helperMcpTools(cache: McpCache | undefined, activeMain: ReadonlySet<string>, investigative: readonly string[], blocked: readonly string[]): HelperMcpReach {
+  if (!cache) return { catalog: [], direct: [] };
+  const chosen: Array<Omit<McpToolInfo, "exposedName"> & { shown: boolean }> = [];
   for (const [server, tools] of cache) {
     for (const tool of tools) {
       if (blocked.includes(tool.name)) continue;
       const listed = investigative.includes(tool.name) || investigative.includes(`${server}/${tool.name}`);
-      const activeReadOnly = tool.readOnly && exposedNamesFor(server, tool.name).some((name) => activeMain.has(name));
-      if (!listed && !activeReadOnly) continue;
-      chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema });
+      if (!listed && !tool.readOnly) continue;
+      const active = exposedNamesFor(server, tool.name).some((name) => activeMain.has(name));
+      chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema, shown: listed || active });
     }
   }
   const count = new Map<string, number>();
   for (const tool of chosen) count.set(tool.name, (count.get(tool.name) ?? 0) + 1);
-  return chosen.map((tool) => ({ ...tool, exposedName: (count.get(tool.name) ?? 0) > 1 ? `${tool.server}__${tool.name}` : tool.name }));
+  const catalog = chosen.map(({ shown: _shown, ...tool }) => ({ ...tool, exposedName: (count.get(tool.name) ?? 0) > 1 ? `${tool.server}__${tool.name}` : tool.name }));
+  return { catalog, direct: catalog.filter((_tool, i) => chosen[i]!.shown) };
 }
 
 /**

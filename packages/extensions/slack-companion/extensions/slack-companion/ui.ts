@@ -1,6 +1,7 @@
 // The owner's surface: one line above the editor, and a panel on a key.
 // Holds docs/adr/20261104-show-slack-activity-in-a-dock-line.md — Slack activity lives here,
-// never as rows in main's transcript. Graphite: brightness carries hierarchy, color only state.
+// never as rows in main's transcript. Graphite: brightness carries hierarchy, color only state;
+// the line stays quiet (muted) until something needs the owner.
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Approval, type EngineState, isLive, type WatchState, watchLabel } from "./engine.ts";
 import { isDirectMessage } from "./conversation.ts";
@@ -13,6 +14,17 @@ export interface Paint {
 }
 
 export const WIDGET_KEY = "slack-companion";
+
+/**
+ * The panel's share of the terminal's height. The overlay is opened with exactly this share and
+ * the panel lays itself out in exactly as many rows: the overlay cuts what is taller, and "the
+ * request was shown to its end" relies on nothing being cut.
+ */
+export const PANEL_HEIGHT_PERCENT = 80;
+
+export function panelRows(terminalRows: number): number {
+  return Math.floor((terminalRows * PANEL_HEIGHT_PERCENT) / 100);
+}
 
 /** Why the package cannot watch: a short title for the line, the whole explanation for the panel. */
 export interface SurfaceProblem {
@@ -27,13 +39,18 @@ export interface SurfaceState {
   panelKey: string;
   /** Watches whose helper is answering right now. */
   answering: ReadonlySet<string>;
-  /** When the owner last opened the panel: watches that stopped with an error after it are unseen. */
-  seenAt: number;
+  /** Error stops the owner has seen in the panel, by errorId. */
+  seenErrors: ReadonlySet<string>;
   now: number;
 }
 
-function unseenErrors(surface: SurfaceState): number {
-  return surface.engine.watches.filter((w) => w.status === "error" && (w.endedAt ?? 0) > surface.seenAt).length;
+/** One stop with an error: a watch can stop, be watched again, and stop again. */
+export function errorId(watch: Pick<WatchState, "key" | "endedAt">): string {
+  return `${watch.key}@${watch.endedAt ?? 0}`;
+}
+
+function isUnseenError(surface: SurfaceState, watch: WatchState): boolean {
+  return watch.status === "error" && !surface.seenErrors.has(errorId(watch));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -42,9 +59,9 @@ function unseenErrors(surface: SurfaceState): number {
 
 interface LineEntry {
   label: string;
-  state: "paused" | "answering" | "idle";
+  /** A state word shown whole, in its color; or none, and the note shows instead. */
+  word?: { text: string; color: PaintColor };
   note: string;
-  lastActivityAt: number;
 }
 
 /** A conversation as the line names it: the person, and the channel when it is not a DM. */
@@ -54,90 +71,100 @@ function lineLabel(watch: WatchState): string {
   return `${person} #${watch.channelName || watch.conversation.channelId}`;
 }
 
-/** One entry per person in a direct message (its top level and its threads), one per channel thread. */
+/** One entry per person in a direct message (its top level and its threads), one per channel thread; what needs the owner first. */
 function lineEntries(surface: SurfaceState): LineEntry[] {
   const groups = new Map<string, WatchState[]>();
   for (const watch of surface.engine.watches.filter(isLive)) {
     const id = isDirectMessage(watch.conversation.channelId) ? watch.conversation.channelId : watch.key;
     groups.set(id, [...(groups.get(id) ?? []), watch]);
   }
-  const entries = [...groups.values()].map((watches): LineEntry => {
+  const ranked = [...groups.values()].map((watches) => {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
-    const state = watches.some((w) => w.status === "paused") ? "paused" : watches.some((w) => surface.answering.has(w.key)) ? "answering" : "idle";
-    const noted = [...watches].sort((a, b) => (a.activity?.at(-1)?.at ?? 0) - (b.activity?.at(-1)?.at ?? 0)).reverse().find((w) => w.lastNote);
-    return { label: lineLabel(named), state, note: noted?.lastNote ?? "watching", lastActivityAt: Math.max(...watches.map((w) => w.lastActivityAt)) };
+    const paused = watches.some((w) => w.status === "paused");
+    const answering = watches.some((w) => surface.answering.has(w.key));
+    const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    const entry: LineEntry = {
+      label: lineLabel(named),
+      ...(paused ? { word: { text: "paused", color: "warning" as const } } : answering ? { word: { text: "answering…", color: "accent" as const } } : {}),
+      note: latest.find((w) => w.lastNote)?.lastNote ?? "watching",
+    };
+    return { entry, rank: paused ? 0 : answering ? 1 : 2, at: latest[0]!.lastActivityAt };
   });
-  // What needs the owner first, then the most recently active.
-  const rank = { paused: 0, answering: 1, idle: 2 } as const;
-  return entries.sort((a, b) => rank[a.state] - rank[b.state] || b.lastActivityAt - a.lastActivityAt);
+  return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
 }
 
-/** The narrowest a watch entry may be: room for a name, its channel and a short state. */
-const ENTRY_MIN = 26;
+/** Characters of a note an entry must show to be worth showing. */
+const NOTE_MIN = 12;
+const SEP = " · ";
 
 export function renderLine(surface: SurfaceState, paint: Paint, width: number): string[] {
-  const sep = paint.fg("dim", " · ");
-  const sepWidth = 3;
-  const hint = (long: boolean) => paint.fg("dim", long ? `${surface.panelKey} opens` : surface.panelKey);
+  const sep = paint.fg("dim", SEP);
   const head = (color: PaintColor) => ` ${paint.fg(color, "●")} ${paint.fg("muted", "slack")}`;
-  // Left part, then the key hint right-aligned; the left part gives way first, the hint never.
-  const compose = (left: string, longHint = true): string => {
+  const hint = (long: boolean) => paint.fg("dim", long ? `${surface.panelKey} opens` : surface.panelKey);
+  /** The left part, then the key hint right-aligned with at least two spaces before it. */
+  const compose = (left: string, longHint: boolean) => {
     const h = hint(longHint);
-    const room = width - visibleWidth(h) - 2;
-    if (room < 8) return truncateToWidth(`${left} ${h}`, width, "…");
-    const cut = truncateToWidth(left, room, "…");
-    return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(h)))}${h}`;
+    return `${left}${" ".repeat(Math.max(2, width - visibleWidth(left) - visibleWidth(h)))}${h}`;
   };
-  if (surface.problem) return [compose(`${head("error")} ${paint.fg("text", `can't watch: ${surface.problem.title}`)}`)];
+  const fits = (left: string, longHint: boolean) => visibleWidth(left) + 2 + visibleWidth(hint(longHint)) <= width;
+  if (surface.problem) {
+    const left = `${head("error")} ${paint.fg("text", `can't watch: ${surface.problem.title}`)}`;
+    return [compose(truncateToWidth(left, Math.max(8, width - visibleWidth(hint(false)) - 2), "…"), fits(left, true))];
+  }
   if (!surface.enabled) return [];
   const entries = lineEntries(surface);
   const waiting = surface.engine.approvals.filter((a) => a.status === "pending").length;
-  const paused = entries.filter((e) => e.state === "paused").length;
-  const stopped = unseenErrors(surface);
+  const pausedCount = surface.engine.watches.filter((w) => w.status === "paused").length;
+  const stopped = surface.engine.watches.filter((w) => isUnseenError(surface, w)).length;
   if (!entries.length && !waiting && !stopped) return [];
-  const counts = (short: boolean) => [
+  const dot: PaintColor = stopped ? "error" : waiting || pausedCount ? "warning" : "muted";
+  // Counts in the order they matter: waiting first, then stops, then pauses.
+  const counts = (short: boolean, shownPaused: number) => [
     waiting ? paint.fg("warning", short ? `${waiting} waiting` : `${waiting} waiting for you`) : "",
-    paused ? paint.fg("warning", `${paused} paused`) : "",
     stopped ? paint.fg("error", `${stopped} stopped`) : "",
+    pausedCount > shownPaused ? paint.fg("warning", `${pausedCount} paused`) : "",
   ].filter(Boolean);
-  const dot: PaintColor = stopped ? "error" : waiting || paused ? "warning" : "muted";
-  for (const short of [false, true]) {
-    const fixed = [head(dot), ...counts(short)].join(sep);
-    const hintWidth = visibleWidth(hint(!short));
-    // Room for watch entries, between the counts and the hint (with a two-cell gap before it).
-    const avail = width - visibleWidth(fixed) - hintWidth - 2 - sepWidth;
-    let shown = 0;
-    let each = 0;
-    for (let k = entries.length; k >= 1; k -= 1) {
-      const rest = entries.length - k;
-      const reserve = rest ? sepWidth + visibleWidth(`+${rest} watching`) : 0;
-      const per = Math.floor((avail - reserve - (k - 1) * sepWidth) / k);
-      if (per >= ENTRY_MIN) {
-        shown = k;
-        each = per;
-        break;
-      }
+
+  // Watch entries at their natural width, in rank order: an entry shows only if its whole label
+  // and its state word (or a useful part of its note) fit; the rest fold into "+N watching".
+  for (const long of [true, false]) {
+    const countsWidth = (shownPaused: number) => counts(!long, shownPaused).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
+    const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
+    const chosen: LineEntry[] = [];
+    const need = (e: LineEntry) => visibleWidth(e.label) + 1 + (e.word ? visibleWidth(e.word.text) : Math.min(visibleWidth(e.note), NOTE_MIN));
+    const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
+    const fold = (k: number) => (entries.length - k ? SEP.length + visibleWidth(`${k ? "+" : ""}${entries.length - k} watching`) : 0);
+    const shownPausedOf = (list: LineEntry[]) => list.filter((e) => e.word?.text === "paused").length;
+    for (const entry of entries) {
+      const next = [...chosen, entry];
+      const total = used() + SEP.length + need(entry) + fold(next.length) + countsWidth(shownPausedOf(next));
+      if (total > room) break;
+      chosen.push(entry);
     }
-    if (!short || shown > 0 || visibleWidth(fixed) + hintWidth + 2 <= width) {
-      const parts = entries.slice(0, shown).map((e) => {
-        // The state word stays whole; the label gives way to it, and a note gives way to both.
-        const word = e.state === "paused" ? "paused" : e.state === "answering" ? "answering…" : "";
-        const labelRoom = Math.max(6, each - (word ? visibleWidth(word) + 1 : Math.min(12, Math.floor(each / 2))));
-        const label = truncateToWidth(e.label, labelRoom, "…");
-        const room = each - visibleWidth(label) - 1;
-        const state = word ? paint.fg(e.state === "paused" ? "warning" : "accent", word) : paint.fg("text", truncateToWidth(e.note, Math.max(0, room), "…"));
-        return truncateToWidth(`${paint.fg("muted", label)} ${state}`, each, "…");
-      });
-      const rest = entries.length - shown;
-      if (rest) parts.push(paint.fg("muted", shown ? `+${rest} watching` : `${rest} watching`));
-      const left = [head(dot), ...parts, ...counts(short)].join(sep);
-      if (visibleWidth(left) + hintWidth + 2 <= width) return [compose(left, !short)];
-      if (short) {
-        // Too narrow for any watch: the counts and the key are what the glance is for.
-        const bare = [head(dot), ...counts(short)].join(sep);
-        return [compose(visibleWidth(bare) + hintWidth + 2 <= width ? bare : [` ${paint.fg(dot, "●")}`, ...counts(short)].join(sep), false)];
-      }
+    // Space left over goes to the shown notes, in rank order.
+    let spare = room - used() - fold(chosen.length) - countsWidth(shownPausedOf(chosen));
+    if (spare < 0 && chosen.length === 0 && !long) {
+      // Too narrow even for the counts in full: keep them in priority order until they fit.
+      let kept = counts(true, 0);
+      while (kept.length > 1 && !fits([` ${paint.fg(dot, "●")}`, ...kept].join(sep), false)) kept = kept.slice(0, -1);
+      const bare = [head(dot), ...kept].join(sep);
+      return [compose(fits(bare, false) ? bare : [` ${paint.fg(dot, "●")}`, ...kept].join(sep), false)];
     }
+    if (spare < 0) continue;
+    const parts = chosen.map((e) => {
+      let state: string;
+      if (e.word) state = paint.fg(e.word.color, e.word.text);
+      else {
+        const base = Math.min(visibleWidth(e.note), NOTE_MIN);
+        const extra = Math.max(0, Math.min(visibleWidth(e.note) - base, spare));
+        spare -= extra;
+        state = paint.fg("muted", truncateToWidth(e.note, base + extra, "…"));
+      }
+      return `${paint.fg("muted", e.label)} ${state}`;
+    });
+    if (entries.length > chosen.length) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${entries.length - chosen.length} watching`));
+    const left = [head(dot), ...parts, ...counts(!long, shownPausedOf(chosen))].join(sep);
+    if (fits(left, long)) return [compose(left, long)];
   }
   return [compose(head(dot), false)];
 }
@@ -154,22 +181,30 @@ export type PanelItem =
 const ENDED_SHOWN = 3;
 
 /**
- * Requests first (waiting, then those resolved while the panel is open), then live watches, then
- * ended ones: every one that stopped with an error (the owner may need `w` on it), and the latest
- * few that ended quietly, newest first; the rest fold into "N more ended" unless `allEnded`.
+ * What needs the owner first: requests (waiting, then those resolved while the panel is open);
+ * paused watches; stops with an error he has not seen; watches answering now; the other live
+ * watches, most recently active first; then ended ones (errors already seen, and the latest few
+ * quiet ends, newest first; the rest fold into "N more ended" unless `allEnded`).
  */
-export function panelItems(state: EngineState, openedAt: number, allEnded = false): PanelItem[] {
+export function panelItems(surface: SurfaceState, openedAt: number, allEnded = false): PanelItem[] {
+  const state = surface.engine;
   const approvals: PanelItem[] = state.approvals
     .filter((a) => a.status === "pending" || (a.resolvedAt !== undefined && a.resolvedAt >= openedAt))
     .map((approval) => ({ kind: "approval", approval }));
-  const live: PanelItem[] = state.watches.filter(isLive).reverse().map((watch) => ({ kind: "watch", watch }));
+  const byActivity = (a: WatchState, b: WatchState) => b.lastActivityAt - a.lastActivityAt;
   const byEnd = (a: WatchState, b: WatchState) => (b.endedAt ?? 0) - (a.endedAt ?? 0);
+  const live = state.watches.filter(isLive);
+  const paused = live.filter((w) => w.status === "paused").sort(byActivity);
+  const answering = live.filter((w) => w.status === "active" && surface.answering.has(w.key)).sort(byActivity);
+  const rest = live.filter((w) => w.status === "active" && !surface.answering.has(w.key)).sort(byActivity);
   const errors = state.watches.filter((w) => w.status === "error").sort(byEnd);
+  const unseen = errors.filter((w) => isUnseenError(surface, w));
+  const seen = errors.filter((w) => !isUnseenError(surface, w));
   const quiet = state.watches.filter((w) => w.status === "stopped").sort(byEnd);
   const shownQuiet = allEnded ? quiet : quiet.slice(0, ENDED_SHOWN);
-  const ended: PanelItem[] = [...errors, ...shownQuiet].map((watch) => ({ kind: "watch", watch }));
-  if (quiet.length > shownQuiet.length) ended.push({ kind: "ended", count: quiet.length - shownQuiet.length });
-  return [...approvals, ...live, ...ended];
+  const watches: PanelItem[] = [...paused, ...unseen, ...answering, ...rest, ...seen, ...shownQuiet].map((watch) => ({ kind: "watch", watch }));
+  if (quiet.length > shownQuiet.length) watches.push({ kind: "ended", count: quiet.length - shownQuiet.length });
+  return [...approvals, ...watches];
 }
 
 function age(now: number, at: number): string {
@@ -187,35 +222,43 @@ function kindLabel(watch: WatchState): string {
   const { conversation } = watch;
   if (conversation.kind === "dm-top") return "top level";
   const root = watch.context.find((m) => m.ts === conversation.threadTs);
-  const text = root?.text.replace(/^\S*🤖\s*/u, "").replace(/\*\*[^*]+\*\*[^\n]*\n+/, "").replace(/\s+/g, " ").trim() ?? "";
+  // The root as the person wrote it: the package's marker and agent line are not its words.
+  const text = root?.text.split("\n").filter((line) => !/^\S+ \*\*.+'s agent\*\*/.test(line)).join(" ").replace(/\s+/g, " ").trim() ?? "";
   if (!text) return "thread";
   return `thread "${text.length > 32 ? `${text.slice(0, 32).trimEnd()}…` : text}"`;
 }
 
-function keysFor(item: PanelItem | undefined, fullySeen: boolean): string {
+/** Who asked, and where, without saying the person twice. */
+function requestSource(approval: Approval): string {
+  const ownThread = `${approval.requester}'s thread in `;
+  if (approval.label === `${approval.requester} (DM)`) return approval.label;
+  if (approval.label.startsWith(ownThread)) return `${approval.requester} in ${approval.label.slice(ownThread.length)}`;
+  return `${approval.requester} · ${approval.label}`;
+}
+
+function keysFor(item: PanelItem | undefined, approvable: boolean): string {
   if (item?.kind === "ended") return "enter show all";
-  if (item?.kind === "approval") return item.approval.status !== "pending" ? "" : fullySeen ? "a approve · d deny" : "↓ read to the end to approve · d deny";
+  if (item?.kind === "approval") return item.approval.status !== "pending" ? "" : approvable ? "a approve · d deny" : "d deny";
   if (item?.kind !== "watch") return "";
   if (item.watch.status === "paused") return "r resume · s stop";
   if (item.watch.status === "active") return "s stop watching";
   return "w watch again";
 }
 
-/** Rows for one item, `inner` cells wide; the caller adds the selection column in front. */
-function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): string[] {
+/** An item's rows, `inner` cells wide; `pinned` of them stay in view while the rest scroll. */
+function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): { rows: string[]; pinned: number } {
   const indent = (rows: string[]) => rows.map((r) => `   ${r}`);
   const strong = (text: string) => (selected ? paint.bold(text) : text);
-  if (item.kind === "ended") return [paint.fg("muted", `${item.count} more ended`)];
+  if (item.kind === "ended") return { rows: [paint.fg("muted", `${item.count} more ended`)], pinned: 1 };
   if (item.kind === "approval") {
     const { approval } = item;
     const pending = approval.status === "pending";
-    const from = approval.label === `${approval.requester} (DM)` ? approval.label : `${approval.requester} · ${approval.label}`;
     const head = pending
       ? `${paint.fg("warning", strong("◐ waiting for your OK"))} ${paint.fg("muted", `· ${age(surface.now, approval.at)}`)}`
       : paint.fg("muted", approval.status === "approved" ? "✓ approved — sent to your session" : "✗ declined");
     // The whole request, wrapped, never cut: exactly what main receives if approved.
     const body = wrapTextWithAnsi(approval.text, inner - 3).map((row) => (pending ? paint.fg("text", row) : paint.fg("dim", row)));
-    return [head, ...indent([paint.fg("muted", truncateToWidth(`from ${from}`, inner - 3, "…"))]), ...indent(body)];
+    return { rows: [head, ...indent([paint.fg("muted", truncateToWidth(`from ${requestSource(approval)}`, inner - 3, "…"))]), ...indent(body)], pinned: 2 };
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
@@ -225,14 +268,20 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     stopped: paint.fg("muted", "· ended"),
     error: paint.fg("error", "× stopped"),
   }[watch.status];
-  const label = isDirectMessage(watch.conversation.channelId) ? `${watchLabel(watch)} · ${kindLabel(watch)}` : watchLabel(watch);
-  const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(truncateToWidth(label, Math.max(10, inner - 14), "…")))}  ${status}`];
+  const labelRoom = Math.max(10, inner - 14);
+  let label = watchLabel(watch);
+  if (isDirectMessage(watch.conversation.channelId)) {
+    // The kind tells a DM's rows apart, so the name gives way to it.
+    const kind = ` · ${kindLabel(watch)}`;
+    const name = truncateToWidth(label, Math.max(6, labelRoom - Math.min(visibleWidth(kind), labelRoom - 6)), "…");
+    label = `${name}${kind}`;
+  }
+  const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(truncateToWidth(label, labelRoom, "…")))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
-  const activity = (watch.activity ?? []).slice(-3);
-  for (const entry of activity) rows.push(...indent([paint.fg("dim", truncateToWidth(`${clock(entry.at)}  ${entry.text}`, inner - 3, "…"))]));
+  for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", truncateToWidth(`${clock(entry.at)}  ${entry.text}`, inner - 3, "…"))]));
   const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts) && !m.agentFooter);
   if (last && isLive(watch) && !answering) rows.push(...indent([paint.fg("muted", truncateToWidth(`${last.userName}: ${last.text.replace(/\s+/g, " ")}`, inner - 3, "…"))]));
-  return rows;
+  return { rows, pinned: rows.length };
 }
 
 /** The selection column in front of every item row ("› " or two spaces). */
@@ -254,17 +303,28 @@ function frame(rows: string[], width: number, title: string, paint: Paint): stri
 export interface PanelView {
   /** The selected item. */
   selected: number;
-  /** First row of the selected item shown, when it is taller than the panel. */
+  /** How far the selected item's scrolling rows are scrolled, when it is taller than the panel. */
   offset: number;
   allEnded: boolean;
+  /** Requests whose last line the owner has seen: only those can be approved. */
+  read: ReadonlySet<string>;
 }
 
 export interface PanelRender {
   lines: string[];
-  /** Did the owner see the last row of the selected item? */
-  selectedFullySeen: boolean;
+  items: PanelItem[];
+  /** The selected item, as layoutPanel clamped it. */
+  selected: number;
+  /** The scroll offset actually used (clamped to the item). */
+  offset: number;
+  /** Is the selected item's last row in view? */
+  selectedEndInView: boolean;
   /** Rows of the selected item below the window. */
   selectedRowsBelow: number;
+  /** Rows the window shows of a tall item (one page). */
+  pageRows: number;
+  /** Items whose first row is in view. */
+  shown: PanelItem[];
 }
 
 export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint, width: number, openedAt: number, maxRows = 40): PanelRender {
@@ -272,41 +332,49 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   const waiting = surface.engine.approvals.filter((a) => a.status === "pending").length;
   const title = `${paint.fg("accent", paint.bold("Slack"))}${waiting ? paint.fg("muted", ` · ${waiting} waiting`) : ""}`;
   const wrapped = (text: string, color: PaintColor) => wrapTextWithAnsi(text, inner).map((r) => paint.fg(color, r));
-  const message = (rows: string[]): PanelRender => ({ lines: frame([...rows, "", paint.fg("muted", "esc close")], width, title, paint), selectedFullySeen: true, selectedRowsBelow: 0 });
+  const items = surface.problem || !surface.enabled ? [] : panelItems(surface, openedAt, view.allEnded);
+  const message = (rows: string[]): PanelRender => ({
+    lines: frame([...rows, "", paint.fg("muted", "esc close")], width, title, paint),
+    items, selected: 0, offset: 0, selectedEndInView: true, selectedRowsBelow: 0, pageRows: 0, shown: [],
+  });
   if (surface.problem) return message([paint.fg("error", `Can't watch: ${surface.problem.title}`), "", ...wrapped(surface.problem.detail, "text")]);
   if (!surface.enabled) return message(wrapped("slack-companion is off. Run /slack on to turn it on. Then each Slack message your session sends starts a watch.", "muted"));
-  const items = panelItems(surface.engine, openedAt, view.allEnded);
   if (!items.length) return message(wrapped("Nothing watched yet. A Slack message your session sends starts a watch. /slack <link> watches a conversation someone else started.", "muted"));
   const selected = Math.min(view.selected, items.length - 1);
   const blocks = items.map((item, index) => {
-    const rows = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected);
+    const { rows, pinned } = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected);
     rows[0] = `${index === selected ? paint.fg("accent", "›") : " "} ${rows[0]}`;
     for (let i = 1; i < rows.length; i += 1) rows[i] = `  ${rows[i]}`;
-    return rows;
+    return { rows, pinned };
   });
-  const budget = Math.max(3, maxRows - CHROME_ROWS);
+  const budget = Math.max(4, maxRows - CHROME_ROWS);
   const content: string[] = [];
-  let fullySeen = true;
-  let below = 0;
   const sel = blocks[selected]!;
-  if (sel.length + (selected > 0 ? 1 : 0) + (selected < blocks.length - 1 ? 1 : 0) > budget) {
-    // Taller than the panel: a window into the selected item, its markers counted in the budget.
-    const markers = (selected > 0 ? 1 : 0) + (selected < blocks.length - 1 ? 1 : 0);
-    const windowRows = Math.max(1, budget - markers - 1);
-    const offset = Math.max(0, Math.min(view.offset, sel.length - windowRows));
-    below = sel.length - offset - windowRows;
-    fullySeen = below <= 0;
-    if (selected > 0) content.push(paint.fg("muted", `↑ ${selected} more`));
-    content.push(...sel.slice(offset, offset + windowRows));
-    content.push(paint.fg("muted", below > 0 ? `  ↓ ${below} more line${below === 1 ? "" : "s"} of this item` : "  (end of this item)"));
-    if (selected < blocks.length - 1) content.push(paint.fg("muted", `↓ ${blocks.length - 1 - selected} more`));
+  const above = selected;
+  const belowItems = blocks.length - 1 - selected;
+  let offset = 0;
+  let below = 0;
+  let pageRows = 0;
+  let shown: PanelItem[] = [];
+  if (sel.rows.length + (above ? 1 : 0) + 1 > budget) {
+    // Taller than the panel: its header stays pinned, the rest scrolls in a window; one marker
+    // row above (items before it) and one below (lines of this item left, and items after it).
+    const scrolling = sel.rows.slice(sel.pinned);
+    pageRows = Math.max(1, budget - (above ? 1 : 0) - sel.pinned - 1);
+    offset = Math.max(0, Math.min(view.offset, scrolling.length - pageRows));
+    below = scrolling.length - offset - pageRows;
+    if (above) content.push(paint.fg("muted", `↑ ${above} more`));
+    content.push(...sel.rows.slice(0, sel.pinned), ...scrolling.slice(offset, offset + pageRows));
+    const after = belowItems ? ` · ${belowItems} more below` : "";
+    content.push(paint.fg("muted", below > 0 ? `  ↓ ${below} more line${below === 1 ? "" : "s"}${items[selected]!.kind === "approval" ? " · read to the end to approve" : ""}${after}` : `  (end of this item)${after}`));
+    shown = [items[selected]!];
   } else {
-    // Whole blocks around the selection; the ↑/↓ markers count toward the budget.
+    // Whole items around the selection; the ↑/↓ markers count toward the budget.
     let first = selected;
     let last = selected;
     const height = (f: number, l: number) => {
       let rows = (f > 0 ? 1 : 0) + (l < blocks.length - 1 ? 1 : 0);
-      for (let i = f; i <= l; i += 1) rows += blocks[i]!.length + (i > f ? 1 : 0);
+      for (let i = f; i <= l; i += 1) rows += blocks[i]!.rows.length + (i > f ? 1 : 0);
       return rows;
     };
     for (;;) {
@@ -315,22 +383,30 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
       else break;
     }
     if (first > 0) content.push(paint.fg("muted", `↑ ${first} more`));
-    blocks.slice(first, last + 1).forEach((rows, i) => {
+    blocks.slice(first, last + 1).forEach((block, i) => {
       if (i > 0) content.push("");
-      content.push(...rows);
+      content.push(...block.rows);
     });
     if (last < blocks.length - 1) content.push(paint.fg("muted", `↓ ${blocks.length - 1 - last} more`));
+    shown = items.slice(first, last + 1);
   }
-  // The keys row: the action keys and "esc close" always; "↑↓ move" gives way when the row is short.
-  let keys = [keysFor(items[selected], fullySeen), items.length > 1 || below > 0 ? "↑↓ move" : "", "esc close"].filter(Boolean).join(" · ");
-  if (visibleWidth(keys) > inner) keys = [keysFor(items[selected], fullySeen), "esc close"].filter(Boolean).join(" · ");
+  const item = items[selected];
+  const endInView = below <= 0;
+  const approvable = item?.kind === "approval" && (endInView || view.read.has(item.approval.id));
+  // The keys row: action keys and "esc close" always; "↑↓ move" gives way when the row is short.
+  let keys = [keysFor(item, approvable), items.length > 1 || below > 0 ? "↑↓ move" : "", "esc close"].filter(Boolean).join(" · ");
+  if (visibleWidth(keys) > inner) keys = [keysFor(item, approvable), "esc close"].filter(Boolean).join(" · ");
   content.push("", paint.fg("muted", keys));
-  return { lines: frame(content, width, title, paint), selectedFullySeen: fullySeen, selectedRowsBelow: Math.max(0, below) };
+  return { lines: frame(content, width, title, paint), items, selected, offset, selectedEndInView: endInView, selectedRowsBelow: Math.max(0, below), pageRows, shown };
 }
 
 /** The panel's rows (at most `maxRows`): see layoutPanel. */
 export function renderPanel(surface: SurfaceState, selected: number, paint: Paint, width: number, openedAt: number, maxRows = 40): string[] {
-  return layoutPanel(surface, { selected, offset: 0, allEnded: false }, paint, width, openedAt, maxRows).lines;
+  return layoutPanel(surface, { selected, offset: 0, allEnded: false, read: new Set() }, paint, width, openedAt, maxRows).lines;
+}
+
+function itemId(item: PanelItem): string {
+  return item.kind === "approval" ? `a:${item.approval.id}` : item.kind === "watch" ? `w:${item.watch.key}` : "ended";
 }
 
 export type PanelAction =
@@ -342,10 +418,11 @@ export type PanelAction =
 
 /** The panel component; actions go back through `act`, never straight to state. */
 export class Panel implements Component {
-  private view: PanelView = { selected: 0, offset: 0, allEnded: false };
+  private view: { selected: number; offset: number; allEnded: boolean } = { selected: 0, offset: 0, allEnded: false };
   private readonly openedAt: number;
-  /** Requests whose last line the owner has seen: only those can be approved. */
   private readonly read = new Set<string>();
+  /** At the end of a tall item, the first ↓ stays; the next one moves on. */
+  private heldAtEnd = false;
   private lastWidth = 80;
 
   constructor(
@@ -354,22 +431,41 @@ export class Panel implements Component {
     private readonly act: (action: PanelAction) => void,
     private readonly close: () => void,
     private readonly tui?: TUI,
-    private readonly rows: () => number = () => Math.floor((process.stdout.rows || 40) * 0.8),
+    private readonly rows: () => number = () => panelRows(process.stdout.rows || 40),
+    /** Told which error stops the owner has now seen on screen. */
+    private readonly markSeen: (errorIds: string[]) => void = () => {},
   ) {
-    this.openedAt = surface().now;
+    const opened = surface();
+    this.openedAt = opened.now;
+    this.seenAtOpen = new Set(opened.seenErrors);
+  }
+
+  /** Stops already seen when the panel opened: the order uses these, so marking rows seen never reshuffles the list under the cursor. */
+  private readonly seenAtOpen: ReadonlySet<string>;
+
+  private orderedSurface(): SurfaceState {
+    return { ...this.surface(), seenErrors: this.seenAtOpen };
   }
 
   invalidate(): void {}
 
-  private layout(width = this.lastWidth): PanelRender {
-    const render = layoutPanel(this.surface(), this.view, this.paint, width, this.openedAt, this.rows());
-    const item = this.items()[this.view.selected];
-    if (render.selectedFullySeen && item?.kind === "approval") this.read.add(item.approval.id);
-    return render;
-  }
+  /** The selected item's identity, so the selection follows it when items are added or reordered. */
+  private selectedId: string | undefined;
 
-  private items(): PanelItem[] {
-    return panelItems(this.surface().engine, this.openedAt, this.view.allEnded);
+  private layout(width = this.lastWidth): PanelRender {
+    if (this.selectedId !== undefined) {
+      const index = panelItems(this.orderedSurface(), this.openedAt, this.view.allEnded).findIndex((i) => itemId(i) === this.selectedId);
+      if (index >= 0 && index !== this.view.selected) this.view = { ...this.view, selected: index };
+    }
+    const render = layoutPanel(this.orderedSurface(), { ...this.view, read: this.read }, this.paint, width, this.openedAt, this.rows());
+    this.view.selected = render.selected;
+    this.view.offset = render.offset;
+    this.selectedId = render.items[render.selected] ? itemId(render.items[render.selected]!) : undefined;
+    const item = render.items[render.selected];
+    if (render.selectedEndInView && item?.kind === "approval") this.read.add(item.approval.id);
+    const seen = render.shown.flatMap((i) => (i.kind === "watch" && i.watch.status === "error" ? [errorId(i.watch)] : []));
+    if (seen.length) this.markSeen(seen);
+    return render;
   }
 
   render(width: number): string[] {
@@ -378,27 +474,37 @@ export class Panel implements Component {
   }
 
   handleInput(data: string): void {
-    const items = this.items();
-    const item = items[this.view.selected];
-    const { selectedRowsBelow } = this.layout();
-    if (matchesKey(data, Key.escape) || data === "q") return this.close();
-    const select = (index: number) => {
-      if (index !== this.view.selected) this.view = { ...this.view, selected: index, offset: 0 };
+    const before = this.layout();
+    const item = before.items[before.selected];
+    const select = (index: number, atEnd = false) => {
+      if (index === this.view.selected) return;
+      // Entering a tall item from below lands at its end, the way it was left.
+      this.view = { ...this.view, selected: index, offset: atEnd ? Number.MAX_SAFE_INTEGER : 0 };
+      this.selectedId = itemId(before.items[index]!);
+      this.heldAtEnd = false;
     };
+    const tall = before.pageRows > 0;
+    if (matchesKey(data, Key.escape) || data === "q") return this.close();
     if (matchesKey(data, Key.up)) {
-      if (this.view.offset > 0) this.view.offset -= 1;
-      else select(Math.max(0, this.view.selected - 1));
+      if (tall && this.view.offset > 0) this.view.offset -= 1;
+      else select(Math.max(0, this.view.selected - 1), true);
+      this.heldAtEnd = false;
     } else if (matchesKey(data, Key.down)) {
-      // Inside a tall item, ↓ scrolls it first; at its end, ↓ moves on.
-      if (selectedRowsBelow > 0) this.view.offset += 1;
-      else select(Math.min(Math.max(0, items.length - 1), this.view.selected + 1));
+      if (before.selectedRowsBelow > 0) this.view.offset += 1;
+      else if (tall && !this.heldAtEnd) this.heldAtEnd = true;
+      else select(Math.min(before.items.length - 1, this.view.selected + 1));
+    } else if (matchesKey(data, Key.pageDown) || data === " ") {
+      if (before.selectedRowsBelow > 0) this.view.offset += before.pageRows;
+      else select(Math.min(before.items.length - 1, this.view.selected + 1));
+    } else if (matchesKey(data, Key.pageUp)) {
+      if (tall && this.view.offset > 0) this.view.offset = Math.max(0, this.view.offset - before.pageRows);
+      else select(Math.max(0, this.view.selected - 1), true);
     } else if (matchesKey(data, Key.enter) && item?.kind === "ended") this.view.allEnded = true;
     else if (item?.kind === "approval" && item.approval.status === "pending" && data === "a" && this.read.has(item.approval.id)) this.act({ kind: "approve", id: item.approval.id });
     else if (item?.kind === "approval" && item.approval.status === "pending" && data === "d") this.act({ kind: "deny", id: item.approval.id });
     else if (item?.kind === "watch" && isLive(item.watch) && data === "s") this.act({ kind: "stop", key: item.watch.key });
     else if (item?.kind === "watch" && item.watch.status === "paused" && data === "r") this.act({ kind: "resume", key: item.watch.key });
     else if (item?.kind === "watch" && !isLive(item.watch) && data === "w") this.act({ kind: "rewatch", key: item.watch.key });
-    this.view.selected = Math.min(this.view.selected, Math.max(0, this.items().length - 1));
     this.layout();
     this.tui?.requestRender();
   }

@@ -30,7 +30,7 @@ When the owner comes back to a session, he needs to see what the Slack helper di
 - Seeing what happened takes one key; it is not in the scrollback.
 
 ## Enforced by
-`packages/extensions/slack-companion/extensions/slack-companion/ui.test.ts` ("at every width the line fits, keeps the waiting count, the stops and the key, and leads with what needs the owner", "the panel never exceeds its height, keeps its frame and keys, and shows a request's age at its usual width", "a request taller than the panel scrolls inside itself, and cannot be approved before its last line was shown") and `integration.test.ts` ("a helper exchange adds nothing to main's transcript; an info hand-off arrives as the sender's words and starts a turn") — pin the line, the panel and the clean transcript.
+`packages/extensions/slack-companion/extensions/slack-companion/ui.test.ts` ("at every width the line fits, keeps the waiting count, the stops and the key, and leads with what needs the owner", "the panel never exceeds its height, keeps its frame and keys, and shows a request's age at its usual width", "a request taller than the panel scrolls inside itself, keeps its header in view, and cannot be approved before its last line was shown") and `integration.test.ts` ("a helper exchange adds nothing to main's transcript; an info hand-off arrives as the sender's words and starts a turn") — pin the line, the panel and the clean transcript.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`; mock `~/.manifest-dev/drafts/slack-companion-mock/index.html`.
