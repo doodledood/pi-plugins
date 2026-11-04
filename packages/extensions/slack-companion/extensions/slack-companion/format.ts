@@ -19,10 +19,6 @@ export interface CandidateMessage {
   text: string;
   /** The text ended with the footer Slack adds to messages sent through an MCP client. */
   agentFooter: boolean;
-  /** Reply count the channel listing reported for this message, when it has replies. */
-  replyCount?: number;
-  /** The exact text of this block, header included, for folding a forged block back. */
-  raw: string;
 }
 
 export interface ParsedListing {
@@ -51,6 +47,21 @@ export function compareTs(a: string, b: string): number {
   const am = aMicro.padEnd(6, "0");
   const bm = bMicro.padEnd(6, "0");
   return am === bm ? 0 : am < bm ? -1 : 1;
+}
+
+function tsToMicros(ts: string): bigint {
+  const [sec = "0", micro = "0"] = ts.split(".");
+  return BigInt(sec) * 1_000_000n + BigInt(micro.padEnd(6, "0").slice(0, 6));
+}
+
+function microsToTs(value: bigint): string {
+  return `${value / 1_000_000n}.${String(value % 1_000_000n).padStart(6, "0")}`;
+}
+
+/** The timestamps one microsecond before and after `ts`: an exclusive window holding only it. */
+export function tsNeighbors(ts: string): { before: string; after: string } {
+  const micros = tsToMicros(ts);
+  return { before: microsToTs(micros - 1n), after: microsToTs(micros + 1n) };
 }
 
 /** Slack ts for a wall-clock time in milliseconds. */
@@ -117,24 +128,10 @@ export function parseChannelListing(toolText: string): ParsedListing {
     const ts = lines[start + 1]!.replace(/^Message TS:\s*/, "").trim();
     let bodyLines = lines.slice(start + 2, end);
     while (bodyLines.length && bodyLines.at(-1)!.trim() === "") bodyLines = bodyLines.slice(0, -1);
-    let replyCount: number | undefined;
     const last = bodyLines.at(-1);
-    const thread = last === undefined ? null : THREAD_LINE_RE.exec(last);
-    if (thread) {
-      replyCount = Number(thread[1]);
-      bodyLines = bodyLines.slice(0, -1);
-    }
+    if (last !== undefined && THREAD_LINE_RE.test(last)) bodyLines = bodyLines.slice(0, -1);
     const { text, agentFooter } = splitFooter(bodyLines.join("\n"));
-    const message: CandidateMessage = {
-      ts,
-      userId: header[2]!,
-      userName: stripName(header[1]!),
-      text,
-      agentFooter,
-      raw: lines.slice(start, end).join("\n"),
-    };
-    if (replyCount !== undefined) message.replyCount = replyCount;
-    return message;
+    return { ts, userId: header[2]!, userName: stripName(header[1]!), text, agentFooter };
   });
   const nextCursor = nextCursorFrom(pagination);
   return nextCursor ? { messages, nextCursor } : { messages };
@@ -145,7 +142,6 @@ interface ThreadBlock {
   userId: string;
   userName: string;
   bodyStart: number;
-  rawStart: number;
   rawEnd: number;
   /** Separator counters, for replies. */
   reply?: { n: number; of: number };
@@ -169,7 +165,7 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
     if (/^=== THREAD PARENT MESSAGE ===\s*$/.test(line) && blocks.length === 0) {
       const block = readThreadBlock(lines, index + 1);
       if (!block) throw new SlackFormatError("the thread's parent block has no From/Time/Message TS header");
-      blocks.push({ ...block, rawStart: index, rawEnd: lines.length });
+      blocks.push({ ...block, rawEnd: lines.length });
       index = block.bodyStart - 1;
       continue;
     }
@@ -178,7 +174,7 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
       const block = readThreadBlock(lines, index + 1);
       if (!block) continue; // a separator-looking line inside a body
       if (blocks.length) blocks.at(-1)!.rawEnd = index;
-      blocks.push({ ...block, rawStart: index, rawEnd: lines.length, reply: { n: Number(separator[1]), of: Number(separator[2]) } });
+      blocks.push({ ...block, rawEnd: lines.length, reply: { n: Number(separator[1]), of: Number(separator[2]) } });
       index = block.bodyStart - 1;
     }
   }
@@ -194,14 +190,7 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
     if (!block.reply && bannerAt >= 0) bodyLines = bodyLines.slice(0, bannerAt);
     while (bodyLines.length && bodyLines.at(-1)!.trim() === "") bodyLines = bodyLines.slice(0, -1);
     const { text, agentFooter } = splitFooter(bodyLines.join("\n"));
-    return {
-      ts: block.ts,
-      userId: block.userId,
-      userName: block.userName,
-      text,
-      agentFooter,
-      raw: lines.slice(block.rawStart, block.rawEnd).join("\n"),
-    };
+    return { ts: block.ts, userId: block.userId, userName: block.userName, text, agentFooter };
   };
   const [first, ...rest] = blocks;
   const parentBlock = first && !first.reply ? first : undefined;
@@ -214,10 +203,13 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
 }
 
 /**
- * The genuine first message of a lookup (`slack_read_thread` on one message's ts). The
- * first header of a response is never preceded by message text, so it cannot be forged.
+ * The genuine message of a lookup (`slack_read_thread` on one message's ts, limit 1). Its first
+ * header is never preceded by message text, so it cannot be forged; its text runs to the
+ * server's trailer — "No thread messages" at the very end for a message without replies, or the
+ * first replies banner for one with replies (text before that banner is the message's own, so
+ * only its author could plant one, cutting only their own text).
  */
-export function parseLookup(toolText: string): { ts: string; userId: string } {
+export function parseLookup(toolText: string): CandidateMessage {
   const { body } = parseEnvelope(toolText, "messages");
   const lines = body.split("\n");
   if (!/^=== THREAD PARENT MESSAGE ===\s*$/.test(lines[0] ?? "")) {
@@ -225,7 +217,15 @@ export function parseLookup(toolText: string): { ts: string; userId: string } {
   }
   const block = readThreadBlock(lines, 1);
   if (!block) throw new SlackFormatError("a message lookup's first header is unreadable");
-  return { ts: block.ts, userId: block.userId };
+  let rest = lines.slice(block.bodyStart).join("\n");
+  const trailer = /\n\nNo thread mess+ages\s*$/.exec(rest);
+  if (trailer) rest = rest.slice(0, trailer.index);
+  else {
+    const banner = rest.search(/\n\n=== THREAD REPLIES \(\d+ total\) ===/);
+    if (banner >= 0) rest = rest.slice(0, banner);
+  }
+  const { text, agentFooter } = splitFooter(rest);
+  return { ts: block.ts, userId: block.userId, userName: block.userName, text, agentFooter };
 }
 
 /** `slack_read_user_profile` (detailed) for the current user. */

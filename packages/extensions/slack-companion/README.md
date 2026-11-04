@@ -59,23 +59,23 @@ The package is **off until you turn it on**: run `/slack on` once, or set `"enab
 | --- | --- |
 | `/slack on` | Turn the package on (writes `enabled: true`) and let messages this session sends start watches. |
 | `/slack <link>` | Watch a conversation someone else started; the helper answers the part nobody has answered yet. |
-| `/slack` or `alt+s` | Open the panel: watched conversations, what the helper did, and requests waiting for you (`a` approve, `d` deny, `r` resume, `s` stop). |
+| `/slack` or `alt+s` | Open the panel: watched conversations, what the helper did, and requests waiting for you (`a` approve, `d` deny, `r` resume, `s` stop, `w` watch an ended conversation again). |
 | `/slack off` | Messages this session sends stop starting watches (until `/slack on`). |
 | `/slack stop` | Stop every watch in this session. |
-| `stop` in Slack | Anyone in the conversation can type exactly `stop` to end the watch there. |
+| `stop` in Slack | Anyone in the conversation can send a message that is only the word `stop` (any case) to end the watch there. A later send from your session does not start it again; `/slack <link>` does. |
 
 The session also gets a `slack_watch` tool, so you can say "handle this thread <link>" or "stop watching it".
 
 One line above the editor shows each watch, what the helper last did, and how many requests wait for you. Main's transcript shows only your work and the hand-offs that reach your session.
 
-A watch ends when the helper says the conversation has what it needed, when anyone types `stop`, when you stop it, after a quiet period, or when the session closes. Resume the session and it reads what arrived while it was closed. Nothing answers while Pi is closed or the machine is asleep.
+A watch ends when the helper says the conversation has what it needed, when anyone types `stop`, when you stop it, after a quiet period, or when the session closes. Requests waiting for you stay in the panel after their watch ends, until you approve or deny them. The panel keeps the last three ended watches. Resume the session and it reads what arrived while it was closed. Nothing answers while Pi is closed or the machine is asleep.
 
 ## Safety model
 
-- **The helper cannot change your work.** It loads no extension and has only these tools: `read`, `grep`, `find`, `ls`; a `bash` whose every command runs under sandbox-runtime, writing only to a scratch folder, with no network unless you allow domains; the MCP tools your session has that their server marks read-only (or that you list as investigative), called through your session's adapter; and its own `reply_in_slack` and `hand_off_to_main`. It has no edit, write or Slack-send tool and cannot reach your session's tools.
-- **Secrets stay out.** The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders, `.env` files, Pi's `auth.json` or MCP token stores. A reply containing something shaped like a key or token is not sent, and you are told.
-- **Actions wait for you.** Anything that would change your work or cannot be undone becomes a request in the panel, showing the full text your session would receive. Only you, in Pi, approve it.
-- **Slack can only take power away.** Nothing read from Slack approves anything, restarts a stopped conversation or lifts a restriction. Message text that imitates the server's format is caught: every new message is confirmed by a lookup of its own id.
+- **The helper cannot change your work.** It loads no extension and has only these tools: `read`, `grep`, `find`, `ls`; a `bash` whose every command runs under sandbox-runtime, writing only to a scratch folder (`$SCRATCH`), with no network unless you allow domains and no environment variable whose name looks like a credential; the MCP tools your session has that their server marks read-only (or that you list as investigative), called through your session's adapter; and its own `reply_in_slack` and `hand_off_to_main`. It has no edit, write or Slack-send tool and cannot reach your session's tools.
+- **Secrets stay out.** The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders, MCP token stores, or files named like credentials anywhere under your home or project (`.env`, `.env.*`, `auth.json`, `.netrc`, `.npmrc`, `.pgpass`, `credentials`, SSH keys, `mcp.json`, `mcp-adapter.json`). The file tools check the path they will open, so `~`, `@` and `file://` spellings are caught, and search output drops lines from those files, context lines included. A reply containing something shaped like a key or token is not sent, and you are told.
+- **Actions wait for you.** Anything that would change your work or cannot be undone becomes a request in the panel, showing the full text your session would receive. Only you, in Pi, approve it. Your session receives it marked `[Slack approval]`; information arrives marked `[Slack hand-off]`. Slack text cannot carry those markers or forge the quotes the helper reads: they are replaced with look-alike characters.
+- **Slack can only take power away.** Nothing read from Slack approves anything, restarts a stopped conversation or lifts a restriction. Message text that imitates the server's format is caught: every new message is confirmed by a lookup of its own id, which gives its author and text, and by a check that it belongs to the watched conversation. At most 15 messages are confirmed per watch per read; the rest wait for the next read, so a flood is slow but nothing is skipped.
 - **What it does share.** Anyone who posts in a watched conversation is served, and the helper knows what your session knows, so replies can share session content with the people there. Read-only tools that reach the internet can carry content out. Watch only conversations whose readers you trust with that.
 - **It does not spam.** At most one reply per batch of messages, in its own thread in channels, marked as your agent (the first message says whose agent it is). After 5 messages to one conversation without you, it pauses and asks you.
 
@@ -100,12 +100,12 @@ A watch ends when the helper says the conversation has what it needed, when anyo
 
 ## Files it reads and writes
 
-- Reads its config, above.
+- Reads its config, above, and pi-mcp-adapter's tool cache (`~/.pi/agent/mcp-cache.json`) to check the configured Slack tool names at start and to find the MCP tools their servers mark read-only.
 - Writes its state into your session file (custom entries, not sent to the model), so watches survive `/reload` and resume. Watches that ended, resolved requests, the send record and stopped conversations are each kept to a bounded number.
 - Writes one lock file per watched conversation under `~/.pi/agent/slack-companion/locks/`, so two sessions on one machine never answer the same conversation. A session that ends releases its locks; a lock left by a session that died is taken over by the next one.
 - Writes each helper's own entries, with their usage, under `<session file without .jsonl>/slack-companion/`, so session-tree cost accounting counts them. They are kept with the session and removed with it. A session not saved to a file writes none, and that spend cannot be attributed.
 - Each triage call's cost is recorded in the session as a `pi-cost-record` entry.
-- The helper's shell gets a scratch folder under the system temp folder.
+- The helper's shell gets a scratch folder under the system temp folder, removed after each run.
 
 ## Known limits
 
@@ -113,7 +113,7 @@ A watch ends when the helper says the conversation has what it needed, when anyo
 - Pi's built-in MCP support has no way for code to call a tool, so it needs pi-mcp-adapter.
 - Every read is an MCP call; Slack keeps audit logs of MCP activity, so a workspace's admins can see one read a minute per watch.
 - Locks hold on one machine. Two machines watching the same direct message could both answer.
-- A watch whose read fails (an expired login, a renamed tool, a format the parser cannot read) stops and says why; start it again with `/slack <link>` once fixed.
+- A Slack tool name that is not among your MCP tools stops the package at start and names the key to fix. A watch whose read fails later (an expired login, a format the parser cannot read) stops and says why; once fixed, press `w` on it in the panel.
 
 ## Verify
 

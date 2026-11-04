@@ -5,7 +5,9 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { filterSecretLines, findSecretShape, isSecretPath, secretDirectories, walksIntoSecrets } from "./secrets.ts";
+import { pathToFileURL } from "node:url";
+import { denyReadEntries } from "./sandbox.ts";
+import { defaultSecretPolicy, filterSecretLines, findSecretShape, isSecretPath, sanitizeEnv, stripControl, walksIntoSecrets } from "./secrets.ts";
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), "home-"));
@@ -15,7 +17,9 @@ function home() {
   writeFileSync(join(root, "project", ".env"), "TOKEN=x");
   writeFileSync(join(root, "project", "app.ts"), "code");
   symlinkSync(join(root, ".ssh", "id_ed25519"), join(root, "project", "innocent.txt"));
-  return { root, policy: { directories: secretDirectories(root, join(root, ".pi", "agent")) } };
+  mkdirSync(join(root, ".pi", "agent", "mcp-oauth"), { recursive: true });
+  writeFileSync(join(root, ".pi", "agent", "mcp-oauth", "tokens.json"), "{}");
+  return { root, policy: defaultSecretPolicy(join(root, ".pi", "agent"), root) };
 }
 
 test("secret folders, secret file names and symlinks into them are secret; project code is not", () => {
@@ -29,11 +33,48 @@ test("secret folders, secret file names and symlinks into them are secret; proje
   assert.equal(walksIntoSecrets(policy, cwd, "."), false);
 });
 
+test("every spelling Pi's tools accept for a secret path is caught: ~, @, file:// and unicode spaces", () => {
+  const { root, policy } = home();
+  const cwd = join(root, "project");
+  for (const spelling of [
+    "~/.ssh/id_ed25519",
+    "@~/.ssh/id_ed25519",
+    "~/.pi/agent/mcp-oauth/tokens.json",
+    `@${join(root, ".ssh", "id_ed25519")}`,
+    pathToFileURL(join(root, ".ssh", "id_ed25519")).href,
+    `@${pathToFileURL(join(root, ".aws", "credentials")).href}`,
+    "@.env",
+    "~/.ssh",
+    "../.ssh/id_ed25519",
+    "~/.pi/agent/mcp-adapter.json",
+  ]) assert.equal(isSecretPath(policy, cwd, spelling), true, spelling);
+  for (const spelling of ["~", "@~", "~/.pi", pathToFileURL(root).href]) assert.equal(walksIntoSecrets(policy, cwd, spelling), true, spelling);
+  assert.equal(isSecretPath(policy, cwd, "@app.ts"), false);
+});
+
+test("the shell sandbox denies reading every secret folder and file name, anchored under the home and the project", () => {
+  const { root, policy } = home();
+  const entries = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir: join(root, ".pi", "agent"), allowedDomains: [] });
+  for (const dir of policy.directories) assert.ok(entries.includes(dir), `${dir} is denied`);
+  for (const name of [".env", ".env.*", "auth.json", ".netrc", ".npmrc", "credentials", "id_ed25519", "mcp.json", "mcp-adapter.json"]) {
+    assert.ok(entries.includes(`${root}/**/${name}`), `${name} is denied under the home`);
+    assert.ok(entries.includes(`${join(root, "project")}/**/${name}`), `${name} is denied under the project`);
+  }
+  assert.ok(entries.every((e) => e.startsWith("/")), "every entry is anchored; bare globs do not match on macOS");
+});
+
+test("a sandboxed command sees no credential variables, and the owner sees no control sequences", () => {
+  const env = sanitizeEnv({ PATH: "/bin", HOME: "/h", GITHUB_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "y", OPENAI_API_KEY: "z", SLACK_COOKIE: "c" });
+  assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH"]);
+  assert.equal(stripControl("ok\u001b[2J\u001b]0;title\u0007 done\u0000"), "ok done");
+});
+
 test("output lines naming secret files are dropped", () => {
   const { root, policy } = home();
   const cwd = join(root, "project");
-  const out = filterSecretLines(policy, cwd, ".", "app.ts:1:code\n.env:1:TOKEN=x\nREADME.md-2-text");
-  assert.equal(out, "app.ts:1:code\nREADME.md-2-text");
+  const grepOut = ["app.ts:1: code", ".env:1: TOKEN=x", ".env-2- SECRET=y", "release-2-notes.md-3- text", "sub/.env.local-4- K=v", "README.md-2- text"].join("\n");
+  assert.equal(filterSecretLines(policy, cwd, ".", grepOut), ["app.ts:1: code", "release-2-notes.md-3- text", "README.md-2- text"].join("\n"), "match and context lines alike");
+  assert.equal(filterSecretLines(policy, cwd, ".", "app.ts\n.env\ninnocent.txt\nsrc/"), "app.ts\nsrc/", "bare paths from find and ls");
 });
 
 test("common credential shapes are recognized; ordinary text is not", () => {

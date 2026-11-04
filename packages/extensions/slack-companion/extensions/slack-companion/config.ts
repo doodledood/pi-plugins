@@ -3,6 +3,9 @@
 // package off rather than guessing.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { KeyId } from "@earendil-works/pi-tui";
+
+const KEY_RE = /^((ctrl|alt|shift)\+)*([a-z0-9]|f([1-9]|1[0-2])|enter|tab|space|escape|up|down|left|right|home|end|pageup|pagedown)$/;
 
 export interface ToolNames {
   readChannel: string;
@@ -23,7 +26,7 @@ export interface SlackCompanionConfig {
   pauseAfterSends: number;
   quietHours: number;
   marker: string;
-  panelKey: string;
+  panelKey: KeyId;
   /** Domains the helper's sandboxed shell may reach. An allowed domain can also receive writes. */
   allowedDomains: string[];
   /** MCP tools the helper may use although their server does not mark them read-only. */
@@ -106,8 +109,8 @@ export function parseConfig(raw: unknown): SlackCompanionConfig {
     config.marker = input.marker;
   }
   if ("panelKey" in input) {
-    expect(isText(input.panelKey), "panelKey must be a key such as alt+s");
-    config.panelKey = input.panelKey;
+    expect(typeof input.panelKey === "string" && KEY_RE.test(input.panelKey), 'panelKey must be a key such as "alt+s" (modifiers ctrl, alt, shift joined by +, then one key)');
+    config.panelKey = input.panelKey as KeyId;
   }
   if ("allowedDomains" in input) {
     expect(isTextList(input.allowedDomains), "allowedDomains must be a list of domains");

@@ -1,16 +1,16 @@
 // The Slack helper's shell: every command runs under @anthropic-ai/sandbox-runtime, writing
-// only to a scratch folder, reading no secrets, and reaching no network unless the owner
-// listed a domain. If the sandbox cannot start, the helper gets no shell at all.
-// Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
-import { mkdtemp } from "node:fs/promises";
+// only to a scratch folder, reading no secrets, seeing no credential-like environment variable,
+// and reaching no network unless the owner listed a domain. If the sandbox cannot start, the
+// helper gets no shell at all. Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
+import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
-import { secretDirectories } from "./secrets.ts";
+import { sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
 
 export type ShellSandbox =
-  | { ok: true; operations: BashOperations; scratchDir: string }
+  | { ok: true; operations: BashOperations; scratchDir: string; dispose(): Promise<void> }
   | { ok: false; reason: string };
 
 export interface SandboxOptions {
@@ -25,19 +25,13 @@ export function denyReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   const roots = [...new Set([home, options.cwd])];
-  return [
-    ...secretDirectories(home, agentDir),
-    join(agentDir, "auth.json"),
-    join(home, ".netrc"),
-    join(home, ".npmrc"),
-    join(home, ".pgpass"),
-    ...roots.flatMap((root) => [`${root}/**/.env`, `${root}/**/.env.*`]),
-  ];
+  return [...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
-interface SandboxRuntime {
+export interface SandboxRuntime {
   isSupportedPlatform(): boolean;
   initialize(config: unknown): Promise<void>;
+  updateConfig?(config: unknown): void;
   wrapWithSandbox(command: string, binShell?: string, customConfig?: unknown, abortSignal?: AbortSignal): Promise<string>;
 }
 
@@ -46,34 +40,44 @@ async function loadRuntime(): Promise<SandboxRuntime> {
   return module.SandboxManager as unknown as SandboxRuntime;
 }
 
-let initialized: Promise<SandboxRuntime> | undefined;
+// sandbox-runtime keeps one process-wide policy: initialize once, then update it whenever the
+// policy differs, since its network filter reads the global policy rather than per-call config.
+let ready: { runtime: SandboxRuntime; policy: string } | undefined;
 
-/** Start (once per process) and return sandboxed bash operations, or why there is no shell. */
+/** Start and return sandboxed bash operations, or why there is no shell. */
 export async function startShellSandbox(options: SandboxOptions, runtime?: SandboxRuntime): Promise<ShellSandbox> {
+  if (process.platform === "win32") return { ok: false, reason: "the helper's shell is not supported on Windows" };
+  let scratchDir: string | undefined;
   try {
     const manager = runtime ?? (await loadRuntime());
     if (!manager.isSupportedPlatform()) return { ok: false, reason: "sandbox-runtime does not support this platform" };
-    const scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
+    scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
     const config = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },
       filesystem: { denyRead: denyReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
     };
-    if (!runtime) {
-      initialized ??= manager.initialize(config).then(() => manager);
-      await initialized;
-    } else {
+    const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead });
+    if (!ready || ready.runtime !== manager) {
       await manager.initialize(config);
+      ready = { runtime: manager, policy };
+    } else if (ready.policy !== policy) {
+      if (!manager.updateConfig) throw new Error("sandbox-runtime cannot change its policy in this process");
+      manager.updateConfig(config);
+      ready.policy = policy;
     }
     const local = createLocalBashOperations();
+    const scratch = scratchDir;
     const operations: BashOperations = {
       async exec(command, cwd, execOptions) {
         const wrapped = await manager.wrapWithSandbox(command, undefined, config, execOptions.signal);
-        return local.exec(wrapped, cwd, execOptions);
+        // SCRATCH names the one folder a command may write (sandbox-runtime sets its own TMPDIR).
+        return local.exec(wrapped, cwd, { ...execOptions, env: { ...sanitizeEnv(execOptions.env ?? process.env), SCRATCH: scratch } });
       },
     };
-    return { ok: true, operations, scratchDir };
+    return { ok: true, operations, scratchDir: scratch, dispose: () => rm(scratch, { recursive: true, force: true }) };
   } catch (error) {
-    initialized = undefined;
+    if (scratchDir) await rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+    if (!runtime) ready = undefined;
     return { ok: false, reason: `sandbox-runtime could not start: ${(error as Error).message}` };
   }
 }

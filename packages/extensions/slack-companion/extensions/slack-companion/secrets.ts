@@ -4,6 +4,23 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/**
+ * Resolve a tool's path argument exactly as Pi's file tools do (unicode spaces, a leading `@`,
+ * `~`, `file://` URLs), so a guard checks the file the tool will open. Pi does not export its
+ * resolver; path-parity.test.ts compares this copy with Pi's own on every rule.
+ */
+export function resolveToolPath(input: string, cwd: string, home = homedir()): string {
+  let normalized = input.replace(UNICODE_SPACES, " ");
+  if (normalized.startsWith("@")) normalized = normalized.slice(1);
+  if (normalized === "~") normalized = home;
+  else if (normalized.startsWith("~/")) normalized = join(home, normalized.slice(2));
+  else if (/^file:\/\//.test(normalized)) normalized = fileURLToPath(normalized);
+  return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
+}
 
 /** Folders whose contents are credentials. */
 export function secretDirectories(home = homedir(), agentDir = join(home, ".pi", "agent")): string[] {
@@ -16,13 +33,35 @@ export function secretDirectories(home = homedir(), agentDir = join(home, ".pi",
     join(home, ".kube"),
     join(home, ".docker"),
     join(home, ".mcp-auth"),
+    join(home, ".config", "telegram-notify"),
     join(agentDir, "mcp-oauth"),
     join(agentDir, "mcp-oauth-encrypted"),
   ];
 }
 
-/** Files that hold credentials wherever they sit. */
-const SECRET_FILE_NAMES = [/^\.env(\..*)?$/, /^auth\.json$/, /^\.netrc$/, /^\.npmrc$/, /^\.pgpass$/, /^credentials(\.json)?$/, /^id_[a-z0-9]+$/];
+/**
+ * Names of files that hold credentials wherever they sit, as globs (`*` is any run of characters).
+ * The one list both guards use: the file tools match names against it, and the shell sandbox
+ * denies the name at any depth under the home and the project.
+ */
+export const SECRET_FILE_GLOBS: readonly string[] = [
+  ".env",
+  ".env.*",
+  "auth.json",
+  ".netrc",
+  ".npmrc",
+  ".pgpass",
+  "credentials",
+  "credentials.json",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "mcp.json",
+  "mcp-adapter.json",
+];
+
+const SECRET_FILE_NAMES = SECRET_FILE_GLOBS.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`));
 
 function realOrSelf(path: string): string {
   try {
@@ -38,36 +77,65 @@ function inside(child: string, parent: string): boolean {
 
 export interface SecretPolicy {
   directories: string[];
+  home: string;
 }
 
-export function defaultSecretPolicy(): SecretPolicy {
-  return { directories: secretDirectories().map(realOrSelf) };
+export function defaultSecretPolicy(agentDir?: string, home = homedir()): SecretPolicy {
+  return { directories: secretDirectories(home, agentDir), home };
 }
 
-/** Is `path` (relative to cwd, symlinks resolved) a secret file, inside a secret folder, or above one? */
-export function isSecretPath(policy: SecretPolicy, cwd: string, path: string): boolean {
-  const absolute = realOrSelf(isAbsolute(path) ? path : resolve(cwd, path));
-  if (SECRET_FILE_NAMES.some((re) => re.test(basename(absolute)))) return true;
+function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {
   return policy.directories.some((dir) => inside(absolute, dir) || inside(absolute, realOrSelf(dir)));
 }
 
-/** Searching or listing from here would walk into a secret folder. */
-export function walksIntoSecrets(policy: SecretPolicy, cwd: string, path: string): boolean {
-  const absolute = realOrSelf(isAbsolute(path) ? path : resolve(cwd, path));
-  return isSecretPath(policy, cwd, path) || policy.directories.some((dir) => inside(dir, absolute) || inside(realOrSelf(dir), absolute));
+/** Is this absolute path (symlinks resolved) a secret file, or inside a secret folder? */
+export function isSecretAbsolute(policy: SecretPolicy, absolute: string): boolean {
+  const real = realOrSelf(absolute);
+  return [absolute, real].some((p) => SECRET_FILE_NAMES.some((re) => re.test(basename(p))) || underSecretDirectory(policy, p));
 }
 
-/** Drop any output line that names a secret path. */
+/** Is the file a tool would open for `path` a secret? */
+export function isSecretPath(policy: SecretPolicy, cwd: string, path: string): boolean {
+  return isSecretAbsolute(policy, resolveToolPath(path, cwd, policy.home));
+}
+
+/** Would searching or listing from `path` walk into a secret folder? */
+export function walksIntoSecrets(policy: SecretPolicy, cwd: string, path: string): boolean {
+  const absolute = resolveToolPath(path, cwd, policy.home);
+  const real = realOrSelf(absolute);
+  if (isSecretAbsolute(policy, absolute)) return true;
+  return policy.directories.some((dir) => [dir, realOrSelf(dir)].some((d) => inside(d, absolute) || inside(d, real)));
+}
+
+/**
+ * Drop any output line that names a secret path. Pi's grep prints a match as `path:N: text` and a
+ * context line as `path-N- text`, and a path may itself contain `-N-`, so every prefix that ends
+ * at either separator is a candidate; one secret candidate drops the line. Listing tools print
+ * bare paths, so the whole line is a candidate too.
+ */
 export function filterSecretLines(policy: SecretPolicy, cwd: string, root: string, output: string): string {
+  const base = resolveToolPath(root, cwd, policy.home);
+  const isSecret = (pathPart: string) => {
+    const trimmed = pathPart.trim().replace(/\/$/, "");
+    return trimmed !== "" && isSecretAbsolute(policy, isAbsolute(trimmed) ? trimmed : join(base, trimmed));
+  };
   return output
     .split("\n")
     .filter((line) => {
-      const pathPart = line.split(/:(?=\d+[:-])/)[0]!.trim();
-      if (!pathPart) return true;
-      const candidate = isAbsolute(pathPart) ? pathPart : join(resolve(cwd, root), pathPart);
-      return !isSecretPath(policy, cwd, candidate);
+      const candidates = [line];
+      for (const match of line.matchAll(/[:-]\d+[:-]/g)) candidates.push(line.slice(0, match.index));
+      return !candidates.some(isSecret);
     })
     .join("\n");
+}
+
+/** Environment variables a sandboxed command never sees: anything that looks like a credential. */
+const SECRET_ENV = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE)/i;
+
+export function sanitizeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) if (!SECRET_ENV.test(name)) out[name] = value;
+  return out;
 }
 
 /** Shapes of credentials that must never leave in a Slack reply. */
@@ -83,4 +151,12 @@ export const SECRET_SHAPES: ReadonlyArray<{ name: string; pattern: RegExp }> = [
 /** The name of the first secret shape `text` contains, if any. */
 export function findSecretShape(text: string): string | undefined {
   return SECRET_SHAPES.find(({ pattern }) => pattern.test(text))?.name;
+}
+
+/** Remove terminal control and escape sequences, so text shown to the owner is what it says. */
+export function stripControl(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 }

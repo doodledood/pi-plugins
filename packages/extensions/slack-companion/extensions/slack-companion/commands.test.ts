@@ -25,18 +25,18 @@ const ask = { "ask Robin": { kind: "tool", name: "slack_send_message", args: { c
 test("/slack stop ends every watch; /slack off stops new watches; /slack <link> attaches", async () => {
   const h = await createHarness({ replies: replies(ask) });
   await h.session.prompt("ask Robin please");
-  assert.equal(h.engine().activeWatches().length, 2);
+  assert.equal(h.engine().liveWatches().length, 2);
   await h.session.prompt("/slack stop");
-  assert.equal(h.engine().activeWatches().length, 0);
+  assert.equal(h.engine().liveWatches().length, 0);
   assert.ok(h.notices.some((n) => /Stopped watching every Slack conversation/.test(n.text)));
   await h.session.prompt("/slack off");
   await h.session.prompt("ask Robin again");
-  assert.equal(h.engine().activeWatches().length, 0, "sends no longer start watches");
+  assert.equal(h.engine().liveWatches().length, 0, "sends no longer start watches");
   const root = h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "it still doesn't work for me");
   await h.session.prompt(`/slack https://ws.slack.com/archives/${DM}/p${root.ts.replace(".", "")}`);
   await h.engine().idle();
   assert.ok(h.engine().watch(`${DM}/${root.ts}`));
-  assert.ok(h.notices.some((n) => /Watching DM/.test(n.text)));
+  assert.ok(h.notices.some((n) => /Watching the conversation with Robin Colleague/.test(n.text)));
 });
 
 test("/slack on turns a disabled package on, writing only `enabled` into the config", async () => {
@@ -45,7 +45,7 @@ test("/slack on turns a disabled package on, writing only `enabled` into the con
   const saved = JSON.parse(readFileSync(join(h.agentDir, "slack-companion.json"), "utf8"));
   assert.deepEqual(saved, { enabled: true, marker: ">>" });
   await h.session.prompt("ask Robin please");
-  assert.equal(h.engine().activeWatches().length, 2);
+  assert.equal(h.engine().liveWatches().length, 2);
   assert.match(h.slack.messages(DM)[0]!.text, /^>> /);
 });
 
@@ -74,22 +74,21 @@ test("without pi-mcp-adapter the package loads, says why it cannot watch, and to
   assert.ok(h.notices.some((n) => n.level === "error" && /pi-mcp-adapter is not installed/.test(n.text)));
   await h.session.prompt("/slack https://ws.slack.com/archives/D0FAKE0001/p1793700001000001");
   assert.ok(h.notices.some((n) => /cannot watch: pi-mcp-adapter is not installed/.test(n.text)));
-  assert.equal(h.engine().activeWatches().length, 0);
+  assert.equal(h.engine().liveWatches().length, 0);
 });
 
 test("a broken config leaves the package off and names the problem", async () => {
   const h = await createHarness({ rawConfig: '{"enabled": true, "pollSecond": 5}', replies: replies(ask) });
   assert.ok(h.notices.some((n) => /unknown config key "pollSecond"/.test(n.text)));
   await h.session.prompt("ask Robin please");
-  assert.equal(h.engine().activeWatches().length, 0);
+  assert.equal(h.engine().liveWatches().length, 0);
   assert.equal(h.slack.messages(DM)[0]!.text.startsWith("🤖"), false);
 });
 
-test("a misnamed Slack tool stops the watch with a reason the owner can act on", async () => {
+test("a misnamed Slack tool is named at start, with where to fix it, and nothing is watched", async () => {
   const h = await createHarness({ config: { tools: { readThread: "slack_read_thred" } }, replies: replies(ask) });
+  assert.ok(h.notices.some((n) => n.level === "error" && /"slack_read_thred" is not among your MCP tools; set the right name under "tools"/.test(n.text)));
   await h.session.prompt("ask Robin please");
-  await h.engine().poll();
-  const failed = h.engine().snapshot().watches.find((w) => w.status === "error");
-  assert.match(failed!.reason!, /slack_read_thred/);
-  assert.ok(h.notices.some((n) => /stopped watching .*slack_read_thred/.test(n.text)));
+  assert.equal(h.engine().liveWatches().length, 0);
+  assert.equal(h.slack.messages(DM)[0]!.text.startsWith("🤖"), false, "a send is not marked when nothing can watch it");
 });

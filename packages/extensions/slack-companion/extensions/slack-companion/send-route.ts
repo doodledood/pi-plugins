@@ -1,12 +1,18 @@
-// Main's Slack sends reach Pi by three routes: the tool itself, the adapter's `mcp` proxy, and a
-// per-server `mcp__<server>` proxy, whose arguments may arrive as an object or a JSON string.
-// Both hooks (marking before the send, watching after it) read the send through this one place.
+// Main's Slack sends reach Pi by every route pi-mcp-adapter offers: the tool by its own name,
+// its deferred name `mcp__<server>__<tool>`, and the `mcp` and `mcp__<server>` proxies, whose
+// `tool` may itself be any of those names and whose arguments may be an object or a JSON string.
+// Both hooks (marking before the send, watching after it) read a send through this one place.
 export interface SendCall {
   channelId: string;
   threadTs?: string;
   message: string;
   /** Write a new message text back into the call's input, in the shape it arrived in. */
   setMessage(text: string): void;
+}
+
+/** Is `name` the send tool under any of the adapter's names for it? */
+export function namesSendTool(name: unknown, sendTool: string): boolean {
+  return typeof name === "string" && (name === sendTool || name.endsWith(`__${sendTool}`) || name.endsWith(`_${sendTool}`));
 }
 
 function readArgs(holder: Record<string, unknown>, key: string): { args: Record<string, unknown>; write: () => void } | undefined {
@@ -26,8 +32,8 @@ function readArgs(holder: Record<string, unknown>, key: string): { args: Record<
 
 export function sendCallOf(toolName: string, input: Record<string, unknown>, sendTool: string): SendCall | undefined {
   let target: { args: Record<string, unknown>; write: () => void } | undefined;
-  if (toolName === sendTool) target = { args: input, write: () => {} };
-  else if ((toolName === "mcp" || toolName.startsWith("mcp__")) && input.tool === sendTool) target = readArgs(input, "args");
+  if (namesSendTool(toolName, sendTool)) target = { args: input, write: () => {} };
+  else if ((toolName === "mcp" || toolName.startsWith("mcp__")) && namesSendTool(input.tool, sendTool)) target = readArgs(input, "args");
   if (!target) return undefined;
   const { args, write } = target;
   if (typeof args.channel_id !== "string" || typeof args.message !== "string") return undefined;

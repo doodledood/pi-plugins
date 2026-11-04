@@ -21,11 +21,17 @@ export const processAlive: ProcessAlive = (pid) => {
   }
 };
 
+/**
+ * A holder refreshes its lock on every poll. A lock whose process is gone, or that was not
+ * refreshed for `staleAfterMs` (a reused pid after a reboot), is reclaimed.
+ */
 export class LockManager {
   constructor(
     private readonly dir: string,
     private readonly self: Omit<LockHolder, "at">,
     private readonly alive: ProcessAlive = processAlive,
+    private readonly staleAfterMs = 10 * 60 * 1000,
+    private readonly now: () => number = Date.now,
   ) {}
 
   private path(key: string): string {
@@ -45,19 +51,27 @@ export class LockManager {
     mkdirSync(this.dir, { recursive: true });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: Date.now() }), { flag: "wx", mode: 0o600 });
+        writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: this.now() }), { flag: "wx", mode: 0o600 });
         return { ok: true };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
       const holder = this.read(key);
       if (holder && holder.sessionId === this.self.sessionId && holder.pid === this.self.pid) return { ok: true };
-      if (holder && this.alive(holder.pid)) return { ok: false, holder };
+      if (holder && this.alive(holder.pid) && this.now() - holder.at < this.staleAfterMs) return { ok: false, holder };
       // The holder is gone (killed without shutdown) or the file is unreadable: reclaim.
       rmSync(this.path(key), { force: true });
     }
     const holder = this.read(key);
     return holder ? { ok: false, holder } : { ok: false, holder: { pid: -1, sessionId: "unknown", at: 0 } };
+  }
+
+  /** Keep an owned lock fresh. */
+  refresh(key: string): void {
+    const holder = this.read(key);
+    if (holder && holder.sessionId === this.self.sessionId && holder.pid === this.self.pid) {
+      writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: this.now() }), { mode: 0o600 });
+    }
   }
 
   release(key: string): void {

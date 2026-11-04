@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream, type AssistantMessage, type Context, type JsonObject, type Model } from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream, type AssistantMessage, type Context, type JsonObject, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -78,7 +78,8 @@ export interface Harness {
   session: AgentSession;
   slack: FakeSlack;
   engine: () => Engine;
-  calls: Array<{ role: Role; context: Context }>;
+  /** Every model call the provider received, with the credential it was given. */
+  calls: Array<{ role: Role; context: Context; apiKey: string | undefined }>;
   workspace: string;
   agentDir: string;
   foreign: { handlerRuns: number; toolRuns: number };
@@ -111,6 +112,19 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   const agentDir = options.reopen?.agentDir ?? mkdtempSync(join(tmpdir(), "slack-agent-"));
   writeFileSync(join(workspace, "notes.md"), "The judge treats the KB as king.\n");
   mkdirSync(join(agentDir, "slack-companion"), { recursive: true });
+  // The adapter's metadata cache: each server's tools with the annotations their server declares.
+  writeFileSync(join(agentDir, "mcp-cache.json"), JSON.stringify({ version: 1, servers: {
+    slack: { tools: [
+      { name: "slack_send_message", description: "send", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } },
+      { name: "slack_read_thread", description: "read thread", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { name: "slack_read_channel", description: "read channel", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { name: "slack_read_user_profile", description: "profile", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+    ] },
+    data: { tools: [
+      { name: "data_lookup", description: "look data up", inputSchema: { type: "object", properties: { q: { type: "string" } } }, annotations: { readOnlyHint: true } },
+      { name: "data_write", description: "write data", inputSchema: { type: "object", properties: { q: { type: "string" } } } },
+    ] },
+  } }));
   writeFileSync(join(agentDir, "slack-companion.json"), options.rawConfig ?? JSON.stringify({ enabled: options.enabled ?? true, ...(options.config ?? {}) }));
   const slack = options.reopen?.slack ?? new FakeSlack();
   const foreign = { handlerRuns: 0, toolRuns: 0 };
@@ -126,23 +140,29 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       dataCalls.push(request.tool);
       request.result = Promise.resolve({ ok: true, result: { content: [{ type: "text", text: `rows for ${JSON.stringify(request.args)}` }] } });
     });
-    pi.registerTool(defineTool({ name: "mcp", label: "mcp", description: "MCP gateway proxy", parameters: Type.Object({ tool: Type.String(), args: Type.Optional(Type.Any()) }), async execute(_id, params: any) {
-      const request: any = { version: 1, tool: params.tool, args: typeof params.args === "string" ? JSON.parse(params.args) : params.args };
-      pi.events.emit(RUNTIME_TOOL_CALL_EVENT, request);
-      const outcome = await request.result;
-      if (!outcome.ok) throw outcome.error;
-      return outcome.result;
-    } }));
+    for (const proxy of ["mcp", "mcp__slack"]) {
+      pi.registerTool(defineTool({ name: proxy, label: proxy, description: "MCP gateway proxy", parameters: Type.Object({ tool: Type.String(), args: Type.Optional(Type.Any()) }), async execute(_id, params: any) {
+        const tool = String(params.tool).replace(/^mcp__slack__/, "");
+        const request: any = { version: 1, tool, args: typeof params.args === "string" ? JSON.parse(params.args) : params.args };
+        pi.events.emit(RUNTIME_TOOL_CALL_EVENT, request);
+        const outcome = await request.result;
+        if (!outcome.ok) throw outcome.error;
+        return outcome.result;
+      } }));
+    }
     for (const [name, readOnlyHint] of [["data_lookup", true], ["data_write", false]] as const) {
       pi.registerTool({ ...defineTool({ name, label: name, description: `${name} tool`, parameters: Type.Object({ q: Type.String() }), async execute() { throw new Error("direct call not used"); } }), annotations: { readOnlyHint } } as any);
     }
-    pi.registerTool(defineTool({ name: "slack_send_message", label: "slack send", description: "send", parameters: Type.Object({ channel_id: Type.String(), message: Type.String(), thread_ts: Type.Optional(Type.String()) }), async execute(_id, params) {
-      const request: any = { version: 1, tool: "slack_send_message", args: params };
-      pi.events.emit(RUNTIME_TOOL_CALL_EVENT, request);
-      const outcome = await request.result;
-      if (!outcome.ok) throw outcome.error;
-      return outcome.result;
-    } }));
+    // The send tool by its own name (direct) and by its deferred name, as the adapter registers them.
+    for (const name of ["slack_send_message", "mcp__slack__slack_send_message"]) {
+      pi.registerTool(defineTool({ name, label: "slack send", description: "send", parameters: Type.Object({ channel_id: Type.String(), message: Type.String(), thread_ts: Type.Optional(Type.String()) }), async execute(_id, params) {
+        const request: any = { version: 1, tool: "slack_send_message", args: params };
+        pi.events.emit(RUNTIME_TOOL_CALL_EVENT, request);
+        const outcome = await request.result;
+        if (!outcome.ok) throw outcome.error;
+        return outcome.result;
+      } }));
+    }
   };
   let piRef: ExtensionAPI | undefined;
   const foreignExtension = (pi: ExtensionAPI) => {
@@ -181,9 +201,9 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   const calls: Harness["calls"] = [];
   registry.registerProvider(PROVIDER, {
     api: API,
-    streamSimple: (selected: Model<any>, context: Context) => {
+    streamSimple: (selected: Model<any>, context: Context, streamOptions?: SimpleStreamOptions) => {
       const role = roleOf(context);
-      calls.push({ role, context: { ...context, messages: [...context.messages] } });
+      calls.push({ role, context: { ...context, messages: [...context.messages] }, apiKey: streamOptions?.apiKey });
       const reply = options.replies(context, role, calls.filter((c) => c.role === role).length);
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
@@ -210,7 +230,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   } as any);
   const { session } = await createAgentSession({
     cwd: workspace, agentDir, model, thinkingLevel: "off",
-    tools: ["read", "mcp", "slack_send_message", "data_lookup", "data_write", "foreign_tool", "slack_watch"],
+    tools: ["read", "mcp", "mcp__slack", "slack_send_message", "mcp__slack__slack_send_message", "data_lookup", "data_write", "foreign_tool", "slack_watch"],
     sessionManager, settingsManager, modelRuntime, resourceLoader,
   });
   await session.bindExtensions({});

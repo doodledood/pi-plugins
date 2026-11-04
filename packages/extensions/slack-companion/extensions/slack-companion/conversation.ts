@@ -40,3 +40,22 @@ export function parseSlackLink(link: string): ParsedLink | undefined {
   if (threadTs !== undefined && !isSlackTs(threadTs)) return undefined;
   return threadTs ? { channelId: match[1]!, messageTs, threadTs } : { channelId: match[1]!, messageTs };
 }
+
+/**
+ * The conversations a send by the session takes part in (the one routing rule, see
+ * docs/adr/20261104-start-watching-when-the-session-messages-someone.md): a reply belongs to its
+ * thread; a new message lives in its own thread, and in a direct message the top level too,
+ * where people often answer.
+ */
+export function conversationsForSend(send: { channelId: string; ts?: string; threadTs?: string }): Conversation[] {
+  if (send.threadTs) return [{ kind: "thread", channelId: send.channelId, threadTs: send.threadTs }];
+  const out: Conversation[] = [];
+  if (send.ts) out.push({ kind: "thread", channelId: send.channelId, threadTs: send.ts });
+  if (isDirectMessage(send.channelId)) out.push({ kind: "dm-top", channelId: send.channelId });
+  return out;
+}
+
+/** The conversations a message link names: its thread, and a direct message's top level when the link is top-level. */
+export function conversationsForLink(link: ParsedLink): Conversation[] {
+  return conversationsForSend({ channelId: link.channelId, ts: link.messageTs, ...(link.threadTs ? { threadTs: link.threadTs } : {}) });
+}

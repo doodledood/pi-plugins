@@ -44,10 +44,12 @@ export class FakeSlack {
   private micro = 100_000;
   redactEmails: boolean;
   appId: string;
-  /** Fail the next calls of a tool: "error" (ok:false), "throw-after-post" for sends. */
+  /** Fail the next calls of a tool: "error" (ok:false), "post-then-error" (a send that posted, then failed), "truncate", "truncate-unsaved". */
   failures = new Map<string, Array<"error" | "post-then-error" | "truncate" | "truncate-unsaved">>();
   /** Page size the fake uses regardless of the requested limit, to force pagination. */
   pageSize = 100;
+  /** Seconds the fake clock moves per message. */
+  secondsPerMessage = 1;
 
   constructor(options: FakeSlackOptions = {}) {
     this.ownerId = options.ownerId ?? "UOWNER0001";
@@ -63,7 +65,7 @@ export class FakeSlack {
 
   nextTs(): string {
     this.micro += 1;
-    this.clockSec += 1;
+    this.clockSec += this.secondsPerMessage;
     return `${this.clockSec}.${String(this.micro).padStart(6, "0")}`;
   }
 
@@ -120,14 +122,16 @@ export class FakeSlack {
     if (tool === "slack-companion-probe") return { ok: false, error: new Error("Unsupported MCP runtime tool-call version: 0") };
     this.calls.push({ tool, args });
     const failure = this.failures.get(tool)?.shift();
-    if (failure === "error") return { ok: false, error: new Error(`${tool}: fake failure`) };
+    // The adapter reduces a failed call to its own code, as the real one does.
+    if (failure === "error") return { ok: false, error: new Error("MCP tool call failed: tool_error") };
     let text: string;
     try {
       text = this.respond(tool, args);
     } catch (error) {
-      return { ok: false, error: error as Error };
+      const code = /no tool/.test((error as Error).message) ? "tool_not_found" : "tool_error";
+      return { ok: false, error: new Error(`MCP tool call failed: ${code}`) };
     }
-    if (failure === "post-then-error") return { ok: false, error: new Error("request timed out") };
+    if (failure === "post-then-error") return { ok: false, error: new Error("MCP tool call failed: tool_error") };
     if (failure === "truncate" || failure === "truncate-unsaved") {
       const dir = mkdtempSync(join(tmpdir(), "fake-guard-"));
       const fullOutputPath = join(dir, "output.txt");
@@ -155,8 +159,9 @@ export class FakeSlack {
       }
       case "slack_read_channel": {
         const oldest = typeof args.oldest === "string" ? args.oldest : undefined;
+        const latest = typeof args.latest === "string" ? args.latest : undefined;
         const top = this.messages(channelId)
-          .filter((m) => !m.threadTs && (!oldest || compareTs(m.ts, oldest) > 0))
+          .filter((m) => !m.threadTs && (!oldest || compareTs(m.ts, oldest) > 0) && (!latest || compareTs(m.ts, latest) < 0))
           .sort((a, b) => compareTs(b.ts, a.ts));
         const offset = typeof args.cursor === "string" ? Number(args.cursor) : 0;
         const page = top.slice(offset, offset + this.pageSize);
@@ -175,12 +180,14 @@ export class FakeSlack {
         const ts = String(args.message_ts);
         const all = this.messages(channelId);
         const root = all.find((m) => m.ts === ts);
-        if (!root) throw new Error("thread_not_found");
+        if (!root) throw new Error("execution_failed: thread_not_found");
         const oldest = typeof args.oldest === "string" ? args.oldest : undefined;
+        const latest = typeof args.latest === "string" ? args.latest : undefined;
         const replies = root.threadTs ? [] : all.filter((m) => m.threadTs === root.ts).sort((a, b) => compareTs(a.ts, b.ts));
-        const fresh = replies.filter((m) => !oldest || compareTs(m.ts, oldest) > 0);
+        const fresh = replies.filter((m) => (!oldest || compareTs(m.ts, oldest) > 0) && (!latest || compareTs(m.ts, latest) < 0));
         const offset = typeof args.cursor === "string" ? Number(args.cursor) : 0;
         const limit = Math.min(Number(args.limit ?? 100), this.pageSize);
+        // Asked about a reply, the real server shows that reply alone, as the "parent" (verified live).
         const page = fresh.slice(offset, offset + limit);
         const more = offset + limit < fresh.length;
         const parent = `=== THREAD PARENT MESSAGE ===\nFrom: ${this.header(root)}\nTime: ${this.time(root.ts)}\nMessage TS: ${root.ts}\n${root.text}\n\n`;

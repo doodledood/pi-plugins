@@ -15,6 +15,26 @@ export interface TriageInput {
   batch: readonly SlackMessage[];
 }
 
+/** What the triage call sees: the batch, a few earlier messages, and the agent's own last messages. */
+export function triageInput(input: {
+  label: string;
+  ownerName: string;
+  addressed: boolean;
+  context: readonly SlackMessage[];
+  ownPosts: ReadonlySet<string>;
+  batch: readonly SlackMessage[];
+}): TriageInput {
+  const inBatch = new Set(input.batch.map((m) => m.ts));
+  return {
+    label: input.label,
+    ownerName: input.ownerName,
+    addressed: input.addressed,
+    agentMessages: input.context.filter((m) => input.ownPosts.has(m.ts)).slice(-3),
+    recent: input.context.filter((m) => !inBatch.has(m.ts) && !input.ownPosts.has(m.ts)).slice(-6),
+    batch: input.batch,
+  };
+}
+
 export function triageContext(input: TriageInput): Context {
   const line = (m: SlackMessage) => `- ${m.userName}: ${m.text.replace(/\s+/g, " ").slice(0, 600)}`;
   const systemPrompt = `${TRIAGE_MARKER}

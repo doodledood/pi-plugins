@@ -20,7 +20,7 @@ test("resume restores watches and answers what arrived while closed; shutdown le
   await first.session.dispose();
   first.slack.post(DM, "U0COLL0001", "Robin Colleague", "answered while you were away", question!.ts);
   const second = await createHarness({ reopen: first, replies });
-  assert.equal(second.engine().activeWatches().length, 2, "both watches came back");
+  assert.equal(second.engine().liveWatches().length, 2, "both watches came back");
   await second.engine().poll();
   await second.engine().idle();
   const reply = second.slack.messages(DM).find((m) => m.threadTs === question!.ts && m.userId === second.slack.ownerId);
