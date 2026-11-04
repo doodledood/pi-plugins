@@ -156,6 +156,17 @@ function readThreadBlock(lines: string[], fromLine: number): { userId: string; u
 }
 
 /** Thread replies (`slack_read_thread`, detailed). Parent first, then replies oldest first. */
+/**
+ * The channel's name from a channel listing's first line, `Channel: <name> (<id>)`, when it names
+ * one; a direct message shows "DM" there, which is no name.
+ */
+export function parseChannelName(toolText: string): string | undefined {
+  const { body } = parseEnvelope(toolText, "messages");
+  const match = /^Channel:\s*(.+?)\s*\(([A-Z0-9]+)\)\s*$/.exec(body.split("\n", 1)[0] ?? "");
+  const name = match?.[1]?.replace(/^#/, "").trim();
+  return name && name !== "DM" ? name : undefined;
+}
+
 export function parseThreadListing(toolText: string): ParsedListing & { parent?: CandidateMessage } {
   const { body, pagination } = parseEnvelope(toolText, "messages");
   const lines = body.split("\n");

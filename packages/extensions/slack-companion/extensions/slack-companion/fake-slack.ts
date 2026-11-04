@@ -44,10 +44,16 @@ export class FakeSlack {
   private micro = 100_000;
   redactEmails: boolean;
   appId: string;
-  /** Fail the next calls of a tool: "error" (ok:false), "post-then-error" (a send that posted, then failed), "truncate", "truncate-unsaved". */
-  failures = new Map<string, Array<"error" | "post-then-error" | "truncate" | "truncate-unsaved">>();
+  /**
+   * What the next calls of a tool do, in order: "ok" (answer normally), "error" (ok:false, the
+   * adapter's generic code), "post-then-error" (a send that posted, then failed), "truncate",
+   * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting).
+   */
+  failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready">>();
   /** Page size the fake uses regardless of the requested limit, to force pagination. */
   pageSize = 100;
+  /** Channel names the listing header shows (a channel not here shows "general"). */
+  readonly channelNames = new Map<string, string>();
   /** Seconds the fake clock moves per message. */
   secondsPerMessage = 1;
 
@@ -131,6 +137,8 @@ export class FakeSlack {
       const code = /no tool/.test((error as Error).message) ? "tool_not_found" : "tool_error";
       return { ok: false, error: new Error(`MCP tool call failed: ${code}`) };
     }
+    if (failure === "not-ready") return { ok: false, error: new Error("MCP initialization is still in progress") };
+    if (failure === "garbage") return { ok: true, result: { content: [{ type: "text", text: "<html>Service Unavailable</html>" }] } };
     if (failure === "post-then-error") return { ok: false, error: new Error("MCP tool call failed: tool_error") };
     if (failure === "truncate" || failure === "truncate-unsaved") {
       const dir = mkdtempSync(join(tmpdir(), "fake-guard-"));
@@ -172,7 +180,7 @@ export class FakeSlack {
           return `=== Message from ${this.header(m)} at ${this.time(m.ts)} === \nMessage TS: ${m.ts}\n${m.text}${thread}`;
         });
         return JSON.stringify({
-          messages: `Channel: ${channelId.startsWith("D") ? "DM" : "#channel"} (${channelId})\n\n${blocks.join("\n\n")}`,
+          messages: `Channel: ${channelId.startsWith("D") ? "DM" : `#${this.channelNames.get(channelId) ?? "general"}`} (${channelId})\n\n${blocks.join("\n\n")}`,
           pagination_info: more ? `There are more messages available. To view the next page, use cursor: \`${offset + this.pageSize}\`\n` : "There are no more messages in this channel.\n",
         });
       }

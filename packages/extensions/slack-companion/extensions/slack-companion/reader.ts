@@ -1,14 +1,16 @@
 // Turns a raw read into confirmed new messages and a safe checkpoint.
 //
 // Holds docs/adr/20261104-let-slack-input-only-narrow-what-sessions-may-do.md for reading: the
-// listing is used only to learn which message ids are new. Each new id is then looked up on its
-// own — a lookup's first header is genuine, since no message text precedes it — and its author
-// and text come from that lookup, never from the listing. A message must also belong to the
-// watched conversation. So text imitating the server's format can neither invent a message,
-// put words under another author, nor pull in a message from elsewhere.
+// listing is used only to learn which message ids are new. Each new id is first checked to belong
+// to the watched conversation (a read that succeeds without it is the only evidence that an id is
+// not real), then looked up on its own — a lookup's first header is genuine, since no message
+// text precedes it — and its author and text come from that lookup, never from the listing. So
+// text imitating the server's format can neither invent a message, put words under another
+// author, nor pull in a message from elsewhere. A failed check or lookup throws: the read point
+// stays where it was, and the message is read again later, never dropped.
 // The checkpoint stays a little behind the read's start, so a message Slack makes visible late
 // is still read, and it moves past everything settled, so reads stay short.
-import type { SlackBackend } from "./backend.ts";
+import { BackendError, type SlackBackend } from "./backend.ts";
 import type { Conversation } from "./conversation.ts";
 import { compareTs, isSlackTs, tsFromMillis } from "./format.ts";
 
@@ -60,12 +62,13 @@ export async function readNew(
   const settled: string[] = [];
   let forged = 0;
   for (const ts of now) {
-    const genuine = await backend.lookupMessage(conversation.channelId, ts);
-    if (genuine === "missing" || genuine.ts !== ts || !(await backend.belongsTo(conversation, ts))) {
+    if (!(await backend.belongsTo(conversation, ts))) {
       forged += 1;
       settled.push(ts);
       continue;
     }
+    const genuine = await backend.lookupMessage(conversation.channelId, ts);
+    if (genuine.ts !== ts) throw new BackendError(`looking up message ${ts} returned message ${genuine.ts}`, "unreadable");
     fresh.push({ ts, userId: genuine.userId, userName: genuine.userName, text: genuine.text, agentFooter: genuine.agentFooter });
     settled.push(ts);
   }

@@ -8,7 +8,7 @@
  */
 import type { BuildSystemPromptOptions, ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { Type } from "typebox";
 import { McpSlackBackend, RUNTIME_TOOL_CALL_EVENT, type SlackBackend } from "./backend.ts";
 import { ConfigError, DEFAULT_CONFIG, enableInConfig, loadConfig, type SlackCompanionConfig } from "./config.ts";
@@ -18,14 +18,14 @@ import { parseSendResult } from "./format.ts";
 import { selectForkBranch } from "./fork.ts";
 import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { mcpCachePathIn, readOnlyMcpTools } from "./mcp-tools.ts";
+import { helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, type McpToolInfo } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, triageCostRecord, writeHelperRecord } from "./records.ts";
-import { startShellSandbox, type ShellSandbox } from "./sandbox.ts";
+import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
 import { defaultSecretPolicy } from "./secrets.ts";
-import { namesSendTool, sendCallOf } from "./send-route.ts";
+import { sendCallOf } from "./send-route.ts";
 import { chooseTriageModel, triageContext, triageVerdict } from "./triage.ts";
-import { Panel, renderLine, WIDGET_KEY, type Paint, type SurfaceState } from "./ui.ts";
+import { Panel, renderLine, WIDGET_KEY, type Paint, type PanelAction, type SurfaceProblem, type SurfaceState } from "./ui.ts";
 
 export const STATE_ENTRY = "slack-companion-state";
 export const HANDOFF_MESSAGE = "slack-companion-handoff";
@@ -34,15 +34,34 @@ export const WATCH_TOOL = "slack_watch";
 
 export interface Overrides {
   agentDir?: string;
+  /** The home folder whose secret locations the helper may not read (default: the real one). */
+  home?: string;
   backend?: (pi: ExtensionAPI, config: SlackCompanionConfig) => SlackBackend;
-  sandbox?: (cwd: string, config: SlackCompanionConfig) => Promise<ShellSandbox>;
+  /** sandbox-runtime itself; the package's own policy and options still flow through startShellSandbox. */
+  sandboxRuntime?: SandboxRuntime;
   now?: () => number;
-  /** Tests drive polls themselves. */
-  noTimer?: boolean;
+  /** Starts and clears the poll timer; tests pass one that records and never fires, and drive polls themselves. */
+  scheduler?: Scheduler;
   onEngine?: (engine: Engine) => void;
   /** Sees every notice the owner would see (tests run without a UI). */
   onNotify?: (level: "info" | "warning" | "error", text: string) => void;
 }
+
+export interface Scheduler {
+  start(run: () => void, everyMs: number): unknown;
+  stop(handle: unknown): void;
+}
+
+const realScheduler: Scheduler = {
+  start(run, everyMs) {
+    const handle = setInterval(run, everyMs);
+    handle.unref?.();
+    return handle;
+  },
+  stop(handle) {
+    clearInterval(handle as ReturnType<typeof setInterval>);
+  },
+};
 
 function paintFrom(theme: Theme): Paint {
   return { fg: (color, text) => theme.fg(color, text), bold: (text) => theme.bold(text) };
@@ -56,36 +75,34 @@ function adapterPresent(pi: ExtensionAPI): boolean {
   return probe.result !== undefined;
 }
 
-/** A configured Slack tool that is not among the MCP tools Pi or the adapter knows. */
-function missingTool(pi: ExtensionAPI, config: SlackCompanionConfig, cachePath: string): string | undefined {
-  const known = new Set(pi.getAllTools().map((t) => t.name));
-  let cached = false;
-  try {
-    const cache = JSON.parse(readFileSync(cachePath, "utf8"));
-    for (const entry of Object.values<any>(cache?.servers ?? {})) for (const tool of entry?.tools ?? []) if (typeof tool?.name === "string") { known.add(tool.name); cached = true; }
-  } catch {
-    /* no cache yet: the adapter has not listed its servers; nothing to check against */
+const ADAPTER_MISSING = "pi-mcp-adapter is not installed, so Slack cannot be read from code; slack-companion cannot watch.";
+
+/** A key the owner pressed in the panel: owner input first (it is the owner acting), then the action. */
+export async function applyPanelAction(engine: Engine, action: PanelAction): Promise<void> {
+  engine.ownerInput();
+  switch (action.kind) {
+    case "approve": return engine.approve(action.id);
+    case "deny": return engine.deny(action.id);
+    case "stop": return engine.stop(action.key);
+    case "resume": return engine.resume(action.key);
+    case "rewatch": return engine.rewatch(action.key);
   }
-  if (!cached) return undefined;
-  for (const name of Object.values(config.tools)) {
-    if (![...known].some((k) => namesSendTool(k, name))) return name;
-  }
-  return undefined;
 }
 
 export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   const agentDir = overrides.agentDir ?? getAgentDir();
+  const home = overrides.home ?? homedir();
   const cachePath = mcpCachePathIn(agentDir);
   const now = overrides.now ?? Date.now;
   let config: SlackCompanionConfig = { ...DEFAULT_CONFIG };
-  let problem: string | undefined;
+  let problem: SurfaceProblem | undefined;
   const readConfig = () => {
     try {
       config = loadConfig(agentDir);
       problem = undefined;
     } catch (error) {
       config = { ...DEFAULT_CONFIG, enabled: false };
-      problem = error instanceof ConfigError ? error.message : String(error);
+      problem = { title: "its config has an error", detail: error instanceof ConfigError ? error.message : String(error) };
     }
   };
   readConfig();
@@ -94,10 +111,14 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   let ctxRef: ExtensionContext | undefined;
   // False from session_shutdown on: work still finishing must not touch a context Pi has retired.
   let live = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const scheduler = overrides.scheduler ?? realScheduler;
+  let timer: unknown;
   let requestRender: (() => void) | undefined;
   let warnedUnattributed = false;
   let warnedTriage = false;
+  let warnedCache = false;
+  // Send calls this package marked, so the nested call a proxy makes for one is not marked again.
+  const markedCalls = new Set<string>();
   let panelSeenAt = 0;
   // The main session's prompt options as of its last turn: the helper rebuilds the same skills and context files.
   let lastPromptOptions: BuildSystemPromptOptions | undefined;
@@ -110,7 +131,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       engine: engineState,
       panelKey: config.panelKey,
       answering: new Set(engineState.watches.filter((w) => engine?.isAnswering(w.key)).map((w) => w.key)),
-      unseenErrors: engineState.watches.filter((w) => w.status === "error" && (w.endedAt ?? 0) > panelSeenAt).length,
+      seenAt: panelSeenAt,
       now: now(),
     };
   };
@@ -121,12 +142,27 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (ctxRef?.hasUI) ctxRef.ui.notify(text, level);
   };
 
+  /** The MCP tools the helper gets: main's active read-only ones and the owner's investigative list. */
+  const mcpToolsForHelper = (): McpToolInfo[] => {
+    try {
+      return helperMcpTools(readMcpCache(cachePath), new Set(pi.getActiveTools()), config.investigativeTools, [config.tools.sendMessage]);
+    } catch (error) {
+      if (!warnedCache) {
+        warnedCache = true;
+        notify("warning", `Slack helper runs without MCP tools: pi-mcp-adapter's tool cache could not be read (${(error as Error).message}).`);
+      }
+      return [];
+    }
+  };
+
   const runHelperFor: EngineDeps["runHelper"] = async ({ batch, signal }) => {
     const ctx = ctxRef;
     if (!live || !ctx?.model) throw new Error("the main session is not available");
-    const sandbox = overrides.sandbox
-      ? await overrides.sandbox(ctx.cwd, config)
-      : await startShellSandbox({ cwd: ctx.cwd, allowedDomains: config.allowedDomains, agentDir });
+    const sandbox = await startShellSandbox({ cwd: ctx.cwd, allowedDomains: config.allowedDomains, agentDir, home }, overrides.sandboxRuntime);
+    if (signal.aborted) {
+      if (sandbox.ok) await sandbox.dispose();
+      throw new Error("the helper was stopped before it answered");
+    }
     if (!sandbox.ok) notify("warning", `Slack helper runs without a shell: ${sandbox.reason}`);
     const sections = { ...(lastPromptOptions?.sections ?? {}) };
     delete sections[PROMPT_SECTION];
@@ -141,9 +177,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         branch: selectForkBranch(ctx.sessionManager.getBranch() as SessionEntry[], ctx.isIdle()),
         systemPromptOptions: { ...(lastPromptOptions ?? { cwd: ctx.cwd }), sections },
         events: pi.events,
-        mcpTools: readOnlyMcpTools(cachePath, config.investigativeTools, [config.tools.sendMessage]),
+        mcpTools: mcpToolsForHelper(),
         sandbox,
-        secrets: defaultSecretPolicy(agentDir),
+        secrets: defaultSecretPolicy(agentDir, home),
       }, batch, signal);
     } finally {
       if (sandbox.ok) await sandbox.dispose();
@@ -165,29 +201,46 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       warnedTriage = true;
       notify("info", `Slack: ${note}`);
     }
-    const message = await ctx.modelRegistry.complete(model, triageContext(input));
+    // streamSimple, not complete: only streamSimple routes a virtual model to a real one.
+    const message = await ctx.modelRegistry.streamSimple(model, triageContext(input)).result();
     if (live) pi.appendEntry(COST_RECORD_TYPE, triageCostRecord(model.provider, model.id, message.usage));
     if (message.stopReason === "error") throw new Error(`the triage model failed: ${message.errorMessage ?? "unknown error"}`);
     return { speak: triageVerdict(message), usd: message.usage?.cost?.total ?? 0 };
   };
 
   const startTimer = () => {
-    if (timer || !engine || !config.enabled || problem || overrides.noTimer) return;
+    if (timer !== undefined || !engine || !config.enabled || problem) return;
     // The first read waits for the first tick: the adapter may still be starting at session_start.
-    timer = setInterval(() => void engine?.poll().catch(() => {}), config.pollSeconds * 1000);
-    timer.unref?.();
+    timer = scheduler.start(() => {
+      void engine?.poll().catch((error) => notify("error", `Slack: a poll failed: ${(error as Error).message}`));
+    }, config.pollSeconds * 1000);
   };
 
+  /** Read the config and check what watching needs; the one path both session start and /slack on take. */
+  const checkReady = () => {
+    readConfig();
+    if (!config.enabled || problem) return;
+    if (!adapterPresent(pi)) {
+      problem = { title: "pi-mcp-adapter is not installed", detail: ADAPTER_MISSING };
+      return;
+    }
+    try {
+      const missing = missingSlackTools(readMcpCache(cachePath), Object.values(config.tools), config.server);
+      if (missing.length) problem = { title: `Slack tool name${missing.length === 1 ? "" : "s"} not found`, detail: `the Slack tool${missing.length === 1 ? "" : "s"} ${missing.map((m) => `"${m}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} not among your Slack server's MCP tools; set the right name under "tools" in ${agentDir}/slack-companion.json.` };
+    } catch (error) {
+      problem = { title: "pi-mcp-adapter's tool cache is unreadable", detail: `pi-mcp-adapter's tool cache could not be read: ${(error as Error).message}` };
+    }
+  };
+
+  /** Build the engine for this session from the config as it is now. */
   const startEngine = (ctx: ExtensionContext) => {
     ctxRef = ctx;
     live = true;
-    readConfig();
-    if (config.enabled && !problem && !adapterPresent(pi)) problem = "pi-mcp-adapter is not installed, so Slack cannot be read from code; slack-companion cannot watch.";
-    if (config.enabled && !problem) {
-      const missing = missingTool(pi, config, cachePath);
-      if (missing) problem = `the Slack tool "${missing}" is not among your MCP tools; set the right name under "tools" in ~/.pi/agent/slack-companion.json.`;
-    }
-    if (problem) notify("error", `slack-companion: ${problem}`);
+    if (timer !== undefined) scheduler.stop(timer);
+    timer = undefined;
+    engine?.dispose();
+    checkReady();
+    if (problem) notify("error", `slack-companion: ${problem.detail}`);
     const backend = overrides.backend ? overrides.backend(pi, config) : new McpSlackBackend(pi.events, config.tools, config.server);
     const locks = new LockManager(`${agentDir}/slack-companion/locks`, { pid: process.pid, sessionId: ctx.sessionManager.getSessionId() }, undefined, Math.max(10 * 60_000, 5 * config.pollSeconds * 1000), now);
     engine = new Engine({
@@ -218,7 +271,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     // A disabled package holds nothing: no restored watch, no lock.
     if (config.enabled && !problem) {
       const saved = [...(ctx.sessionManager.getBranch() as SessionEntry[])].reverse().find((e) => e.type === "custom" && e.customType === STATE_ENTRY);
-      engine.restore(saved?.type === "custom" ? (saved.data as EngineState) : undefined);
+      if (!engine.restore(saved?.type === "custom" ? saved.data : undefined)) {
+        notify("warning", "slack-companion: this session's saved Slack watches were written by another version of the package and were not restored.");
+      }
     }
     overrides.onEngine?.(engine);
     if (ctx.hasUI) {
@@ -233,7 +288,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   pi.on("session_start", (_event, ctx) => startEngine(ctx));
   pi.on("session_shutdown", () => {
     live = false;
-    if (timer) clearInterval(timer);
+    if (timer !== undefined) scheduler.stop(timer);
     timer = undefined;
     engine?.dispose();
     engine = undefined;
@@ -256,19 +311,22 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   // Mark every message main sends into a watched conversation, or one that starts a watch.
   pi.on("tool_call", async (event) => {
     if (!config.enabled || problem || !engine) return;
+    // A proxy's nested call carries the message this package already marked in its parent call.
+    if (event.parentToolCallId && markedCalls.has(event.parentToolCallId)) return;
     const call = sendCallOf(event.toolName, event.input as Record<string, unknown>, config.tools.sendMessage);
     if (!call || !engine.sendWillBeWatched(call.channelId, call.threadTs)) return;
-    if (config.marker && call.message.startsWith(`${config.marker} `)) return; // already marked (a proxy's nested call)
+    markedCalls.add(event.toolCallId);
     let ownerName = "the owner";
     try {
       ownerName = (await engine.owner()).name;
     } catch {
       /* the watch will report the backend problem; mark with a neutral name */
     }
-    call.setMessage(markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs)));
+    call.setMessage(markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs), { cut: false }));
   });
 
   pi.on("tool_result", async (event) => {
+    markedCalls.delete(event.toolCallId);
     if (!config.enabled || problem || !engine || event.isError) return;
     const call = sendCallOf(event.toolName, event.input, config.tools.sendMessage);
     if (!call) return;
@@ -287,11 +345,16 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   });
 
   const attachLink = async (link: string): Promise<string> => {
-    if (problem) return `slack-companion cannot watch: ${problem}`;
+    if (problem) return `slack-companion cannot watch: ${problem.detail}`;
     if (!config.enabled) return "slack-companion is off; /slack on turns it on.";
     const parsed = parseSlackLink(link);
     if (!parsed) return `Not a Slack message link: ${link}`;
-    const watch = await engine?.attach(parsed);
+    let watch;
+    try {
+      watch = await engine?.attach(parsed);
+    } catch (error) {
+      return `Could not watch that conversation: ${(error as Error).message}`;
+    }
     return watch ? `Watching ${watch.partner?.name ? `the conversation with ${watch.partner.name}` : "that conversation"}.` : "Could not watch that conversation (see the notice).";
   };
 
@@ -324,12 +387,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     requestRender?.();
     await ctx.ui.custom<void>((tui, theme, _kb, done) => new Panel(surface, paintFrom(theme), (action) => {
       if (!engine) return;
-      engine.ownerInput();
-      if (action.kind === "approve") void engine.approve(action.id).catch((e) => notify("error", `Slack: approving failed: ${(e as Error).message}`));
-      else if (action.kind === "deny") void engine.deny(action.id).catch((e) => notify("error", `Slack: declining failed: ${(e as Error).message}`));
-      else if (action.kind === "stop") engine.stop(action.key);
-      else if (action.kind === "resume") engine.resume(action.key);
-      else engine.rewatch(action.key);
+      void applyPanelAction(engine, action).catch((e) => notify("error", `Slack: ${action.kind} failed: ${(e as Error).message}`));
       tui.requestRender();
     }, () => done(), tui), { overlay: true, overlayOptions: { maxHeight: "80%" } });
     panelSeenAt = now();
@@ -342,19 +400,12 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       const arg = args.trim();
       if (!arg) return openPanel(ctx);
       if (arg === "on") {
+        const wasReady = config.enabled && !problem;
         enableInConfig(agentDir);
-        readConfig();
-        if (config.enabled && !problem && !adapterPresent(pi)) problem = "pi-mcp-adapter is not installed, so Slack cannot be read from code; slack-companion cannot watch.";
-        if (problem) {
-          notify("error", `slack-companion is on, but cannot watch: ${problem}`);
-          return;
-        }
-        if (engine && !engine.liveWatches().length) {
-          const saved = [...(ctx.sessionManager.getBranch() as SessionEntry[])].reverse().find((e) => e.type === "custom" && e.customType === STATE_ENTRY);
-          engine.restore(saved?.type === "custom" ? (saved.data as EngineState) : undefined);
-        }
+        if (wasReady) engine?.setAutoStart(true);
+        else startEngine(ctx);
+        if (problem) return; // startEngine said why it cannot watch
         engine?.setAutoStart(true);
-        startTimer();
         notify("info", "slack-companion is on: a Slack message this session sends now starts a watch.");
         return;
       }

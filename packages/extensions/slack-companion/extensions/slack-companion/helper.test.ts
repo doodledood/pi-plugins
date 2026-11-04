@@ -9,8 +9,8 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { selectForkBranch } from "./fork.ts";
-import { runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
-import { mcpCachePathIn, readOnlyMcpTools } from "./mcp-tools.ts";
+import { HelperAbortedError, MAX_HELPER_TURNS, runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
+import { helperMcpTools, mcpCachePathIn, readMcpCache } from "./mcp-tools.ts";
 import { createHarness, textOf, type Reply } from "./pi-harness.ts";
 import { startShellSandbox, type ShellSandbox } from "./sandbox.ts";
 import { defaultSecretPolicy } from "./secrets.ts";
@@ -36,7 +36,7 @@ function fakeHome() {
 
 const realSandbox = (cwd: string, home: string) => startShellSandbox({ cwd, allowedDomains: [], home, agentDir: join(home, ".pi", "agent") });
 
-async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox> } = {}) {
+async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal } = {}) {
   const queue = [...steps];
   const h = await createHarness({
     replies: (_c, role) => (role === "helper" ? (queue.shift() ?? { kind: "text", text: "done" }) : { kind: "text", text: "ok" }),
@@ -64,11 +64,11 @@ async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cw
     branch: selectForkBranch(h.session.sessionManager.getBranch() as SessionEntry[], true),
     systemPromptOptions: { cwd: h.workspace },
     events: h.events,
-    mcpTools: readOnlyMcpTools(mcpCachePathIn(h.agentDir), [], ["slack_send_message"]),
+    mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], ["slack_send_message"]),
     sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
     secrets: defaultSecretPolicy(join(home, ".pi", "agent"), home),
   };
-  const outcome = await runHelper(env, batch);
+  const outcome = await runHelper(env, batch, options.signal);
   const results = outcome.ownEntries
     .filter((e: any) => e.type === "message" && e.message.role === "toolResult")
     .map((e: any) => ({ tool: e.message.toolName as string, isError: e.message.isError as boolean, text: textOf(e.message.content) }));
@@ -91,7 +91,9 @@ test("the helper's runtime: no extension, no handler, only the allowlisted tools
       return started;
     },
   });
-  const expected = ["read", "grep", "find", "ls", "data_lookup", "slack_read_thread", "slack_read_channel", "slack_read_user_profile", "reply_in_slack", "hand_off_to_main"];
+  // data_lookup: read-only and active in main. Read-only tools main does not have active (the Slack
+  // reads) and data_write (not read-only) are left out.
+  const expected = ["read", "grep", "find", "ls", "data_lookup", "reply_in_slack", "hand_off_to_main"];
   assert.deepEqual(new Set(outcome.toolNames), new Set(scratch ? [...expected, "bash"] : expected));
   for (const forbidden of ["mcp", "mcp__slack", "edit", "write", "goal", "slack_send_message", "mcp__slack__slack_send_message", "foreign_tool", "data_write", "slack_watch", "installed_tool"]) {
     assert.equal(outcome.toolNames.includes(forbidden), false, forbidden);
@@ -188,4 +190,13 @@ test("a sandbox that cannot start leaves the helper without a shell", async () =
   });
   assert.equal(sandbox.ok, false);
   assert.match((sandbox as { reason: string }).reason, /seatbelt refused/);
+});
+
+test("a stopped run does not start, and a run stuck calling tools is stopped at the turn limit", async () => {
+  const stopped = new AbortController();
+  stopped.abort();
+  await assert.rejects(helperRun([], { signal: stopped.signal }), HelperAbortedError);
+  const { outcome, h } = await helperRun(Array.from({ length: MAX_HELPER_TURNS + 10 }, () => ({ kind: "tool", name: "ls", args: {} }) as Reply));
+  assert.equal(outcome.stoppedAtTurnLimit, true);
+  assert.ok(h.calls.filter((c) => c.role === "helper").length <= MAX_HELPER_TURNS + 1);
 });

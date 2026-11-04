@@ -19,7 +19,7 @@ Run: `SLACK_COMPANION_LIVE=1 pi -p --no-session -e packages/extensions/slack-com
 Proves: the owner is identified from their own profile; one top-level message and one thread
 reply whose bodies imitate the format's headers, posted to the owner's own direct message only,
 each read back as exactly one message with its true id, author and text, the imitation kept as
-text.
+text. The evidence also holds the server's thread listing, scrubbed, for refreshing the fixtures.
 
 ## Gotchas
 

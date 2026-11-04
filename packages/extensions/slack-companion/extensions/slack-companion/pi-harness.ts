@@ -22,8 +22,9 @@ import { Type } from "typebox";
 import { RUNTIME_TOOL_CALL_EVENT } from "./backend.ts";
 import type { Engine } from "./engine.ts";
 import { FakeSlack } from "./fake-slack.ts";
-import { activate, type Overrides } from "./index.ts";
-import type { ShellSandbox } from "./sandbox.ts";
+import { activate, type Overrides, type Scheduler } from "./index.ts";
+import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import type { SandboxRuntime } from "./sandbox.ts";
 
 process.env.PI_OFFLINE ??= "1";
 
@@ -89,6 +90,12 @@ export interface Harness {
   /** Main's registered tools, as an extension sees them. */
   allTools: () => import("@earendil-works/pi-coding-agent").ToolInfo[];
   events: import("./backend.ts").EventBus;
+  /** The poll timers the package has started and not stopped, by id (ids rise). */
+  runningTimers: () => number[];
+  /** The fake home folder the package's secret policy and sandbox are built for. */
+  home: string;
+  /** Every policy the package gave sandbox-runtime (a recording stand-in; no command runs unsandboxed). */
+  sandboxConfigs: SandboxRuntimeConfig[];
   /** Main's model registry, the one the helper's model calls go through. */
   registry: ModelRegistry;
 }
@@ -96,7 +103,6 @@ export interface Harness {
 export interface HarnessOptions {
   replies: (context: Context, role: Role, call: number) => Reply;
   enabled?: boolean;
-  sandbox?: (cwd: string) => Promise<ShellSandbox>;
   persistSession?: boolean;
   config?: Record<string, unknown>;
   /** Reopen an earlier harness's session: same Slack, folders and session file. */
@@ -170,11 +176,25 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     pi.on("before_agent_start", () => { foreign.handlerRuns += 1; });
     pi.registerTool(defineTool({ name: "foreign_tool", label: "foreign", description: "foreign", parameters: Type.Object({}), async execute() { foreign.toolRuns += 1; return { content: [{ type: "text", text: "foreign" }], details: {} }; } }));
   };
+  const home = options.reopen?.home ?? mkdtempSync(join(tmpdir(), "slack-home-"));
+  // Poll timers the package started and has not stopped; they never fire: tests drive polls.
+  const timers = new Set<number>();
+  let nextTimer = 0;
+  const scheduler: Scheduler = { start: () => { nextTimer += 1; timers.add(nextTimer); return nextTimer; }, stop: (handle) => { timers.delete(handle as number); } };
+  const sandboxConfigs: SandboxRuntimeConfig[] = [];
+  // Records the policy production code builds; every command it wraps fails, so nothing runs unconfined.
+  const sandboxRuntime: SandboxRuntime = {
+    isSupportedPlatform: () => true,
+    initialize: async (config) => { sandboxConfigs.push(config); },
+    updateConfig: (config) => { sandboxConfigs.push(config); },
+    wrapWithSandbox: async () => "echo 'the test sandbox runs nothing' >&2; exit 1",
+  };
   const overrides: Overrides = {
     agentDir,
-    noTimer: true,
+    home,
+    scheduler,
     now: () => slack.nowMs(),
-    sandbox: async (cwd) => (options.sandbox ? options.sandbox(cwd) : { ok: false, reason: "no sandbox in this test" }),
+    sandboxRuntime,
     onEngine: (e) => { engine = e; },
     onNotify: (level, text) => notices.push({ level, text }),
   };
@@ -235,7 +255,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
   });
   await session.bindExtensions({});
   const harness: Harness = {
-    session, slack, calls, workspace, agentDir, foreign, dataCalls, notices,
+    session, slack, calls, workspace, agentDir, home, sandboxConfigs, runningTimers: () => [...timers], foreign, dataCalls, notices,
     allTools: () => piRef!.getAllTools(),
     registry,
     events: piRef!.events,

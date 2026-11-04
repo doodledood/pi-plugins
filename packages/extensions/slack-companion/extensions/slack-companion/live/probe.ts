@@ -4,10 +4,12 @@
 // profile): one at the top level and one reply in its thread, each with a body imitating the
 // server's format. It reads both back through the package's real backend and reader and checks
 // that exactly those messages come back, with their true ids, authors and text. It waits for
-// pi-mcp-adapter to finish starting, and exits before any model call. Evidence: printed JSON.
+// pi-mcp-adapter to finish starting, and exits before any model call. Evidence: printed JSON,
+// including the server's raw thread listing with the owner's name, ids and emails replaced by the
+// fixtures' invented ones, so format.test.ts fixtures can be refreshed from it.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { BackendNotReadyError, McpSlackBackend } from "../backend.ts";
+import { BackendNotReadyError, McpSlackBackend, runMcpTool } from "../backend.ts";
 import { loadConfig } from "../config.ts";
 import type { Conversation } from "../conversation.ts";
 import { tsNeighbors } from "../format.ts";
@@ -48,6 +50,17 @@ async function readsBack(backend: McpSlackBackend, conversation: Conversation, t
   };
 }
 
+/** The server's text with every identifying value replaced by the fixtures' invented ones. */
+function scrub(text: string, owner: { userId: string; name: string }, channelId: string): string {
+  return text
+    .split(owner.userId).join("U0OWNER001")
+    .split(owner.name).join("Dana Owner")
+    .split(channelId).join("D0FAKE0001")
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "owner@example.com")
+    .replace(/\[EMAIL:[^\]]*\]/g, "[EMAIL:redacted]")
+    .replace(/<@A[A-Z0-9]+\|/g, "<@A0FAKEAPP|");
+}
+
 export default function probe(pi: ExtensionAPI): void {
   if (process.env.SLACK_COMPANION_LIVE !== "1") return;
   // before_agent_start runs after every extension's session_start (so the adapter has its
@@ -65,7 +78,9 @@ export default function probe(pi: ExtensionAPI): void {
         const top = await backend.send(owner.userId, IMITATION(owner.userId), undefined);
         const reply = await backend.send(top.channelId, IMITATION(owner.userId), top.ts);
         const lookup = await backend.lookupMessage(top.channelId, reply.ts);
-        report.replyLookupIsTheReply = lookup !== "missing" && lookup.ts === reply.ts && lookup.userId === owner.userId;
+        report.replyLookupIsTheReply = lookup.ts === reply.ts && lookup.userId === owner.userId;
+        const raw = await runMcpTool(pi.events, config.tools.readThread, { channel_id: top.channelId, message_ts: top.ts, response_format: "detailed" }, config.server);
+        report.scrubbedThreadListing = scrub(raw, owner, top.channelId);
         report.topLevel = await readsBack(backend, { kind: "dm-top", channelId: top.channelId }, top.ts, owner.userId);
         report.threadReply = await readsBack(backend, { kind: "thread", channelId: top.channelId, threadTs: top.ts }, reply.ts, owner.userId);
         const passed = (r: any) => r.exactlyTheSent === true && r.imitationKeptAsText === true;

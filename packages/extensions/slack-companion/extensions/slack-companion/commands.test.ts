@@ -87,7 +87,7 @@ test("a broken config leaves the package off and names the problem", async () =>
 
 test("a misnamed Slack tool is named at start, with where to fix it, and nothing is watched", async () => {
   const h = await createHarness({ config: { tools: { readThread: "slack_read_thred" } }, replies: replies(ask) });
-  assert.ok(h.notices.some((n) => n.level === "error" && /"slack_read_thred" is not among your MCP tools; set the right name under "tools"/.test(n.text)));
+  assert.ok(h.notices.some((n) => n.level === "error" && /"slack_read_thred" is not among your Slack server's MCP tools; set the right name under "tools"/.test(n.text)));
   await h.session.prompt("ask Robin please");
   assert.equal(h.engine().liveWatches().length, 0);
   assert.equal(h.slack.messages(DM)[0]!.text.startsWith("🤖"), false, "a send is not marked when nothing can watch it");

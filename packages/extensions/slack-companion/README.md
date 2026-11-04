@@ -1,25 +1,25 @@
 # @doodledood/pi-slack-companion
 
-The people your Pi session messages on Slack can work with it directly, without you relaying between them.
+The people your Pi session messages on Slack can work with it directly. You do not relay between them.
 
-When your session sends someone a Slack message, Pi watches that conversation. When they reply, a read-only, sandboxed fork of your session — the **Slack helper** — answers them in the thread. Information they give goes to your session as their words. Anything that would change your work waits for your approval. You stop being both the doorbell ("they answered") and the send button ("ask them").
+When your session sends someone a Slack message, Pi watches that conversation. When they reply, a read-only, sandboxed fork of your session answers them in the thread. This fork is the **Slack helper**. Information they give goes to your session as their words. Anything that would change your work waits for your approval.
 
-It is for people who run Pi with a Slack MCP server and want the conversations their sessions start to carry on without them, safely.
+It is for people who run Pi with a Slack MCP server and want the conversations their sessions start to continue safely without them.
 
 ## How it works
 
-1. **Start.** Your session sends a Slack message, or you run `/slack <link>` on a conversation someone else started. Pi watches that conversation: a direct message's top level, or one thread — never a whole channel.
-2. **Watch.** Plain code reads each watched conversation about once a minute through your Slack MCP tools. It uses no model and no tokens.
-3. **Filter.** The code skips your session's own posts, reactions and repeats, and handles `stop` itself. Each remaining batch of new messages gets one cheap call to a small model: does the agent have something to say? Most chat between people gets a no, and costs only that call.
-4. **Answer.** Pi forks your session, as it is at that moment, into a helper in memory. The helper reads, investigates and replies in the thread — once per batch — or stays silent.
-5. **Hand off.** The helper passes information your session asked for to your session as the sender's words. A request for an action waits in the panel for your approval; when you approve, your session gets exactly the text you saw, and the person is told.
+1. **Start.** Your session sends a Slack message, or you run `/slack <link>` on a conversation someone else started. Pi then watches that conversation: the top level of a direct message, or one thread. It never watches a whole channel.
+2. **Watch.** Plain code reads each watched conversation about once a minute through your Slack MCP tools. This uses no model and no tokens.
+3. **Filter.** The code skips your session's own posts, reactions and repeats. It handles `stop` itself. Each remaining batch of new messages gets one call to a small, cheap model, which decides if the agent has something to say. Most chat between people gets a "no", and costs only that call.
+4. **Answer.** Pi forks your session, as it is at that moment, into a helper in memory. The helper reads, investigates and replies in the thread, at most once per batch. It can also stay silent.
+5. **Hand off.** The helper gives information your session asked for to your session, as the sender's words. A request for an action waits in the panel for your approval. When you approve, your session gets exactly the text you saw, and the person is told.
 
 ## Prerequisites
 
 - Pi 1.4.0 or newer.
-- [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter), with a Slack MCP server configured. The package calls Slack's tools from code through the adapter's documented runtime tool-call event, which Pi's built-in MCP support does not offer. Without the adapter the package loads and tells you it cannot watch.
-- A Slack MCP server whose output the package can read. It reads the official Slack MCP server's detailed format (directly, or through a gateway that redacts emails). Tool names are configurable for servers that name the same tools differently.
-- For the helper's shell: [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (installed with the package). macOS uses its built-in Seatbelt; Linux needs `bubblewrap`, `socat` and `ripgrep`. Where the sandbox cannot start, the helper runs without a shell.
+- [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter), with a Slack MCP server configured. The package calls Slack's tools from code through the adapter's runtime tool-call event. Pi's built-in MCP support has no such event. Without the adapter, the package loads and tells you that it cannot watch.
+- A Slack MCP server whose output the package can read. The package reads the detailed format of the official Slack MCP server, directly or through a gateway that hides emails. You can set the tool names for a server that uses different names.
+- For the helper's shell: [sandbox-runtime](https://github.com/anthropics/sandbox-runtime), which installs with the package. macOS uses its built-in Seatbelt. Linux needs `bubblewrap`, `socat` and `ripgrep`. If the sandbox cannot start, the helper has no shell.
 
 ## Install
 
@@ -51,69 +51,102 @@ Only this package from the Git bundle, in `~/.pi/agent/settings.json`:
 }
 ```
 
-The package is **off until you turn it on**: run `/slack on` once, or set `"enabled": true` in its config. An update of the whole bundle never starts answering anyone on your behalf.
+The package is **off until you turn it on**. Run `/slack on` once, or set `"enabled": true` in its config. An update of the whole bundle never starts to answer anyone for you.
 
 ## Use
 
 | Command or key | What it does |
 | --- | --- |
-| `/slack on` | Turn the package on (writes `enabled: true`) and let messages this session sends start watches. |
-| `/slack <link>` | Watch a conversation someone else started; the helper answers the part nobody has answered yet. |
-| `/slack` or `alt+s` | Open the panel: watched conversations, what the helper did, and requests waiting for you (`a` approve, `d` deny, `r` resume, `s` stop, `w` watch an ended conversation again). |
-| `/slack off` | Messages this session sends stop starting watches (until `/slack on`). |
-| `/slack stop` | Stop every watch in this session. |
-| `stop` in Slack | Anyone in the conversation can send a message that is only the word `stop` (any case) to end the watch there. A later send from your session does not start it again; `/slack <link>` does. |
+| `/slack on` | Turns the package on (writes `enabled: true`). Messages this session sends then start watches. |
+| `/slack <link>` | Watches a conversation someone else started. The helper answers the part after your last message there. |
+| `/slack` or `alt+s` | Opens the panel. See *The panel* below. |
+| `/slack off` | Messages this session sends no longer start watches, until `/slack on`. |
+| `/slack stop` | Stops every watch in this session. |
+| `stop` in Slack | Anyone in the conversation can send a message that is only the word `stop` (any case). This ends the watch there. A later send from your session does not start it again; `/slack <link>` does. |
 
-The session also gets a `slack_watch` tool, so you can say "handle this thread <link>" or "stop watching it".
+The session also gets a `slack_watch` tool. You can tell it "handle this thread <link>" or "stop watching it".
 
-One line above the editor shows each watch, what the helper last did, and how many requests wait for you. Main's transcript shows only your work and the hand-offs that reach your session.
+One line above the editor shows each watch, what the helper did last, and the requests that wait for you. Watches that need you (paused, answering) come first. Your session's transcript shows only your work and the hand-offs that reach your session.
 
-A watch ends when the helper says the conversation has what it needed, when anyone types `stop`, when you stop it, after a quiet period, or when the session closes. Requests waiting for you stay in the panel after their watch ends, until you approve or deny them. The panel keeps the last three ended watches. Resume the session and it reads what arrived while it was closed. Nothing answers while Pi is closed or the machine is asleep.
+### The panel
+
+- Requests that wait for you come first, with their full text, who asked, and when. Press `a` to approve or `d` to deny. You can approve a request only after you saw all of it: a long request scrolls with `↓`.
+- Watched conversations come next, each with its last few events and times. Press `s` to stop one, or `r` to resume a paused one.
+- Ended conversations come last. A watch that stopped with an error always shows. Press `w` to watch it again. The panel shows the last three quiet ends; press `enter` on "N more ended" to see all.
+
+### When a watch ends or pauses
+
+- A watch ends when the helper says the conversation has what it needed, when anyone sends `stop`, when you stop it, or after a quiet period.
+- A watch pauses after it sends 5 messages without you, or when its daily spend cap is reached. Your next message in Pi resumes a watch paused for the message count. A spend-cap pause waits for you to press `r`. A reply the helper wrote during a pause waits and goes out as written when you resume.
+- If a read fails for a reason that can pass (a rate limit, a dropped connection), the watch tries again at the next read. After 5 failures in a row, or at once for a problem that does not pass, it stops and tells you why.
+- Requests that wait for you stay in the panel after their watch ends, until you approve or deny them. Your approval or denial is always sent to the person, even during a pause.
+- Watches come back when you resume the session. Pi then reads what arrived while it was closed. Nothing answers while Pi is closed or the machine sleeps.
 
 ## Safety model
 
-- **The helper cannot change your work.** It loads no extension and has only these tools: `read`, `grep`, `find`, `ls`; a `bash` whose every command runs under sandbox-runtime, writing only to a scratch folder (`$SCRATCH`), with no network unless you allow domains and no environment variable whose name looks like a credential; the MCP tools your session has that their server marks read-only (or that you list as investigative), called through your session's adapter; and its own `reply_in_slack` and `hand_off_to_main`. It has no edit, write or Slack-send tool and cannot reach your session's tools.
-- **Secrets stay out.** The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders, MCP token stores, or files named like credentials anywhere under your home or project (`.env`, `.env.*`, `auth.json`, `.netrc`, `.npmrc`, `.pgpass`, `credentials`, SSH keys, `mcp.json`, `mcp-adapter.json`). The file tools check the path they will open, so `~`, `@` and `file://` spellings are caught, and search output drops lines from those files, context lines included. A reply containing something shaped like a key or token is not sent, and you are told.
-- **Actions wait for you.** Anything that would change your work or cannot be undone becomes a request in the panel, showing the full text your session would receive. Only you, in Pi, approve it. Your session receives it marked `[Slack approval]`; information arrives marked `[Slack hand-off]`. Slack text cannot carry those markers or forge the quotes the helper reads: they are replaced with look-alike characters.
-- **Slack can only take power away.** Nothing read from Slack approves anything, restarts a stopped conversation or lifts a restriction. Message text that imitates the server's format is caught: every new message is confirmed by a lookup of its own id, which gives its author and text, and by a check that it belongs to the watched conversation. At most 15 messages are confirmed per watch per read; the rest wait for the next read, so a flood is slow but nothing is skipped.
-- **What it does share.** Anyone who posts in a watched conversation is served, and the helper knows what your session knows, so replies can share session content with the people there. Read-only tools that reach the internet can carry content out. Watch only conversations whose readers you trust with that.
-- **It does not spam.** At most one reply per batch of messages, in its own thread in channels, marked as your agent (the first message says whose agent it is). After 5 messages to one conversation without you, it pauses and asks you.
+**The helper cannot change your work.** It loads no extension. It has only these tools:
+
+- `read`, `grep`, `find` and `ls`.
+- A `bash` shell. Every command runs under sandbox-runtime. The shell can write only to its scratch folder, `$SCRATCH`. It has no network unless you allow domains. It gets no environment variable whose name looks like a credential.
+- The MCP tools that your session has active now and that their server marks read-only, plus the tools you list as investigative. The helper calls them through your session's adapter.
+- Its own `reply_in_slack` and `hand_off_to_main`.
+
+It has no edit, write or Slack-send tool, and it cannot use your session's other tools. A helper run stops after 25 model turns.
+
+**Secrets stay out.**
+
+- The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders or MCP token stores.
+- They cannot read files named like credentials anywhere under your home or project: `.env`, `.env.*`, `auth.json`, `.netrc`, `.npmrc`, `.pgpass`, `credentials`, SSH keys, `mcp.json` and `mcp-adapter.json`.
+- The file tools check the path that they will open, so `~`, `@` and `file://` forms do not get past the check. Search output drops lines from these files, context lines too.
+- The package does not send a reply that contains something shaped like a key or token. It tells you instead.
+
+**Actions wait for you.** The helper turns anything that would change your work, or that cannot be undone, into a request in the panel. Only you, in Pi, can approve it. Your session gets an approved request marked `[Slack approval]`, and information marked `[Slack hand-off]`. Slack text and display names cannot carry these markers, and cannot fake the quotes that the helper reads: the package replaces them with look-alike characters.
+
+**Nothing from Slack gives more permission.** Nothing read from Slack approves anything, restarts a stopped conversation or removes a limit. Text that copies the server's format cannot add or change a message:
+
+- The package confirms every new message by a lookup of its own id. The lookup gives the true author and text.
+- It also checks that the message is in the watched conversation. It skips an id only when a read that succeeded shows that the id is not there, and then it tells you.
+- It confirms at most 15 messages per watch per read. The rest wait for the next read. A burst of messages is slow, but none is skipped.
+
+**What the helper can share.** The package serves anyone who posts in a watched conversation. The helper knows what your session knows, so its replies can share session content with the people there. A read-only tool that reaches the internet can carry content out. Watch only conversations whose readers you trust with that.
+
+**It does not spam.** It sends at most one reply per batch of messages. In channels, it replies only in the thread. It marks every message as your agent's. The first message in a conversation says whose agent it is.
 
 ## Configuration
 
-`~/.pi/agent/slack-companion.json` (the agent folder follows `PI_CODING_AGENT_DIR`). Every key is optional; an unknown key or a wrong type stops the package and names the problem.
+The config file is `~/.pi/agent/slack-companion.json`. The agent folder follows `PI_CODING_AGENT_DIR`. Every key is optional. An unknown key or a wrong type stops the package and names the problem.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Nothing watches or sends until true. |
+| `enabled` | `false` | Nothing watches or sends until this is true. |
 | `tools` | `slack_read_channel`, `slack_read_thread`, `slack_send_message`, `slack_read_user_profile` | Your server's names for `readChannel`, `readThread`, `sendMessage`, `userProfile`. |
-| `server` | unset | MCP server name to pass with every call, when tool names are ambiguous. |
-| `pollSeconds` | `60` | How often each watch is read (minimum 10). |
-| `triageModel` | the cheapest model of your session's provider | `"provider/model-id"` for the speak-or-stay-silent check; falls back to the session's model when no priced model exists. |
+| `server` | unset | The MCP server name to pass with every call, when tool names are ambiguous. |
+| `pollSeconds` | `60` | How often each watch is read. The minimum is 10. |
+| `triageModel` | the cheapest priced model of your session's provider | `"provider/model-id"` for the speak-or-stay-silent check. If that model is not available, or no priced model exists, the check uses your session's model and tells you. |
 | `pauseAfterSends` | `5` | Messages to one conversation without you before it pauses. |
 | `quietHours` | `24` | Hours without a message before a watch ends. |
-| `marker` | `🤖` | Prefix on every message the agent sends. |
-| `panelKey` | `alt+s` | Key that opens the panel. |
-| `allowedDomains` | `[]` | Domains the helper's shell may reach. An allowed domain can also receive data. |
-| `investigativeTools` | `[]` | MCP tools the helper may use although their server does not mark them read-only. |
-| `spendCapUsdPerDay` | unset | Pause a conversation once its helpers and checks spend this much in a day. |
+| `marker` | `🤖` | The prefix on every message the agent sends. |
+| `panelKey` | `alt+s` | The key that opens the panel. |
+| `allowedDomains` | `[]` | Domains the helper's shell can reach. An allowed domain can also receive data. |
+| `investigativeTools` | `[]` | MCP tools the helper can use although their server does not mark them read-only, or although your session does not have them active. Write `tool` or `server/tool`. |
+| `spendCapUsdPerDay` | unset | Pause a conversation when its helpers and checks spend this much in one day. |
 
 ## Files it reads and writes
 
-- Reads its config, above, and pi-mcp-adapter's tool cache (`~/.pi/agent/mcp-cache.json`) to check the configured Slack tool names at start and to find the MCP tools their servers mark read-only.
-- Writes its state into your session file (custom entries, not sent to the model), so watches survive `/reload` and resume. Watches that ended, resolved requests, the send record and stopped conversations are each kept to a bounded number.
-- Writes one lock file per watched conversation under `~/.pi/agent/slack-companion/locks/`, so two sessions on one machine never answer the same conversation. A session that ends releases its locks; a lock left by a session that died is taken over by the next one.
-- Writes each helper's own entries, with their usage, under `<session file without .jsonl>/slack-companion/`, so session-tree cost accounting counts them. They are kept with the session and removed with it. A session not saved to a file writes none, and that spend cannot be attributed.
-- Each triage call's cost is recorded in the session as a `pi-cost-record` entry.
-- The helper's shell gets a scratch folder under the system temp folder, removed after each run.
+- It reads its config, above. It also reads pi-mcp-adapter's tool cache, `~/.pi/agent/mcp-cache.json`, to check the Slack tool names at start and to find the MCP tools that their servers mark read-only.
+- It writes its state into your session file as custom entries, which the model does not see. This lets watches survive `/reload` and resume. It writes a small snapshot only when something changed, and each part of the state has a limit.
+- It writes one lock file per watched conversation under `~/.pi/agent/slack-companion/locks/`. Two sessions on one machine then never answer the same conversation. A session that ends releases its locks. The next session takes over a lock from a session that died. A session that loses a lock to another session stops answering there and tells you.
+- It writes the entries of each helper run, with their usage, under `<session file without .jsonl>/slack-companion/`. Session-tree cost accounting counts them. If you delete the session, delete that folder too: Pi does not remove it. A session that is not saved to a file writes no such entries, and the package tells you that their spend cannot be attributed.
+- It records the cost of each check in the session as a `pi-cost-record` entry.
+- The helper's shell gets a scratch folder in the system temp folder. The package removes it after each run.
 
 ## Known limits
 
-- Nothing answers while Pi is closed or the machine is asleep; resume catches up.
-- Pi's built-in MCP support has no way for code to call a tool, so it needs pi-mcp-adapter.
-- Every read is an MCP call; Slack keeps audit logs of MCP activity, so a workspace's admins can see one read a minute per watch.
-- Locks hold on one machine. Two machines watching the same direct message could both answer.
-- A Slack tool name that is not among your MCP tools stops the package at start and names the key to fix. A watch whose read fails later (an expired login, a format the parser cannot read) stops and says why; once fixed, press `w` on it in the panel.
+- Nothing answers while Pi is closed or the machine sleeps. Resume catches up.
+- Pi's built-in MCP support gives code no way to call a tool, so the package needs pi-mcp-adapter.
+- Every read is an MCP call, and Slack keeps audit logs of MCP activity. Each watch reads once a minute, plus two calls for each new message and one for each send it must check.
+- Locks work on one machine. Two machines that watch the same direct message could both answer.
+- At start, the package checks the Slack tool names against your Slack server's tools in the adapter's cache. If the adapter has not listed that server yet, the first read reports a wrong name instead.
 
 ## Verify
 
@@ -122,12 +155,8 @@ npm run typecheck --workspace @doodledood/pi-slack-companion
 npm run test --workspace @doodledood/pi-slack-companion
 ```
 
-The tests run real Pi sessions in memory with a scripted model and a fake Slack server that writes the official server's formats; they reach no network and no Slack. `scripts/verify drive slack-companion` runs them as the project's recipe; `scripts/verify drive slack-companion-live` (ask first: it posts to your own Slack direct message) checks the parser against your real server.
+The tests run real Pi sessions in memory with a scripted model and a fake Slack server that writes the official server's formats. They use no network and no Slack. `scripts/verify drive slack-companion` runs them as the project's recipe. `scripts/verify drive slack-companion-live` checks the parser against your real server. Ask first before you run it: it posts two messages to your own Slack direct message.
 
 ## Uninstall
 
-```bash
-pi remove /absolute/path/to/pi-plugins/packages/extensions/slack-companion
-```
-
-Then delete `~/.pi/agent/slack-companion.json` and `~/.pi/agent/slack-companion/` if you want no trace. Helper records go with their sessions.
+Remove the package the way you installed it: `pi remove <the source you installed>`, or delete its entry from `packages` in `~/.pi/agent/settings.json`. Then delete `~/.pi/agent/slack-companion.json` and `~/.pi/agent/slack-companion/` if you want no trace. Helper records stay in each session's `slack-companion/` folder until you delete them.

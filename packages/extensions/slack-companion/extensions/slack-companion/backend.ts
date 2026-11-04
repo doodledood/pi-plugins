@@ -8,6 +8,7 @@ import {
   type CandidateMessage,
   compareTs,
   parseChannelListing,
+  parseChannelName,
   parseLookup,
   parseProfile,
   parseSendResult,
@@ -24,10 +25,18 @@ export interface SlackBackend {
   whoAmI(): Promise<Identity>;
   /** Every candidate message newer than `oldest` (exclusive), all pages. Candidates are unconfirmed. */
   readSince(conversation: Conversation, oldest: string | undefined): Promise<CandidateMessage[]>;
-  /** One message as Slack has it (genuine author and text), or "missing" when it does not exist. */
-  lookupMessage(channelId: string, ts: string): Promise<CandidateMessage | "missing">;
-  /** Does the message with this ts belong to the watched conversation? */
+  /**
+   * One message as Slack has it: its genuine author and text. Ask only about a message
+   * `belongsTo` confirmed; any failure throws, since a failed call is not evidence of absence.
+   */
+  lookupMessage(channelId: string, ts: string): Promise<CandidateMessage>;
+  /**
+   * Does a message with this ts exist in the watched conversation? False only on positive
+   * evidence: a read that succeeded and does not hold it. A failed read throws.
+   */
   belongsTo(conversation: Conversation, ts: string): Promise<boolean>;
+  /** The channel's name as the server shows it (without "#"), when it shows one. */
+  channelName(channelId: string): Promise<string | undefined>;
   /** Post `text`; throws SendUncertainError when Slack may or may not have taken it. */
   send(channelId: string, text: string, threadTs: string | undefined): Promise<{ ts: string; channelId: string }>;
 }
@@ -101,8 +110,17 @@ export async function runMcpTool(events: EventBus, tool: string, args: Record<st
 
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 50;
-/** Adapter codes that mean the tool or server is misconfigured, not that a message is gone. */
-const CONFIG_CODES = new Set(["tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "no_adapter"]);
+/** Failures that retrying cannot fix: a misconfigured tool or server, or a result the package cannot use whole. */
+const LASTING_CODES = new Set(["tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable"]);
+
+/**
+ * Is this a failure that may pass on its own (a rate limit, a dropped connection, the adapter's
+ * backoff, an expired login being renewed)? Such a read is retried on later polls; anything else,
+ * and output the parser cannot read, stops the watch at once.
+ */
+export function isPassingFailure(error: unknown): boolean {
+  return error instanceof BackendNotReadyError || (error instanceof BackendError && !LASTING_CODES.has(error.code ?? ""));
+}
 
 export class McpSlackBackend implements SlackBackend {
   constructor(
@@ -142,19 +160,8 @@ export class McpSlackBackend implements SlackBackend {
     throw new BackendError(`more than ${MAX_PAGES} pages of new messages; reading stopped rather than skip any`, "too_many_pages");
   }
 
-  async lookupMessage(channelId: string, ts: string): Promise<CandidateMessage | "missing"> {
-    const args = { channel_id: channelId, message_ts: ts, limit: 1, response_format: "detailed" };
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        return parseLookup(await this.call(this.tools.readThread, args));
-      } catch (error) {
-        // The server reports a missing message as a tool error ("thread_not_found"), which the
-        // adapter reduces to its generic code; one retry separates a blip from a message that is not there.
-        if (error instanceof BackendError && !(error instanceof BackendNotReadyError) && !CONFIG_CODES.has(error.code ?? "") && attempt === 0) continue;
-        if (error instanceof BackendError && !(error instanceof BackendNotReadyError) && !CONFIG_CODES.has(error.code ?? "")) return "missing";
-        throw error;
-      }
-    }
+  async lookupMessage(channelId: string, ts: string): Promise<CandidateMessage> {
+    return parseLookup(await this.call(this.tools.readThread, { channel_id: channelId, message_ts: ts, limit: 1, response_format: "detailed" }));
   }
 
   async belongsTo(conversation: Conversation, ts: string): Promise<boolean> {
@@ -171,6 +178,11 @@ export class McpSlackBackend implements SlackBackend {
       channel_id: conversation.channelId, oldest: before, latest: after, limit: 1, response_format: "detailed",
     }));
     return listing.messages[0]?.ts === ts;
+  }
+
+  async channelName(channelId: string): Promise<string | undefined> {
+    const text = await this.call(this.tools.readChannel, { channel_id: channelId, limit: 1, response_format: "detailed" });
+    return parseChannelName(text);
   }
 
   async send(channelId: string, text: string, threadTs: string | undefined): Promise<{ ts: string; channelId: string }> {

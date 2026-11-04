@@ -3,7 +3,7 @@
 // invent, re-author or repeat a message, and a failed read never counts as an empty one.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BackendError, McpSlackBackend } from "./backend.ts";
+import { BackendError, BackendNotReadyError, isPassingFailure, McpSlackBackend } from "./backend.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import type { Conversation } from "./conversation.ts";
 import { FakeSlack, memoryBus } from "./fake-slack.ts";
@@ -193,4 +193,31 @@ test("property: every message is delivered exactly once across pages, late visib
     assert.deepEqual([...delivered].sort(compareTs), [...posted].sort(compareTs), `seed ${seed}: every message exactly once`);
     assert.equal(new Set(delivered).size, delivered.length, `seed ${seed}: no repeats`);
   }
+});
+
+test("a lookup that fails is never taken as absence: a misnamed tool or a passing failure leaves the point unchanged", async () => {
+  for (const failure of ["error", "not-ready"] as const) {
+    const { slack, backend } = setup();
+    const root = slack.post(DM, slack.ownerId, slack.ownerName, "root");
+    slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "real answer", root.ts);
+    slack.failures.set("slack_read_thread", ["ok", "ok", failure]); // listing, membership, then the lookup fails
+    const point: ReadPoint = { checkpoint: root.ts, seen: [] };
+    await assert.rejects(readNew(backend, { kind: "thread", channelId: DM, threadTs: root.ts }, point, slack.nowMs()), BackendError);
+    const again = await readNew(backend, { kind: "thread", channelId: DM, threadTs: root.ts }, point, slack.nowMs());
+    assert.deepEqual(again.fresh.map((m) => m.text), ["real answer"], failure);
+  }
+  const { slack } = setup();
+  const bus = memoryBus();
+  slack.attach(bus);
+  const misnamed = new McpSlackBackend(bus, { ...DEFAULT_CONFIG.tools, readThread: "slack_read_thred" });
+  const root = slack.post(DM, slack.ownerId, slack.ownerName, "root");
+  await assert.rejects(readNew(misnamed, { kind: "thread", channelId: DM, threadTs: root.ts }, { checkpoint: root.ts, seen: [] }, slack.nowMs()), (e: unknown) => e instanceof BackendError && !isPassingFailure(e));
+});
+
+test("failures are sorted: passing ones are retried later, lasting ones stop the watch", () => {
+  assert.equal(isPassingFailure(new BackendError("x", "tool_error")), true);
+  assert.equal(isPassingFailure(new BackendError("x", "server_backoff")), true);
+  assert.equal(isPassingFailure(new BackendNotReadyError("x", "not_ready")), true);
+  for (const code of ["tool_not_found", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable"]) assert.equal(isPassingFailure(new BackendError("x", code)), false, code);
+  assert.equal(isPassingFailure(new Error("the channel listing has message headers this parser cannot read")), false);
 });

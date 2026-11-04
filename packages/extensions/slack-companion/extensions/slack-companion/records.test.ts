@@ -49,4 +49,8 @@ test("a session with no file writes no helper record", async () => {
   await h.engine().poll();
   await h.engine().idle();
   assert.equal(h.session.sessionManager.getSessionFile(), undefined);
+  assert.ok(h.notices.some((n) => /not attributable/.test(n.text)), "the owner is told the spend cannot be attributed");
+  for (const dir of [h.workspace, h.agentDir]) {
+    assert.equal(readdirSync(dir, { recursive: true }).some((p) => String(p).split("/").includes("slack-companion") && String(p).endsWith(".jsonl")), false, `no helper record under ${dir}`);
+  }
 });

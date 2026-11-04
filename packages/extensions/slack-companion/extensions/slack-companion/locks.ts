@@ -66,12 +66,17 @@ export class LockManager {
     return holder ? { ok: false, holder } : { ok: false, holder: { pid: -1, sessionId: "unknown", at: 0 } };
   }
 
-  /** Keep an owned lock fresh. */
-  refresh(key: string): void {
+  /**
+   * Keep an owned lock fresh. False when another session now holds it (it took over a lock this
+   * session left unrefreshed, for example across a long sleep): this session must stop answering.
+   */
+  refresh(key: string): boolean {
     const holder = this.read(key);
     if (holder && holder.sessionId === this.self.sessionId && holder.pid === this.self.pid) {
       writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: this.now() }), { mode: 0o600 });
+      return true;
     }
+    return this.acquire(key).ok;
   }
 
   release(key: string): void {

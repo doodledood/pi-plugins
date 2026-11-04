@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
 import { sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
 
@@ -28,16 +29,17 @@ export function denyReadEntries(options: SandboxOptions): string[] {
   return [...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
+/** The part of sandbox-runtime's SandboxManager the package uses; tests pass a recording one. */
 export interface SandboxRuntime {
   isSupportedPlatform(): boolean;
-  initialize(config: unknown): Promise<void>;
-  updateConfig?(config: unknown): void;
-  wrapWithSandbox(command: string, binShell?: string, customConfig?: unknown, abortSignal?: AbortSignal): Promise<string>;
+  initialize(config: SandboxRuntimeConfig): Promise<void>;
+  updateConfig(config: SandboxRuntimeConfig): void;
+  wrapWithSandbox(command: string, binShell?: string, customConfig?: Partial<SandboxRuntimeConfig>, abortSignal?: AbortSignal): Promise<string>;
 }
 
 async function loadRuntime(): Promise<SandboxRuntime> {
-  const module = await import("@anthropic-ai/sandbox-runtime");
-  return module.SandboxManager as unknown as SandboxRuntime;
+  const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
+  return SandboxManager satisfies SandboxRuntime;
 }
 
 // sandbox-runtime keeps one process-wide policy: initialize once, then update it whenever the
@@ -52,16 +54,18 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
     const manager = runtime ?? (await loadRuntime());
     if (!manager.isSupportedPlatform()) return { ok: false, reason: "sandbox-runtime does not support this platform" };
     scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
-    const config = {
+    const config: SandboxRuntimeConfig = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },
       filesystem: { denyRead: denyReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
     };
     const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead });
     if (!ready || ready.runtime !== manager) {
       await manager.initialize(config);
+      // initialize returns early when an earlier load of this package (before a /reload) already
+      // initialized the process-wide runtime; updateConfig makes this policy the one in force.
+      manager.updateConfig(config);
       ready = { runtime: manager, policy };
     } else if (ready.policy !== policy) {
-      if (!manager.updateConfig) throw new Error("sandbox-runtime cannot change its policy in this process");
       manager.updateConfig(config);
       ready.policy = policy;
     }
