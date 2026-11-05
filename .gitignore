@@ -1,5 +1,5 @@
 # Dependencies and build output
-node_modules/
+node_modules
 dist/
 build/
 coverage/

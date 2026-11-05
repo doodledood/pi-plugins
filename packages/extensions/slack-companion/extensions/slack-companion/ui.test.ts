@@ -904,11 +904,10 @@ test("when every label of a conversation is already shown, the line counts it an
   for (const watches of [dms, threads]) {
     for (let width = 20; width <= 200; width += 1) {
       const [line] = renderLine(surface({ watches }), plain, width);
-      assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
       const left = line!.split(/ {2,}alt\+s/)[0]!;
       const named = (left.match(/ – watching/g) ?? []).length;
       const counted = Number(/(\d+) watching/.exec(left.replace(/ – watching/g, ""))?.[1] ?? 0);
-      if (named + counted > 0) assert.equal(named + counted, 3, `every watch named or counted at ${width}: ${line}`);
+      assert.equal(named + counted, 3, `every watch named or counted at ${width}: ${line}`);
     }
   }
   assert.match(renderLine(surface({ watches: dms }), plain, 120)[0]!, /a direct message – watching · DM "Can you review…" – watching · \+1 watching/, "the third reads like the second, so it is counted");

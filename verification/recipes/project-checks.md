@@ -19,7 +19,8 @@ runs, so there is still one definition of each check.
 ### structure
 Run: `npm run verify:structure`
 Proves: the script tests pass and every install surface lists the same extensions, themes,
-skills and setup files, with no workplace term in the published tree.
+skills and setup files, with no workplace term in the published tree, and the lockfile matches
+the manifests.
 Line: 0.8 s on darwin-arm64-12cpu
 
 ### types
