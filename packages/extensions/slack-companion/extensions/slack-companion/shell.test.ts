@@ -128,9 +128,9 @@ test("on macOS, a system that does not name the per-user folder leaves the helpe
   // The system's getconf does not answer (a getconf found on PATH instead would answer: it is not asked).
   const fakeBin = mkdtempSync(join(tmpdir(), "fake-getconf-"));
   const preload = join(fakeBin, "no-getconf.mjs");
-  writeFileSync(preload, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; const real = cp.execFileSync; cp.execFileSync = (file, ...rest) => { if (file === "/usr/bin/getconf") throw new Error("getconf did not answer"); return real(file, ...rest); }; syncBuiltinESMExports();`);
+  writeFileSync(preload, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; const real = cp.execFileSync; cp.execFileSync = (file, ...rest) => { if (file === "/usr/bin/getconf") throw Object.assign(new Error("spawnSync /usr/bin/getconf ETIMEDOUT"), { code: "ETIMEDOUT", stderr: "" }); return real(file, ...rest); }; syncBuiltinESMExports();`);
   const out = execFileSync(process.execPath, ["--import", preload, "--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8" });
   const result = JSON.parse(out.trim().split("\n").at(-1)!);
   assert.equal(result.ok, false, out);
-  assert.equal(result.reason, "macOS gave no usable per-user temp folder (getconf DARWIN_USER_DIR: getconf did not answer); asked again after 10 minutes");
+  assert.equal(result.reason, "macOS gave no usable per-user temp folder (getconf DARWIN_USER_DIR did not answer in 2 s); macOS is asked again in 10 minutes");
 });

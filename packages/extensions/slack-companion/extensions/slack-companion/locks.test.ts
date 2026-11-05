@@ -131,7 +131,10 @@ test("the real start time reads the same whatever the caller's time zone and lan
     assert.equal(plain.kind, "started", `this process's start: ${JSON.stringify(plain)}`);
     Object.assign(process.env, { TZ: "Asia/Tokyo", LC_ALL: "de_DE.UTF-8", LANG: "de_DE.UTF-8" });
     assert.deepEqual(processStart(process.pid), plain);
-    assert.deepEqual(processStart(999_999), { kind: "gone" });
+    // ps may run out of time on a loaded machine ("unknown", which keeps a holder): ask again then.
+    let missing = processStart(999_999);
+    for (let tries = 0; missing.kind === "unknown" && tries < 3; tries += 1) missing = processStart(999_999);
+    assert.deepEqual(missing, { kind: "gone" });
   } finally {
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }

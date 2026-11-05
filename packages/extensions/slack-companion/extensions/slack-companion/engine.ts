@@ -1087,7 +1087,7 @@ export class Engine {
     if (watch.held) {
       // Written before the pause: sent as written, so its hand-offs and requests are not made twice.
       const held = watch.held.reply;
-      const sent = await this.sendTracked(watch, held, { commit: () => { delete watch.held; } });
+      const sent = await this.sendTracked(watch, held, { by: "helper", commit: () => { delete watch.held; } });
       // Every outcome but a pause settles the held reply (sent, blocked as secret-shaped, or the
       // conversation ended); keeping it would schedule the same attempt again without end.
       if (sent !== "paused") delete watch.held;
@@ -1157,7 +1157,7 @@ export class Engine {
       return;
     }
     const reply = parts.join("\n\n");
-    const sent = await this.sendTracked(watch, reply, { commit: () => { this.takeFromInbox(watch, taken); } });
+    const sent = await this.sendTracked(watch, reply, { by: "helper", commit: () => { this.takeFromInbox(watch, taken); } });
     if (this.disposed || signal.aborted) {
       // Stopped during the send (and perhaps watched again since): this run's step is settled by
       // the commit; it must not end, note or finish a watch that is no longer its own.
@@ -1183,8 +1183,8 @@ export class Engine {
    * and recorded. A note the owner's own action caused (approved, declined) is not held by a pause
    * and does not count toward it.
    */
-  async sendTracked(watch: WatchState, text: string, options: { by?: OwnAuthor; commit?: () => void } = {}): Promise<SendOutcome> {
-    const by = options.by ?? "helper";
+  async sendTracked(watch: WatchState, text: string, options: { by: OwnAuthor; commit?: () => void }): Promise<SendOutcome> {
+    const { by } = options;
     const what = by === "this session" ? "your note" : "a reply";
     if (this.disposed || !isLive(watch)) return "revoked";
     const config = this.deps.config();
@@ -1222,7 +1222,8 @@ export class Engine {
       watch.lastAgentPostOurs = true;
     } catch (error) {
       entry.status = error instanceof SendUncertainError ? "uncertain" : "failed";
-      if (!this.disposed) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
+      // Already read back in the conversation: reconcile confirms it; no warning to take back.
+      if (!this.disposed && !entry.readBack) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
     } finally {
       this.inFlightSends.delete(entry.id);
     }

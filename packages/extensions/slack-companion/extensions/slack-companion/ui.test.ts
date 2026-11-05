@@ -457,3 +457,28 @@ test("the panel's latest post skips this session's helper replies as well as mai
   assert.match(panel, /Robin Colleague: is staging down\?/);
   assert.doesNotMatch(panel, /Checking now/);
 });
+
+test("a conversation where agent posts wait is never folded into 'watching': the line counts it in warning, and the panel lists it right after the paused", () => {
+  const plainLine = (w: number, state: SurfaceState) => renderLine(state, plain, w)[0] ?? "";
+  const colored: Paint = { fg: (c, t) => `<${c}>${t}</${c}>`, bold: (t) => t };
+  const agentWatch = channelWatch(9, { channelName: "general", partner: { userId: "U9", name: "Casey Ops" }, agentPostsWaiting: 1, lastActivityAt: 1 });
+  const others = [1, 2, 3, 4, 5].map((i) => channelWatch(i, { lastActivityAt: 10 + i }));
+  const state = surface({ watches: [...others, agentWatch] }, { answering: new Set([others[0]!.key]) });
+  for (const width of [40, 50, 60, 80]) {
+    const line = plainLine(width, state);
+    assert.match(line, /Casey Ops #general agent post waits|1 agent\b|1 with agent posts/, `${width}: ${line}`);
+  }
+  assert.match(renderLine(state, colored, 40)[0]!, /<warning>●<\/warning>/, "the dot says something waits");
+  const order = renderPanel(state, 0, plain, 80, 0, 60).filter((r) => /Person \d|Casey Ops/.test(r) && /●|○/.test(r));
+  assert.match(order[0]!, /Casey Ops/, `first after the paused: ${order.join(" | ")}`);
+});
+
+test("threads with different people in one long channel keep the people in a narrow panel", () => {
+  const long = "release-train-2026-q4-coordination";
+  const state = surface({ watches: [channelWatch(1, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "1.0" }, partner: { userId: "U1", name: "Robin Colleague" } }), channelWatch(2, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "2.0" }, partner: { userId: "U2", name: "Robert Smith" } })] });
+  for (const width of [36, 40, 44, 50]) {
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#"));
+    assert.equal(rows.length, 2, `${width}`);
+    assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `${width}: ${rows.join(" | ")}`);
+  }
+});
