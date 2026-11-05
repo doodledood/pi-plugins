@@ -110,6 +110,8 @@ test("a sandboxed command sees no credential variables, and the owner sees no co
   assert.equal(stripControl("ok\u001b[2J\u001b]0;title\u0007 done\u0000"), "ok done");
   assert.equal(stripControl("approve \u202eexe.\u202c report \u2066x\u2069"), "approve exe. report x", "no text shown in another order than it is");
   assert.equal(stripControl("\u200f12\u200f,\u200f34\u061c\u200e"), "12,34", "nor through the invisible marks");
+  assert.equal(stripControl("Ro\u200bbin\u2060 Colleague\ufeff"), "Robin Colleague", "a name padded with invisible spaces shows as it reads");
+  assert.equal(stripControl("👨\u200d👩\u200d👧 می\u200cخواهم"), "👨\u200d👩\u200d👧 می\u200cخواهم", "the joiners that shape emoji and scripts stay");
 });
 
 test("output lines naming what the helper may not read are dropped; other text stays", () => {

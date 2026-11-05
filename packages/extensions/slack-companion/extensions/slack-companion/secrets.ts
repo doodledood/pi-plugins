@@ -303,8 +303,8 @@ export function findSecretShape(text: string): string | undefined {
 }
 
 /**
- * Remove terminal control and escape sequences and invisible bidirectional controls, so text shown
- * to the owner is what it says, in the order it is.
+ * Remove terminal control and escape sequences, invisible bidirectional controls and invisible
+ * spaces, so text shown to the owner is what it says, in the order it is.
  */
 export function stripControl(text: string): string {
   return text
@@ -313,5 +313,8 @@ export function stripControl(text: string): string {
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
     // Invisible bidirectional controls (marks, overrides, isolates): they would show text in
     // another order than it is. Right-to-left letters themselves stay.
-    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    // Invisible spaces that join or part nothing (zero-width space, word joiner, byte-order mark):
+    // a name padded with them would look like another. The joiners that shape scripts and emoji stay.
+    .replace(/[\u200b\u2060\ufeff]/g, "");
 }

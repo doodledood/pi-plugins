@@ -31,117 +31,6 @@ export function cut(text: string, width: number): string {
 }
 
 /**
- * Cut a channel's name so it reads apart from the others shown: keep its start, skip what it
- * shares with them, and show from just before where it differs, the differing character included.
- * Each name is first cut where it differs from its nearest neighbour; a cut that two names still
- * share moves to where the name differs from another, then to a cut from the middle. The whole set
- * is decided at once, so every row computes the same cuts.
- */
-export function cutApart(name: string, others: readonly string[], width: number): string {
-  const names = [...new Set([name, ...others])].sort();
-  const key = `${width}\u0000${names.join("\u0000")}`;
-  let set = cutSets.get(key);
-  if (!set) {
-    set = cutSet(names, width);
-    // Rows of one width, and every re-render, ask for the same set again: keep the latest few.
-    if (cutSets.size >= 64) cutSets.delete(cutSets.keys().next().value!);
-    cutSets.set(key, set);
-  }
-  return set.get(name)!;
-}
-
-const cutSets = new Map<string, Map<string, string>>();
-
-function cutSet(names: readonly string[], width: number): Map<string, string> {
-  const unique = [...new Set(names)].sort();
-  const choices = new Map<string, string[]>();
-  for (const name of unique) {
-    if (visibleWidth(name) <= width) {
-      choices.set(name, [name]);
-      continue;
-    }
-    const chars = [...name];
-    // Where it differs from each other name, nearest neighbour first.
-    const differences = [...new Set(unique.filter((o) => o !== name).map((o) => {
-      const other = [...o];
-      let n = 0;
-      while (n < chars.length && n < other.length && chars[n] === other[n]) n += 1;
-      return n;
-    }))].sort((a, b) => b - a);
-    const cuts = differences.map((at) => cutAt(chars, at, width)).filter((c): c is string => c !== undefined);
-    choices.set(name, [...new Set([...cuts, cutMiddle(name, width)])]);
-  }
-  const chosen = new Map(unique.map((name) => [name, choices.get(name)![0]!]));
-  for (const name of unique) {
-    const takenByOther = (cut: string) => unique.some((other) => other !== name && chosen.get(other) === cut);
-    if (!takenByOther(chosen.get(name)!)) continue;
-    const free = choices.get(name)!.find((cut) => !takenByOther(cut));
-    if (free) chosen.set(name, free);
-  }
-  return chosen;
-}
-
-/** A name cut to show where it differs at character `at`, or undefined when that cannot fit. */
-function cutAt(chars: readonly string[], at: number, width: number): string | undefined {
-  const cells = (from: number, to: number) => visibleWidth(chars.slice(from, to).join(""));
-  // The difference falls inside the start a middle cut keeps (which shows the end too), or else
-  // inside an end cut (width - 1 cells and the mark).
-  if (cells(0, at + 1) <= Math.floor((width - 1) / 2)) return cutMiddle(chars.join(""), width);
-  if (cells(0, at + 1) <= width - 1) return cut(chars.join(""), width);
-  const room = width - 1; // cells besides the skip mark
-  // The start always keeps one to three characters within three cells (one wide character still
-  // counts), more when the tail leaves room, so a wide script leaves room for where names differ.
-  let headMin = 1;
-  while (headMin < 3 && cells(0, headMin + 1) <= 3) headMin += 1;
-  // In very few cells, one starting character is enough.
-  if (room - cells(0, headMin) < 2) headMin = 1;
-  const tailRoom = room - cells(0, headMin);
-  // Up to two characters of lead-in before the difference, fewer where room is short.
-  for (let lead = 2; lead >= 0; lead -= 1) {
-    const from = at - lead;
-    const whole = cells(from, chars.length);
-    // A tail that is cut needs its mark as well as the characters through the difference.
-    if ((whole <= tailRoom ? whole : cells(from, at + 1) + 1) > tailRoom) continue;
-    const tailCells = Math.min(whole, tailRoom);
-    let head = "";
-    for (const char of chars.slice(0, from)) {
-      if (visibleWidth(head + char) > room - tailCells) break;
-      head += char;
-    }
-    return `${head}…${cut(chars.slice(from).join(""), tailCells)}`;
-  }
-  return undefined;
-}
-
-/**
- * A person's name in `width` cells: a plain cut, unless it would read like another of `others`
- * (cut the same way, or the start of their name); then cut where the name differs from them, as
- * channels are cut.
- */
-function cutPerson(name: string, others: readonly string[], width: number): string {
-  const plain = cut(name, width);
-  const kept = plain.endsWith("…") ? plain.slice(0, -1) : undefined;
-  const clash = others.some((other) => other !== name && (cut(other, width) === plain || (kept !== undefined && other.startsWith(kept))));
-  return clash ? cutApart(name, others, width) : plain;
-}
-
-/** Cut a name from the middle, keeping its start and its end. */
-export function cutMiddle(text: string, width: number): string {
-  if (visibleWidth(text) <= width) return text;
-  if (width <= 2) return cut(text, width);
-  const chars = [...text];
-  let head = "";
-  let tail = "";
-  for (let i = 0, j = chars.length - 1; i <= j; ) {
-    const next = visibleWidth(head) <= visibleWidth(tail) ? chars[i]! : chars[j]!;
-    if (visibleWidth(head) + visibleWidth(tail) + visibleWidth(next) > width - 1) break;
-    if (visibleWidth(head) <= visibleWidth(tail)) head += chars[i++]!;
-    else tail = chars[j--]! + tail;
-  }
-  return `${head}…${tail}`;
-}
-
-/**
  * The panel's share of the terminal's height. The overlay is opened with exactly this share and
  * the panel lays itself out in exactly as many rows: the overlay cuts what is taller, and "the
  * request was shown to its end" relies on nothing being cut.
@@ -204,47 +93,41 @@ function openingWords(watch: WatchState, cells: number): string | undefined {
 
 /** Cells the line gives a conversation's first words, so two or three fresh conversations fit. */
 const LINE_OPENING_CELLS = 16;
-/** Cells a channel's name may take on the line before anyone answered, so its first words still show. */
-const CHANNEL_NAME_CELLS = 14;
-/** Cells the panel keeps for a conversation's first words before it cuts the channel's name. */
-const PANEL_OPENING_CELLS = 8;
-/** The fewest cells a cut channel name keeps in the panel: enough for its start, a mark and three characters where it differs. */
-const CHANNEL_NAME_MIN_CELLS = 8;
 /** What quoting first words adds after a prefix: a space and two quotes. */
 const QUOTED_EXTRA = 3;
 
 /**
  * A conversation as the line and the panel name it before anyone has answered: a DM by its first
- * words, a channel thread by its channel and first words. One spelling for both surfaces. `room`
- * is the cells the whole label may take (the panel's); without it, the line's budget is used.
+ * words, a channel thread by its channel and first words. One spelling for both surfaces. Names
+ * are never cut: the first words take what is left of `room` (the panel's), or the line's budget
+ * without it, and are left out when too little is left.
  */
-function unnamedLabel(watch: WatchState, others: readonly string[], room?: number): string {
-  const dm = isDirectMessage(watch.conversation.channelId);
-  const channel = channelOf(watch);
-  // The panel names the channel whole unless its first words would get too few cells; the line
-  // caps it. Either cuts it where it differs from the other channels shown (cutApart).
-  const channelCells = room === undefined ? CHANNEL_NAME_CELLS : Math.max(CHANNEL_NAME_MIN_CELLS, room - 1 - QUOTED_EXTRA - PANEL_OPENING_CELLS);
-  const prefix = dm ? "DM" : `#${cutApart(channel, others, channelCells)}`;
+function unnamedLabel(watch: WatchState, room?: number): string {
+  const prefix = unnamedPrefix(watch);
   const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - QUOTED_EXTRA;
   const opening = cells >= 4 ? openingWords(watch, cells) : undefined;
   if (opening) return `${prefix} "${opening}"`;
-  return dm ? dmLabel(undefined) : prefix;
+  return isDirectMessage(watch.conversation.channelId) ? dmLabel(undefined) : prefix;
 }
 
-/** A conversation as the line names it: the person, and the channel when it is not a DM; before anyone answers, unnamedLabel. */
-function lineLabel(watch: WatchState, others: readonly string[]): string {
+/** What names a conversation before its first words: "DM", or its channel. */
+function unnamedPrefix(watch: WatchState): string {
+  return isDirectMessage(watch.conversation.channelId) ? "DM" : `#${channelOf(watch)}`;
+}
+
+/**
+ * A conversation as the line names it: the person, and the channel when it is not a DM; before
+ * anyone answers, unnamedLabel. Names are whole: an entry whose label does not fit folds into
+ * "+N watching".
+ */
+function lineLabel(watch: WatchState): string {
   const person = watch.partner?.name;
-  if (!person) return unnamedLabel(watch, others);
-  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${cutApart(channelOf(watch), others, CHANNEL_NAME_CELLS)}`;
+  if (!person) return unnamedLabel(watch);
+  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${channelOf(watch)}`;
 }
 
 function channelOf(watch: WatchState): string {
   return watch.channelName || watch.conversation.channelId;
-}
-
-/** The channel names of every watch shown, so each cut name reads apart from the rest. */
-function channelNames(surface: SurfaceState): string[] {
-  return [...new Set(surface.engine.watches.filter((w) => !isDirectMessage(w.conversation.channelId)).map(channelOf))];
 }
 
 /**
@@ -269,7 +152,6 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const id = isDirectMessage(watch.conversation.channelId) ? watch.conversation.channelId : watch.key;
     groups.set(id, [...(groups.get(id) ?? []), watch]);
   }
-  const others = channelNames(surface);
   const ranked = [...groups.values()].map((watches) => {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
     const states = watches.map((w) => watchState(w, surface));
@@ -277,7 +159,7 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const agentPosts = watches.reduce((sum, w) => sum + (w.agentPostsWaiting ?? 0), 0);
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const word = state === "agent posts" ? { text: agentPosts === 1 ? "agent post waits" : `${agentPosts} agent posts wait`, color: "warning" as const } : LINE_WORD[state];
-    const entry: LineEntry = { label: lineLabel(named, others), state, agentPosts, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
+    const entry: LineEntry = { label: lineLabel(named), state, agentPosts, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
     return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
@@ -503,7 +385,7 @@ function keysFor(item: PanelItem | undefined, approvable: boolean): string {
 }
 
 /** An item's rows, `inner` cells wide; `pinned` of them stay in view while the rest scroll. */
-function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean, channels: readonly string[]): { rows: string[]; pinned: number } {
+function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): { rows: string[]; pinned: number } {
   const indent = (rows: string[]) => rows.map((r) => `   ${r}`);
   const strong = (text: string) => (selected ? paint.bold(text) : text);
   if (item.kind === "ended") return { rows: [paint.fg("muted", `${item.count} more ended`)], pinned: 1 };
@@ -515,17 +397,19 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
       : paint.fg("muted", approval.status === "approved" ? "✓ approved — sent to your session" : "✗ declined");
     // The whole request, wrapped, never cut: exactly what main receives if approved.
     const body = wrapTextWithAnsi(approval.text, inner - 3).map((row) => (pending ? paint.fg("text", row) : paint.fg("dim", row)));
-    return { rows: [head, ...indent([paint.fg("muted", cut(`from ${requestSource(approval)}`, inner - 3))]), ...indent(body)], pinned: 2 };
+    // Who asked, whole (a person's name is never cut), wrapped when long.
+    const from = wrapTextWithAnsi(`from ${requestSource(approval)}`, inner - 3).map((row) => paint.fg("muted", row));
+    return { rows: [head, ...indent(from), ...indent(body)], pinned: 1 + from.length };
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
   const live = isLive(watch) ? PANEL_STATUS[watchState(watch, surface)] : undefined;
   const status = live ? paint.fg(live.color, live.text) : watch.status === "error" ? paint.fg("error", "× stopped") : paint.fg("muted", "· ended");
-  const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
-  // The people of the other threads in this channel, so a cut name still tells the rows apart.
-  const people = surface.engine.watches.filter((w) => w.conversation.channelId === watch.conversation.channelId && w.partner).map((w) => w.partner!.name);
-  const { text: label, personWhole } = panelLabel(watch, labelRoom, channels, people);
-  const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
+  // Names wrap, so the label takes only what the status leaves.
+  const labelRoom = Math.max(4, inner - visibleWidth(status) - 2);
+  const [first, ...more] = panelLabel(watch, labelRoom, inner - 3);
+  const labelColor = isLive(watch) ? "text" : "muted";
+  const rows = [`${paint.fg(labelColor, strong(first!))}  ${status}`, ...indent(more.map((row) => paint.fg(labelColor, strong(row))))];
   // Agent posts that wait on the owner stay in view until he or his session writes there: the
   // count, then the latest such post on rows of its own (two at most), so its words show.
   const latestAgentPost = watch.agentPostsWaiting && isLive(watch) ? [...watch.context].reverse().find((m) => m.origin === "someone's agent") : undefined;
@@ -535,13 +419,9 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     const countRow = visibleWidth(agentPostsWord(n) + tail) <= inner - 3 ? agentPostsWord(n) + tail : agentPostsWord(n);
     rows.push(...indent([paint.fg("warning", cut(countRow, inner - 3))]));
     if (latestAgentPost) {
-      // The row already names its person: their agent's post needs no second name.
-      // Only while the row shows that person's name whole (a narrow row may cut or drop it).
-      const text = agentText(latestAgentPost);
-      const poster = latestAgentPost.userId === watch.partner?.userId && personWhole ? "their agent" : `${nameFor(latestAgentPost, surface, inner - 3, 2, text)} (agent)`;
-      const wrapped = wrapTextWithAnsi(`${poster}: ${text}`, inner - 3);
-      const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
-      rows.push(...indent(shown.map((row) => paint.fg("warning", row))));
+      // The row above names its person, whole: their agent's post needs no second name.
+      const poster = latestAgentPost.userId === watch.partner?.userId ? "their agent" : postedBy(latestAgentPost);
+      rows.push(...indent(postRows(poster, agentText(latestAgentPost), inner - 3, 2).map((row) => paint.fg("warning", row))));
     }
   }
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
@@ -552,49 +432,51 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   // (Not twice: an agent post that waits is already on the row above.)
   if (last && last !== latestAgentPost && isLive(watch) && !answering) {
     const text = last.origin === "someone's agent" ? agentText(last) : last.text.replace(/\s+/g, " ");
-    rows.push(...indent([paint.fg("muted", cut(`${postedBy(last, nameFor(last, surface, inner - 3, 1, text))}: ${text}`, inner - 3))]));
+    rows.push(...indent(postRows(postedBy(last), text, inner - 3, 1).map((row) => paint.fg("muted", row))));
   }
   return { rows, pinned: 1 };
 }
 
 /**
- * A watch as its panel row names it, in `room` cells; `channels` are the channel names shown, and
- * `people` the people of the threads in this watch's channel (a cut name must read apart from them).
- * Also whether the row shows the partner's whole name (the name itself, not letters of the channel).
+ * A watch as its panel rows name it: the first in `room` cells (the status follows it), the rest in
+ * `rest`.
+ * Names (people, channels) are never cut: the first words and the kind of conversation give way,
+ * a name that does not fit beside the person goes to rows of its own, and a name wider than a row
+ * wraps.
  */
-function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[]): { text: string; personWhole: boolean } {
+function panelLabel(watch: WatchState, room: number, rest: number): string[] {
   const dm = isDirectMessage(watch.conversation.channelId);
   const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   if (!watch.partner) {
-    // Before anyone has answered: the same first words as on the line, cut to leave the kind whole.
+    // Before anyone has answered: the same first words as on the line, cut to leave the kind whole;
+    // where the channel leaves them too little, on a row of their own, so fresh threads read apart.
     const kind = dm ? ` · ${bareKind}` : "";
-    return { text: `${unnamedLabel(watch, channels, room - visibleWidth(kind))}${kind}`, personWhole: false };
+    const label = unnamedLabel(watch, room - visibleWidth(kind));
+    const opening = openingWords(watch, rest - QUOTED_EXTRA + 1);
+    if (label !== unnamedPrefix(watch) || !opening) return wrapFirst(`${label}${kind}`, room, rest);
+    return [...wrapFirst(`${label}${kind}`, room, rest), `"${opening}"`];
   }
   const name = watch.partner.name;
   if (!dm) {
-    // The person first; the channel gets what is left, cut where it differs from the others.
-    // Where the long form leaves the channel too little, the short one (as on the line) keeps it.
-    const channel = channelOf(watch);
-    // A short channel needs no more than its own cells.
-    const channelNeeds = Math.min(CHANNEL_NAME_MIN_CELLS, visibleWidth(channel));
-    const head = `${threadOf(watch.partner.name)}#`;
-    if (room - visibleWidth(head) >= channelNeeds) return { text: `${head}${cutApart(channel, channels, room - visibleWidth(head))}`, personWhole: true };
-    // The short form, as on the line: the person first (rows in one channel differ only by the
-    // person), the channel in what is left; with under two cells for the person, the channel alone,
-    // so no later cut drops where it differs.
-    const personRoom = room - 2 - channelNeeds;
-    if (personRoom < 2) return { text: `#${cutApart(channel, channels, room - 1)}`, personWhole: false };
-    const person = cutPerson(name, people, personRoom);
-    return { text: `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`, personWhole: person === name };
+    const channel = `#${channelOf(watch)}`;
+    for (const text of [`${threadOf(name)}${channel}`, `${name} ${channel}`]) if (visibleWidth(text) <= room) return [text];
+    return [...wrapFirst(name, room, rest), ...wrapTextWithAnsi(channel, rest)];
   }
-  // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
-  // snippet gives way to a bare "thread" when too little is left for it.
-  const shownName = cut(name, Math.max(6, room - DM_MARK.length - 12));
-  const who = `${shownName} ${DM_MARK}`;
+  // The name and "(DM)" first; the kind of conversation gets what is left: a thread's first words
+  // give way to a bare "thread" when too little is left for them, and that to a row of its own.
+  const who = `${name} ${DM_MARK}`;
   const left = room - visibleWidth(`${who} · `);
+  if (left < visibleWidth(bareKind)) return [...wrapFirst(who, room, rest), cut(kindLabel(watch), rest)];
   const kind = kindLabel(watch);
   const fitted = visibleWidth(kind) <= left ? kind : watch.conversation.kind === "thread" && left >= 16 ? cut(kind, left) : bareKind;
-  return { text: `${who} · ${fitted}`, personWhole: shownName === name };
+  return [`${who} · ${fitted}`];
+}
+
+/** `text` wrapped: its first row in `first` cells, the rest in `rest`. */
+function wrapFirst(text: string, first: number, rest: number): string[] {
+  const head = wrapTextWithAnsi(text, first)[0] ?? "";
+  const remainder = text.slice(head.length).trimStart();
+  return remainder ? [head, ...wrapTextWithAnsi(remainder, rest)] : [head];
 }
 
 /** An agent's marker (an emoji or two) in front of its post: "(agent)" already says it. */
@@ -607,21 +489,21 @@ function agentText(message: ContextMessage): string {
 }
 
 /**
- * A poster's name for a post shown on `rows` rows of `width` cells: whole when the post's words
- * still fit with it (or keep a dozen cells on its first row), else cut only as far as that needs,
- * and so it reads apart from every other person the panel names.
+ * A post as `poster: text`: the text on `rows` rows of `width` cells, wrapped, cut on the last.
+ * The poster's name is never cut: one too wide to share a row with the text gets rows of its own.
  */
-function nameFor(message: ContextMessage, surface: SurfaceState, width: number, rows: number, text: string): string {
-  const name = message.userName;
-  const suffix = message.origin === "someone's agent" ? " (agent): " : ": ";
-  const wholeFits = wrapTextWithAnsi(`${name}${suffix}${text}`, width).length <= rows || visibleWidth(name + suffix) + 12 <= width;
-  if (wholeFits) return name;
-  const names = [...new Set(surface.engine.watches.flatMap((w) => [...(w.partner ? [w.partner.name] : []), ...w.context.map((m) => m.userName)]))];
-  return cutPerson(name, names, Math.max(8, width - visibleWidth(suffix) - 12));
+function postRows(poster: string, text: string, width: number, rows: number): string[] {
+  const fit = (line: string) => {
+    const wrapped = wrapTextWithAnsi(line, width);
+    return wrapped.length > rows ? [...wrapped.slice(0, rows - 1), cut(wrapped.slice(rows - 1).join(" "), width)] : wrapped;
+  };
+  const name = wrapTextWithAnsi(`${poster}:`, width);
+  return name.length > 1 ? [...name, ...fit(text)] : fit(`${poster}: ${text}`);
 }
 
-/** Who posted a kept message, as the panel names them (`name`: the poster's name as cut for the row). */
-function postedBy(message: ContextMessage, name = message.userName): string {
+/** Who posted a kept message, as the panel names them. */
+function postedBy(message: ContextMessage): string {
+  const name = message.userName;
   const { origin } = message;
   switch (origin) {
     case "owner's other agent":
@@ -700,9 +582,8 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   if (!surface.enabled) return message(wrapped("slack-companion is off. Run /slack on to turn it on. Then each Slack message your session sends starts a watch.", "muted"));
   if (!items.length) return message(wrapped("Nothing watched yet. A Slack message your session sends starts a watch. /slack <link> watches a conversation someone else started.", "muted"));
   const selected = Math.min(view.selected, items.length - 1);
-  const channels = channelNames(surface);
   const blocks = items.map((item, index) => {
-    const { rows, pinned } = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected, channels);
+    const { rows, pinned } = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected);
     rows[0] = `${index === selected ? paint.fg("accent", "›") : " "} ${rows[0]}`;
     for (let i = 1; i < rows.length; i += 1) rows[i] = `  ${rows[i]}`;
     return { rows, pinned };
