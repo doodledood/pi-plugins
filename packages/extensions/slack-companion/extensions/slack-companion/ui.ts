@@ -93,6 +93,8 @@ function cutAt(chars: readonly string[], at: number, width: number): string | un
   // counts), more when the tail leaves room, so a wide script leaves room for where names differ.
   let headMin = 1;
   while (headMin < 3 && cells(0, headMin + 1) <= 3) headMin += 1;
+  // In very few cells, one starting character is enough.
+  if (room - cells(0, headMin) < 2) headMin = 1;
   const tailRoom = room - cells(0, headMin);
   // Up to two characters of lead-in before the difference, fewer where room is short.
   for (let lead = 2; lead >= 0; lead -= 1) {
@@ -173,6 +175,8 @@ interface LineEntry {
   label: string;
   /** The conversation's state: the first in LINE_ORDER any of its watches is in. */
   state: LineState;
+  /** Agent posts that wait on the owner across its watches. */
+  agentPosts: number;
   /** A state word shown whole, in its color; or none, and the note shows instead. */
   word?: { text: string; color: PaintColor };
   note: string;
@@ -261,7 +265,7 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const agentPosts = watches.reduce((sum, w) => sum + (w.agentPostsWaiting ?? 0), 0);
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const word = state === "agent posts" ? { text: agentPosts === 1 ? "agent post waits" : `${agentPosts} agent posts wait`, color: "warning" as const } : LINE_WORD[state];
-    const entry: LineEntry = { label: lineLabel(named, others), state, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
+    const entry: LineEntry = { label: lineLabel(named, others), state, agentPosts, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
     return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
@@ -279,23 +283,25 @@ const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>>
   "catching up": { text: "catching up", color: "accent" },
 };
 
-/** What needs the owner first, on the line and in the panel (catching up and watching tie: newest first). */
-const LINE_RANK: Record<LineState, number> = { paused: 0, "agent posts": 1, answering: 2, "catching up": 3, watching: 3 };
+/** What needs the owner first, on the line and in the panel: LINE_ORDER, with catching up and watching tied (newest first). */
+const LINE_RANK = Object.fromEntries(LINE_ORDER.map((state, i) => [state, Math.min(i, LINE_ORDER.indexOf("catching up"))])) as Record<LineState, number>;
 
 /**
  * The states the line counts on their own when it does not name them all, never folded into
- * "watching", and that turn its dot to warning: what waits on the owner. In LINE_ORDER.
+ * "watching", and that turn its dot to warning: what waits on the owner. In LINE_ORDER. Each
+ * counts in its own unit (`weight`: conversations, or agent posts), and its words take the number
+ * of the unnamed ones, with "+" when some are named.
  */
-const LINE_COUNTED: Partial<Record<LineState, { long: (n: number) => string; short: (n: number) => string }>> = {
-  paused: { long: (n) => `${n} paused`, short: (n) => `${n} paused` },
-  "agent posts": { long: (n) => `${n} with agent posts`, short: (n) => (n === 1 ? "1 agent post" : `${n} agent posts`) },
+const LINE_COUNTED: Partial<Record<LineState, { weight: (e: LineEntry) => number; long: (n: number) => string; short: (n: number) => string }>> = {
+  paused: { weight: () => 1, long: (n) => `${n} paused`, short: (n) => `${n} paused` },
+  "agent posts": { weight: (e) => e.agentPosts, long: (n) => `${n} agent post${n === 1 ? "" : "s"} waiting`, short: (n) => `${n} agent post${n === 1 ? "" : "s"}` },
 };
 const countedStates = LINE_ORDER.filter((state) => LINE_COUNTED[state]);
 
 /** The panel's status per live state: a mark before the word, since a row has room the line lacks. */
 const PANEL_STATUS: Record<LineState, { text: string; color: PaintColor }> = {
   paused: { text: "○ paused", color: "warning" },
-  "agent posts": { text: "◐ agent post waits", color: "warning" },
+  "agent posts": { text: "◐ agent post", color: "warning" },
   answering: { text: "● answering…", color: "accent" },
   "catching up": { text: "◌ catching up", color: "accent" },
   watching: { text: "● watching", color: "success" },
@@ -330,19 +336,24 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   if (!surface.enabled) return [];
   const entries = lineEntries(surface);
   const waiting = surface.engine.approvals.filter((a) => a.status === "pending").length;
-  // Paused conversations, counted as the line shows them: a DM's top level and its threads are one.
+  // A state's conversations, counted as the line shows them: a DM's top level and its threads are one.
   const counted = (list: readonly LineEntry[], state: LineState) => list.filter((e) => e.state === state).length;
   const stopped = surface.engine.watches.filter((w) => isUnseenError(surface, w)).length;
   if (!entries.length && !waiting && !stopped) return [];
   const dot: PaintColor = stopped ? "error" : waiting || entries.some((e) => LINE_COUNTED[e.state]) ? "warning" : "muted";
   // Counts in the order they matter: waiting first, then stops, then the counted states. A count
-  // appears when the line leaves any of its kind unnamed, and counts all of them.
+  // appears when the line leaves any of its kind unnamed: it counts the unnamed ones, in its unit,
+  // with "+" when some of its kind are named (as "+N watching" does).
   const counts = (short: boolean, shown: readonly LineEntry[]) => [
     waiting ? paint.fg("warning", short ? `${waiting} waiting` : `${waiting} waiting for you`) : "",
     stopped ? paint.fg("error", `${stopped} stopped`) : "",
     ...countedStates.map((state) => {
-      const total = counted(entries, state);
-      return total > counted(shown, state) ? paint.fg("warning", LINE_COUNTED[state]![short ? "short" : "long"](total)) : "";
+      const spec = LINE_COUNTED[state]!;
+      const unnamed = entries.filter((e) => e.state === state && !shown.includes(e));
+      if (!unnamed.length) return "";
+      const n = unnamed.reduce((sum, e) => sum + spec.weight(e), 0);
+      const words = spec[short ? "short" : "long"](n);
+      return paint.fg("warning", counted(shown, state) ? `+${words}` : words);
     }),
   ].filter(Boolean);
 
@@ -411,8 +422,8 @@ const ENDED_SHOWN = 3;
 
 /**
  * What needs the owner first: requests (waiting, then those resolved while the panel is open);
- * paused watches; stops with an error he has not seen; watches answering now; the other live
- * watches, most recently active first; then ended ones (errors already seen, and the latest few
+ * paused watches; stops with an error he has not seen; the other live watches in LINE_RANK order
+ * (agent posts waiting, answering now, the rest), most recently active first within each; then ended ones (errors already seen, and the latest few
  * quiet ends, newest first; the rest fold into "N more ended" unless `allEnded`).
  */
 export function panelItems(surface: SurfaceState, openedAt: number, allEnded = false): PanelItem[] {
@@ -501,9 +512,13 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const latestAgentPost = watch.agentPostsWaiting && isLive(watch) ? [...watch.context].reverse().find((m) => m.origin === "someone's agent") : undefined;
   if (watch.agentPostsWaiting && isLive(watch)) {
     const n = watch.agentPostsWaiting;
-    rows.push(...indent([paint.fg("warning", cut(`${agentPostsWord(n)}${latestAgentPost ? ", the latest:" : `; check ${n === 1 ? "it" : "them"}`}`, inner - 3))]));
+    const tail = latestAgentPost ? ", the latest:" : n === 1 ? "; check it" : "; check them";
+    const countRow = visibleWidth(agentPostsWord(n) + tail) <= inner - 3 ? agentPostsWord(n) + tail : agentPostsWord(n);
+    rows.push(...indent([paint.fg("warning", cut(countRow, inner - 3))]));
     if (latestAgentPost) {
-      const wrapped = wrapTextWithAnsi(`${postedBy(latestAgentPost)}: ${agentText(latestAgentPost)}`, inner - 3);
+      // The row already names its person: their agent's post needs no second name.
+      const poster = latestAgentPost.userId === watch.partner?.userId ? "their agent" : postedBy(latestAgentPost);
+      const wrapped = wrapTextWithAnsi(`${poster}: ${agentText(latestAgentPost)}`, inner - 3);
       const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
       rows.push(...indent(shown.map((row) => paint.fg("warning", row))));
     }
@@ -521,8 +536,11 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   return { rows, pinned: 1 };
 }
 
-/** A watch as its panel row names it, in `room` cells; `channels` are the channel names shown. */
-function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[] = []): string {
+/**
+ * A watch as its panel row names it, in `room` cells; `channels` are the channel names shown, and
+ * `people` the people of the threads in this watch's channel (a cut name must read apart from them).
+ */
+function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[]): string {
   const dm = isDirectMessage(watch.conversation.channelId);
   const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   if (!watch.partner) {
@@ -543,8 +561,11 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     // so no later cut drops where it differs.
     const personRoom = room - 2 - channelNeeds;
     if (personRoom < 2) return `#${cutApart(channel, channels, room - 1)}`;
-    // Cut where the person differs from the others in that channel, as channels are cut.
-    const person = cutApart(watch.partner.name, people, personRoom);
+    // A plain cut, unless it would read like another person's in that channel: then cut where
+    // the person differs from them, as channels are cut.
+    const plain = cut(watch.partner.name, personRoom);
+    const clash = people.some((other) => other !== watch.partner!.name && cut(other, personRoom) === plain);
+    const person = clash ? cutApart(watch.partner.name, people, personRoom) : plain;
     return `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`;
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's

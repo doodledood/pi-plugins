@@ -95,7 +95,7 @@ function userTempFolders(): string[] {
 
 let userFolders: { perUser: string; temp: string } | { failed: Error; at: number } | undefined;
 
-/** How long getconf may take to answer. */
+/** How long getconf may take to answer before the shell is refused (it answers at once when well). */
 const GETCONF_TIMEOUT_MS = 2000;
 
 /** How long a failed answer is kept before the system is asked again. */
@@ -122,14 +122,17 @@ function darwinUserFolders(): { perUser: string; temp: string } | undefined {
           if (said) throw new Error(said);
           if (code === "ETIMEDOUT") throw new Error(`getconf ${name} did not answer in ${GETCONF_TIMEOUT_MS / 1000} s`);
           if (code === "ENOENT") throw new Error("getconf is missing");
-          throw new Error(`getconf ${name} failed (${code ?? `exit ${(error as { status?: number }).status ?? "unknown"}`})`);
+          const { status, signal } = error as { status?: number | null; signal?: NodeJS.Signals | null };
+          throw new Error(`getconf ${name} failed: ${code ?? (signal ? `killed by ${signal}` : `exit ${status ?? "unknown"}`)}`);
         }
       };
       const userDir = ask("DARWIN_USER_DIR");
       if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
       userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
     } catch (error) {
-      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again ${USER_FOLDERS_RETRY_MS / 60_000} minutes after this`), at: Date.now() };
+      const retryAt = new Date(Date.now() + USER_FOLDERS_RETRY_MS);
+      const at = `${String(retryAt.getHours()).padStart(2, "0")}:${String(retryAt.getMinutes()).padStart(2, "0")}`;
+      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again at ${at}`), at: Date.now() };
     }
   }
   if ("failed" in userFolders) throw userFolders.failed;

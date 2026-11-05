@@ -1835,7 +1835,7 @@ test("the helper's own reply leaves the agent-post count: it never answers agent
   const watch = engine.watch(key)!;
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("Will do")));
   assert.equal(watch.agentPostsWaiting, 1, "still waiting on the owner");
-  assert.match(panelOf(engine, slack), /1 agent post since you wrote, the latest:[^\n]*\n[^\n]*Robin Colleague \(agent\): which migration id\?/);
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote, the latest:[^\n]*\n[^\n]*their agent: which migration id\?/);
   assert.equal(watch.context.find((m) => m.text.includes("Will do"))?.origin, "helper");
 });
 
@@ -1909,7 +1909,7 @@ test("an agent post that waits on the owner stays on the line and in the panel h
   await settle(engine);
   assert.ok(agentPosts(slack, DM, q.ts).filter((p) => p.text.includes("Sure, on it.")).length >= 3);
   assert.match(lineOf(engine, slack), /agent post waits/);
-  assert.match(panelOf(engine, slack), /1 agent post since you wrote(, the latest:|; check it)/, "the count, with the post while it is still kept");
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote(, the latest:[^\n]*\n[^\n]*their agent: which migration id\?|; check it)/, "the count, with the post while it is still kept");
 });
 
 test("a note or reply read back while its send runs, whose send then ends uncertain, is settled as sent: never reported lost", async () => {
@@ -1962,4 +1962,27 @@ test("a stop keeps the helper's posts only among the posts it keeps as this sess
   const watch = engine.watch(key)!;
   assert.ok((watch.helperPosts ?? []).every((ts) => watch.ownPosts.includes(ts)), JSON.stringify({ own: watch.ownPosts, helper: watch.helperPosts }));
   assert.ok(watch.helperPosts === undefined || watch.helperPosts.length > 0, "an empty list is dropped");
+});
+
+test("a send read back before it fails, whatever the error, is settled as sent", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack, { now: () => slack.clockMs() + 5000 });
+  const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const send = engine["deps"].backend.send.bind(engine["deps"].backend);
+  engine["deps"].backend.send = async (...args: Parameters<typeof send>) => {
+    await send(...args);
+    await gate;
+    throw new Error("connection reset"); // not marked uncertain, yet the post is out
+  };
+  const sending = engine.sendTracked(engine.watch(key)!, "a reply", { by: "helper" });
+  await new Promise((r) => setTimeout(r, 20));
+  await engine.poll();
+  release();
+  assert.equal(await sending, "uncertain");
+  await settle(engine);
+  assert.equal(log.notices.some((n) => /did not go out|may not have gone out/.test(n)), false, log.notices.join("\n"));
+  assert.ok(engine.watch(key)!.activity!.some((a) => a.text === "helper's reply went out"));
 });

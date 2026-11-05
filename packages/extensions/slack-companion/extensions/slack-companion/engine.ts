@@ -1221,9 +1221,10 @@ export class Engine {
       watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
     } catch (error) {
-      entry.status = error instanceof SendUncertainError ? "uncertain" : "failed";
-      // Already read back in the conversation: reconcile confirms it; no warning to take back.
-      if (!this.disposed && !(entry.readBack && entry.status === "uncertain")) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
+      // A send already read back went out, whatever the error says: reconcile confirms it.
+      entry.status = error instanceof SendUncertainError || entry.readBack ? "uncertain" : "failed";
+      // Already read back in the conversation: reconcile confirms it, so no warning to take back.
+      if (!this.disposed && !entry.readBack) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
     } finally {
       this.inFlightSends.delete(entry.id);
     }

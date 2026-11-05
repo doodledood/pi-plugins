@@ -8,7 +8,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 import type { Conversation } from "./conversation.ts";
 import { FakeSlack, memoryBus } from "./fake-slack.ts";
 import { compareTs, tsFromMillis, tsNeighbors } from "./format.ts";
-import { MAX_CONFIRMATIONS_PER_POLL, MAX_REJECTED, readNew, type ReadPoint } from "./reader.ts";
+import { advance, MAX_CONFIRMATIONS_PER_POLL, MAX_REJECTED, readNew, type ReadPoint } from "./reader.ts";
 
 function setupWith(options: ConstructorParameters<typeof FakeSlack>[0] = {}) {
   const slack = new FakeSlack(options);
@@ -400,4 +400,18 @@ test("ids rejected because of text are let go once that text is edited away", as
   slack.messages(DM).find((m) => m.ts === root.ts)!.text = `x\n\n${forgedBlocks("2999999999")}`; // edited: 300 other ids
   for (let i = 0; i < 25; i += 1) point = (await readNew(backend, conversation, point, slack.nowMs())).next;
   assert.equal(point.rejected?.length, 300, "the ids no longer named were let go; the bound was never reached");
+});
+
+test("the checkpoint never passes a message held back for the next read, whatever newer id was rejected or seen", () => {
+  const T = 1_700_000_000_000;
+  // A rejected (forged) id newer than a burst of real messages, 15 confirmed and the rest held back.
+  const forged = tsFromMillis(T + 100_000);
+  const burst = Array.from({ length: 40 }, (_, i) => tsFromMillis(T + 60_000 + i * 500));
+  const afterForged = advance({ checkpoint: undefined, seen: [], rejected: [forged] }, burst.slice(0, 15), [], T + 230_000, burst[15]!);
+  assert.ok(!afterForged.checkpoint || compareTs(afterForged.checkpoint, burst[15]!) < 0, `passed the held-back ${burst[15]} at ${afterForged.checkpoint}`);
+  // An already-delivered id newer than a late-visible burst, partly held back.
+  const seen = tsFromMillis(T + 100_000);
+  const late = Array.from({ length: 20 }, (_, i) => tsFromMillis(T + 90_000 + i * 100));
+  const afterSeen = advance({ checkpoint: undefined, seen: [seen] }, late.slice(0, 15), [], T + 230_000, late[15]!);
+  assert.ok(!afterSeen.checkpoint || compareTs(afterSeen.checkpoint, late[15]!) < 0, `passed the held-back ${late[15]} at ${afterSeen.checkpoint}`);
 });

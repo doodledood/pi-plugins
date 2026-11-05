@@ -157,7 +157,7 @@ test("the selection follows its item when the list changes, so a key acts on wha
   assert.deepEqual(actions, [{ kind: "stop", key: "C1/1.0" }]);
 });
 
-test("the panel orders by need: requests, paused, unseen stops, answering, the rest; ended ones newest first", () => {
+test("the panel orders by need: requests, paused, unseen stops, agent posts, answering, the rest; ended ones newest first", () => {
   const watches = [
     channelWatch(1, { lastActivityAt: 9 }),
     channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }),
@@ -474,7 +474,7 @@ test("a conversation where agent posts wait is never folded into 'watching': the
   const heads = renderPanel(panelState, 0, plain, 80, 0, 80).filter((r) => /Person \d|Casey Ops/.test(r) && /●|○|◐|×/.test(r));
   assert.deepEqual(heads.slice(0, 4).map((r) => /Person 7|Person 8|Casey Ops|Person 1/.exec(r)?.[0]), ["Person 7", "Person 8", "Casey Ops", "Person 1"], heads.join(" | "));
   assert.equal(heads.filter((r) => r.includes("Casey Ops")).length, 1, "listed once");
-  assert.match(heads.find((r) => r.includes("Casey Ops"))!, /◐ agent post waits/);
+  assert.match(heads.find((r) => r.includes("Casey Ops"))!, /◐ agent post/);
 });
 
 test("the agent post that waits shows its words in the panel at every width", () => {
@@ -504,5 +504,40 @@ test("threads with different people in one long channel keep the people in a nar
     const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#"));
     assert.equal(rows.length, 2, `${width}`);
     assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `${width}: ${rows.join(" | ")}`);
+  }
+});
+
+test("a paused watch stays paused on the line and in the panel even with agent posts waiting, and a DM with one paused thread reads paused", () => {
+  const paused = channelWatch(1, { status: "paused", reason: "sent 5 messages without you", agentPostsWaiting: 1, partner: { userId: "U1", name: "Robin Colleague" } });
+  const state = surface({ watches: [paused] });
+  assert.match(renderLine(state, plain, 100)[0]!, /Robin Colleague #team-1 paused/);
+  const panel = renderPanel(state, 0, plain, 80, 0).join("\n");
+  assert.match(panel, /○ paused/);
+  assert.match(panel, /1 agent post since you wrote/);
+  const dm = surface({ watches: [
+    watch({ key: "D1/top", conversation: { kind: "dm-top", channelId: "D1" }, partner: { userId: "U1", name: "Robin Colleague" }, lastActivityAt: 5 }),
+    watch({ key: "D1/1.0", conversation: { kind: "thread", channelId: "D1", threadTs: "1.0" }, partner: { userId: "U1", name: "Robin Colleague" }, status: "paused", lastActivityAt: 1 }),
+  ] });
+  assert.match(renderLine(dm, plain, 100)[0]!, /Robin Colleague paused/);
+});
+
+test("the line counts agent posts in posts: named and unnamed alike", () => {
+  const many = channelWatch(9, { channelName: "general", partner: { userId: "U9", name: "Casey Ops" }, agentPostsWaiting: 12 });
+  assert.match(renderLine(surface({ watches: [many] }), plain, 40)[0]!, /12 agent posts/);
+  const two = channelWatch(8, { channelName: "eval", partner: { userId: "U8", name: "Sam Teammate" }, agentPostsWaiting: 3, lastActivityAt: 0 });
+  const others = [1, 2, 3].map((i) => channelWatch(i, { lastActivityAt: 10 + i }));
+  const line = renderLine(surface({ watches: [many, two, ...others] }), plain, 90)[0]!;
+  if (/12 agent posts wait/.test(line) && !/3 agent posts wait/.test(line)) assert.match(line, /\+3 agent posts/, line);
+  assert.doesNotMatch(line, / 2 agent posts/, "never a count of conversations called posts");
+});
+
+test("people whose names share their start and end read apart in a narrow panel, in any state", () => {
+  const long = "alerts-prod-payments";
+  for (const agentPostsWaiting of [undefined, 1]) {
+    const state = surface({ watches: [channelWatch(1, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "1.0" }, partner: { userId: "U1", name: "Daniel Fox Smith" }, agentPostsWaiting }), channelWatch(2, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "2.0" }, partner: { userId: "U2", name: "Daniel Ray Smith" }, agentPostsWaiting })] });
+    for (const width of [34, 36, 38, 40]) {
+      const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#"));
+      assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `${agentPostsWaiting ?? 0} ${width}: ${rows.join(" | ")}`);
+    }
   }
 });
