@@ -422,6 +422,11 @@ test("main's own send whose result named no message is read back as this session
   assert.ok(h.calls.some((c) => c.role === "helper"), "the reply is answered");
 });
 
+test("a first session start, before any lock was taken, gives no warning", async () => {
+  const h = await createHarness({ replies: script("question", () => ({ kind: "text", text: "done" })) });
+  assert.deepEqual(h.notices.filter((n) => n.level === "warning"), []);
+});
+
 test("a session start whose lock sweep fails warns and still starts", async () => {
   const first = await createHarness({ persistSession: true, replies: script("question", () => ({ kind: "text", text: "done" })) });
   const locks = join(first.agentDir, "slack-companion", "locks");

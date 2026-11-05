@@ -21,14 +21,16 @@ import { triageInput, type TriageInput } from "./triage.ts";
 export type WatchStatus = "active" | "paused" | "stopped" | "error";
 
 /**
- * Who a kept message came from, as the engine judged it when it read it: this session (main or its
- * helper), another of the owner's agents, someone else's agent, the owner by hand, or a person.
+ * Who a kept message came from, as the engine judged it when it read it (and corrected by markOwn
+ * when it later learns a post was this session's): this session (main or its helper), another
+ * agent of the owner's (another Pi session, or another tool posting as him), someone else's agent,
+ * the owner by hand, or a person.
  */
-export type Origin = "this session" | "other session" | "agent" | "owner" | "person";
+export type Origin = "this session" | "owner's other agent" | "someone's agent" | "owner" | "person";
+const ORIGINS: readonly Origin[] = ["this session", "owner's other agent", "someone's agent", "owner", "person"];
 
 export interface ContextMessage extends SlackMessage {
-  /** Unset in state saved before origins were kept. */
-  origin?: Origin;
+  origin: Origin;
 }
 
 export interface WatchState {
@@ -74,8 +76,6 @@ export interface WatchState {
   channelName?: string;
   /** A post through someone else's agent was seen and the owner told; told once per conversation. */
   agentPostSeen?: boolean;
-  /** Posts through someone else's agent, never answered: the running count in the latest note. */
-  agentPostsUnanswered?: number;
   /** Waiting messages dropped since the waiting list was last answered: the note shows this total. */
   droppedWaiting?: number;
   /**
@@ -131,7 +131,7 @@ export type SendOutcome = "sent" | "paused" | "blocked" | "revoked" | "uncertain
  * a snapshot of another version is not restored. An added optional field needs no bump: an older
  * snapshot simply lacks it.
  */
-export const STATE_VERSION = 2 as const;
+export const STATE_VERSION = 3 as const;
 const MAX_CONTEXT = 12;
 /** Characters of one message kept in the persisted context. */
 const MAX_CONTEXT_TEXT = 1000;
@@ -145,7 +145,7 @@ const MAX_INBOX = 20;
 /** Reads a rejoining watch waits for a read to catch up before it answers anyway (a burst that never ends). */
 const MAX_REJOIN_READS = 5;
 const DROPPED_NOTE = /^\d+ older dropped; /;
-const AGENT_POSTS_NOTE = /agent posts? not answered; /;
+const AGENT_POSTS_NOTE = /^(an|\d+) agent posts? not answered; /;
 /** Characters of a waiting message kept. */
 const MAX_INBOX_TEXT = 4000;
 /** Requests from one conversation that may wait for the owner at once. */
@@ -200,6 +200,7 @@ export function salvageState(data: unknown): { approvals: Approval[]; tombstones
 function watchOk(w: any): boolean {
   return Boolean(w && typeof w.key === "string" && w.conversation && typeof w.conversation.channelId === "string"
     && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox)
+    && w.context.every((m: any) => m && ORIGINS.includes(m.origin))
     && (w.held === undefined || (typeof w.held?.reply === "string" && (w.held.through === undefined || typeof w.held.through === "string"))));
 }
 
@@ -243,7 +244,12 @@ export function watchLabel(watch: Pick<WatchState, "conversation" | "partner" | 
   const { conversation, partner } = watch;
   if (isDirectMessage(conversation.channelId)) return dmLabel(partner?.name);
   const where = watch.channelName ? `#${watch.channelName}` : `#${conversation.channelId}`;
-  return partner ? `${partner.name}'s thread in ${where}` : `a thread in ${where}`;
+  return partner ? `${threadOf(partner.name)}${where}` : `a thread in ${where}`;
+}
+
+/** The one spelling of "a person's thread in" before a channel. */
+export function threadOf(person: string): string {
+  return `${person}'s thread in `;
 }
 
 export interface EngineDeps {
@@ -443,18 +449,42 @@ export class Engine {
    * Is this owner post one of this session's own whose ts is not recorded yet: main's send still
    * running or whose result named no message, or a helper or owner-note send not settled yet?
    */
-  private ownUnrecorded(watch: WatchState, raw: SlackMessage): boolean {
+  private ownUnrecorded(watch: WatchState, raw: SlackMessage): "main" | "tracked" | undefined {
     const text = raw.text.trim();
-    const { conversation } = watch;
     for (const [callId, sent] of this.mainSendsUnrecorded) {
-      if (sent.text !== text || this.channelFor(sent.channelId) !== conversation.channelId) continue;
-      if (sent.threadTs && !(conversation.kind === "thread" && conversation.threadTs === sent.threadTs)) continue;
+      if (sent.text !== text || !this.sendReadHere(watch, sent, raw.ts)) continue;
       this.mainSendsUnrecorded.delete(callId);
-      watch.ownPosts = [...watch.ownPosts, raw.ts].slice(-MAX_OWN_POSTS);
-      return true;
+      return "main";
     }
-    // A tracked send settles by its own result or by reconcile, which then records the ts.
-    return this.state.ledger.some((e) => e.watchKey === watch.key && (e.status === "sending" || e.status === "uncertain") && e.text.trim() === text);
+    // A tracked send settles by its own result or by reconcile, which then records the ts (reconcile
+    // looks for a ts it does not know yet, so it is not recorded here).
+    return this.state.ledger.some((e) => e.watchKey === watch.key && (e.status === "sending" || e.status === "uncertain") && e.text.trim() === text) ? "tracked" : undefined;
+  }
+
+  /**
+   * Could main's send show up in this watch as the post `ts`? In its channel (a user id names the
+   * direct message with that person, once known, or a direct message whose person is not known
+   * yet); in its thread when it named one; else at the top level, or as the first message of the
+   * thread it starts.
+   */
+  private sendReadHere(watch: WatchState, sent: { channelId: string; threadTs?: string }, ts: string): boolean {
+    const { conversation } = watch;
+    const channel = this.channelFor(sent.channelId);
+    const sameChannel = channel === conversation.channelId
+      || (channel === sent.channelId && /^[UW]/.test(sent.channelId) && isDirectMessage(conversation.channelId) && (watch.partner?.userId ?? sent.channelId) === sent.channelId);
+    if (!sameChannel) return false;
+    if (sent.threadTs) return conversation.kind === "thread" && conversation.threadTs === sent.threadTs;
+    return conversation.kind !== "thread" || conversation.threadTs === ts;
+  }
+
+  /**
+   * Record that the post `ts` is this session's own: in ownPosts and, when the message is kept, in
+   * its origin. The one place both change, so they never disagree.
+   */
+  private markOwn(watch: WatchState, ts: string): void {
+    if (!watch.ownPosts.includes(ts)) watch.ownPosts = [...watch.ownPosts, ts].slice(-MAX_OWN_POSTS);
+    const kept = watch.context.find((m) => m.ts === ts);
+    if (kept) kept.origin = "this session";
   }
 
   /** Main sent a message (any route). Start or continue watching, and remember the post. */
@@ -469,7 +499,7 @@ export class Engine {
         watch = this.startWatch(conversation, "send", input.ts);
         if (!watch) continue;
       }
-      watch.ownPosts = [...new Set([...watch.ownPosts, input.ts])].slice(-MAX_OWN_POSTS);
+      this.markOwn(watch, input.ts);
       watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
       watch.lastActivityAt = this.deps.now();
@@ -860,9 +890,13 @@ export class Engine {
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text };
       watch.lastActivityAt = this.deps.now();
       const byOwner = raw.userId === owner.userId;
-      const ownPost = own.has(message.ts) || (byOwner && this.ownUnrecorded(watch, raw));
-      const origin: Origin = ownPost ? "this session" : byOwner ? (raw.agentFooter ? "other session" : "owner") : raw.agentFooter ? "agent" : "person";
+      const unrecorded = !own.has(message.ts) && byOwner ? this.ownUnrecorded(watch, raw) : undefined;
+      const ownPost = own.has(message.ts) || unrecorded !== undefined;
+      const origin: Origin = ownPost ? "this session" : byOwner ? (raw.agentFooter ? "owner's other agent" : "owner") : raw.agentFooter ? "someone's agent" : "person";
       this.remember(watch, { ...message, origin });
+      if (unrecorded === "main") this.markOwn(watch, message.ts);
+      // The owner or this session spoke after them: earlier agent posts are no longer waiting on him.
+      if (origin === "owner" || origin === "this session") this.clearAgentPostsNote(watch);
       if (ownPost) {
         watch.lastAgentPostOurs = true;
         continue;
@@ -889,11 +923,12 @@ export class Engine {
         continue;
       }
       // Someone else's agent (a post with the agent footer under their name): context only, so two
-      // agents never answer each other in a loop. One running count is noted on the watch (the line
-      // shows it; the panel shows the post), and the owner is told once per conversation.
+      // agents never answer each other in a loop. One note counts those since the owner or this
+      // session last spoke (the line shows it; the panel shows the post), and the owner is told
+      // once per conversation.
       if (message.agentFooter) {
-        const count = (watch.agentPostsUnanswered = (watch.agentPostsUnanswered ?? 0) + 1);
-        this.note(watch, count === 1 ? "agent post not answered; check it" : `${count} agent posts not answered; check them`, { replacing: AGENT_POSTS_NOTE });
+        const count = this.agentPostsSinceOwner(watch);
+        this.note(watch, count === 1 ? "an agent post not answered; check it" : `${count} agent posts not answered; check them`, { replacing: AGENT_POSTS_NOTE });
         if (!watch.agentPostSeen) {
           watch.agentPostSeen = true;
           this.deps.notify("info", `Slack: in ${watchLabel(watch)}, ${message.userName}'s agent posted. Agent posts are not answered, so two agents never answer each other; answer it yourself if it needs you: "${firstLine(message.text, 80)}"`);
@@ -955,6 +990,28 @@ export class Engine {
   private remember(watch: WatchState, message: ContextMessage): void {
     const kept = message.text.length > MAX_CONTEXT_TEXT ? { ...message, text: `${message.text.slice(0, MAX_CONTEXT_TEXT)}…` } : message;
     watch.context = [...watch.context.filter((m) => m.ts !== message.ts), kept].slice(-MAX_CONTEXT);
+  }
+
+  /** Posts through someone else's agent kept since the owner or this session last spoke there. */
+  private agentPostsSinceOwner(watch: WatchState): number {
+    let count = 0;
+    for (const m of [...watch.context].reverse()) {
+      if (m.origin === "owner" || m.origin === "this session") break;
+      if (m.origin === "someone's agent") count += 1;
+    }
+    return count;
+  }
+
+  /** Drop the agent-post count note: nothing it counted waits on the owner now. */
+  private clearAgentPostsNote(watch: WatchState): void {
+    const activity = (watch.activity ?? []).filter((entry) => !AGENT_POSTS_NOTE.test(entry.text));
+    if (activity.length === (watch.activity ?? []).length) return;
+    watch.activity = activity;
+    if (watch.lastNote && AGENT_POSTS_NOTE.test(watch.lastNote)) {
+      const previous = activity.at(-1)?.text;
+      if (previous) watch.lastNote = previous;
+      else delete watch.lastNote;
+    }
   }
 
   /** What the helper did, for the line (last note) and the panel (the last few, with times). */
@@ -1127,7 +1184,7 @@ export class Engine {
       const { ts } = await this.deps.backend.send(watch.conversation.channelId, marked, threadTs);
       entry.status = "sent";
       entry.ts = ts;
-      watch.ownPosts = [...watch.ownPosts, ts].slice(-MAX_OWN_POSTS);
+      this.markOwn(watch, ts);
       watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
     } catch (error) {
@@ -1177,7 +1234,7 @@ export class Engine {
         known.add(found.ts);
         entry.status = "sent";
         entry.ts = found.ts;
-        watch.ownPosts = [...watch.ownPosts, found.ts].slice(-MAX_OWN_POSTS);
+        this.markOwn(watch, found.ts);
         this.note(watch, entry.by === "owner" ? "your note went out" : "helper's reply went out");
       } else {
         entry.status = "failed";

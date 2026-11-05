@@ -93,7 +93,7 @@ function userTempFolders(): string[] {
   return [...new Set(folders)];
 }
 
-let userFolders: { perUser: string; temp: string } | undefined;
+let userFolders: { perUser: string; temp: string } | Error | undefined;
 
 /**
  * The per-user folder and its temp folder as macOS names them, whatever TMPDIR says (asked once:
@@ -103,11 +103,18 @@ let userFolders: { perUser: string; temp: string } | undefined;
  */
 function darwinUserFolders(): { perUser: string; temp: string } | undefined {
   if (process.platform !== "darwin") return undefined;
-  if (userFolders) return userFolders;
-  const ask = (name: string) => canonicalPath(execFileSync("getconf", [name], { encoding: "utf8", timeout: 2000 }).trim());
-  const userDir = ask("DARWIN_USER_DIR");
-  if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`the system named an unexpected per-user folder: ${userDir}`);
-  userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
+  if (!userFolders) {
+    try {
+      const ask = (name: string) => canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: 2000 }).trim());
+      const userDir = ask("DARWIN_USER_DIR");
+      if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
+      userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
+    } catch (error) {
+      // Kept too: asking again would block each helper start for as long.
+      userFolders = new Error(`macOS did not name the per-user temp folder, which the shell must close: ${(error as Error).message}`);
+    }
+  }
+  if (userFolders instanceof Error) throw userFolders;
   return userFolders;
 }
 
@@ -139,6 +146,11 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
     const manager = runtime ?? (await loadRuntime());
     if (!manager.isSupportedPlatform()) return { ok: false, reason: "sandbox-runtime does not support this platform" };
     if ((options.platform ?? process.platform) === "linux") return { ok: false, reason: NO_SHELL_ON_LINUX };
+    try {
+      darwinUserFolders();
+    } catch (error) {
+      return { ok: false, reason: (error as Error).message };
+    }
     scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
     const config: SandboxRuntimeConfig = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },

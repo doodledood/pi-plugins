@@ -197,7 +197,7 @@ test("ended watches fold into an expandable count", () => {
 });
 
 test("rows say which conversation a DM watch is, and what happened lately", () => {
-  const thread = watch({ context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text: "Three quick questions about the eval", agentFooter: true }], activity: [{ at: Date.UTC(2026, 10, 4, 14, 29), text: "replied: Checked" }, { at: Date.UTC(2026, 10, 4, 14, 41), text: "stayed silent on 1 message" }] });
+  const thread = watch({ context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text: "Three quick questions about the eval", agentFooter: true, origin: "this session" }], activity: [{ at: Date.UTC(2026, 10, 4, 14, 29), text: "replied: Checked" }, { at: Date.UTC(2026, 10, 4, 14, 41), text: "stayed silent on 1 message" }] });
   const top = watch({ key: "D1/top", conversation: { kind: "dm-top", channelId: "D1" } });
   const text = flat(renderPanel(surface({ watches: [top, thread] }), 0, plain, 100, 0, 40));
   assert.match(text, /Robin Colleague \(DM\) · thread "Three quick questions about the…"/);
@@ -290,7 +290,7 @@ test("a DM row keeps the name whole before the snippet, and a cut label keeps it
   // Real SGR codes (zero width), one color per name, so a reset inside a label shows.
   const codes: Record<string, number> = { text: 37, muted: 90 };
   const painted: Paint = { fg: (c, t) => `\u001b[${codes[c] ?? 36}m${t}\u001b[39m`, bold: (t) => `\u001b[1m${t}\u001b[22m` };
-  const thread = watch({ partner: { userId: "U1", name: long }, context: [{ ts: "1.000001", userId: "U1", userName: long, text: "Three quick questions about the deploy before Friday's release window opens", agentFooter: false }] });
+  const thread = watch({ partner: { userId: "U1", name: long }, context: [{ ts: "1.000001", userId: "U1", userName: long, text: "Three quick questions about the deploy before Friday's release window opens", agentFooter: false, origin: "person" }] });
   const ended = watch({ ...thread, key: "D1/2.0", conversation: { kind: "thread", channelId: "D1", threadTs: "1.000001" }, status: "stopped", endedAt: 1 });
   const channel = channelWatch(1, { channelName: "release-coordination-and-incident-follow-ups", partner: { userId: "U2", name: long } });
   for (const width of [44, 60, 80, 120]) {
@@ -344,7 +344,7 @@ test("the line names the people before it spends room on long words", () => {
 
 test("before anyone answers, the line and the panel name a conversation by the same first words, cut by cells", () => {
   const fresh = (key: string, channelId: string, text: string, over: Partial<WatchState> = {}) =>
-    watch({ key, conversation: { kind: "thread", channelId, threadTs: "1.000001" }, partner: undefined, context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text, agentFooter: true }], ...over });
+    watch({ key, conversation: { kind: "thread", channelId, threadTs: "1.000001" }, partner: undefined, context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text, agentFooter: true, origin: "this session" }], ...over });
   const state = surface({ watches: [fresh("C1/1.000001", "C0GEN", "Deploy is blocked on the flaky check", { channelName: "general" }), fresh("C2/1.000001", "C0GEN", "Who owns the flaky check now?", { channelName: "general" }), fresh("D9/1.000001", "D9", "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 ship it")] });
   const panel = renderPanel(state, 0, plain, 100, 0).join("\n");
   assert.match(panel, /#general "Deploy is blocked/, "a channel thread is told apart by its first words in the panel too");
@@ -365,7 +365,7 @@ test("the panel says a rejoining watch is catching up, and tells apart fresh thr
   assert.match(panel, /◌ catching up/);
   assert.doesNotMatch(panel, /● watching/);
   const fresh = (key: string, text: string) =>
-    watch({ key, conversation: { kind: "thread", channelId: "C0REL", threadTs: key.split("/")[1]! }, channelName: "release-train-2026-q4-coordination", partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text, agentFooter: true }] });
+    watch({ key, conversation: { kind: "thread", channelId: "C0REL", threadTs: key.split("/")[1]! }, channelName: "release-train-2026-q4-coordination", partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text, agentFooter: true, origin: "this session" }] });
   const state = surface({ watches: [fresh("C0REL/1.000001", "Deploy is blocked on the migration"), fresh("C0REL/2.000001", "Who owns the flaky check now?")] });
   for (const width of [40, 48, 60, 80]) {
     const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#rel"));
@@ -376,7 +376,7 @@ test("the panel says a rejoining watch is catching up, and tells apart fresh thr
 
 test("channels that share a long start read apart: the panel names them whole where there is room, and every cut keeps their ends", () => {
   const fresh = (key: string, channelId: string, channelName: string, over: Partial<WatchState> = {}) =>
-    watch({ key, conversation: { kind: "thread", channelId, threadTs: key.split("/")[1]! }, channelName, partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text: "Deploy is blocked on the migration, anyone?", agentFooter: true }], ...over });
+    watch({ key, conversation: { kind: "thread", channelId, threadTs: key.split("/")[1]! }, channelName, partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text: "Deploy is blocked on the migration, anyone?", agentFooter: true, origin: "this session" }], ...over });
   for (const rejoining of [undefined, 1]) {
     const state = surface({ watches: [fresh("C0Q3/1.000001", "C0Q3", "release-train-2026-q3", { rejoining }), fresh("C0Q4/1.000001", "C0Q4", "release-train-2026-q4", { rejoining })] });
     const wide = renderPanel(state, 0, plain, 80, 0).join("\n");
@@ -395,6 +395,11 @@ test("channels that share a long start read apart: the panel names them whole wh
   assert.equal(cutMiddle("release-train-2026-q4", 9), "rele…6-q4");
   assert.equal(cutMiddle("short", 9), "short");
   assert.equal(cutApart("release-train-2026-q4-coordination", ["release-train-2026-q3-coordination"], 12), "rel…-q4-coo…", "from just before where it differs");
+  for (const width of [7, 8, 10]) {
+    const [a, b] = [cutApart("team-frontend-alerts-prod", ["team-frontend-alerts-stag"], width), cutApart("team-frontend-alerts-stag", ["team-frontend-alerts-prod"], width)];
+    assert.notEqual(a, b, `the difference shows at ${width}: ${a}`);
+    assert.ok(visibleWidth(a) <= width);
+  }
   assert.equal(cutApart("general-chatter-and-more", ["eval"], 9), cutMiddle("general-chatter-and-more", 9), "nothing shared: cut from the middle");
 });
 
@@ -417,7 +422,9 @@ test("rows that name a person keep the end of a long channel name, where channel
     assert.equal(rows.length, 2, `${width}`);
     assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `rows read apart at ${width}: ${rows.join(" | ")}`);
   }
-  const [line] = renderLine(state, plain, 200);
-  assert.match(line!, /q3/);
-  assert.match(line!, /q4/);
+  for (const width of [120, 200]) {
+    const [line] = renderLine(state, plain, width);
+    assert.match(line!, /q3/, `${width}: ${line}`);
+    assert.match(line!, /q4/, `${width}: ${line}`);
+  }
 });

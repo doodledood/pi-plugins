@@ -9,7 +9,8 @@ const dir = mkdtempSync(join(tmpdir(), "slack-companion-tests-"));
 // This node, with its own flags (a preload such as a simulated platform passes on), running tsx.
 const args = [...process.execArgv, "--import", "tsx", "--test", "--test-timeout=60000", ...process.argv.slice(2)];
 const child = spawn(process.execPath, args, { stdio: "inherit", env: { ...process.env, TMPDIR: dir } });
-// Ctrl-C reaches the child through the terminal; this process waits for it to end, then cleans up.
+// Ctrl-C reaches the child through the terminal too; a signal sent to this process alone (such as
+// a SIGTERM from a runner) is passed on. Either way this process waits for the child, then cleans up.
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => child.kill(signal));
 child.on("error", (error) => {
   rmSync(dir, { recursive: true, force: true });

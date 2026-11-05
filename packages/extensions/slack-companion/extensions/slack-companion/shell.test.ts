@@ -1,6 +1,7 @@
-// The helper's real shell, in Seatbelt on macOS: what it may read and write (the broad scenario and
-// secrets are in shell-secrets.test.ts, git in shell-git.test.ts, saved output in shell-output.test.ts). Split from helper.test.ts so the slow real-sandbox scenarios run
-// beside the rest. Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md,
+// The helper's real shell, in Seatbelt on macOS: what it may read and write (the broad scenario
+// and secrets are in shell-secrets.test.ts, git in shell-git.test.ts, saved output in
+// shell-output.test.ts). Split from helper.test.ts so the slow real-sandbox scenarios run beside
+// the rest. Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md,
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md and
 // docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md.
 import assert from "node:assert/strict";
@@ -124,8 +125,12 @@ test("on macOS, a system that does not name the per-user folder leaves the helpe
   if (process.platform !== "darwin") return; // the per-user folder is macOS's
   const home = fakeHome();
   const script = `import(${JSON.stringify(join(import.meta.dirname, "sandbox.ts"))}).then((m) => m.startShellSandbox({ cwd: ${JSON.stringify(home)}, home: ${JSON.stringify(home)}, allowedDomains: [] })).then((r) => console.log(JSON.stringify(r)))`;
-  const out = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8", env: { ...process.env, PATH: "/nonexistent" } });
+  // A getconf that does not answer: a folder named like it on PATH would not be used (the full path is).
+  const fakeBin = mkdtempSync(join(tmpdir(), "fake-getconf-"));
+  const preload = join(fakeBin, "no-getconf.mjs");
+  writeFileSync(preload, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; const real = cp.execFileSync; cp.execFileSync = (file, ...rest) => { if (String(file).endsWith("getconf")) throw new Error("getconf did not answer"); return real(file, ...rest); }; syncBuiltinESMExports();`);
+  const out = execFileSync(process.execPath, ["--import", preload, "--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8" });
   const result = JSON.parse(out.trim().split("\n").at(-1)!);
   assert.equal(result.ok, false, out);
-  assert.match(result.reason, /could not start: .*getconf/, result.reason);
+  assert.match(result.reason, /macOS did not name the per-user temp folder, which the shell must close: getconf did not answer/, result.reason);
 });

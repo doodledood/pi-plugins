@@ -127,7 +127,8 @@ function namedLikeSecret(path: string): boolean {
  * What the helper's file tools may read: an allowlist, so another spelling of a path (other case,
  * the data-volume path, /dev/fd) is closed rather than missed. A path is readable only when its
  * canonical spelling is inside a root, or is one of the exact files (skill files before the closed
- * folders, saved files after them), and nothing in it is named like a secret. See docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
+ * folders, saved files after them), and nothing in it is named like a secret. See
+ * docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
  */
 export interface ReadPolicy {
   home: string;
@@ -170,7 +171,7 @@ export function readableRoots(home: string, folders: readonly string[], agentDir
 export function repositoryFolders(cwd: string, home: string, agentDir: string): string[] {
   let lines: string[];
   try {
-    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "pipe"] });
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--git-common-dir"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
     lines = out.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => resolve(cwd, line));
   } catch (error) {
     const { status, code } = error as { status?: number; code?: string };

@@ -215,3 +215,8 @@ test("a sweep that cannot remove a folder for a reason other than a new lock say
   t.after(() => chmodSync(dir, 0o700));
   assert.throws(() => new LockManager(dir, { pid: 2, sessionId: "b" }, m.alive, m.startOf).sweep(), /EACCES|EPERM/);
 });
+
+test("a sweep before any lock was taken (no locks folder yet) does nothing and says nothing", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "locks-")), "not-yet");
+  assert.doesNotThrow(() => new LockManager(dir, { pid: 2, sessionId: "b" }, () => true, () => started("t2")).sweep());
+});
