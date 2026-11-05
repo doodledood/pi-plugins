@@ -167,6 +167,18 @@ export function parseChannelName(toolText: string): string | undefined {
   return name && name !== "DM" ? name : undefined;
 }
 
+/**
+ * The server's line ending a thread read that holds no reply ("No thread messsages", its own
+ * spelling, tolerated with one or more s). The one place the package knows this token.
+ */
+const NO_REPLIES_LINE = /^No thread mess+ages\s*$/;
+const NO_REPLIES_AT_END = /\n*No thread mess+ages\s*$/;
+
+/** Where a thread read's body ends with the no-replies trailer, or -1. */
+export function noRepliesTrailerAt(body: string): number {
+  return NO_REPLIES_AT_END.exec(body)?.index ?? -1;
+}
+
 export function parseThreadListing(toolText: string): ParsedListing & { parent?: CandidateMessage } {
   const { body, pagination } = parseEnvelope(toolText, "messages");
   const lines = body.split("\n");
@@ -197,7 +209,7 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
   const toMessage = (block: ThreadBlock): CandidateMessage => {
     let bodyLines = lines.slice(block.bodyStart, block.rawEnd);
     // The parent's body is followed by the replies banner or "No thread messages".
-    const bannerAt = bodyLines.findIndex((l) => /^=== THREAD REPLIES \(\d+ total\) ===\s*$/.test(l) || /^No thread mess+ages\s*$/.test(l));
+    const bannerAt = bodyLines.findIndex((l) => /^=== THREAD REPLIES \(\d+ total\) ===\s*$/.test(l) || NO_REPLIES_LINE.test(l));
     if (!block.reply && bannerAt >= 0) bodyLines = bodyLines.slice(0, bannerAt);
     while (bodyLines.length && bodyLines.at(-1)!.trim() === "") bodyLines = bodyLines.slice(0, -1);
     const { text, agentFooter } = splitFooter(bodyLines.join("\n"));
@@ -229,8 +241,8 @@ export function parseLookup(toolText: string): CandidateMessage {
   const block = readThreadBlock(lines, 1);
   if (!block) throw new SlackFormatError("a message lookup's first header is unreadable");
   let rest = lines.slice(block.bodyStart).join("\n");
-  const trailer = /\n\nNo thread mess+ages\s*$/.exec(rest);
-  if (trailer) rest = rest.slice(0, trailer.index);
+  const trailer = noRepliesTrailerAt(rest);
+  if (trailer >= 0) rest = rest.slice(0, trailer);
   else {
     const banner = rest.search(/\n\n=== THREAD REPLIES \(\d+ total\) ===/);
     if (banner >= 0) rest = rest.slice(0, banner);

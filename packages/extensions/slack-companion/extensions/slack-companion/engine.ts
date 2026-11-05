@@ -7,7 +7,7 @@
 // created from a helper's hand-off but resolved only through approve()/deny(), which only the
 // owner's panel calls; nothing read from Slack resolves, removes or hides one.
 import { randomUUID } from "node:crypto";
-import { BackendError, BackendNotReadyError, FAILURE_HINTS, isPassingFailure, SendUncertainError, type Identity, type SlackBackend } from "./backend.ts";
+import { BackendError, FAILURE_HINTS, isPassingFailure, SendUncertainError, type Identity, type SlackBackend } from "./backend.ts";
 import type { SlackCompanionConfig } from "./config.ts";
 import { type Conversation, conversationKey, conversationsForLink, conversationsForSend, isDirectMessage, type ParsedLink } from "./conversation.ts";
 import { type HelperBatch, type HelperOutcome, MAX_HELPER_TURNS } from "./helper.ts";
@@ -116,7 +116,8 @@ const MAX_PENDING_PER_WATCH = 10;
 export const MAX_READ_FAILURES = 5;
 const MAX_OWN_POSTS = 200;
 const MAX_LEDGER = 100;
-const MAX_TOMBSTONES = 200;
+/** Stops remembered: a stopped conversation stays stopped across the last this many stops. */
+export const MAX_TOMBSTONES = 1000;
 const MAX_ENDED_WATCHES = 20;
 const MAX_RESOLVED_APPROVALS = 10;
 const MAX_DM_CHANNELS = 200;
@@ -429,22 +430,27 @@ export class Engine {
   async attach(link: ParsedLink, options: { byOwner: boolean }): Promise<WatchState | undefined> {
     if (this.disposed) return undefined;
     if (!options.byOwner && this.isStoppedLink(link)) throw new StoppedConversationError();
+    // Read Slack for every conversation first; then decide and start them all with no await in
+    // between, so a stop that lands while Slack is read refuses the whole attach, not part of it.
+    const plans: Array<{ conversation: Conversation; from: string | undefined }> = [];
+    for (const conversation of conversationsForLink(link)) {
+      const existing = this.watch(conversationKey(conversation));
+      if (existing && isLive(existing)) continue;
+      const from = conversation.kind === "thread" ? await this.ownerBoundary(conversation) : link.messageTs;
+      plans.push({ conversation, from });
+    }
+    if (this.disposed) return undefined; // the session ended while Slack was read: take no lock
+    if (!options.byOwner && this.isStoppedLink(link)) throw new StoppedConversationError();
     let primary: WatchState | undefined;
     for (const conversation of conversationsForLink(link)) {
       const key = conversationKey(conversation);
-      const existing = this.watch(key);
-      if (existing && isLive(existing)) {
-        primary ??= existing;
+      const plan = plans.find((p) => conversationKey(p.conversation) === key);
+      if (!plan) {
+        primary ??= this.watch(key);
         continue;
       }
-      let from: string | undefined = conversation.kind === "dm-top" ? link.messageTs : undefined;
-      if (conversation.kind === "thread") from = await this.ownerBoundary(conversation);
-      if (this.disposed) return undefined; // the session ended while Slack was read: take no lock
-      // Checked again after reading Slack: a stop that arrived meanwhile holds unless the owner asked.
-      if (!options.byOwner && this.isTombstoned(key)) throw new StoppedConversationError();
       this.state.tombstones = this.state.tombstones.filter((t) => t !== key);
-      const watch = this.startWatch(conversation, "attach", from);
-      primary ??= watch;
+      primary ??= this.startWatch(conversation, "attach", plan.from);
     }
     this.save();
     // A pass already running may have listed its watches before this one existed: let it end, then read.
@@ -452,6 +458,7 @@ export class Engine {
     await this.poll();
     return primary;
   }
+
 
   /** The owner's last genuine message in a thread, checked like any message read; at most a few candidates are checked. */
   private async ownerBoundary(conversation: Extract<Conversation, { kind: "thread" }>): Promise<string | undefined> {
@@ -514,6 +521,7 @@ export class Engine {
     watch.sendsWithoutOwner = 0;
     delete watch.reason;
     delete watch.pause;
+    this.note(watch, "resumed by you");
     this.save();
     this.schedule(watch);
   }
@@ -534,7 +542,9 @@ export class Engine {
     watch.since = tsFromMillis(this.deps.now());
     delete watch.reason;
     delete watch.readFailures;
+    this.note(watch, "watching again");
     this.save();
+    this.schedule(watch); // what was waiting when it stopped is answered now
   }
 
   stop(key: string, reason = "stopped by you"): void {
@@ -557,7 +567,8 @@ export class Engine {
     watch.status = status;
     watch.reason = stripControl(reason);
     watch.endedAt = this.deps.now();
-    watch.inbox = [];
+    // A stop with an error keeps what was waiting: watching again (w) answers it.
+    if (status === "stopped") watch.inbox = [];
     delete watch.pause;
     delete watch.readFailures;
     // A conversation that ended quietly keeps what the panel needs, not its conversation; one that
@@ -574,7 +585,7 @@ export class Engine {
     if (explicit && !this.state.tombstones.includes(watch.key)) this.state.tombstones.push(watch.key);
     this.running.get(watch.key)?.abort.abort();
     this.deps.locks.release(watch.key);
-    if (status === "error" && !this.disposed) this.deps.notify("error", `Slack: stopped watching ${watchLabel(watch)}: ${reason}. Open the panel (/slack) and press w to watch it again.`);
+    if (status === "error" && !this.disposed) this.deps.notify("error", `Slack: stopped watching ${watchLabel(watch)}: ${watch.reason}. Open the panel (/slack) and press w to watch it again.`);
   }
 
   pendingApprovals(): Approval[] {
@@ -662,7 +673,10 @@ export class Engine {
       const outcome = await readNew(this.deps.backend, watch.conversation, watch.point, startedAt);
       if (this.disposed || !isLive(watch)) return;
       watch.point = outcome.next;
-      delete watch.readFailures;
+      if (watch.readFailures) {
+        delete watch.readFailures;
+        this.note(watch, "reading again");
+      }
       if (outcome.forged) {
         this.note(watch, `skipped ${outcome.forged} unconfirmed message id${outcome.forged === 1 ? "" : "s"}`);
         this.deps.notify("warning", `Slack: in ${watchLabel(watch)}, ${outcome.forged} message id${outcome.forged === 1 ? " was" : "s were"} not found in the conversation and skipped (deleted, or text imitating Slack's format).`);
@@ -675,13 +689,12 @@ export class Engine {
       }
     } catch (error) {
       if (this.disposed) return;
-      if (error instanceof BackendNotReadyError) return; // Pi is still starting the adapter; the next poll reads
       const message = error instanceof Error ? error.message : String(error);
       // A failure that may pass (a rate limit, a dropped connection) leaves the read point as it
       // was and reads again next time; only repeated or lasting failures stop the watch.
       if (isPassingFailure(error) && (watch.readFailures ?? 0) + 1 < MAX_READ_FAILURES) {
         watch.readFailures = (watch.readFailures ?? 0) + 1;
-        this.note(watch, `could not read (${firstLine(message, 60)}); trying again`);
+        this.note(watch, `could not read Slack (${error instanceof BackendError ? error.code ?? "error" : "error"}); trying again`);
         this.save();
         return;
       }

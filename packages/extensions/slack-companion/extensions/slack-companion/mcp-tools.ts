@@ -18,6 +18,8 @@ export interface McpToolInfo {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Its server marks it read-only (else the owner listed it for investigation). */
+  readOnly: boolean;
   /** The name the helper sees: the tool's own, or `<server>__<tool>` when two servers share it. */
   exposedName: string;
 }
@@ -111,11 +113,12 @@ export function helperMcpTools(
     for (const tool of tools) {
       if (limits.blocked.includes(tool.name)) continue;
       const listed = investigative.includes(tool.name) || investigative.includes(`${server}/${tool.name}`);
-      // A private server's tools (the owner's own Slack) are reachable only when listed by name.
-      if (limits.privateServers?.includes(server) && !listed) continue;
+      // A private server's tools (the owner's own Slack) are reachable only when listed by name, and
+      // only read-only ones even then: the helper never gets a Slack tool that posts or changes.
+      if (limits.privateServers?.includes(server) && (!listed || !tool.readOnly)) continue;
       if (!listed && !tool.readOnly) continue;
       const active = exposedNamesFor(server, tool.name).some((name) => activeMain.has(name));
-      chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema, shown: listed || active });
+      chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.readOnly, shown: listed || active });
     }
   }
   const count = new Map<string, number>();

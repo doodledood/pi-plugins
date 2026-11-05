@@ -9,6 +9,7 @@ import {
   compareTs,
   parseChannelListing,
   parseChannelName,
+  noRepliesTrailerAt,
   parseEnvelope,
   parseLookup,
   parseProfile,
@@ -74,7 +75,9 @@ interface RuntimeToolCallRequest {
   result?: Promise<{ ok: true; result: { content: unknown[]; details?: any } } | { ok: false; error: Error }>;
 }
 
-const NOT_READY = /require an active Pi session|initialization is still in progress|MCP is not initialized/i;
+/** The adapter is starting (it may pass); "is not initialized" means its start-up failed (it does not). */
+const NOT_READY = /require an active Pi session|initialization is still in progress/i;
+const START_FAILED = /MCP is not initialized/i;
 
 /** Call an MCP tool through pi-mcp-adapter; the result exactly as the adapter guards it. */
 export async function runMcpToolGuarded(events: EventBus, tool: string, args: Record<string, unknown>, server?: string): Promise<{ content: unknown[]; details?: any }> {
@@ -87,6 +90,7 @@ export async function runMcpToolGuarded(events: EventBus, tool: string, args: Re
   if (!outcome.ok) {
     const message = outcome.error.message;
     if (NOT_READY.test(message)) throw new BackendNotReadyError(`${tool}: ${message}`, "not_ready");
+    if (START_FAILED.test(message)) throw new BackendError(`${tool}: ${message}`, "adapter_not_started");
     const code = /MCP tool call failed: (\S+)/.exec(message)?.[1];
     throw new BackendError(`${tool} failed: ${message}`, code);
   }
@@ -114,7 +118,8 @@ const MAX_PAGES = 50;
 /** Failures that retrying cannot fix: a misconfigured tool or server, or a result the package cannot use whole. */
 const LASTING_CODES = new Set([
   "tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool",
-  "no_adapter", "truncated", "too_many_pages", "unreadable", "auth_required", "url_elicitation_required",
+  "no_adapter", "adapter_not_started", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required",
+  "approval_required", "approval_denied",
 ]);
 
 /** What the owner can do about a lasting failure, by the adapter's code. */
@@ -124,6 +129,10 @@ export const FAILURE_HINTS: Readonly<Record<string, string>> = {
   ambiguous_tool: "more than one MCP server has this tool; set \"server\" in slack-companion.json",
   url_elicitation_required: "your Slack MCP server asks you to open a link; use one of its tools in Pi once to answer it",
   tool_not_found: "the tool name is wrong; set the right name under \"tools\" in slack-companion.json",
+  adapter_not_started: "pi-mcp-adapter did not start; check /mcp-adapter, then /reload",
+  approval_required: "pi-mcp-adapter asks to approve each Slack read; slack-companion reads without asking, so take its Slack tools out of approveTools",
+  approval_denied: "a Slack read was declined; slack-companion reads without asking, so take its Slack tools out of approveTools",
+  too_many_ids: "this conversation's text names too many message ids that do not exist; watch it again after that message is edited",
   server_not_found: "the server name is wrong; check \"server\" in slack-companion.json",
 };
 
@@ -135,9 +144,6 @@ export const FAILURE_HINTS: Readonly<Record<string, string>> = {
 export function isPassingFailure(error: unknown): boolean {
   return error instanceof BackendNotReadyError || (error instanceof BackendError && !LASTING_CODES.has(error.code ?? ""));
 }
-
-/** The server's own line ending a thread read that holds no reply (the real server spells it "messsages"). */
-const NO_REPLIES_TRAILER = /\n*No thread mess+ages\s*$/;
 
 export class McpSlackBackend implements SlackBackend {
   /** The server was seen ending an empty thread read with its trailer. */
@@ -192,7 +198,7 @@ export class McpSlackBackend implements SlackBackend {
         const text = await this.call(this.tools.readThread, {
           channel_id: conversation.channelId, message_ts: conversation.threadTs, oldest, latest, limit: 2, response_format: "detailed",
         });
-        return { count: parseThreadListing(text).messages.filter((m) => m.ts === ts).length, empty: NO_REPLIES_TRAILER.test(parseEnvelope(text, "messages").body) };
+        return { count: parseThreadListing(text).messages.filter((m) => m.ts === ts).length, empty: noRepliesTrailerAt(parseEnvelope(text, "messages").body) >= 0 };
       };
       // The thread's first message comes with every read, and its own text could imitate a reply
       // block naming any id. The window spans one microsecond either side of the id, so the only

@@ -275,3 +275,12 @@ test("when the line is very narrow, it drops the lowest count before the word sl
     assert.match(line!, /^ ● slack · 2 waiting/, `at ${width}: ${line}`);
   }
 });
+
+test("a paused watch is counted once: as paused, not also as watching", () => {
+  const engine = { watches: [channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" })] };
+  for (let width = 40; width <= 120; width += 1) {
+    const [line] = renderLine(surface(engine), plain, width);
+    assert.equal(/1 watching/.test(line!), false, `at ${width}: ${line}`);
+    assert.match(line!, /paused/);
+  }
+});

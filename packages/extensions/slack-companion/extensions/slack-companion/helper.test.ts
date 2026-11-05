@@ -241,10 +241,11 @@ test("every file tool and the shell are denied Pi's auth file, cloud credentials
   writeFileSync(join(home, ".aws", "credentials"), "AWS-CREDENTIAL-CONTENT");
   writeFileSync(join(home, ".pi", "agent", "auth.json"), "PI-AUTH-CONTENT");
   writeFileSync(join(home, ".ssh", "config"), "SSH-CONFIG-CONTENT");
+  writeFileSync(join(home, ".pi", "agent", "auth.json.bak-openai1m"), "PI-AUTH-BACKUP-CONTENT");
   const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
   if (probe.ok) await probe.dispose();
   const steps: Reply[] = [];
-  const secrets = [join(home, ".aws", "credentials"), join(home, ".pi", "agent", "auth.json"), "linked-config"];
+  const secrets = [join(home, ".aws", "credentials"), join(home, ".pi", "agent", "auth.json"), join(home, ".pi", "agent", "auth.json.bak-openai1m"), "linked-config"];
   for (const path of secrets) steps.push({ kind: "tool", name: "read", args: { path } });
   steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: join(home, ".aws") } });
   steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: "." } });
@@ -261,7 +262,7 @@ test("every file tool and the shell are denied Pi's auth file, cloud credentials
   });
   assert.ok(h);
   assert.equal(results.filter((r) => r.tool === "read").every((r) => r.isError && /secret location/.test(r.text)), true, "read");
-  assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret");
+  assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|PI-AUTH-BACKUP-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret, a backup of one included");
   assert.ok(results.filter((r) => r.tool === "ls" || r.tool === "find").every((r) => r.isError), "find and ls refuse secret folders, through a symlink too");
   if (!probe.ok) t.diagnostic(`shell part not run: ${probe.reason}`);
 });

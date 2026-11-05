@@ -666,18 +666,23 @@ test("a snapshot written by another version is not restored", async () => {
   assert.equal(engine.liveWatches().length, 2, "a current one is restored");
 });
 
-test("while the adapter is still starting, a watch waits without counting a failure", async () => {
+test("an adapter still starting is retried and shown; one whose start-up failed stops the watch at once, saying what to do", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack);
   const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "answer", q.ts);
-  slack.failures.set("slack_read_thread", Array(MAX_READ_FAILURES + 2).fill("not-ready"));
-  for (let i = 0; i < MAX_READ_FAILURES + 2; i += 1) await settle(engine);
-  const watch = engine.watch(`${DM}/${q.ts}`)!;
-  assert.equal(watch.status, "active");
-  assert.equal(watch.readFailures, undefined);
+  slack.failures.set("slack_read_thread", ["not-ready", "not-ready"]);
   await settle(engine);
-  assert.equal(agentPosts(slack, DM, q.ts).length, 1);
+  assert.equal(engine.watch(key)!.status, "active");
+  assert.match(engine.watch(key)!.lastNote!, /could not read Slack \(not_ready\); trying again/);
+  await settle(engine);
+  await settle(engine);
+  assert.equal(agentPosts(slack, DM, q.ts).length, 1, "answered once the adapter is up");
+  slack.failures.set("slack_read_thread", ["not-started"]);
+  await settle(engine);
+  assert.equal(engine.watch(key)!.status, "error", "at once");
+  assert.match(engine.watch(key)!.reason!, /pi-mcp-adapter did not start/);
 });
 
 test("a good read resets the failure count; a paused watch keeps its waiting messages past the quiet period", async () => {
@@ -827,6 +832,7 @@ test("a paused conversation's waiting messages and a conversation's waiting requ
     await settle(engine);
   }
   assert.ok(engine.pendingApprovals().length <= 10);
+  assert.deepEqual(log.helpers.map((h) => h.requestRoom), [10, 6, 2, 0], "each helper is told how many more requests can wait");
   assert.ok(log.notices.some((n) => /already has 10 requests waiting/.test(n)));
   const watch = engine.watch(`${DM}/${q.ts}`)!;
   watch.status = "paused";
@@ -969,6 +975,7 @@ test("a stop that arrives while the model's watch tool is attaching holds", asyn
   await assert.rejects(engine.attach({ channelId: DM, messageTs: root.ts }, { byOwner: false }), StoppedConversationError);
   assert.equal(engine.isTombstoned(top), true);
   assert.equal(engine.watch(top)!.status, "stopped");
+  assert.equal(engine.watch(`${DM}/${root.ts}`), undefined, "all or nothing: the new thread was not started either");
 });
 
 test("reconcile is not fooled by a line naming the owner's real message with the reply's text", async () => {
@@ -988,7 +995,7 @@ test("reconcile is not fooled by a line naming the owner's real message with the
 
 test("control sequences in an error are stripped from the note and the reason; a lasting adapter error stops at once with what to do", async () => {
   const slack = new FakeSlack();
-  const { engine } = makeEngine(slack);
+  const { engine, log } = makeEngine(slack);
   const q = await mainSends(slack, engine, DM, "q");
   const key = `${DM}/${q.ts}`;
   slack.failures.set("slack_read_thread", Array(MAX_READ_FAILURES).fill("ansi-error"));
@@ -996,6 +1003,7 @@ test("control sequences in an error are stripped from the note and the reason; a
   const watch = engine.watch(key)!;
   assert.equal(watch.status, "error");
   assert.equal(/\u001b|\u0007/.test(`${watch.reason}${watch.lastNote}${JSON.stringify(watch.activity)}`), false);
+  assert.equal(log.notices.some((n) => /\u001b|\u0007/.test(n)), false, "nor the notice");
   slack.failures.clear();
   engine.rewatch(key);
   slack.failures.set("slack_read_thread", ["disabled"]);
@@ -1053,4 +1061,41 @@ test("a stop with an error keeps the conversation for watching again; seen stops
   assert.ok(ended.context.length > 1, "context kept");
   engine.markErrorsSeen([`${key}@${ended.endedAt}`]);
   assert.deepEqual(engine.snapshot().seenErrors, [`${key}@${ended.endedAt}`]);
+});
+
+test("a helper reply's control codes never reach the line or the panel", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack, { helper: () => ({ reply: { text: "\u001b]0;pwned\u0007\u001b[2Jsure", done: false } }) });
+  const q = await mainSends(slack, engine, DM, "q");
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "?", q.ts);
+  await settle(engine);
+  const watch = engine.watch(`${DM}/${q.ts}`)!;
+  assert.equal(/\u001b|\u0007/.test(`${watch.lastNote}${JSON.stringify(watch.activity)}`), false);
+});
+
+test("after a passing read failure, the next good read says so; the line does not keep the failure", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "q");
+  slack.failures.set("slack_read_thread", ["error"]);
+  await settle(engine);
+  assert.match(engine.watch(`${DM}/${q.ts}`)!.lastNote!, /could not read Slack \(tool_error\)/);
+  await settle(engine);
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.lastNote, "reading again");
+});
+
+test("what was waiting when a watch stopped with an error is answered when it is watched again", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
+  const triage = engine["deps"].triage;
+  engine["deps"].triage = async () => { throw new Error("provider overloaded"); };
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "are you there?", q.ts);
+  await settle(engine);
+  assert.equal(engine.watch(key)!.status, "error");
+  engine["deps"].triage = triage;
+  engine.rewatch(key);
+  await engine.idle();
+  assert.ok(log.helpers.some((h) => h.messages.some((m) => m.text === "are you there?")));
 });

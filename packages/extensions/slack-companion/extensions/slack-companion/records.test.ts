@@ -1,12 +1,13 @@
 // Holds docs/adr/20261104-run-slack-helpers-in-memory.md: a finished helper leaves a thin record
 // of only its own entries, linked to the parent, and every paid call is counted.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { SessionTreeScanner } from "../../../simple-statusline/extensions/simple-statusline/session-cost.ts";
 import { createHarness, textOf, type Reply } from "./pi-harness.ts";
-import { COST_RECORD_TYPE, helperRecordDir } from "./records.ts";
+import { COST_RECORD_TYPE, helperRecordDir, pruneOrphanRecords } from "./records.ts";
 
 const DM = "D0FAKE0001";
 
@@ -53,4 +54,29 @@ test("a session with no file writes no helper record", async () => {
   for (const dir of [h.workspace, h.agentDir]) {
     assert.equal(readdirSync(dir, { recursive: true }).some((p) => String(p).split("/").includes("slack-companion") && String(p).endsWith(".jsonl")), false, `no helper record under ${dir}`);
   }
+});
+
+test("the records of a deleted session are removed at start; others, and anything else beside them, stay", () => {
+  const sessions = mkdtempSync(join(tmpdir(), "sessions-"));
+  const live = join(sessions, "live.jsonl");
+  writeFileSync(live, "{}\n");
+  mkdirSync(join(sessions, "live", "slack-companion"), { recursive: true });
+  mkdirSync(join(sessions, "gone", "slack-companion"), { recursive: true });
+  mkdirSync(join(sessions, "gone-shared", "slack-companion"), { recursive: true });
+  mkdirSync(join(sessions, "gone-shared", "tasks"), { recursive: true });
+  assert.equal(pruneOrphanRecords(live), 2);
+  assert.ok(existsSync(join(sessions, "live", "slack-companion")), "a live session keeps its records");
+  assert.equal(existsSync(join(sessions, "gone")), false, "an emptied folder goes");
+  assert.ok(existsSync(join(sessions, "gone-shared", "tasks")), "another extension's data stays");
+  assert.equal(existsSync(join(sessions, "gone-shared", "slack-companion")), false);
+});
+
+test("starting a session removes the records of sessions deleted since", async () => {
+  const first = await createHarness({ persistSession: true, replies });
+  await first.session.prompt("ask Robin");
+  const sessionsDir = dirname(first.session.sessionManager.getSessionFile()!);
+  mkdirSync(join(sessionsDir, "deleted-session", "slack-companion"), { recursive: true });
+  await first.session.dispose();
+  await createHarness({ reopen: first, replies });
+  assert.equal(existsSync(join(sessionsDir, "deleted-session")), false);
 });

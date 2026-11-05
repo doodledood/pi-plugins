@@ -20,7 +20,7 @@ import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
 import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
-import { COST_RECORD_TYPE, costOf, triageCostRecord, writeHelperRecord } from "./records.ts";
+import { COST_RECORD_TYPE, costOf, pruneOrphanRecords, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
 import { defaultSecretPolicy } from "./secrets.ts";
 import { sendCallOf } from "./send-route.ts";
@@ -289,6 +289,12 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       }
     }
     overrides.onEngine?.(engine);
+    // Helper records of deleted sessions are removed when a session starts (Pi leaves them behind).
+    try {
+      pruneOrphanRecords(ctx.sessionManager.getSessionFile());
+    } catch (error) {
+      notify("warning", `slack-companion: could not clean up the records of deleted sessions: ${(error as Error).message}`);
+    }
     if (ctx.hasUI) {
       ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
         requestRender = () => tui.requestRender();

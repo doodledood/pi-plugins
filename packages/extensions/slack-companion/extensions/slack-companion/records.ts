@@ -2,8 +2,8 @@
 // Holds docs/adr/20261104-run-slack-helpers-in-memory.md: a helper's file holds only its own
 // entries, linked to the parent session, never a copy of main.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CURRENT_SESSION_VERSION, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export const HELPER_SESSION_KIND = "slack-companion";
@@ -26,6 +26,26 @@ export function writeHelperRecord(parentSessionFile: string | undefined, cwd: st
   const path = join(dir, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
   writeFileSync(path, `${[header, ...own].map((e) => JSON.stringify(e)).join("\n")}\n`, { mode: 0o600 });
   return path;
+}
+
+/**
+ * Remove the helper records of sessions that no longer exist: Pi deletes a session's file but not
+ * the folder beside it. Only this package's own subfolder is removed, and its parent folder only
+ * when nothing else is left in it. Returns how many record folders went.
+ */
+export function pruneOrphanRecords(sessionFile: string | undefined): number {
+  if (!sessionFile) return 0;
+  const sessionsDir = dirname(sessionFile);
+  let removed = 0;
+  for (const entry of readdirSync(sessionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const records = join(sessionsDir, entry.name, HELPER_SESSION_KIND);
+    if (!existsSync(records) || existsSync(join(sessionsDir, `${entry.name}.jsonl`))) continue;
+    rmSync(records, { recursive: true, force: true });
+    removed += 1;
+    if (!readdirSync(join(sessionsDir, entry.name)).length) rmdirSync(join(sessionsDir, entry.name));
+  }
+  return removed;
 }
 
 /** Total cost of the assistant messages among `entries`. */

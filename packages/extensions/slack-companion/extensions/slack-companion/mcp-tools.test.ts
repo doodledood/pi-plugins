@@ -35,6 +35,9 @@ test("the owner's own Slack server is private: its tools are reachable only when
   const names = (investigative: string[]) => helperMcpTools(cache, active, investigative, { blocked: ["slack_send_message"], privateServers: slackServers(cache, ["slack_read_thread", "slack_send_message"], undefined) }).catalog.map((t) => t.name).sort();
   assert.deepEqual(names([]), ["lookup", "lookup"], "no Slack search or reads by default");
   assert.deepEqual(names(["slack/slack_read_thread"]), ["lookup", "lookup", "slack_read_thread"]);
+  const withWriter: McpCache = new Map([...cache, ["slack", [...cache.get("slack")!, tool("slack_send_message_draft", false)]]]);
+  const listedWriter = helperMcpTools(withWriter, active, ["slack/slack_send_message_draft"], { blocked: ["slack_send_message"], privateServers: ["slack"] });
+  assert.equal(listedWriter.catalog.some((t) => t.name === "slack_send_message_draft"), false, "a Slack tool that writes is never reachable, even listed");
   assert.deepEqual(slackServers(cache, ["x"], "configured"), ["configured"]);
 });
 

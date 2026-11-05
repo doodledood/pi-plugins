@@ -3,7 +3,7 @@
 // and reaching no network unless the owner listed a domain. If the sandbox cannot start, the
 // helper gets no shell at all. Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
 import { mkdtemp, rm } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
@@ -19,16 +19,28 @@ export interface SandboxOptions {
   allowedDomains: readonly string[];
   agentDir?: string;
   home?: string;
+  /** For tests: the platform, and the folders at the filesystem root (default: this machine's). */
+  platform?: NodeJS.Platform;
+  rootFolders?: readonly string[];
 }
+
+/** Top-level folders that hold the system, not user data: not walked for secret names on Linux. */
+const SYSTEM_ROOT_FOLDERS = new Set(["proc", "sys", "dev", "run", "usr", "lib", "lib32", "lib64", "libx32", "bin", "sbin", "boot", "snap", "etc", "lost+found"]);
 
 /** The read denials, as absolute paths and anchored patterns (bare patterns do not match on macOS). */
 export function denyReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   // Secret file names are denied at any depth from the filesystem root, so a .env or an auth file
-  // outside the home and the project (another checkout, an agent folder elsewhere) is covered too;
-  // the agent folder's own files are also named outright, for platforms that match no patterns.
-  const roots = [...new Set(["", home, options.cwd, agentDir])];
+  // outside the home and the project (another checkout, an agent folder elsewhere) is covered too.
+  // macOS matches "/**/name" as a pattern. Linux (bubblewrap) expands each pattern by walking from
+  // its first literal folder and skips one with none, so there each top-level folder that can hold
+  // user data is named. The agent folder's own files are also named outright.
+  const platform = options.platform ?? process.platform;
+  const fromRoot = platform === "linux"
+    ? (options.rootFolders ?? readdirSync("/")).filter((name) => !SYSTEM_ROOT_FOLDERS.has(name)).map((name) => `/${name}`)
+    : [""];
+  const roots = [...new Set([...fromRoot, home, options.cwd, agentDir])];
   return [
     ...secretDirectories(home, agentDir),
     ...["auth.json", "mcp.json", "mcp-adapter.json"].map((name) => join(agentDir, name)),

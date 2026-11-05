@@ -133,7 +133,9 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
     const chosen: LineEntry[] = [];
     const need = (e: LineEntry) => visibleWidth(e.label) + 1 + (e.word ? visibleWidth(e.word.text) : Math.min(visibleWidth(e.note), NOTE_MIN));
     const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
-    const fold = (k: number) => (entries.length - k ? SEP.length + visibleWidth(`${k ? "+" : ""}${entries.length - k} watching`) : 0);
+    // Folded watches are counted as "watching"; a paused one is already in the paused count.
+    const foldCount = (k: number) => entries.slice(k).filter((e) => e.word?.text !== "paused").length;
+    const fold = (k: number) => (foldCount(k) ? SEP.length + visibleWidth(`${k ? "+" : ""}${foldCount(k)} watching`) : 0);
     const shownPausedOf = (list: LineEntry[]) => list.filter((e) => e.word?.text === "paused").length;
     for (const entry of entries) {
       const next = [...chosen, entry];
@@ -169,7 +171,7 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
       }
       return `${paint.fg("muted", e.label)} ${state}`;
     });
-    if (entries.length > chosen.length) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${entries.length - chosen.length} watching`));
+    if (foldCount(chosen.length)) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${foldCount(chosen.length)} watching`));
     const left = [head(dot), ...parts, ...counts(!long, shownPausedOf(chosen))].join(sep);
     if (fits(left, long)) return [compose(left, long)];
   }
@@ -278,10 +280,14 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   let label = watchLabel(watch);
   if (isDirectMessage(watch.conversation.channelId)) {
-    // The kind tells a DM's rows apart, so the name gives way to it.
-    const kind = ` · ${kindLabel(watch)}`;
-    const name = truncateToWidth(label, Math.max(6, labelRoom - Math.min(visibleWidth(kind), labelRoom - 6)), "…");
-    label = `${name}${kind}`;
+    // "(DM)" and the kind tell a DM's rows apart: the thread's snippet gives way first, then the name.
+    const name = watch.partner?.name ?? "someone";
+    const kind = kindLabel(watch);
+    const fixed = ` (DM) · `;
+    const kindRoom = Math.max(6, labelRoom - visibleWidth(fixed) - Math.min(visibleWidth(name), 16));
+    const shortKind = truncateToWidth(kind, kindRoom, "…");
+    const nameRoom = Math.max(4, labelRoom - visibleWidth(fixed) - visibleWidth(shortKind));
+    label = `${truncateToWidth(name, nameRoom, "…")}${fixed}${shortKind}`;
   }
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(truncateToWidth(label, labelRoom, "…")))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
@@ -375,15 +381,20 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     content.push(...sel.rows.slice(0, sel.pinned), ...scrolling.slice(offset, offset + pageRows));
     const selItem = items[selected]!;
     const unread = selItem.kind === "approval" && selItem.approval.status === "pending" && !view.read.has(selItem.approval.id);
-    // The marker row: what is left of this item, how to page, and why; optional parts give way to fit.
-    const parts = below > 0
-      ? [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page", belowItems ? `${belowItems} more below` : ""]
-      : ["(end of this item)", belowItems ? `${belowItems} more below` : ""];
-    let marker = parts.filter(Boolean);
-    for (const optional of [belowItems ? `${belowItems} more below` : "", "space next page"]) {
-      if (2 + visibleWidth(marker.join(" · ")) <= inner - POINTER_WIDTH) break;
-      marker = marker.filter((p) => p !== optional);
-    }
+    // The marker row: what is left of this item, why to read on, and how to page. Longer forms
+    // give way to shorter ones until one fits; the paging hint goes last.
+    const more = belowItems ? `${belowItems} more below` : "";
+    const forms: string[][] = below > 0
+      ? [
+          [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page", more],
+          [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page"],
+          [`↓ ${below} more`, unread ? "read all to approve" : "", "space pages"],
+          [`↓ ${below} more`, "space pages"],
+          [`↓ ${below} more`],
+        ]
+      : [["(end of this item)", more], ["(end of this item)"]];
+    const room = inner - POINTER_WIDTH - 2;
+    const marker = forms.map((f) => f.filter(Boolean)).find((f) => visibleWidth(f.join(" · ")) <= room) ?? forms.at(-1)!.filter(Boolean);
     content.push(paint.fg("muted", `  ${marker.join(" · ")}`));
     shown = [items[selected]!];
   } else {

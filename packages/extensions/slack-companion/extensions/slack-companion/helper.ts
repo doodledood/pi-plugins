@@ -182,7 +182,7 @@ export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome,
     tools.push(defineTool({
       name: tool.exposedName,
       label: tool.exposedName,
-      description: `${tool.description}\n(MCP tool from ${tool.server}, read-only, called through the owner's session.)`.trim(),
+      description: `${tool.description}\n(MCP tool from ${tool.server}, ${tool.readOnly ? "read-only" : "listed by the owner for investigation"}, called through the owner's session.)`.trim(),
       parameters: tool.inputSchema as unknown as TSchema,
       execute: (_id, params) => invokeMcpTool(tool, params as Record<string, unknown>),
     }) as unknown as AnyTool);

@@ -46,7 +46,7 @@ export interface ReadOutcome {
 
 /** How far behind the read's start the checkpoint stays, to absorb late visibility and clock skew. */
 export const CHECKPOINT_LAG_MS = 2 * 60 * 1000;
-/** Rejected ids kept per conversation. */
+/** Rejected ids a conversation may name at once; more stops the watch (lasting). */
 export const MAX_REJECTED = 500;
 /**
  * New messages confirmed per poll, so one poll stays near 30 Slack reads, well inside Slack's read
@@ -85,7 +85,12 @@ export async function readNew(
     delivered.push(ts);
   }
   const firstDeferred = ids[now.length];
-  return { fresh, next: advance(point, delivered, rejected, readStartedAtMs, firstDeferred), forged: rejected.length, deferred: ids.length - now.length };
+  const next = advance(point, delivered, rejected, readStartedAtMs, firstDeferred, new Set(candidates.map((c) => c.ts)));
+  // Text can name any number of ids that do not exist; past the bound, stop rather than check them in turns forever.
+  if ((next.rejected?.length ?? 0) > MAX_REJECTED) {
+    throw new BackendError(`this conversation names more than ${MAX_REJECTED} message ids that do not exist`, "too_many_ids");
+  }
+  return { fresh, next, forged: rejected.length, deferred: ids.length - now.length };
 }
 
 /**
@@ -93,7 +98,7 @@ export async function readNew(
  * up to an id still waiting for confirmation. Newer delivered ids stay in `seen`, newer rejected
  * ones in `rejected` (bounded); both are dropped once the checkpoint passes them.
  */
-export function advance(point: ReadPoint, deliveredNow: readonly string[], rejectedNow: readonly string[], readStartedAtMs: number, firstUnsettled?: string): ReadPoint {
+export function advance(point: ReadPoint, deliveredNow: readonly string[], rejectedNow: readonly string[], readStartedAtMs: number, firstUnsettled?: string, listed?: ReadonlySet<string>): ReadPoint {
   const cap = tsFromMillis(Math.max(0, readStartedAtMs - CHECKPOINT_LAG_MS));
   const delivered = [...new Set([...point.seen, ...deliveredNow])];
   const rejected = [...new Set([...(point.rejected ?? []), ...rejectedNow])];
@@ -104,6 +109,7 @@ export function advance(point: ReadPoint, deliveredNow: readonly string[], rejec
     if (!checkpoint || compareTs(ts, checkpoint) > 0) checkpoint = ts;
   }
   const after = (ts: string) => !checkpoint || compareTs(ts, checkpoint) > 0;
-  const keptRejected = rejected.filter(after).slice(-MAX_REJECTED);
+  // A rejected id is kept while a listing still names it (an edit that removes the text lets it go).
+  const keptRejected = rejected.filter(after).filter((ts) => !listed || listed.has(ts) || rejectedNow.includes(ts));
   return { checkpoint, seen: delivered.filter(after).sort(compareTs), ...(keptRejected.length ? { rejected: keptRejected } : {}) };
 }

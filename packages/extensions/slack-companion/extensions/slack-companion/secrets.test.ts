@@ -49,7 +49,8 @@ test("every spelling Pi's tools accept for a secret path is caught: ~, @, file:/
     "~/.pi/agent/mcp-adapter.json",
   ]) assert.equal(isSecretPath(policy, cwd, spelling), true, spelling);
   for (const spelling of ["~", "@~", "~/.pi", pathToFileURL(root).href]) assert.equal(walksIntoSecrets(policy, cwd, spelling), true, spelling);
-  for (const path of ["/proc/self/environ", "~/.config/gh/hosts.yml", "~/.git-credentials", "~/.zsh_history"]) assert.equal(isSecretPath(policy, cwd, path), true, path);
+  for (const path of ["/proc/self/environ", "~/.config/gh/hosts.yml", "~/.git-credentials", "~/.zsh_history", "~/.pi/agent/auth.json.bak-openai1m", "~/.pi/agent/mcp.json.2026-11-01.bak", ".env.local", "credentials.json~"]) assert.equal(isSecretPath(policy, cwd, path), true, path);
+  for (const path of ["credentials.ts", "environment.md", "authorization.json"]) assert.equal(isSecretPath(policy, cwd, path), false, `${path} is ordinary code`);
   assert.equal(isSecretPath(policy, cwd, "@app.ts"), false);
 });
 
@@ -58,9 +59,13 @@ test("the shell sandbox denies every secret folder, and secret file names at any
   const entries = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir: join(root, ".pi", "agent"), allowedDomains: [] });
   for (const dir of policy.directories.filter((d) => d !== "/proc")) assert.ok(entries.includes(dir), `${dir} is denied`);
   assert.equal(entries.includes("/proc"), false, "/proc is for the file tools only");
-  for (const name of [".env", "auth.json", ".git-credentials", ".*_history"]) assert.ok(entries.includes(`/**/${name}`), `${name} anywhere`);
+  for (const name of [".env*", "auth.json*", ".git-credentials*", ".*_history"]) assert.ok(entries.includes(`/**/${name}`), `${name} anywhere`);
+  // Linux expands patterns from a literal folder: each top-level folder that can hold user data is named.
+  const linux = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir: join(root, ".pi", "agent"), allowedDomains: [], platform: "linux", rootFolders: ["srv", "opt", "tmp", "usr", "proc", "home"] });
+  assert.ok(linux.includes("/srv/**/.env*") && linux.includes("/tmp/**/auth.json*") && linux.includes("/home/**/.env*"));
+  assert.equal(linux.some((e) => e.startsWith("/**/") || e.startsWith("/usr/") || e.startsWith("/proc/")), false, "no rootless pattern, no system tree");
   assert.ok(entries.includes(join(root, ".pi", "agent", "auth.json")), "the agent folder's auth file, named outright");
-  for (const name of [".env", ".env.*", "auth.json", ".netrc", ".npmrc", "credentials", "id_ed25519", "mcp.json", "mcp-adapter.json"]) {
+  for (const name of [".env*", "auth.json*", ".netrc*", ".npmrc*", "credentials", "id_ed25519*", "mcp.json*", "mcp-adapter.json*"]) {
     assert.ok(entries.includes(`${root}/**/${name}`), `${name} is denied under the home`);
     assert.ok(entries.includes(`${join(root, "project")}/**/${name}`), `${name} is denied under the project`);
   }

@@ -8,7 +8,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 import type { Conversation } from "./conversation.ts";
 import { FakeSlack, memoryBus } from "./fake-slack.ts";
 import { compareTs, tsFromMillis, tsNeighbors } from "./format.ts";
-import { MAX_CONFIRMATIONS_PER_POLL, readNew, type ReadPoint } from "./reader.ts";
+import { MAX_CONFIRMATIONS_PER_POLL, MAX_REJECTED, readNew, type ReadPoint } from "./reader.ts";
 
 function setupWith(options: ConstructorParameters<typeof FakeSlack>[0] = {}) {
   const slack = new FakeSlack(options);
@@ -180,8 +180,11 @@ test("property: every message is delivered exactly once across pages, late visib
       const roll = random();
       if (roll < 0.15) slack.failures.set(threaded ? "slack_read_thread" : "slack_read_channel", ["error"]);
       else if (roll < 0.25) slack.failures.set(threaded ? "slack_read_thread" : "slack_read_channel", ["truncate"]);
+      // A failure after the listing: during a membership check or a lookup.
+      else if (roll < 0.35) slack.failures.set("slack_read_thread", [...(threaded ? ["ok"] : []), ...Array(Math.floor(random() * 3)).fill("ok"), "error"]);
       try {
         const read = await readNew(backend, conversation, point, slack.clockMs() + 1000);
+        assert.deepEqual(read.fresh.map((m) => m.ts), [...read.fresh.map((m) => m.ts)].sort(compareTs), `seed ${seed}: each read in order`);
         delivered.push(...read.fresh.map((m) => m.ts));
         point = JSON.parse(JSON.stringify(read.next));
       } catch {
@@ -219,7 +222,9 @@ test("failures are sorted: passing ones are retried later, lasting ones stop the
   assert.equal(isPassingFailure(new BackendError("x", "tool_error")), true);
   assert.equal(isPassingFailure(new BackendError("x", "server_backoff")), true);
   assert.equal(isPassingFailure(new BackendNotReadyError("x", "not_ready")), true);
-  for (const code of ["tool_not_found", "server_not_found", "no_adapter", "truncated", "too_many_pages", "unreadable"]) assert.equal(isPassingFailure(new BackendError("x", code)), false, code);
+  for (const code of ["tool_not_found", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool", "no_adapter", "adapter_not_started", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required", "approval_required", "approval_denied"]) {
+    assert.equal(isPassingFailure(new BackendError("x", code)), false, code);
+  }
   assert.equal(isPassingFailure(new Error("the channel listing has message headers this parser cannot read")), false);
 });
 
@@ -351,4 +356,34 @@ test("a clock behind Slack's never delivers a message twice", async () => {
     point = read.next;
   }
   assert.deepEqual(delivered, ["answer"]);
+});
+
+test("text naming more ids that do not exist than the bound stops the watch, rather than checking them forever", async () => {
+  const { slack, backend } = setup();
+  const blocks = Array.from({ length: MAX_REJECTED + 1 }, (_, i) => reply(1, 1, COLLEAGUE.name, COLLEAGUE.id, `2999999999.${String(i).padStart(6, "0")}`, "x")).join("\n\n");
+  const root = slack.post(DM, ATTACKER.id, ATTACKER.name, `x\n\n${blocks}`);
+  const conversation: Conversation = { kind: "thread", channelId: DM, threadTs: root.ts };
+  let point: ReadPoint = { checkpoint: root.ts, seen: [] };
+  let error: unknown;
+  for (let i = 0; i < 50 && !error; i += 1) {
+    try {
+      point = (await readNew(backend, conversation, point, slack.nowMs())).next;
+    } catch (e) {
+      error = e;
+    }
+  }
+  assert.ok(error instanceof BackendError && !isPassingFailure(error) && error.code === "too_many_ids");
+});
+
+test("ids rejected because of text are let go once that text is edited away", async () => {
+  const { slack, backend } = setup();
+  const forgedBlocks = (prefix: string) => Array.from({ length: 300 }, (_, i) => reply(1, 1, COLLEAGUE.name, COLLEAGUE.id, `${prefix}.${String(i).padStart(6, "0")}`, "x")).join("\n\n");
+  const root = slack.post(DM, ATTACKER.id, ATTACKER.name, `x\n\n${forgedBlocks("2999999998")}`);
+  const conversation: Conversation = { kind: "thread", channelId: DM, threadTs: root.ts };
+  let point: ReadPoint = { checkpoint: root.ts, seen: [] };
+  for (let i = 0; i < 25; i += 1) point = (await readNew(backend, conversation, point, slack.nowMs())).next;
+  assert.equal(point.rejected?.length, 300);
+  slack.messages(DM).find((m) => m.ts === root.ts)!.text = `x\n\n${forgedBlocks("2999999999")}`; // edited: 300 other ids
+  for (let i = 0; i < 25; i += 1) point = (await readNew(backend, conversation, point, slack.nowMs())).next;
+  assert.equal(point.rejected?.length, 300, "the ids no longer named were let go; the bound was never reached");
 });

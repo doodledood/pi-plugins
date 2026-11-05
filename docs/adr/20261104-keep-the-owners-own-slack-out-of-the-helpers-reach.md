@@ -14,8 +14,8 @@ An agent, during an unattended build, from the owner's ruling that the helper ge
 
 ## Decision
 - The helper does not get the tools of the MCP server that serves the configured Slack tools (the configured `server`, else every server listing one of them), even when they are marked read-only.
-- The owner can give it any of them by listing it by name in `investigativeTools` (`tool` or `server/tool`).
-- The send tool is never reachable, listed or not.
+- The owner can give it any of its read-only tools by listing it by name in `investigativeTools` (`tool` or `server/tool`).
+- A tool of that server that is not read-only (it posts or changes something) is never reachable, listed or not; neither is the configured send tool on any server.
 
 ## Alternatives Considered
 - **All read-only reach, Slack included**: what the earlier record says; rejected because it lets anyone in a watched conversation read the owner's private Slack through the helper.
@@ -28,6 +28,7 @@ An agent, during an unattended build, from the owner's ruling that the helper ge
 
 ### Negative
 - The helper cannot look up a Slack link someone pastes, unless the owner lists the read tools.
+- A gateway that serves Slack and other tools as one MCP server hides those other tools from the helper too, unless listed.
 
 ## Enforced by
 `packages/extensions/slack-companion/extensions/slack-companion/mcp-tools.test.ts` ("the owner's own Slack server is private: its tools are reachable only when he lists them") and `wiring.test.ts` ("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed") — pin the exclusion, the opt-in by name, and the production wiring.

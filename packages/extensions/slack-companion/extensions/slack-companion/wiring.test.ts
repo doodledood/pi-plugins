@@ -42,7 +42,7 @@ test("the real helper path builds its sandbox and file guards for the owner's ho
   await h.engine().idle();
   const policy = h.sandboxConfigs.at(-1)!;
   assert.ok(policy.filesystem.denyRead.includes(join(h.home, ".ssh")), "the shell may not read the home's ~/.ssh");
-  assert.ok(policy.filesystem.denyRead.includes(`${h.home}/**/.env`));
+  assert.ok(policy.filesystem.denyRead.includes(`${h.home}/**/.env*`));
   assert.deepEqual(policy.network.allowedDomains, ["docs.example.org"]);
   const helperCalls = h.calls.filter((c) => c.role === "helper");
   const readResult = helperCalls.at(-1)!.context.messages.find((m: any) => m.role === "toolResult" && m.toolName === "read") as any;
@@ -194,6 +194,14 @@ test("the panel opened through Pi fits the overlay it asks for, gates approval o
     component.handleInput("a");
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(h.engine().pendingApprovals().length, 0, "approved once read");
+    // A stop with an error, rendered in the panel, is recorded as seen in the saved state.
+    h.slack.failures.set("slack_read_thread", ["garbage"]);
+    await h.engine().poll();
+    const stopped = h.engine().snapshot().watches.find((w) => w.status === "error")!;
+    for (let i = 0; i < 10; i += 1) component.handleInput("\u001b[B");
+    component.render(80);
+    const saved = (h.session.sessionManager.getBranch() as any[]).filter((e) => e.type === "custom" && e.customType === "slack-companion-state").at(-1).data;
+    assert.ok(saved.seenErrors.includes(`${stopped.key}@${stopped.endedAt}`), "seen, and saved");
   } finally {
     close();
     await closed;
@@ -226,7 +234,11 @@ test("an information hand-off steers main while it is busy, and main stays usabl
   await h.session.agent.waitForIdle?.();
   const afterTool = h.calls.filter((c) => c.role === "main").find((c) => c.context.messages.some((m: any) => m.role === "toolResult" && m.toolName === "data_lookup"))!;
   assert.ok(afterTool.context.messages.some((m: any) => /\[Slack hand-off\][\s\S]*staging is fine/.test(textOf(m.content))), "the hand-off reached main within its running turn");
+  // A request now waits for the owner; main keeps working meanwhile.
+  h.engine()["state"].approvals.push({ id: "w1", watchKey: `${DM}/${question!.ts}`, label: "Robin Colleague (DM)", requester: "Robin Colleague", text: "merge it", at: 0, status: "pending" });
+  assert.equal(h.engine().pendingApprovals().length, 1);
   const before = h.calls.filter((c) => c.role === "main").length;
   await h.session.prompt("anything else?");
-  assert.equal(h.calls.filter((c) => c.role === "main").length, before + 1, "main answers while nothing waits on it");
+  assert.equal(h.calls.filter((c) => c.role === "main").length, before + 1, "main answers while a request waits");
+  assert.equal(h.engine().pendingApprovals().length, 1, "and the request still waits for the owner");
 });
