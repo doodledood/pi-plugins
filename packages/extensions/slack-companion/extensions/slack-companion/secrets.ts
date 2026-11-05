@@ -182,8 +182,13 @@ export function repositoryFolders(cwd: string, home: string, agentDir: string): 
   };
   if (!top || !openable(top)) return [];
   const folders = [canonicalPath(top)];
-  // A linked worktree's shared folder belongs to the main checkout, which must pass as well.
-  if (common && basename(common) === ".git" && openable(dirname(common))) folders.push(canonicalPath(common));
+  if (common) {
+    // The shared folder belongs to a repository that must pass as well: a linked worktree's main
+    // checkout, a submodule's superproject, or, for a bare repository, the shared folder itself.
+    const modules = common.indexOf(`${sep}.git${sep}modules${sep}`);
+    const owner = basename(common) === ".git" ? dirname(common) : modules >= 0 ? common.slice(0, modules) : common;
+    if (openable(owner)) folders.push(canonicalPath(common));
+  }
   return [...new Set(folders)];
 }
 
@@ -221,8 +226,13 @@ export function isReadableAbsolute(policy: ReadPolicy, absolute: string): boolea
  */
 export function skillFolder(policy: ReadPolicy, skillFile: string): string | undefined {
   if (basename(skillFile) !== "SKILL.md") return undefined;
-  const folder = canonicalPath(dirname(skillFile));
+  // The folder of the file itself: a SKILL.md that is a link opens where it leads.
+  const folder = dirname(canonicalPath(skillFile));
   if (namedLikeSecret(folder)) return undefined;
+  // A SKILL.md lying directly in one of the home's dot-folders (~/.agents) opens only itself.
+  const home = canonicalPath(policy.home);
+  const fromHome = inside(folder, home) ? folder.slice(home.length + 1) : undefined;
+  if (fromHome !== undefined && fromHome.startsWith(".") && !fromHome.includes(sep)) return undefined;
   // The home, and any folder holding it, hold the secret folders too: one check refuses them all.
   if (policy.closed.some((dir) => inside(dir, folder))) return undefined;
   return folder;

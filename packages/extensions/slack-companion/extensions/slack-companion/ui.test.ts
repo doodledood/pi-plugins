@@ -359,3 +359,17 @@ test("a watch that is catching up after a gap says so on the line", () => {
   const [line] = renderLine(surface({ watches: [watch({ rejoining: 1, lastNote: "watching again" })] }), plain, 120);
   assert.match(line!, /Robin Colleague catching up/);
 });
+
+test("the panel says a rejoining watch is catching up, and tells apart fresh threads of a long-named channel at any width", () => {
+  const panel = renderPanel(surface({ watches: [watch({ rejoining: 1 })] }), 0, plain, 80, 0).join("\n");
+  assert.match(panel, /◌ catching up/);
+  assert.doesNotMatch(panel, /● watching/);
+  const fresh = (key: string, text: string) =>
+    watch({ key, conversation: { kind: "thread", channelId: "C0REL", threadTs: key.split("/")[1]! }, channelName: "release-train-2026-q4-coordination", partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text, agentFooter: true }] });
+  const state = surface({ watches: [fresh("C0REL/1.000001", "Deploy is blocked on the migration"), fresh("C0REL/2.000001", "Who owns the flaky check now?")] });
+  for (const width of [40, 48, 60, 80]) {
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#release"));
+    assert.equal(rows.length, 2, `${width}`);
+    assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `two rows read apart at ${width}: ${rows.join(" | ")}`);
+  }
+});

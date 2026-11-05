@@ -91,17 +91,22 @@ function openingWords(watch: WatchState, cells: number): string | undefined {
 
 /** Cells the line gives a conversation's first words, so two or three fresh conversations fit. */
 const LINE_OPENING_CELLS = 16;
+/** Cells a channel's name may take in a label before anyone answered, so its first words still show. */
+const CHANNEL_NAME_CELLS = 14;
 
 /**
  * A conversation as the line and the panel name it before anyone has answered: a DM by its first
- * words, a channel thread by its channel and first words. One spelling for both surfaces; `cells`
- * is what the first words may take.
+ * words, a channel thread by its channel and first words. One spelling for both surfaces. `room`
+ * is the cells the whole label may take (the panel's); without it, the line's budget is used.
  */
-function unnamedLabel(watch: WatchState, cells = LINE_OPENING_CELLS): string {
-  const opening = openingWords(watch, cells);
-  if (isDirectMessage(watch.conversation.channelId)) return opening ? `DM "${opening}"` : dmLabel(undefined);
-  const channel = `#${watch.channelName || watch.conversation.channelId}`;
-  return opening ? `${channel} "${opening}"` : channel;
+function unnamedLabel(watch: WatchState, room?: number): string {
+  const dm = isDirectMessage(watch.conversation.channelId);
+  const prefix = dm ? "DM" : `#${cut(watch.channelName || watch.conversation.channelId, CHANNEL_NAME_CELLS)}`;
+  // The first words get what is left after the prefix, a space and two quotes.
+  const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - 3;
+  const opening = cells >= 4 ? openingWords(watch, cells) : undefined;
+  if (opening) return `${prefix} "${opening}"`;
+  return dm ? dmLabel(undefined) : prefix;
 }
 
 /** A conversation as the line names it: the person, and the channel when it is not a DM; before anyone answers, unnamedLabel. */
@@ -325,7 +330,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
   const status = {
-    active: answering ? paint.fg("accent", "● answering…") : paint.fg("success", "● watching"),
+    active: answering ? paint.fg("accent", "● answering…") : watch.rejoining !== undefined ? paint.fg("accent", "◌ catching up") : paint.fg("success", "● watching"),
     paused: paint.fg("warning", "○ paused"),
     stopped: paint.fg("muted", "· ended"),
     error: paint.fg("error", "× stopped"),
@@ -336,7 +341,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   if (!watch.partner) {
     // Before anyone has answered: the same first words as on the line, cut to leave the kind whole.
     const kind = isDirectMessage(watch.conversation.channelId) ? ` · ${bareKind}` : "";
-    label = `${unnamedLabel(watch, labelRoom - visibleWidth(kind) - 16)}${kind}`;
+    label = `${unnamedLabel(watch, labelRoom - visibleWidth(kind))}${kind}`;
   } else if (isDirectMessage(watch.conversation.channelId)) {
     // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
     // snippet gives way to a bare "thread" when too little is left for it.

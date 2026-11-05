@@ -6,7 +6,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
 import { canonicalPath, openedFolders, sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
@@ -44,10 +44,11 @@ export const HOME_TOOLCHAINS: readonly string[] = [
 ];
 
 /**
- * What the shell may read inside the closed home folder: the project and the owner's readable
- * folders, Pi's `bin` (first on the shell's PATH; its `fd` and `rg` live there), and the
- * toolchains. Secret folders and names inside them stay denied: Seatbelt keeps a deny that is more
- * specific than the allow around it.
+ * What the shell may read inside the closed folders: the opened folders (the project, the owner's
+ * readable folders and the repository's own, see secrets.openedFolders), Pi's `bin` (first on the
+ * shell's PATH; its `fd` and `rg` live there), the toolchains, and Apple's developer-tools cache in
+ * the temp folder. Secret folders and names inside them stay denied: Seatbelt keeps a deny that is
+ * more specific than the allow around it.
  */
 export function allowReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
@@ -67,11 +68,21 @@ export function denyReadEntries(options: SandboxOptions): string[] {
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   const roots = [...new Set(["", home, options.cwd, agentDir])];
   // The temp folders hold Pi's full tool output, pi-mcp-adapter's saved results, and other tools' scratch files.
-  return [home, canonicalPath(tmpdir()), ...SHARED_TEMP, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
+  return [home, userTempFolder(), ...SHARED_TEMP, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
-/** The system's shared temp folders, closed to the shell as the user's own temp folder is. */
-const SHARED_TEMP = ["/private/tmp", "/private/var/tmp"];
+/** The system's shared folders where data of other users and tools sits, closed to the shell as the user's own temp folder is. */
+const SHARED_TEMP = ["/private/tmp", "/private/var/tmp", "/Users/Shared"];
+
+/**
+ * The user's own temp folder, or on macOS the per-user folder that holds it and the user's caches
+ * (/private/var/folders/<x>/<y>, whose T is the temp folder and C the caches). A temp folder of any
+ * other shape is closed by itself, so a TMPDIR such as /tmp never closes a parent like /.
+ */
+export function userTempFolder(): string {
+  const temp = canonicalPath(tmpdir());
+  return /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(temp) ? dirname(temp) : temp;
+}
 
 /** sandbox-runtime lets every command write here and points TMPDIR here; the helper writes only to its scratch folder. */
 const RUNTIME_WRITABLE = ["/tmp/claude", "/private/tmp/claude"];

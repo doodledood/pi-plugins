@@ -163,12 +163,19 @@ export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome,
     const bash = createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false });
     tools.push({
       ...bash,
-      // A long output is saved to a file the result names: that one file becomes readable to this run.
+      // A long output is saved to a file the result names: that one file becomes readable to this
+      // run. A command that times out or is stopped throws instead, naming the file in its message.
       async execute(...args: Parameters<typeof bash.execute>) {
-        const result = await bash.execute(...args);
-        const saved = (result.details as { fullOutputPath?: unknown } | undefined)?.fullOutputPath;
-        if (typeof saved === "string") env.reads.files.add(canonicalPath(saved));
-        return result;
+        try {
+          const result = await bash.execute(...args);
+          const saved = result.details?.fullOutputPath;
+          if (saved) env.reads.files.add(canonicalPath(saved));
+          return result;
+        } catch (error) {
+          const saved = /Full output: ([^\]\s]+)\]/.exec(error instanceof Error ? error.message : "")?.[1];
+          if (saved) env.reads.files.add(canonicalPath(saved));
+          throw error;
+        }
       },
     } as unknown as AnyTool);
   }
@@ -325,7 +332,8 @@ export async function runHelper(env: HelperEnvironment, batch: HelperBatch, sign
   throwIfAborted(signal);
 
   // The skills the helper is offered (as the loader resolved them) can be loaded, though most live
-  // in Pi's agent folder, which is otherwise closed to it: each skill's own file, nothing beside it.
+  // in Pi's agent folder, which is otherwise closed to it: each offered skill's folder (a SKILL.md
+  // and the files beside it, see secrets.skillFolder), or a loose skill file alone.
   const reads: ReadPolicy = { ...env.reads, files: new Set(env.reads.files), skillFolders: [...env.reads.skillFolders] };
   for (const skill of loader.getSkills().skills) {
     const folder = skillFolder(reads, skill.filePath);

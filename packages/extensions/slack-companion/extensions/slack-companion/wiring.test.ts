@@ -7,7 +7,7 @@
 // docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md (told once on Linux) and
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md (the closed home, as wired).
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
@@ -365,4 +365,37 @@ test("through the real send path, a fresh DM is named by the words main wrote, n
     assert.match(line!, /DM "Can you review…"/, "two fresh DMs read apart");
     assert.doesNotMatch(line!, /agent\*\*|Dana Owner/, "the package's agent line is not the name");
   }
+});
+
+test("in a real session, the session's own post, agent posts, a reaction and a repeated read wake no model; a real reply does", async () => {
+  const h = await createHarness({ replies: script("question", () => ({ kind: "text", text: "done" })) });
+  await h.session.prompt("ask Robin");
+  const [question] = h.slack.messages(DM);
+  const models = () => h.calls.filter((c) => c.role === "triage" || c.role === "helper").length;
+  h.slack.post(DM, h.slack.ownerId, h.slack.ownerName, "from another of my agents\n*Sent using* <@A0FAKEAPP|Slack MCP>", question!.ts);
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "from Robin's agent\n*Sent using* <@A0FAKEAPP|Slack MCP>", question!.ts);
+  await h.engine().poll();
+  await h.engine().idle();
+  h.slack.messages(DM).at(-1)!.text += " :thumbsup:"; // a reaction changes nothing that matters
+  await h.engine().poll();
+  await h.engine().poll();
+  await h.engine().idle();
+  assert.equal(models(), 0, "no model woke");
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a real question", question!.ts);
+  await h.engine().poll();
+  await h.engine().idle();
+  assert.equal(h.calls.filter((c) => c.role === "triage").length, 1, "a real reply is judged once");
+});
+
+test("a session start removes lock folders released more than a day ago", async () => {
+  const first = await createHarness({ persistSession: true, replies: script("question", () => ({ kind: "text", text: "done" })) });
+  const locks = join(first.agentDir, "slack-companion", "locks");
+  mkdirSync(join(locks, "D0OLD_top"), { recursive: true });
+  const marker = join(locks, "D0OLD_top", "2.json");
+  writeFileSync(marker, JSON.stringify({ pid: 1, sessionId: "old", released: true }));
+  const old = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+  utimesSync(marker, old, old);
+  await first.session.dispose();
+  await createHarness({ reopen: first, replies: script("question", () => ({ kind: "text", text: "done" })) });
+  assert.equal(existsSync(join(locks, "D0OLD_top")), false);
 });

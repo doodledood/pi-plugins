@@ -72,7 +72,7 @@ test("the folders that open the home: never the home, a folder holding it, a sec
   assert.equal(closed(library, root, "~/Library/Application Support/Claude/Cookies"), true);
 });
 
-test("exact files open: an offered skill's file and a result the helper's own call saved, nothing beside them", () => {
+test("exact files open: a loose skill file and a result the helper's own call saved, nothing beside them", () => {
   const { root, agentDir } = home();
   const skill = join(agentDir, "skills", "notes", "SKILL.md");
   mkdirSync(join(agentDir, "skills", "notes"), { recursive: true });
@@ -164,6 +164,14 @@ test("a skill opens its own folder, never the home, a folder holding it or one h
   assert.equal(skillFolder(policy, join(agentDir, "SKILL.md")), undefined, "nor Pi's agent folder");
   assert.equal(skillFolder(policy, join(root, ".pi", "SKILL.md")), undefined, "nor a folder holding a secret folder");
   assert.equal(skillFolder(policy, join(inAgent, "handy.md")), undefined, "a loose skill file opens only itself");
+  mkdirSync(join(root, ".agents"), { recursive: true });
+  assert.equal(skillFolder(policy, join(root, ".agents", "SKILL.md")), undefined, "nor a home dot-folder holding a SKILL.md directly");
+  const source = join(root, "dev", "skills-src", "linked");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "SKILL.md"), "x");
+  mkdirSync(join(agentDir, "skills", "linked"), { recursive: true });
+  symlinkSync(join(source, "SKILL.md"), join(agentDir, "skills", "linked", "SKILL.md"));
+  assert.equal(skillFolder(policy, join(agentDir, "skills", "linked", "SKILL.md")), canonicalPath(source), "a linked SKILL.md opens where it leads");
 });
 
 test("a repository opens its folders only when its top folder could be opened: never a dotfiles repository at ~ or in ~/.config", () => {
@@ -180,6 +188,19 @@ test("a repository opens its folders only when its top folder could be opened: n
   git(repo, "init", "-q");
   const opened = openedFolders({ home: root, agentDir, cwd: join(repo, "sub"), readable: [] });
   assert.ok(opened.includes(canonicalPath(repo)), "a subfolder's repository top is opened");
+  // A worktree of a bare repository opens the bare folder; a bare dotfiles repository does not.
+  const bare = join(root, "code", "proj.git");
+  git(join(root, "code"), "init", "-q", "--bare", bare);
+  writeFileSync(join(repo, "a.txt"), "a");
+  git(repo, "add", "a.txt");
+  git(repo, "commit", "-qm", "c");
+  git(repo, "push", "-q", bare, "HEAD:main");
+  git(bare, "worktree", "add", "-q", join(root, "code", "proj-wt"), "main");
+  assert.ok(openedFolders({ home: root, agentDir, cwd: join(root, "code", "proj-wt"), readable: [] }).includes(canonicalPath(bare)));
+  const dotBare = join(root, ".dotfiles");
+  git(root, "init", "-q", "--bare", dotBare);
+  git(dotBare, "worktree", "add", "-q", join(root, "code", "dots-wt"));
+  assert.equal(openedFolders({ home: root, agentDir, cwd: join(root, "code", "dots-wt"), readable: [] }).includes(canonicalPath(dotBare)), false);
 });
 
 test("a folder whose name begins like an open one is not inside it; a folder named like a secret closes its contents", () => {

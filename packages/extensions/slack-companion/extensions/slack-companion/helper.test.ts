@@ -3,111 +3,17 @@
 // (no extension, allowlisted tools), docs/adr/20261104-sandbox-the-slack-helpers-shell.md and
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Skill } from "@earendil-works/pi-coding-agent";
-import { forkEntriesForChild, selectForkBranch } from "./fork.ts";
-import { HelperAbortedError, MAX_HELPER_TURNS, runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
-import { helperMcpTools, mcpCachePathIn, readMcpCache } from "./mcp-tools.ts";
+import { forkEntriesForChild } from "./fork.ts";
+import { HelperAbortedError, MAX_HELPER_TURNS } from "./helper.ts";
 import type { Context } from "@earendil-works/pi-ai";
-import { createHarness, type Harness, systemText, textOf, type Reply } from "./pi-harness.ts";
-import { NO_SHELL_ON_LINUX, startShellSandbox, type ShellSandbox } from "./sandbox.ts";
-import { readPolicy } from "./secrets.ts";
-
-const batch: HelperBatch = {
-  conversationLabel: "DM with Robin Colleague",
-  ownerName: "Dana Owner",
-  inChannel: false,
-  context: [],
-  messages: [{ ts: "1793700100.000001", userId: "U0COLL0001", userName: "Robin Colleague", text: "can you check?", agentFooter: false }],
-  waitingApprovals: [],
-  requestRoom: 1,
-};
-
-/** A home folder of the test's own, with a key in ~/.ssh and an OAuth token under the agent folder. */
-function fakeHome() {
-  const home = mkdtempSync(join(tmpdir(), "helper-home-"));
-  mkdirSync(join(home, ".ssh"));
-  writeFileSync(join(home, ".ssh", "id_ed25519"), "PRIVATE-KEY-CONTENT");
-  mkdirSync(join(home, ".pi", "agent", "mcp-oauth"), { recursive: true });
-  writeFileSync(join(home, ".pi", "agent", "mcp-oauth", "tokens.json"), "OAUTH-TOKEN-CONTENT");
-  return home;
-}
-
-const realSandbox = (cwd: string, home: string) => startShellSandbox({ cwd, allowedDomains: [], home, agentDir: join(home, ".pi", "agent") });
-
-/**
- * Whether a real shell scenario can run here. On Linux the helper has no shell by decision
- * (docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md): the scenario then checks
- * exactly that and ends, which is a pass, not a skip. Elsewhere it skips only where sandbox-runtime
- * does not support the platform; anywhere else, a shell that did not start is a failure.
- */
-async function shellRunsHere(t: { skip(message?: string): void; diagnostic(message: string): void }, probe: ShellSandbox): Promise<boolean> {
-  if (probe.ok) return true;
-  if (probe.reason === NO_SHELL_ON_LINUX) {
-    assert.equal(process.platform, "linux", "only Linux refuses the shell by decision");
-    t.diagnostic(`no shell on Linux, as decided: ${probe.reason}`);
-    return false;
-  }
-  const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
-  if (SandboxManager.isSupportedPlatform()) assert.fail(`sandbox-runtime supports this platform but did not start: ${probe.reason}`);
-  t.skip(`sandbox-runtime does not support this platform: ${probe.reason}`);
-  return false;
-}
-
-type Step = Reply | ((context: Context) => Reply);
-
-async function helperRun(steps: Step[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal; skills?: (agentDir: string) => Skill[]; prepare?: (h: Harness) => void } = {}) {
-  const queue = [...steps];
-  const h = await createHarness({
-    replies: (c, role) => {
-      if (role !== "helper") return { kind: "text", text: "ok" };
-      const next = queue.shift() ?? { kind: "text", text: "done" };
-      return typeof next === "function" ? next(c) : next;
-    },
-  });
-  options.prepare?.(h);
-  await h.session.prompt("hello");
-  const home = options.home ?? fakeHome();
-  writeFileSync(join(h.workspace, ".env"), "TOKEN=secret-value");
-  writeFileSync(join(h.workspace, "config.ts"), "line one\nline two\n");
-  const handlerRunsBefore = h.foreign.handlerRuns;
-  // An extension the owner installed globally: the helper must not load it.
-  mkdirSync(join(h.agentDir, "extensions"), { recursive: true });
-  writeFileSync(join(h.agentDir, "extensions", "installed-elsewhere.ts"), [
-    'import { writeFileSync } from "node:fs";',
-    "export default function (pi: any) {",
-    `  writeFileSync(${JSON.stringify(join(h.agentDir, "installed-factory-ran"))}, "yes");`,
-    `  pi.on("before_agent_start", () => writeFileSync(${JSON.stringify(join(h.agentDir, "installed-ran"))}, "yes"));`,
-    '  pi.registerTool({ name: "installed_tool", label: "installed", description: "installed", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "installed" }], details: {} }; } });',
-    "}",
-  ].join("\n"));
-  const env: HelperEnvironment = {
-    cwd: h.workspace,
-    agentDir: h.agentDir,
-    model: h.session.model!,
-    thinkingLevel: "off",
-    streamSimple: (m, c, o) => h.registry.streamSimple(m, c, o),
-    branch: selectForkBranch(h.session.sessionManager.getBranch() as SessionEntry[], true),
-    systemPromptOptions: { cwd: h.workspace, ...(options.skills ? { skills: options.skills(h.agentDir) } : {}) },
-    events: h.events,
-    mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], { blocked: ["slack_send_message"] }),
-    sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
-    reads: readPolicy({ home, agentDir: join(home, ".pi", "agent"), roots: [h.workspace] }),
-  };
-  const outcome = await runHelper(env, batch, options.signal).finally(async () => {
-    if (env.sandbox.ok) await env.sandbox.dispose(); // no scratch folder outlives the test
-  });
-  const results = outcome.ownEntries
-    .filter((e: any) => e.type === "message" && e.message.role === "toolResult")
-    .map((e: any) => ({ tool: e.message.toolName as string, isError: e.message.isError as boolean, text: textOf(e.message.content) }));
-  return { h, outcome, results, home, handlerRunsBefore };
-}
+import { systemText, textOf, type Reply } from "./pi-harness.ts";
+import { fakeHome, helperRun, realSandbox } from "./helper-fixtures.ts";
+import { startShellSandbox } from "./sandbox.ts";
 
 test("the helper's runtime: no extension, no handler, only the allowlisted tools, and those tools work", async () => {
   let scratch = "";
@@ -177,52 +83,6 @@ test("every file tool is denied secret locations, in every spelling Pi's tools a
   assert.match(results.find((r) => r.tool === "grep" && /config\.ts/.test(r.text))!.text, /line one/, "ordinary search still works");
 });
 
-test("the sandboxed shell writes only to scratch, reads no secrets and reaches no network", async (t) => {
-  const home = fakeHome();
-  const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
-  if (!(await shellRunsHere(t, probe)) || !probe.ok) return;
-  await probe.dispose();
-  process.env.SLACK_HELPER_TEST_TOKEN = "TOKEN-FROM-ENVIRONMENT";
-  t.after(() => { delete process.env.SLACK_HELPER_TEST_TOKEN; });
-  let scratch = "";
-  const { results, h } = await helperRun([
-    { kind: "tool", name: "bash", args: { command: "touch project-write.txt && echo WROTE" } },
-    { kind: "tool", name: "bash", args: { command: `cat ${join(home, ".ssh", "id_ed25519")}; echo END` } },
-    { kind: "tool", name: "bash", args: { command: `cat ${join(home, ".pi", "agent", "mcp-oauth", "tokens.json")}; echo END` } },
-    { kind: "tool", name: "bash", args: { command: "cat .env; echo END" } },
-    { kind: "tool", name: "bash", args: { command: "env" } },
-    { kind: "tool", name: "bash", args: { command: "curl -sS -m 5 https://example.com -o /dev/null && echo NET" } },
-    { kind: "tool", name: "bash", args: { command: "echo hi > \"$SCRATCH/scratch-check\" && cat \"$SCRATCH/scratch-check\" && echo SCRATCH-OK" } },
-  ], {
-    home,
-    sandbox: async (cwd, h2) => {
-      const started = await realSandbox(cwd, h2);
-      if (started.ok) scratch = started.scratchDir;
-      return started;
-    },
-  });
-  assert.ok(scratch);
-  assert.equal(existsSync(join(h.workspace, "project-write.txt")), false, "no write in the project");
-  const outputs = results.filter((r) => r.tool === "bash").map((r) => r.text);
-  assert.equal(outputs.length, 7);
-  assert.equal(outputs.some((o) => /\bWROTE\b/.test(o)), false);
-  assert.equal(outputs.some((o) => /PRIVATE-KEY-CONTENT|OAUTH-TOKEN-CONTENT|TOKEN=secret-value/.test(o)), false, "secret files are unreadable from the shell");
-  assert.equal(outputs.some((o) => /\bNET\b/.test(o)), false, "no network");
-  assert.match(outputs[4]!, /\bPATH=/, "the environment was printed");
-  assert.equal(outputs.some((o) => /TOKEN-FROM-ENVIRONMENT/.test(o)), false, "credential variables are not passed to commands");
-  assert.match(outputs[6]!, /SCRATCH-OK/, "the scratch folder is writable");
-  // Secrets outside the home and the project: another checkout's .env, an agent folder elsewhere.
-  const outside = mkdtempSync(join(tmpdir(), "outside-"));
-  writeFileSync(join(outside, ".env"), "OUTSIDE-ENV-SECRET");
-  const outsideAgent = mkdtempSync(join(tmpdir(), "agent-elsewhere-"));
-  writeFileSync(join(outsideAgent, "auth.json"), "OUTSIDE-AUTH-SECRET");
-  const { results: more } = await helperRun([
-    { kind: "tool", name: "bash", args: { command: `cat ${join(outside, ".env")}; cat ${join(outsideAgent, "auth.json")}; echo END` } },
-  ], { home, sandbox: (cwd, h2) => startShellSandbox({ cwd, allowedDomains: [], home: h2, agentDir: outsideAgent }) });
-  assert.equal(more.some((r) => /OUTSIDE-ENV-SECRET|OUTSIDE-AUTH-SECRET/.test(r.text)), false, "denied outside the home and the project too");
-  assert.match(more[0]!.text, /END/, "the command ran");
-});
-
 test("a sandbox that cannot start leaves the helper without a shell", async () => {
   const { outcome, h } = await helperRun([{ kind: "tool", name: "bash", args: { command: "echo hi" } }], { sandbox: async () => ({ ok: false, reason: "test: no sandbox" }) });
   assert.equal(outcome.toolNames.includes("bash"), false);
@@ -262,38 +122,6 @@ test("the helper reaches every read-only tool through search and call, and nothi
   assert.ok(send!.isError && /not a read-only tool/.test(send!.text));
   assert.ok(write!.isError && /not a read-only tool/.test(write!.text));
   assert.equal(h.slack.messages("D0FAKE0001").length, 0);
-});
-
-test("every file tool and the shell are denied Pi's auth file, cloud credentials, and secrets reached through a symlink", async (t) => {
-  const home = fakeHome();
-  mkdirSync(join(home, ".aws"), { recursive: true });
-  writeFileSync(join(home, ".aws", "credentials"), "AWS-CREDENTIAL-CONTENT");
-  writeFileSync(join(home, ".pi", "agent", "auth.json"), "PI-AUTH-CONTENT");
-  writeFileSync(join(home, ".ssh", "config"), "SSH-CONFIG-CONTENT");
-  writeFileSync(join(home, ".pi", "agent", "auth.json.bak-openai1m"), "PI-AUTH-BACKUP-CONTENT");
-  const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
-  if (probe.ok) await probe.dispose();
-  const steps: Reply[] = [];
-  const secrets = [join(home, ".aws", "credentials"), join(home, ".pi", "agent", "auth.json"), join(home, ".pi", "agent", "auth.json.bak-openai1m"), "linked-config"];
-  for (const path of secrets) steps.push({ kind: "tool", name: "read", args: { path } });
-  steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: join(home, ".aws") } });
-  steps.push({ kind: "tool", name: "grep", args: { pattern: "CONTENT", path: "." } });
-  steps.push({ kind: "tool", name: "find", args: { pattern: "*", path: join(home, ".aws") } });
-  steps.push({ kind: "tool", name: "ls", args: { path: "linked-dir" } });
-  if (probe.ok) for (const path of secrets) steps.push({ kind: "tool", name: "bash", args: { command: `cat ${path}; echo END` } });
-  const { results, h } = await helperRun(steps, {
-    home,
-    sandbox: async (cwd, h2) => {
-      symlinkSync(join(home, ".ssh", "config"), join(cwd, "linked-config"));
-      symlinkSync(join(home, ".ssh"), join(cwd, "linked-dir"));
-      return realSandbox(cwd, h2);
-    },
-  });
-  assert.ok(h);
-  assert.equal(results.filter((r) => r.tool === "read").every((r) => r.isError && /not open to the Slack helper/.test(r.text)), true, "read");
-  assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|PI-AUTH-BACKUP-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret, a backup of one included");
-  assert.ok(results.filter((r) => r.tool === "ls" || r.tool === "find").every((r) => r.isError), "find and ls refuse secret folders, through a symlink too");
-  if (!probe.ok) t.diagnostic(`shell part not run: ${probe.reason}`);
 });
 
 test("the helper is told when no more requests can wait, so it never tells the person one waits", async () => {
@@ -354,47 +182,6 @@ test("the helper can load the skills it is offered from Pi's agent folder, and n
   }
 });
 
-test("the real shell reads Pi's bin folder, and nothing else in Pi's agent folder", async (t) => {
-  const home = fakeHome();
-  const agent = join(home, ".pi", "agent");
-  mkdirSync(join(agent, "bin"), { recursive: true });
-  writeFileSync(join(agent, "bin", "tool-notes"), "BIN-CONTENT");
-  writeFileSync(join(agent, "models.json"), "MODELS-KEY");
-  const cwd = mkdtempSync(join(tmpdir(), "p-"));
-  const sandbox = await realSandbox(cwd, home);
-  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return;
-  t.after(() => sandbox.dispose());
-  let out = "";
-  await sandbox.operations.exec(`cat '${join(agent, "bin", "tool-notes")}'; cat '${join(agent, "models.json")}'; echo END`, cwd, { onData: (d) => { out += d.toString(); }, env: process.env });
-  assert.match(out, /BIN-CONTENT/, "Pi's bin is readable");
-  assert.doesNotMatch(out, /MODELS-KEY/, "the rest of the agent folder is not");
-  assert.match(out, /END/);
-});
-
-test("the real shell reads the project inside the home and the toolchains, and nothing else there; secrets in the project stay closed", async (t) => {
-  const home = fakeHome();
-  const project = join(home, "code", "app");
-  mkdirSync(project, { recursive: true });
-  writeFileSync(join(project, "notes.md"), "PROJECT-NOTES");
-  writeFileSync(join(project, ".env.local"), "PROJECT-ENV-SECRET");
-  mkdirSync(join(home, ".config", "firebase"), { recursive: true });
-  writeFileSync(join(home, ".config", "firebase", "me_application_default_credentials.json"), "FIREBASE-REFRESH-TOKEN");
-  mkdirSync(join(home, "Documents"), { recursive: true });
-  writeFileSync(join(home, "Documents", "private.txt"), "PRIVATE-DOC");
-  mkdirSync(join(home, ".nvm"), { recursive: true });
-  writeFileSync(join(home, ".nvm", "nvm.sh"), "NVM-SCRIPT");
-  const sandbox = await startShellSandbox({ cwd: project, allowedDomains: [], home, agentDir: join(home, ".pi", "agent") });
-  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return;
-  t.after(() => sandbox.dispose());
-  let out = "";
-  const files = ["notes.md", ".env.local", join(home, ".config", "firebase", "me_application_default_credentials.json"), join(home, "Documents", "private.txt"), join(home, ".nvm", "nvm.sh")];
-  await sandbox.operations.exec(`${files.map((f) => `cat '${f}' 2>/dev/null`).join("; ")}; echo END`, project, { onData: (d) => { out += d.toString(); }, env: process.env });
-  assert.match(out, /PROJECT-NOTES/, "the project is readable");
-  assert.match(out, /NVM-SCRIPT/, "a toolchain is readable");
-  for (const secret of ["PROJECT-ENV-SECRET", "FIREBASE-REFRESH-TOKEN", "PRIVATE-DOC"]) assert.doesNotMatch(out, new RegExp(secret), `${secret} stays closed`);
-  assert.match(out, /END/);
-});
-
 test("before main's first prompt, the skills the loader offers can be loaded", async () => {
   // No prompt options yet (a restored watch answering before the owner types): the loader finds its own skills.
   let skillPath = "";
@@ -425,60 +212,6 @@ test("a result the helper's own call saved to a file can be read; other saved re
   assert.ok(foreign!.isError && /not open to the Slack helper/.test(foreign!.text));
 });
 
-async function runInShell(t: any, cwd: string, home: string, command: string, agentDir = join(home, ".pi", "agent")): Promise<string | undefined> {
-  const sandbox = await startShellSandbox({ cwd, allowedDomains: [], home, agentDir });
-  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return undefined;
-  t.after(() => sandbox.dispose());
-  let out = "";
-  await sandbox.operations.exec(command, cwd, { onData: (d) => { out += d.toString(); }, env: process.env });
-  return out;
-}
-
-test("the real shell writes only to its scratch folder: not to sandbox-runtime's shared temp, and TMPDIR is the scratch folder", async (t) => {
-  const home = fakeHome();
-  const cwd = mkdtempSync(join(tmpdir(), "p-"));
-  const elsewhere = mkdtempSync(join(tmpdir(), "other-"));
-  writeFileSync(join(elsewhere, "pi-bash-log.txt"), "MAIN-SESSION-OUTPUT");
-  const marker = `zz-${process.pid}-${Date.now()}`;
-  const shared = mkdtempSync("/tmp/shared-");
-  writeFileSync(join(shared, "notes.txt"), "SHARED-TMP-NOTES");
-  t.after(() => rmSync(shared, { recursive: true, force: true }));
-  const out = await runInShell(t, cwd, home, `echo x > /tmp/claude/${marker} 2>/dev/null && echo WROTE-SHARED; echo y > "$SCRATCH/ok" && echo WROTE-SCRATCH; [ "$TMPDIR" = "$SCRATCH" ] && echo TMPDIR-IS-SCRATCH; cat '${join(elsewhere, "pi-bash-log.txt")}' '${join(shared, "notes.txt")}' 2>/dev/null; echo END`);
-  if (out === undefined) return;
-  assert.doesNotMatch(out, /WROTE-SHARED/, "sandbox-runtime's shared /tmp/claude is not writable");
-  assert.match(out, /WROTE-SCRATCH/);
-  assert.match(out, /TMPDIR-IS-SCRATCH/);
-  assert.doesNotMatch(out, /MAIN-SESSION-OUTPUT/, "other files in the temp folder are closed");
-  assert.doesNotMatch(out, /SHARED-TMP-NOTES/, "and in the shared /tmp");
-  assert.match(out, /END/);
-});
-
-test("the real shell opens nothing when the project is a secret folder, such as Pi's agent folder", async (t) => {
-  const home = fakeHome();
-  const agent = join(home, ".pi", "agent");
-  writeFileSync(join(agent, "models.json"), "MODELS-KEY");
-  const out = await runInShell(t, agent, home, `cat '${join(agent, "models.json")}' 2>/dev/null; echo END`);
-  if (out === undefined) return;
-  assert.doesNotMatch(out, /MODELS-KEY/);
-  assert.match(out, /END/);
-});
-
-test("git works in the real shell from a linked worktree, whose repository lies outside the project", async (t) => {
-  const home = fakeHome();
-  const main = join(home, "code", "repo");
-  mkdirSync(main, { recursive: true });
-  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { stdio: "ignore" });
-  git(main, "init", "-q");
-  writeFileSync(join(main, "a.txt"), "a");
-  git(main, "add", "a.txt");
-  git(main, "commit", "-qm", "first commit here");
-  const worktree = join(home, "code", "repo-wt");
-  git(main, "worktree", "add", "-q", worktree);
-  const out = await runInShell(t, worktree, home, "git log --oneline -1 2>&1; echo END");
-  if (out === undefined) return;
-  assert.match(out, /first commit here/, out);
-  assert.doesNotMatch(out, /error|couldn't|not permitted/i, "git runs without errors");
-});
 
 test("searches through the helper drop what it may not read: no secret file's lines or name come back", async () => {
   const { results } = await helperRun([
@@ -492,19 +225,3 @@ test("searches through the helper drop what it may not read: no secret file's li
   assert.match(results[1]!.text, /config\.ts/, "ordinary files are listed");
 });
 
-test("the helper can read the full output its own long shell command saved", async (t) => {
-  let saved = "";
-  const { results } = await helperRun([
-    { kind: "tool", name: "bash", args: { command: "seq 1 30000" } },
-    (c) => {
-      saved = /Full output: ([^\]\s]+)/.exec(textOf((c.messages.at(-1) as any)?.content))?.[1] ?? "";
-      return { kind: "tool", name: "read", args: { path: saved, offset: 29990 } };
-    },
-  ]);
-  if (results.length < 2 || !results[0]!.text.includes("Full output")) {
-    t.diagnostic("no shell here, or the output was not cut: nothing to check");
-    return;
-  }
-  assert.equal(results[1]!.isError, false, results[1]!.text);
-  assert.match(results[1]!.text, /30000/);
-});

@@ -1,13 +1,15 @@
 // One session owns a watched conversation on this machine. Each conversation has a folder of
 // numbered lock files under ~/.pi/agent/slack-companion/locks/; the highest number is the lock.
 // Taking a lock is creating the next number, which only one session can do, so two sessions never
-// both win; numbers are never used twice (a release writes a "released" file as the next one). A
-// lock is taken from its holder only when that holder's process is gone (its pid answers no more,
-// or now belongs to a process started at another time): never from a live session, however long
-// it slept.
+// both win; numbers are not used twice while a conversation's folder exists (a release writes a
+// "released" file as the next one; the sweep removes only folders abandoned for a day). A lock is
+// taken from its holder only when that holder's process is gone (its pid answers no more, or now
+// belongs to a process started at another time): never from a live session, however long it
+// slept. A lock file that cannot be read is respected for a minute (it may be being written), then
+// taken.
 // Holds docs/adr/20261104-start-watching-when-the-session-messages-someone.md (routing).
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface LockHolder {
@@ -30,14 +32,27 @@ export const processAlive: ProcessAlive = (pid) => {
   }
 };
 
-export type ProcessStart = (pid: number) => string | undefined;
+/** When a process started; "gone" when no such process runs; "unknown" when it could not be read. */
+export type ProcessStart = (pid: number) => string | "gone" | "unknown";
 
-/** When a process started, as `ps` prints it; undefined when there is no such process or no `ps`. */
+/**
+ * When a process started, as `ps` prints it, read in one fixed time zone and language: `ps` prints
+ * the start in the caller's zone and locale, and two sessions must read the same text for the same
+ * process. A `ps` that cannot run, or runs too long, says "unknown", never "gone".
+ */
 export const processStart: ProcessStart = (pid) => {
   try {
-    return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
-  } catch {
-    return undefined;
+    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, TZ: "UTC", LC_ALL: "C", LANG: "C" },
+    }).trim();
+    return out || "gone";
+  } catch (error) {
+    const { status, stdout } = error as { status?: number; stdout?: string };
+    // ps exits 1 with nothing printed when no such process runs.
+    return status === 1 && !String(stdout ?? "").trim() ? "gone" : "unknown";
   }
 };
 
@@ -64,7 +79,7 @@ export class LockManager {
     private readonly startOf: ProcessStart = processStart,
   ) {
     const start = startOf(self.pid);
-    this.self = { ...self, ...(start ? { start } : {}) };
+    this.self = { ...self, ...(start !== "gone" && start !== "unknown" ? { start } : {}) };
   }
 
   private folder(key: string): string {
@@ -102,10 +117,15 @@ export class LockManager {
     return Boolean(holder && !holder.released && holder.pid === this.self.pid && holder.sessionId === this.self.sessionId && holder.start === this.self.start);
   }
 
-  /** The holder's process still runs: its pid answers, and (when known) started when the holder's did. */
+  /**
+   * The holder's process still runs: its pid answers, and started when the holder's did. A start
+   * that cannot be read keeps the holder live: only a start read as different means the pid was reused.
+   */
   private isLive(holder: LockHolder): boolean {
     if (holder.released || !this.alive(holder.pid)) return false;
-    return holder.start === undefined || this.startOf(holder.pid) === holder.start;
+    if (holder.start === undefined) return true;
+    const start = this.startOf(holder.pid);
+    return start === "unknown" || start === holder.start;
   }
 
   /** Take the lock, or say who holds it. Taking one's own lock again succeeds. */
@@ -182,8 +202,17 @@ export class LockManager {
       const top = this.top(folder);
       if (!top) continue;
       const age = now - (mtimeOf(top.path) ?? now);
+      if (age <= OLD_LOCK_MS) continue;
       const abandoned = top.holder === undefined || top.holder.released || !this.isLive(top.holder);
-      if (abandoned && age > OLD_LOCK_MS) rmSync(folder, { recursive: true, force: true });
+      if (!abandoned) continue;
+      // Only the files read here go, then the folder if nothing else is in it: a lock another
+      // session creates meanwhile stays (and a taker that finds the folder gone tries again).
+      for (const generation of this.generations(folder)) if (generation <= top.generation) rmSync(join(folder, `${generation}.json`), { force: true });
+      try {
+        rmdirSync(folder);
+      } catch {
+        // a new lock is in it
+      }
     }
   }
 }
