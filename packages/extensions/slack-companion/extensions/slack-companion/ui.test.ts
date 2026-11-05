@@ -562,3 +562,28 @@ test("'their agent' only while the row shows that person's name whole", () => {
   assert.doesNotMatch(narrow, /their agent/, narrow);
   assert.match(narrow.replace(/[│\n ]+/g, " "), /Robin/, "the post row names the person when the header cannot");
 });
+
+test("'their agent' needs the row to show the person's name, not the same letters in the channel, nor a cut name", () => {
+  const post = (userId: string, userName: string) => ({ ts: "1.000001", userId, userName, text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const });
+  const inChannel = channelWatch(1, { channelName: "dan-standup-notes-long", partner: { userId: "U1", name: "dan" }, agentPostsWaiting: 1, context: [post("U1", "dan")] });
+  for (const width of [26, 28, 30, 32]) {
+    const panel = renderPanel(surface({ watches: [inChannel] }), 0, plain, width, 0).join("\n");
+    if (!/│ [› ] dan #/.test(panel)) assert.doesNotMatch(panel, /their agent/, `${width}: ${panel}`);
+  }
+  const cutName = channelWatch(2, { channelName: "alerts-prod-payments-eu", partner: { userId: "U2", name: "Robin Colleague" }, agentPostsWaiting: 1, context: [post("U2", "Robin Colleague")] });
+  const narrow = renderPanel(surface({ watches: [cutName] }), 0, plain, 36, 0).join("\n");
+  assert.doesNotMatch(narrow, /their agent/, narrow);
+  assert.match(narrow, /Robin[^:]* \(agent\):/);
+  const dm = watch({ partner: { userId: "U3", name: "Robin Colleague" }, agentPostsWaiting: 1, context: [post("U3", "Robin Colleague")] });
+  assert.doesNotMatch(renderPanel(surface({ watches: [dm] }), 0, plain, 44, 0).join("\n"), /their agent/, "a DM row whose name is cut");
+});
+
+test("a long poster name leaves room for the agent post's words", () => {
+  const w = channelWatch(1, { channelName: "release-train-2026-q4-coordination", partner: { userId: "U1", name: "Alexandra Montgomery-Fitzgerald" }, agentPostsWaiting: 1, context: [
+    { ts: "1.000001", userId: "U9", userName: "Maximiliano Fernández-Oyarzábal", text: "🤖 Done; all green. Shall I promote the build?", agentFooter: true, origin: "someone's agent" },
+  ] });
+  for (const width of [30, 36, 40, 48]) {
+    const panel = renderPanel(surface({ watches: [w] }), 0, plain, width, 0, 40).join("\n").replace(/[│\n ]+/g, " ");
+    assert.match(panel, /Done;/, `${width}: ${panel}`);
+  }
+});

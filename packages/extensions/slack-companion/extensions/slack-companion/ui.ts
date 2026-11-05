@@ -512,7 +512,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   // The people of the other threads in this channel, so a cut name still tells the rows apart.
   const people = surface.engine.watches.filter((w) => w.conversation.channelId === watch.conversation.channelId && w.partner).map((w) => w.partner!.name);
-  const label = panelLabel(watch, labelRoom, channels, people);
+  const { text: label, personWhole } = panelLabel(watch, labelRoom, channels, people);
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
   // Agent posts that wait on the owner stay in view until he or his session writes there: the
   // count, then the latest such post on rows of its own (two at most), so its words show.
@@ -525,7 +525,9 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     if (latestAgentPost) {
       // The row already names its person: their agent's post needs no second name.
       // Only while the row shows that person's name whole (a narrow row may cut or drop it).
-      const poster = latestAgentPost.userId === watch.partner?.userId && label.includes(watch.partner.name) ? "their agent" : postedBy(latestAgentPost);
+      // A long name takes at most about half the row, so the post's own words show.
+      const nameCells = Math.max(8, Math.floor((inner - 3) / 2) - " (agent)".length);
+      const poster = latestAgentPost.userId === watch.partner?.userId && personWhole ? "their agent" : `${cut(latestAgentPost.userName, nameCells)} (agent)`;
       const wrapped = wrapTextWithAnsi(`${poster}: ${agentText(latestAgentPost)}`, inner - 3);
       const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
       rows.push(...indent(shown.map((row) => paint.fg("warning", row))));
@@ -548,14 +550,15 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
  * A watch as its panel row names it, in `room` cells; `channels` are the channel names shown, and
  * `people` the people of the threads in this watch's channel (a cut name must read apart from them).
  */
-function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[]): string {
+function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[]): { text: string; personWhole: boolean } {
   const dm = isDirectMessage(watch.conversation.channelId);
   const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   if (!watch.partner) {
     // Before anyone has answered: the same first words as on the line, cut to leave the kind whole.
     const kind = dm ? ` · ${bareKind}` : "";
-    return `${unnamedLabel(watch, channels, room - visibleWidth(kind))}${kind}`;
+    return { text: `${unnamedLabel(watch, channels, room - visibleWidth(kind))}${kind}`, personWhole: false };
   }
+  const name = watch.partner.name;
   if (!dm) {
     // The person first; the channel gets what is left, cut where it differs from the others.
     // Where the long form leaves the channel too little, the short one (as on the line) keeps it.
@@ -563,26 +566,28 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     // A short channel needs no more than its own cells.
     const channelNeeds = Math.min(CHANNEL_NAME_MIN_CELLS, visibleWidth(channel));
     const head = `${threadOf(watch.partner.name)}#`;
-    if (room - visibleWidth(head) >= channelNeeds) return `${head}${cutApart(channel, channels, room - visibleWidth(head))}`;
+    if (room - visibleWidth(head) >= channelNeeds) return { text: `${head}${cutApart(channel, channels, room - visibleWidth(head))}`, personWhole: true };
     // The short form, as on the line: the person first (rows in one channel differ only by the
     // person), the channel in what is left; with under two cells for the person, the channel alone,
     // so no later cut drops where it differs.
     const personRoom = room - 2 - channelNeeds;
-    if (personRoom < 2) return `#${cutApart(channel, channels, room - 1)}`;
+    if (personRoom < 2) return { text: `#${cutApart(channel, channels, room - 1)}`, personWhole: false };
     // A plain cut, unless it would read like another person's in that channel: then cut where
     // the person differs from them, as channels are cut.
     const plain = cut(watch.partner.name, personRoom);
     const clash = people.some((other) => other !== watch.partner!.name && cut(other, personRoom) === plain);
     const person = clash ? cutApart(watch.partner.name, people, personRoom) : plain;
-    return `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`;
+    return { text: `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`, personWhole: person === name };
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
   // snippet gives way to a bare "thread" when too little is left for it.
-  const who = `${cut(watch.partner.name, Math.max(6, room - DM_MARK.length - 12))} ${DM_MARK}`;
+  const shownName = cut(name, Math.max(6, room - DM_MARK.length - 12));
+  const who = `${shownName} ${DM_MARK}`;
   const left = room - visibleWidth(`${who} · `);
   const kind = kindLabel(watch);
   const fitted = visibleWidth(kind) <= left ? kind : watch.conversation.kind === "thread" && left >= 16 ? cut(kind, left) : bareKind;
-  return `${who} · ${fitted}`;
+  // The row cuts the label to its room afterwards: the name is whole only if it fits in it too.
+  return { text: `${who} · ${fitted}`, personWhole: shownName === name && visibleWidth(name) <= room - 1 };
 }
 
 /** An agent's marker (an emoji or two) in front of its post: "(agent)" already says it. */

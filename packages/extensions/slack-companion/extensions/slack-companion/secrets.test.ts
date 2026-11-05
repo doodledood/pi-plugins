@@ -108,6 +108,7 @@ test("a sandboxed command sees no credential variables, and the owner sees no co
   const env = sanitizeEnv({ PATH: "/bin", HOME: "/h", GITHUB_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "y", OPENAI_API_KEY: "z", SLACK_COOKIE: "c" });
   assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH"]);
   assert.equal(stripControl("ok\u001b[2J\u001b]0;title\u0007 done\u0000"), "ok done");
+  assert.equal(stripControl("approve \u202eexe.\u202c report \u2066x\u2069"), "approve exe. report x", "no text shown in another order than it is");
 });
 
 test("output lines naming what the helper may not read are dropped; other text stays", () => {

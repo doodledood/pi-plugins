@@ -1986,3 +1986,15 @@ test("a send read back before it fails, whatever the error, is settled as sent",
   assert.equal(log.notices.some((n) => /did not go out|may not have gone out/.test(n)), false, log.notices.join("\n"));
   assert.ok(engine.watch(key)!.activity!.some((a) => a.text === "helper's reply went out"));
 });
+
+test("a send that surely failed, not read back, says it did not go out", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "q");
+  engine["deps"].backend.send = async () => {
+    throw new Error("refused");
+  };
+  assert.equal(await engine.sendTracked(engine.watch(`${DM}/${q.ts}`)!, "a reply", { by: "helper" }), "failed");
+  assert.ok(log.notices.some((n) => /a reply in .* did not go out \(refused\); it was not re-sent\./.test(n)), log.notices.join("\n"));
+  assert.equal(log.notices.some((n) => /may not have gone out/.test(n)), false);
+});

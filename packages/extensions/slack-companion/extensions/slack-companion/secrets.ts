@@ -307,5 +307,7 @@ export function stripControl(text: string): string {
   return text
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/g, "")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
+    // Bidirectional overrides and isolates: they would show text in another order than it is.
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
 }
