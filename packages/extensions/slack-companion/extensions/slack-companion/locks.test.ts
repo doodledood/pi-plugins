@@ -5,11 +5,13 @@ import { mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { DAMAGED_LOCK_MS, LockManager, OLD_LOCK_MS, processStart } from "./locks.ts";
+import { DAMAGED_LOCK_MS, LockManager, OLD_LOCK_MS, processStart, type StartReading } from "./locks.ts";
+
+const started = (at: string): StartReading => ({ kind: "started", at });
 
 /** Processes and when they started; a pid missing here is gone. */
 function machine(processes: Record<number, string>) {
-  return { alive: (pid: number) => pid in processes, startOf: (pid: number) => processes[pid] ?? "gone" };
+  return { alive: (pid: number) => pid in processes, startOf: (pid: number): StartReading => (pid in processes ? started(processes[pid]!) : { kind: "gone" }) };
 }
 
 test("a live holder keeps the lock, however long it slept; its owner re-acquires; release lets another take it", () => {
@@ -108,7 +110,7 @@ test("a session start removes lock folders released or abandoned more than a day
   a.release("D2/top"); // released, old
   a.acquire("D3/top");
   a.release("D3/top"); // released, fresh
-  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => "t9").acquire("D4/top"); // abandoned (pid 9 is gone for b), old
+  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => started("t9")).acquire("D4/top"); // abandoned (pid 9 is gone for b), old
   const old = (Date.now() - OLD_LOCK_MS - 60_000) / 1000;
   for (const name of ["D1_top", "D2_top", "D4_top"]) for (const file of readdirSync(join(dir, name))) utimesSync(join(dir, name, file), old, old);
   new LockManager(dir, { pid: 2, sessionId: "b" }, m.alive, m.startOf).sweep();
@@ -117,8 +119,8 @@ test("a session start removes lock folders released or abandoned more than a day
 
 test("a holder whose start cannot be read is kept: only a start read as different means its pid was reused", () => {
   const dir = mkdtempSync(join(tmpdir(), "locks-"));
-  new LockManager(dir, { pid: 1, sessionId: "a" }, () => true, () => "t1").acquire("D1/top");
-  const psFails = new LockManager(dir, { pid: 2, sessionId: "b" }, () => true, (pid) => (pid === 1 ? "unknown" : "t2"));
+  new LockManager(dir, { pid: 1, sessionId: "a" }, () => true, () => started("t1")).acquire("D1/top");
+  const psFails = new LockManager(dir, { pid: 2, sessionId: "b" }, () => true, (pid): StartReading => (pid === 1 ? { kind: "unknown" } : started("t2")));
   assert.equal(psFails.acquire("D1/top").ok, false, "ps could not tell: the holder is live");
 });
 
@@ -126,10 +128,10 @@ test("the real start time reads the same whatever the caller's time zone and lan
   const saved = { TZ: process.env.TZ, LC_ALL: process.env.LC_ALL, LANG: process.env.LANG };
   try {
     const plain = processStart(process.pid);
-    assert.ok(plain !== "gone" && plain !== "unknown", `this process's start: ${plain}`);
+    assert.equal(plain.kind, "started", `this process's start: ${JSON.stringify(plain)}`);
     Object.assign(process.env, { TZ: "Asia/Tokyo", LC_ALL: "de_DE.UTF-8", LANG: "de_DE.UTF-8" });
-    assert.equal(processStart(process.pid), plain);
-    assert.equal(processStart(999_999), "gone");
+    assert.deepEqual(processStart(process.pid), plain);
+    assert.deepEqual(processStart(999_999), { kind: "gone" });
   } finally {
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
@@ -137,7 +139,7 @@ test("the real start time reads the same whatever the caller's time zone and lan
 
 test("a sweep never removes a lock another session takes while the sweep is deciding", () => {
   const dir = mkdtempSync(join(tmpdir(), "locks-"));
-  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => "t9").acquire("D1/top");
+  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => started("t9")).acquire("D1/top");
   const old = (Date.now() - OLD_LOCK_MS - 60_000) / 1000;
   utimesSync(join(dir, "D1_top", "1.json"), old, old);
   const m = machine({ 2: "t2", 3: "t3" });
@@ -151,4 +153,46 @@ test("a sweep never removes a lock another session takes while the sweep is deci
   };
   sweeper.sweep();
   assert.ok(taker.holds("D1/top"), "the new lock survives the sweep");
+});
+
+test("a taker that judged a lock before a sweep began the folder again does not overtake the new holder", () => {
+  const dir = mkdtempSync(join(tmpdir(), "locks-"));
+  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => started("t9")).acquire("D1/top");
+  const gone = machine({ 3: "t3", 4: "t4", 5: "t5" });
+  const c = new LockManager(dir, { pid: 3, sessionId: "c" }, gone.alive, gone.startOf);
+  const d = new LockManager(dir, { pid: 4, sessionId: "d" }, gone.alive, gone.startOf);
+  const sweeper = new LockManager(dir, { pid: 5, sessionId: "sweeper" }, gone.alive, gone.startOf);
+  const top = (c as any).top.bind(c);
+  let raced = false;
+  (c as any).top = (folder: string) => {
+    const found = top(folder);
+    if (!raced && found?.holder?.sessionId === "crashed") {
+      raced = true;
+      // Before c writes: the old lock is swept away with its folder, and d takes the conversation afresh.
+      const old = (Date.now() - OLD_LOCK_MS - 60_000) / 1000;
+      utimesSync(join(dir, "D1_top", "1.json"), old, old);
+      sweeper.sweep();
+      assert.deepEqual(d.acquire("D1/top"), { ok: true });
+    }
+    return found;
+  };
+  assert.equal(c.acquire("D1/top").ok, false, "c sees d's lock, not the one it judged");
+  assert.ok(d.holds("D1/top"));
+});
+
+test("a ps that cannot run reads as unknown, and a session started then still keeps its lock from one whose ps works", () => {
+  const savedPath = process.env.PATH;
+  const dir = mkdtempSync(join(tmpdir(), "locks-"));
+  let blind: LockManager;
+  try {
+    process.env.PATH = "/nonexistent";
+    assert.deepEqual(processStart(process.pid), { kind: "unknown" });
+    blind = new LockManager(dir, { pid: process.pid, sessionId: "blind" });
+    assert.deepEqual(blind.acquire("D1/top"), { ok: true });
+  } finally {
+    process.env.PATH = savedPath;
+  }
+  const working = new LockManager(dir, { pid: 4242, sessionId: "working" }, () => true, processStart);
+  assert.equal(working.acquire("D1/top").ok, false, "the holder runs: a start it never recorded is no reason to take its lock");
+  assert.ok(blind.holds("D1/top"));
 });

@@ -59,7 +59,7 @@ function makeEngine(slack: FakeSlack, options: {
       const scripted = (await options.helper?.(batch)) ?? { reply: { text: `re: ${batch.messages.map((m) => m.text).join(" / ")}`, done: false } };
       return { handoffs: [], ownEntries: [], toolNames: [], usd: 0.01, ...scripted };
     },
-    locks: new LockManager(options.lockDir ?? mkdtempSync(join(tmpdir(), "locks-")), { pid: options.pid ?? process.pid, sessionId: options.sessionId ?? "s1" }, options.alive, () => "unknown"),
+    locks: new LockManager(options.lockDir ?? mkdtempSync(join(tmpdir(), "locks-")), { pid: options.pid ?? process.pid, sessionId: options.sessionId ?? "s1" }, options.alive, () => ({ kind: "unknown" })),
   };
   const engine = new Engine(deps);
   return { engine, log, config };
@@ -550,7 +550,7 @@ test("a reply held by a pause goes out as written on resume; its hand-offs and r
   release();
   await engine.idle();
   assert.equal(watch.status, "paused");
-  assert.ok(watch.heldReply?.startsWith("answer 1"));
+  assert.ok(watch.held?.reply.startsWith("answer 1"));
   engine.ownerInput();
   await engine.idle();
   assert.equal(runs, 1, "the helper did not run again");
@@ -1079,13 +1079,13 @@ test("a crash while a held reply is sent does not send it twice", async () => {
   watch.status = "active"; // let the batch run; its reply is then held by the pause
   watch.sendsWithoutOwner = 1;
   await settle(first.engine);
-  assert.equal(watch.heldReply?.startsWith("held answer"), true);
+  assert.equal(watch.held?.reply.startsWith("held answer"), true);
   const send = first.engine["deps"].backend.send.bind(first.engine["deps"].backend);
   first.engine["deps"].backend.send = async (...args: Parameters<typeof send>) => { const r = await send(...args); first.engine.dispose(); return r; };
   first.engine.resume(watch.key);
   await first.engine.idle();
   const saved = first.log.persisted.at(-1)!;
-  assert.equal(saved.watches.find((w) => w.key === watch.key)!.heldReply, undefined, "settled in the save before the send");
+  assert.equal(saved.watches.find((w) => w.key === watch.key)!.held, undefined, "settled in the save before the send");
   const second = makeEngine(slack, { lockDir });
   second.engine.restore(JSON.parse(JSON.stringify(saved)));
   await settle(second.engine);
@@ -1181,12 +1181,12 @@ test("a held reply that can no longer be sent is dropped once, not tried forever
   const { engine } = makeEngine(slack);
   const q = await mainSends(slack, engine, DM, "q");
   const watch = engine.watch(`${DM}/${q.ts}`)!;
-  watch.heldReply = "the key is AKIAABCDEFGHIJKLMNOP"; // secret-shaped: blocked on resume
+  watch.held = { reply: "the key is AKIAABCDEFGHIJKLMNOP" }; // secret-shaped: blocked on resume
   watch.status = "paused";
   watch.pause = "sendLimit";
   engine.resume(watch.key);
   await engine.idle();
-  assert.equal(watch.heldReply, undefined);
+  assert.equal(watch.held, undefined);
   assert.match(watch.lastNote!, /blocked/);
 });
 
@@ -1451,10 +1451,14 @@ test("another person's agent post is read as context, never answered: two agents
   await settle(engine);
   assert.equal(log.triage.length, 0, "no model woken");
   assert.equal(log.helpers.length, 0);
-  assert.equal(log.notices.filter((n) => /posted through an agent .* not answered/.test(n)).length, 1, "the owner is told");
+  assert.equal(log.notices.filter((n) => /Robin Colleague's agent posted\. Agent posts are not answered/.test(n)).length, 1, "the owner is told");
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.lastNote, "Robin Colleague's agent posted; not answered: answer it yourself", "the line and the panel say so");
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 and again\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
   await settle(engine);
-  assert.equal(log.notices.filter((n) => /posted through an agent/.test(n)).length, 1, "once per conversation");
+  assert.equal(log.notices.filter((n) => /agent posted/.test(n)).length, 1, "told once per conversation");
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.activity!.filter((a) => /agent posted/.test(a.text)).length, 2, "every agent post is noted");
+  const panel = renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
+  assert.match(panel, /Robin Colleague \(agent\): 🤖 and again/, "the latest post shows, marked");
 });
 
 test("a reply held by a pause is not sent after a gap in which another session answered the messages it was for", async () => {
@@ -1469,7 +1473,7 @@ test("a reply held by a pause is not sent after a gap in which another session a
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "one", q.ts);
   await settle(a.engine);
   assert.equal(a.engine.watch(key)!.status, "paused");
-  assert.equal(a.engine.watch(key)!.heldReply, "re: one");
+  assert.equal(a.engine.watch(key)!.held?.reply, "re: one");
   assert.deepEqual(a.engine.watch(key)!.inbox, [], "its batch is no longer waiting");
   const saved = JSON.parse(JSON.stringify(a.log.persisted.at(-1)!));
   a.engine.dispose();
@@ -1506,4 +1510,131 @@ test("watching again while a read pass is running reads that conversation as soo
   await engine.idle();
   assert.equal(engine.watch(key2)!.rejoining, undefined, "read without waiting for the next tick");
   assert.ok(log.helpers.some((h) => h.messages.some((m) => m.text === "for the second")));
+});
+
+test("a read started by watching again that fails is told to the owner, never left unhandled", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
+  engine.stop(key);
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const persist = engine["deps"].persist;
+    let failed = false;
+    engine["deps"].persist = (state) => {
+      if (!failed && state.watches.some((w) => w.key === key && w.rejoining === undefined && w.status === "active")) {
+        failed = true;
+        throw new Error("disk full");
+      }
+      persist(state);
+    };
+    engine.rewatch(key);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(unhandled, []);
+    assert.ok(failed, "the save failed during the read");
+    assert.ok(log.notices.some((n) => /reading failed: disk full/.test(n)), log.notices.join("\n"));
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("watching again after main's own send whose result named no message: that post is this session's, and nothing waiting is left", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "A asks");
+  const key = `${DM}/${q.ts}`;
+  engine.stop(key);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a question while stopped", q.ts);
+  const marked = "🤖 one more thing from main";
+  engine.mainSendStarting("call-1", marked);
+  slack.post(DM, slack.ownerId, slack.ownerName, `${marked}\n*Sent using* <@A0FAKEAPP|Slack MCP>`, q.ts); // its result named no message
+  engine.rewatch(key);
+  await new Promise((r) => setTimeout(r, 50));
+  await settle(engine);
+  assert.equal(log.notices.some((n) => /another of your Pi sessions/.test(n)), false, log.notices.join("\n"));
+  assert.ok(log.helpers.some((h) => h.messages.some((m) => m.text === "a question while stopped")), "answered here");
+  assert.ok(engine.watch(key)!.ownPosts.length >= 2, "the post is recorded as this session's own");
+});
+
+test("a reply still being sent when the owner stops and watches again is this session's own: what came just before it is still answered", async () => {
+  const slack = new FakeSlack();
+  let replies = 0;
+  const { engine, log } = makeEngine(slack, { helper: () => ({ reply: { text: `answer ${++replies}`, done: false }, handoffs: [] }) });
+  const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "question", q.ts);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let posted!: () => void;
+  const landed = new Promise<void>((r) => (posted = r));
+  const send = engine["deps"].backend.send.bind(engine["deps"].backend);
+  let slow = true;
+  engine["deps"].backend.send = async (...args: Parameters<typeof send>) => {
+    if (!slow) return send(...args);
+    slow = false;
+    slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a second question, just before the reply lands", q.ts);
+    const r = await send(...args);
+    posted();
+    await gate; // the result is slow to come back
+    return r;
+  };
+  await engine.poll();
+  await landed;
+  engine.stop(key);
+  engine.rewatch(key);
+  await new Promise((r) => setTimeout(r, 50));
+  release();
+  await settle(engine);
+  await settle(engine);
+  assert.equal(log.notices.some((n) => /another of your Pi sessions/.test(n)), false, log.notices.join("\n"));
+  assert.ok(log.helpers.some((h) => h.messages.some((m) => m.text === "a second question, just before the reply lands")), "answered here");
+});
+
+async function heldInA(slack: FakeSlack, lockDir: string) {
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, config: { pauseAfterSends: 5 } });
+  const q = await mainSends(slack, a.engine, DM, "A asks");
+  const key = `${DM}/${q.ts}`;
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "zero", q.ts);
+  await settle(a.engine);
+  a.config.pauseAfterSends = 1; // the owner lowers the limit: the next reply is held
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "one", q.ts);
+  await settle(a.engine);
+  assert.equal(a.engine.watch(key)!.held?.reply, "re: one");
+  return { a, q, key };
+}
+
+test("while this session holds a conversation throughout, another agent post of the owner's leaves a held reply in place", async () => {
+  const slack = new FakeSlack();
+  const { a, q, key } = await heldInA(slack, mkdtempSync(join(tmpdir(), "locks-")));
+  slack.post(DM, slack.ownerId, slack.ownerName, "🤖 from a desktop agent\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
+  await settle(a.engine);
+  assert.equal(a.engine.watch(key)!.held?.reply, "re: one", "no other Pi session read it meanwhile");
+  const panel = renderPanel({ enabled: true, engine: a.engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
+  assert.match(panel, /you \(other session\): from a desktop agent/, "the panel shows the conversation moved on");
+  a.engine.ownerInput();
+  await a.engine.idle();
+  assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("re: one")), "sent on resume");
+});
+
+test("a rejoin read keeps a held reply when the other session's post is older than the messages it answers", async () => {
+  const slack = new FakeSlack();
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  const { a, q, key } = await heldInA(slack, lockDir);
+  const saved = JSON.parse(JSON.stringify(a.log.persisted.at(-1)!));
+  a.engine.dispose();
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true });
+  await mainSends(slack, b.engine, DM, "B says something", q.ts);
+  b.engine.dispose();
+  // The held reply answers messages up to a point after B's post.
+  saved.watches.find((w: { key: string }) => w.key === key).held.through = "9999999999.000000";
+  const resumed = makeEngine(slack, { lockDir, sessionId: "A", pid: 1003, alive: () => true, config: { pauseAfterSends: 1 } });
+  resumed.engine.restore(saved);
+  await settle(resumed.engine);
+  assert.equal(resumed.engine.watch(key)!.held?.reply, "re: one");
+  resumed.engine.ownerInput();
+  await resumed.engine.idle();
+  assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("re: one")), "sent on resume");
 });

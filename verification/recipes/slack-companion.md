@@ -33,14 +33,15 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   main's credential, stops when stopped and at its turn limit; its file tools and its sandboxed
   shell (macOS) read the project, the opened and repository folders and, for the file tools, the
   offered skills' folders and the files its own calls saved, and refuse the rest of the home, the
-  temp folders and every secret in every path form and through symlinks; the shell writes only to
+  temp and cache folders, `/Users/Shared`, a path a command prints, and every secret in every path
+  form and through symlinks; git works from worktrees and submodules; the shell writes only to
   its scratch folder; on Linux it has no shell and is told so once; the real wiring builds that
   policy.
 - Triage, hand-offs, approvals (read to the end before approving; they outlive their watch),
   held replies, limits and their daily reset, stopping, locks and routing between sessions,
   resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and
   helper and cost records.
-Line: 8.4 s on darwin-arm64-12cpu; raised: round 9 added real-Seatbelt scenarios (closed home and temp folder, scratch-only writes, a project that is a secret folder, git in a linked worktree) and real-wiring checks of skills and saved results, each starts a real sandbox or helper
+Line: 11.1 s on darwin-arm64-12cpu; raised: round 12 added real-Seatbelt and real-git scenarios (a forged saved-output line in a timed-out command, a submodule whose superproject holds the home, TMPDIR set elsewhere, ps that cannot run) and a runner that gives the tests their own temp folder, measured with base 3dcf48b at 9.1-9.3 s and this change at 11.0 s under the same machine load
 
 ### types
 Run: `npm run typecheck --workspace @doodledood/pi-slack-companion`
@@ -48,6 +49,10 @@ Proves: the package compiles with no type error.
 Line: 3.4 s on darwin-arm64-12cpu
 
 ## Gotchas
+
+- `test/run.mjs` runs the tests with a temp folder of their own and removes it afterwards; run a
+  single file the same way (`node test/run.mjs extensions/slack-companion/<file>.test.ts`), or
+  with `npx tsx --test` when its leftovers do not matter.
 
 - The real shell scenarios need macOS Seatbelt. On Linux the helper has no shell by decision
   (docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md), and those scenarios check

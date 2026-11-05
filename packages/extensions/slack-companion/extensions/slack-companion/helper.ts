@@ -163,18 +163,21 @@ export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome,
     const bash = createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false });
     tools.push({
       ...bash,
-      // A long output is saved to a file the result names: that one file becomes readable to this
-      // run. A command that times out or is stopped throws instead, naming the file in its message.
-      async execute(...args: Parameters<typeof bash.execute>) {
+      // A long output is saved to a file Pi names in the result's structured details (and in each
+      // update, so a command that times out or is stopped still names it): that one file becomes
+      // readable to this run. Never a path read from the output text: the command prints that.
+      async execute(id: string, params: Parameters<typeof bash.execute>[1], signal: Parameters<typeof bash.execute>[2], onUpdate: Parameters<typeof bash.execute>[3], ctx: Parameters<typeof bash.execute>[4]) {
+        let saved: string | undefined;
+        const recordingUpdate: Parameters<typeof bash.execute>[3] = (update) => {
+          if (update.details?.fullOutputPath) saved = update.details.fullOutputPath;
+          onUpdate?.(update);
+        };
         try {
-          const result = await bash.execute(...args);
-          const saved = result.details?.fullOutputPath;
-          if (saved) env.reads.files.add(canonicalPath(saved));
+          const result = await bash.execute(id, params, signal, recordingUpdate, ctx);
+          saved = result.details?.fullOutputPath ?? saved;
           return result;
-        } catch (error) {
-          const saved = /Full output: ([^\]\s]+)\]/.exec(error instanceof Error ? error.message : "")?.[1];
-          if (saved) env.reads.files.add(canonicalPath(saved));
-          throw error;
+        } finally {
+          if (saved) env.reads.savedFiles.add(canonicalPath(saved));
         }
       },
     } as unknown as AnyTool);
@@ -184,7 +187,7 @@ export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome,
     const result = await runMcpToolGuarded(env.events, tool.name, params, tool.server);
     // A large result is saved to a file the preview names: that one file becomes readable to this run.
     const saved = result.details?.outputGuard?.fullOutputPath;
-    if (typeof saved === "string") env.reads.files.add(canonicalPath(saved));
+    if (typeof saved === "string") env.reads.savedFiles.add(canonicalPath(saved));
     return { content: result.content as Array<{ type: "text"; text: string }>, details: {} };
   };
   for (const tool of env.mcpTools.direct) {
@@ -334,11 +337,11 @@ export async function runHelper(env: HelperEnvironment, batch: HelperBatch, sign
   // The skills the helper is offered (as the loader resolved them) can be loaded, though most live
   // in Pi's agent folder, which is otherwise closed to it: each offered skill's folder (a SKILL.md
   // and the files beside it, see secrets.skillFolder), or a loose skill file alone.
-  const reads: ReadPolicy = { ...env.reads, files: new Set(env.reads.files), skillFolders: [...env.reads.skillFolders] };
+  const reads: ReadPolicy = { ...env.reads, skillFiles: new Set(env.reads.skillFiles), savedFiles: new Set(env.reads.savedFiles), skillFolders: [...env.reads.skillFolders] };
   for (const skill of loader.getSkills().skills) {
     const folder = skillFolder(reads, skill.filePath);
     if (folder) reads.skillFolders.push(folder);
-    else if (/\.md$/i.test(skill.filePath)) reads.files.add(canonicalPath(skill.filePath));
+    else if (/\.md$/i.test(skill.filePath)) reads.skillFiles.add(canonicalPath(skill.filePath));
   }
   const tools = buildHelperTools({ ...env, reads }, outcome, batch.requestRoom);
   const { session } = await createAgentSession({

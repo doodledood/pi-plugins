@@ -3,6 +3,7 @@
 // and reaching no network unless the owner listed a domain. If the sandbox cannot start, the
 // helper gets no shell at all; on Linux it gets none yet. Holds
 // docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -53,9 +54,11 @@ export const HOME_TOOLCHAINS: readonly string[] = [
 export function allowReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
-  // Apple's developer tools keep a cache in the temp folder; git prints errors without it.
-  const xcrunCache = join(canonicalPath(tmpdir()), "xcrun_db");
-  return [...openedFolders({ home, agentDir, cwd: options.cwd, readable: options.readable ?? [] }), join(agentDir, "bin"), ...HOME_TOOLCHAINS.map((p) => join(home, p)), xcrunCache];
+  // Apple's developer tools keep a cache in the system's temp folder (whatever TMPDIR says); git
+  // prints errors without it.
+  const system = darwinUserFolders()?.temp;
+  const xcrunCaches = [...new Set([canonicalPath(tmpdir()), ...(system ? [system] : [])])].map((temp) => join(temp, "xcrun_db"));
+  return [...openedFolders({ home, agentDir, cwd: options.cwd, readable: options.readable ?? [] }), join(agentDir, "bin"), ...HOME_TOOLCHAINS.map((p) => join(home, p)), ...xcrunCaches];
 }
 
 /**
@@ -68,20 +71,45 @@ export function denyReadEntries(options: SandboxOptions): string[] {
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   const roots = [...new Set(["", home, options.cwd, agentDir])];
   // The temp folders hold Pi's full tool output, pi-mcp-adapter's saved results, and other tools' scratch files.
-  return [home, userTempFolder(), ...SHARED_TEMP, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
+  return [home, ...userTempFolders(), ...SHARED_TEMP, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
 /** The system's shared folders where data of other users and tools sits, closed to the shell as the user's own temp folder is. */
 const SHARED_TEMP = ["/private/tmp", "/private/var/tmp", "/Users/Shared"];
 
+const PER_USER_FOLDER = /^\/private\/var\/folders\/[^/]+\/[^/]+$/;
+
 /**
- * The user's own temp folder, or on macOS the per-user folder that holds it and the user's caches
- * (/private/var/folders/<x>/<y>, whose T is the temp folder and C the caches). A temp folder of any
- * other shape is closed by itself, so a TMPDIR such as /tmp never closes a parent like /.
+ * The user's own temp folder, and on macOS the per-user folder that holds the system's temp folder
+ * and caches (/private/var/folders/<x>/<y>, whose T is the temp folder and C the caches), named by
+ * the system so a TMPDIR set elsewhere does not leave it open. A temp folder of any other shape is
+ * closed by itself, so a TMPDIR such as /tmp never closes a parent like /.
  */
-export function userTempFolder(): string {
+function userTempFolders(): string[] {
   const temp = canonicalPath(tmpdir());
-  return /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(temp) ? dirname(temp) : temp;
+  const folders = [PER_USER_FOLDER.test(dirname(temp)) && /\/T$/.test(temp) ? dirname(temp) : temp];
+  const system = darwinUserFolders();
+  if (system) folders.push(system.perUser);
+  return [...new Set(folders)];
+}
+
+/**
+ * The per-user folder and its temp folder as macOS names them, whatever TMPDIR says; undefined
+ * elsewhere, or when the system does not answer in that shape (then only the temp folder in use
+ * is closed).
+ */
+function darwinUserFolders(): { perUser: string; temp: string } | undefined {
+  if (process.platform !== "darwin") return undefined;
+  const ask = (name: string) => canonicalPath(execFileSync("getconf", [name], { encoding: "utf8", timeout: 2000 }).trim());
+  let userDir: string;
+  let temp: string;
+  try {
+    userDir = ask("DARWIN_USER_DIR");
+    temp = ask("DARWIN_USER_TEMP_DIR");
+  } catch {
+    return undefined;
+  }
+  return PER_USER_FOLDER.test(dirname(userDir)) ? { perUser: dirname(userDir), temp } : undefined;
 }
 
 /** sandbox-runtime lets every command write here and points TMPDIR here; the helper writes only to its scratch folder. */

@@ -30,6 +30,22 @@ export function cut(text: string, width: number): string {
   return `${out.trimEnd()}…`;
 }
 
+/** Cut a name from the middle, keeping its start and its end (where names that share a start differ). */
+export function cutMiddle(text: string, width: number): string {
+  if (visibleWidth(text) <= width) return text;
+  if (width <= 2) return cut(text, width);
+  const chars = [...text];
+  let head = "";
+  let tail = "";
+  for (let i = 0, j = chars.length - 1; i <= j; ) {
+    const next = visibleWidth(head) <= visibleWidth(tail) ? chars[i]! : chars[j]!;
+    if (visibleWidth(head) + visibleWidth(tail) + visibleWidth(next) > width - 1) break;
+    if (visibleWidth(head) <= visibleWidth(tail)) head += chars[i++]!;
+    else tail = chars[j--]! + tail;
+  }
+  return `${head}…${tail}`;
+}
+
 /**
  * The panel's share of the terminal's height. The overlay is opened with exactly this share and
  * the panel lays itself out in exactly as many rows: the overlay cuts what is taller, and "the
@@ -86,13 +102,17 @@ function openingWords(watch: WatchState, cells: number): string | undefined {
   const { conversation } = watch;
   const root = conversation.kind === "thread" ? watch.context.find((m) => m.ts === conversation.threadTs) : watch.context[0];
   const text = root?.text.replace(/\s+/g, " ").trim();
-  return text ? cut(text, Math.max(4, cells)) : undefined; // whole characters, counted in cells
+  return text ? cut(text, cells) : undefined; // whole characters, counted in cells
 }
 
 /** Cells the line gives a conversation's first words, so two or three fresh conversations fit. */
 const LINE_OPENING_CELLS = 16;
-/** Cells a channel's name may take in a label before anyone answered, so its first words still show. */
+/** Cells a channel's name may take on the line before anyone answered, so its first words still show. */
 const CHANNEL_NAME_CELLS = 14;
+/** Cells the panel keeps for a conversation's first words before it cuts the channel's name. */
+const PANEL_OPENING_CELLS = 8;
+/** The fewest cells a cut channel name keeps in the panel. */
+const CHANNEL_NAME_MIN_CELLS = 7;
 
 /**
  * A conversation as the line and the panel name it before anyone has answered: a DM by its first
@@ -101,7 +121,11 @@ const CHANNEL_NAME_CELLS = 14;
  */
 function unnamedLabel(watch: WatchState, room?: number): string {
   const dm = isDirectMessage(watch.conversation.channelId);
-  const prefix = dm ? "DM" : `#${cut(watch.channelName || watch.conversation.channelId, CHANNEL_NAME_CELLS)}`;
+  const channel = watch.channelName || watch.conversation.channelId;
+  // The panel names the channel whole unless its first words would get too few cells; the line
+  // caps it. Either cuts from the middle, so channels that share a start still read apart.
+  const channelCells = room === undefined ? CHANNEL_NAME_CELLS : Math.max(CHANNEL_NAME_MIN_CELLS, room - 4 - PANEL_OPENING_CELLS);
+  const prefix = dm ? "DM" : `#${cutMiddle(channel, channelCells)}`;
   // The first words get what is left after the prefix, a space and two quotes.
   const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - 3;
   const opening = cells >= 4 ? openingWords(watch, cells) : undefined;
@@ -116,6 +140,14 @@ function lineLabel(watch: WatchState): string {
   return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${watch.channelName || watch.conversation.channelId}`;
 }
 
+export type ActiveState = "answering" | "catching up" | "watching";
+
+/** What an active watch is doing, as both the line and the panel say it. */
+export function activeState(watch: WatchState, answering: boolean): ActiveState {
+  if (answering) return "answering";
+  return watch.rejoining !== undefined ? "catching up" : "watching";
+}
+
 /** One entry per person in a direct message (its top level and its threads), one per channel thread; what needs the owner first. */
 function lineEntries(surface: SurfaceState): LineEntry[] {
   const groups = new Map<string, WatchState[]>();
@@ -126,24 +158,29 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
   const ranked = [...groups.values()].map((watches) => {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
     const paused = watches.some((w) => w.status === "paused");
-    const answering = watches.some((w) => surface.answering.has(w.key));
+    const states = watches.map((w) => activeState(w, surface.answering.has(w.key)));
+    const answering = states.includes("answering");
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const entry: LineEntry = {
       label: lineLabel(named),
       paused,
-      ...(paused
-        ? { word: { text: "paused", color: "warning" as const } }
-        : answering
-          ? { word: { text: "answering…", color: "accent" as const } }
-          : watches.some((w) => w.rejoining !== undefined)
-            ? { word: { text: "catching up", color: "accent" as const } }
-            : {}),
+      ...(paused ? { word: { text: "paused", color: "warning" as const } } : answering ? { word: LINE_WORD.answering } : states.includes("catching up") ? { word: LINE_WORD["catching up"] } : {}),
       note: latest.find((w) => w.lastNote)?.lastNote ?? "watching",
     };
     return { entry, rank: paused ? 0 : answering ? 1 : 2, at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
 }
+
+/** The line's word for an active state; plain watching has none. */
+const LINE_WORD = { answering: { text: "answering…", color: "accent" as const }, "catching up": { text: "catching up", color: "accent" as const } };
+
+/** The panel's status for an active state. */
+const PANEL_STATUS: Record<ActiveState, { text: string; color: "accent" | "success" }> = {
+  answering: { text: "● answering…", color: "accent" },
+  "catching up": { text: "◌ catching up", color: "accent" },
+  watching: { text: "● watching", color: "success" },
+};
 
 /** Characters of a note an entry must show to be worth showing. */
 const NOTE_MIN = 16;
@@ -329,8 +366,9 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
+  const active = PANEL_STATUS[activeState(watch, answering)];
   const status = {
-    active: answering ? paint.fg("accent", "● answering…") : watch.rejoining !== undefined ? paint.fg("accent", "◌ catching up") : paint.fg("success", "● watching"),
+    active: paint.fg(active.color, active.text),
     paused: paint.fg("warning", "○ paused"),
     stopped: paint.fg("muted", "· ended"),
     error: paint.fg("error", "× stopped"),
@@ -354,8 +392,13 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
-  const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts) && !m.agentFooter);
-  if (last && isLive(watch) && !answering) rows.push(...indent([paint.fg("muted", cut(`${last.userName}: ${last.text.replace(/\s+/g, " ")}`, inner - 3))]));
+  // The latest post not this session's, so the owner sees where the conversation stands: an agent
+  // post is marked, and one from another of the owner's own sessions says so.
+  const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts));
+  if (last && isLive(watch) && !answering) {
+    const who = !last.agentFooter ? last.userName : last.userId === surface.engine.owner?.userId ? "you (other session)" : `${last.userName} (agent)`;
+    rows.push(...indent([paint.fg("muted", cut(`${who}: ${last.text.replace(/\s+/g, " ")}`, inner - 3))]));
+  }
   return { rows, pinned: 1 };
 }
 

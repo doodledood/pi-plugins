@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { emptyState, type Approval, type EngineState, type WatchState } from "./engine.ts";
-import { layoutPanel, Panel, renderLine, renderPanel, type Paint, type PanelAction, type SurfaceState } from "./ui.ts";
+import { cutMiddle, layoutPanel, Panel, renderLine, renderPanel, type Paint, type PanelAction, type SurfaceState } from "./ui.ts";
 
 const plain: Paint = { fg: (_c, t) => t, bold: (t) => t };
 const DOWN = "\u001b[B";
@@ -368,8 +368,41 @@ test("the panel says a rejoining watch is catching up, and tells apart fresh thr
     watch({ key, conversation: { kind: "thread", channelId: "C0REL", threadTs: key.split("/")[1]! }, channelName: "release-train-2026-q4-coordination", partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text, agentFooter: true }] });
   const state = surface({ watches: [fresh("C0REL/1.000001", "Deploy is blocked on the migration"), fresh("C0REL/2.000001", "Who owns the flaky check now?")] });
   for (const width of [40, 48, 60, 80]) {
-    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#release"));
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#rel"));
     assert.equal(rows.length, 2, `${width}`);
     assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `two rows read apart at ${width}: ${rows.join(" | ")}`);
+  }
+});
+
+test("channels that share a long start read apart: the panel names them whole where there is room, and every cut keeps their ends", () => {
+  const fresh = (key: string, channelId: string, channelName: string, over: Partial<WatchState> = {}) =>
+    watch({ key, conversation: { kind: "thread", channelId, threadTs: key.split("/")[1]! }, channelName, partner: undefined, context: [{ ts: key.split("/")[1]!, userId: "U0", userName: "Dana Owner", text: "Deploy is blocked on the migration, anyone?", agentFooter: true }], ...over });
+  for (const rejoining of [undefined, 1]) {
+    const state = surface({ watches: [fresh("C0Q3/1.000001", "C0Q3", "release-train-2026-q3", { rejoining }), fresh("C0Q4/1.000001", "C0Q4", "release-train-2026-q4", { rejoining })] });
+    const wide = renderPanel(state, 0, plain, 80, 0).join("\n");
+    assert.match(wide, /#release-train-2026-q3 "Deploy/, `whole at 80: ${wide}`);
+    for (const width of [40, 48, 60]) {
+      const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#rel"));
+      assert.equal(rows.length, 2, `${width}`);
+      assert.match(rows.join("\n"), /q3/, `${width}: ${rows.join(" | ")}`);
+      assert.match(rows.join("\n"), /q4/, `${width}: ${rows.join(" | ")}`);
+      assert.match(rows.join("\n"), /"Depl/, `the first words still show at ${width}`);
+    }
+    const [line] = renderLine(state, plain, 160);
+    assert.match(line!, /q3/);
+    assert.match(line!, /q4/);
+  }
+  assert.equal(cutMiddle("release-train-2026-q4", 9), "rele…6-q4");
+  assert.equal(cutMiddle("short", 9), "short");
+});
+
+test("an active watch's state is one decision for the line and the panel", () => {
+  for (const [over, answering, word, status] of [[{}, false, undefined, "● watching"], [{ rejoining: 1 }, false, "catching up", "◌ catching up"], [{ rejoining: 1 }, true, "answering…", "● answering…"]] as const) {
+    const w = watch(over);
+    const state = surface({ watches: [w] }, { answering: new Set(answering ? [w.key] : []) });
+    const [line] = renderLine(state, plain, 120);
+    if (word) assert.match(line!, new RegExp(word));
+    else assert.doesNotMatch(line!, /answering|catching up/);
+    assert.match(renderPanel(state, 0, plain, 80, 0).join("\n"), new RegExp(status));
   }
 });

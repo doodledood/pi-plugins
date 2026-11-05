@@ -264,7 +264,12 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (problem) notify("error", `slack-companion: ${problem.detail}`);
     const backend = overrides.backend ? overrides.backend(pi, config) : new McpSlackBackend(pi.events, config.tools, config.server);
     const locks = new LockManager(`${agentDir}/slack-companion/locks`, { pid: process.pid, sessionId: ctx.sessionManager.getSessionId() });
-    locks.sweep();
+    try {
+      locks.sweep();
+    } catch (error) {
+      // Old lock folders stay; watching works the same. Said, not hidden.
+      notify("warning", `Slack: old lock folders could not be removed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     engine = new Engine({
       backend,
       config: () => config,
@@ -356,7 +361,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     } catch {
       /* the watch will report the backend problem; mark with a neutral name */
     }
-    call.setMessage(markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs), { cut: false }));
+    const marked = markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs), { cut: false });
+    call.setMessage(marked);
+    engine.mainSendStarting(event.toolCallId, marked);
   });
 
   pi.on("tool_result", async (event) => {
@@ -376,6 +383,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       return;
     }
     await engine.onMainSend({ channelId: sent.channelId, ts: sent.ts, addressedTo: call.channelId, text: call.message, ...(call.threadTs ? { threadTs: call.threadTs } : {}) });
+    engine.mainSendRecorded(event.toolCallId);
   });
 
   /**

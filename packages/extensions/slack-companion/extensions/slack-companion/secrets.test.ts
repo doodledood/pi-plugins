@@ -78,10 +78,16 @@ test("exact files open: a loose skill file and a result the helper's own call sa
   mkdirSync(join(agentDir, "skills", "notes"), { recursive: true });
   writeFileSync(skill, "x");
   writeFileSync(join(agentDir, "skills", "notes", "other.md"), "x");
-  const policy = readPolicy({ home: root, agentDir, roots: [join(root, "project")], files: [skill] });
+  const saved = join(mkdtempSync(join(tmpdir(), "pi-bash-")), "out.log");
+  writeFileSync(saved, "x");
+  const inSecretFolder = join(root, ".ssh", "config");
+  writeFileSync(inSecretFolder, "x");
+  const policy = readPolicy({ home: root, agentDir, roots: [join(root, "project")], skillFiles: [skill], savedFiles: [saved, inSecretFolder] });
   assert.equal(closed(policy, root, skill), false);
+  assert.equal(closed(policy, root, saved), false, "a file the helper's own call saved");
   assert.equal(closed(policy, root, join(agentDir, "skills", "notes", "other.md")), true);
   assert.equal(closed(policy, root, join(agentDir, "models.json")), true);
+  assert.equal(closed(policy, root, inSecretFolder), true, "a saved file never opens a secret folder, whatever names it");
 });
 
 test("the shell sandbox denies every secret folder, and secret file names at any depth from the root", () => {
@@ -172,6 +178,11 @@ test("a skill opens its own folder, never the home, a folder holding it or one h
   mkdirSync(join(agentDir, "skills", "linked"), { recursive: true });
   symlinkSync(join(source, "SKILL.md"), join(agentDir, "skills", "linked", "SKILL.md"));
   assert.equal(skillFolder(policy, join(agentDir, "skills", "linked", "SKILL.md")), canonicalPath(source), "a linked SKILL.md opens where it leads");
+  mkdirSync(join(root, "Documents"), { recursive: true });
+  writeFileSync(join(root, "Documents", "SKILL.md"), "x");
+  mkdirSync(join(agentDir, "skills", "docs"), { recursive: true });
+  symlinkSync(join(root, "Documents", "SKILL.md"), join(agentDir, "skills", "docs", "SKILL.md"));
+  assert.equal(skillFolder(policy, join(agentDir, "skills", "docs", "SKILL.md")), undefined, "a SKILL.md linked from a folder directly in the home opens only itself");
 });
 
 test("a repository opens its folders only when its top folder could be opened: never a dotfiles repository at ~ or in ~/.config", () => {
@@ -201,6 +212,24 @@ test("a repository opens its folders only when its top folder could be opened: n
   git(root, "init", "-q", "--bare", dotBare);
   git(dotBare, "worktree", "add", "-q", join(root, "code", "dots-wt"));
   assert.equal(openedFolders({ home: root, agentDir, cwd: join(root, "code", "dots-wt"), readable: [] }).includes(canonicalPath(dotBare)), false);
+});
+
+test("a submodule opens its repository folder only when its superproject could be opened", () => {
+  const outer = canonicalPath(mkdtempSync(join(tmpdir(), "outer-")));
+  const root = join(outer, "home");
+  const agentDir = join(root, ".pi", "agent");
+  mkdirSync(agentDir, { recursive: true });
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "protocol.file.allow=always", ...args], { stdio: "ignore" });
+  const lib = join(outer, "src-lib");
+  mkdirSync(lib);
+  git(lib, "init", "-q");
+  writeFileSync(join(lib, "l.txt"), "l");
+  git(lib, "add", "l.txt");
+  git(lib, "commit", "-qm", "c");
+  // The superproject is a folder holding the home: its submodule's working folder may open, its repository not.
+  git(outer, "init", "-q");
+  git(outer, "submodule", "add", "-q", lib, "lib");
+  assert.deepEqual(openedFolders({ home: root, agentDir, cwd: join(outer, "lib"), readable: [] }), [join(outer, "lib")]);
 });
 
 test("a folder whose name begins like an open one is not inside it; a folder named like a secret closes its contents", () => {

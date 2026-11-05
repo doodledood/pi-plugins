@@ -32,8 +32,9 @@ export const processAlive: ProcessAlive = (pid) => {
   }
 };
 
-/** When a process started; "gone" when no such process runs; "unknown" when it could not be read. */
-export type ProcessStart = (pid: number) => string | "gone" | "unknown";
+/** When a process started; gone when no such process runs; unknown when it could not be read. */
+export type StartReading = { kind: "started"; at: string } | { kind: "gone" } | { kind: "unknown" };
+export type ProcessStart = (pid: number) => StartReading;
 
 /**
  * When a process started, as `ps` prints it, read in one fixed time zone and language: `ps` prints
@@ -48,11 +49,11 @@ export const processStart: ProcessStart = (pid) => {
       stdio: ["ignore", "pipe", "ignore"],
       env: { ...process.env, TZ: "UTC", LC_ALL: "C", LANG: "C" },
     }).trim();
-    return out || "gone";
+    return out ? { kind: "started", at: out } : { kind: "gone" };
   } catch (error) {
     const { status, stdout } = error as { status?: number; stdout?: string };
     // ps exits 1 with nothing printed when no such process runs.
-    return status === 1 && !String(stdout ?? "").trim() ? "gone" : "unknown";
+    return status === 1 && !String(stdout ?? "").trim() ? { kind: "gone" } : { kind: "unknown" };
   }
 };
 
@@ -78,8 +79,9 @@ export class LockManager {
     private readonly alive: ProcessAlive = processAlive,
     private readonly startOf: ProcessStart = processStart,
   ) {
+    // A session whose own start cannot be read records none: others then judge it by its pid alone.
     const start = startOf(self.pid);
-    this.self = { ...self, ...(start !== "gone" && start !== "unknown" ? { start } : {}) };
+    this.self = { ...self, ...(start.kind === "started" ? { start: start.at } : {}) };
   }
 
   private folder(key: string): string {
@@ -93,6 +95,19 @@ export class LockManager {
     } catch {
       return [];
     }
+  }
+
+  /** Each number's file as text (undefined when it cannot be read): what a taker judged. */
+  private contents(folder: string): Map<number, string | undefined> {
+    const found = new Map<number, string | undefined>();
+    for (const generation of this.generations(folder)) {
+      try {
+        found.set(generation, readFileSync(join(folder, `${generation}.json`), "utf8"));
+      } catch {
+        found.set(generation, undefined);
+      }
+    }
+    return found;
   }
 
   /** The current lock: its number and holder (undefined when the file cannot be read). */
@@ -125,7 +140,14 @@ export class LockManager {
     if (holder.released || !this.alive(holder.pid)) return false;
     if (holder.start === undefined) return true;
     const start = this.startOf(holder.pid);
-    return start === "unknown" || start === holder.start;
+    switch (start.kind) {
+      case "unknown":
+        return true;
+      case "gone":
+        return false;
+      case "started":
+        return start.at === holder.start;
+    }
   }
 
   /** Take the lock, or say who holds it. Taking one's own lock again succeeds. */
@@ -133,6 +155,7 @@ export class LockManager {
     const folder = this.folder(key);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       mkdirSync(folder, { recursive: true });
+      const seen = this.contents(folder);
       const top = this.top(folder);
       if (top) {
         if (this.isSelf(top.holder)) return { ok: true };
@@ -152,8 +175,10 @@ export class LockManager {
         throw error;
       }
       // A session that judged the lock from an older reading may have created a number that has
-      // since been passed: only the highest number holds, so back off if a higher one exists.
-      if (this.generations(folder).some((generation) => generation > next)) {
+      // since been passed, or the folder may have been swept and begun again from 1 meanwhile: back
+      // off if a higher number exists, or a lower one that is not the file this session judged.
+      const now = this.contents(folder);
+      if ([...now].some(([generation, text]) => generation > next || (generation < next && seen.get(generation) !== text))) {
         rmSync(join(folder, `${next}.json`), { force: true });
         continue;
       }
@@ -210,8 +235,10 @@ export class LockManager {
       for (const generation of this.generations(folder)) if (generation <= top.generation) rmSync(join(folder, `${generation}.json`), { force: true });
       try {
         rmdirSync(folder);
-      } catch {
-        // a new lock is in it
+      } catch (error) {
+        // A lock another session created meanwhile keeps the folder; anything else is a real failure.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") throw error;
       }
     }
   }

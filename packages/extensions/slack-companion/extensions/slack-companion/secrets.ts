@@ -126,15 +126,20 @@ function namedLikeSecret(path: string): boolean {
 /**
  * What the helper's file tools may read: an allowlist, so another spelling of a path (other case,
  * the data-volume path, /dev/fd) is closed rather than missed. A path is readable only when its
- * canonical spelling is inside a root, or is one of the exact files, and nothing in it is named
+ * canonical spelling is inside a root, or is one of the exact files (skill files, then saved files after the closed folders), and nothing in it is named
  * like a secret. See docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
  */
 export interface ReadPolicy {
   home: string;
   /** Folders the file tools may read: the project and the owner's readable folders (see readableRoots). */
   roots: string[];
-  /** Exact files besides: a skill that is a lone file, and files the helper's own calls saved. */
-  files: Set<string>;
+  /** Loose skill files the helper is offered: open even inside a secret folder, like skillFolders. */
+  skillFiles: Set<string>;
+  /**
+   * Files the helper's own calls saved (large MCP results, long shell output), as Pi and the
+   * adapter name them in structured results: open, but never inside a secret folder.
+   */
+  savedFiles: Set<string>;
   /**
    * The folders of the skills the helper is offered (a SKILL.md and the files beside it), open even
    * inside a secret folder such as Pi's agent folder: see skillFolder.
@@ -197,13 +202,14 @@ export function openedFolders(options: { home: string; agentDir: string; cwd: st
   return [...new Set([...readableRoots(options.home, [options.cwd, ...options.readable], options.agentDir), ...repositoryFolders(options.cwd, options.home, options.agentDir)])];
 }
 
-export function readPolicy(options: { home?: string; agentDir?: string; roots: readonly string[]; files?: readonly string[] }): ReadPolicy {
+export function readPolicy(options: { home?: string; agentDir?: string; roots: readonly string[]; skillFiles?: readonly string[]; savedFiles?: readonly string[] }): ReadPolicy {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   return {
     home,
     roots: readableRoots(home, options.roots, agentDir),
-    files: new Set((options.files ?? []).filter((f) => !namedLikeSecret(f)).map(canonicalPath)),
+    skillFiles: new Set((options.skillFiles ?? []).map(canonicalPath)),
+    savedFiles: new Set((options.savedFiles ?? []).map(canonicalPath)),
     skillFolders: [],
     closed: secretDirectories(home, agentDir).map(canonicalPath),
   };
@@ -213,26 +219,29 @@ export function readPolicy(options: { home?: string; agentDir?: string; roots: r
 export function isReadableAbsolute(policy: ReadPolicy, absolute: string): boolean {
   const path = canonicalPath(absolute);
   if (namedLikeSecret(path)) return false;
-  if (policy.files.has(path)) return true;
+  if (policy.skillFiles.has(path)) return true;
   if (policy.skillFolders.some((dir) => inside(path, dir))) return true;
   if (policy.closed.some((dir) => inside(path, dir))) return false;
+  if (policy.savedFiles.has(path)) return true;
   return policy.roots.some((root) => inside(path, root));
 }
 
 /**
  * The folder a skill may open: its own folder when the skill is a SKILL.md, never the home, a
- * folder holding it, a secret folder itself or a folder holding one (a skill file kept loose in
- * such a place opens only itself). Undefined when only the file may open.
+ * folder holding it, a folder directly in the home (~/Documents, ~/.agents), a secret folder itself
+ * or a folder holding one (a skill file kept loose in such a place opens only itself). Undefined
+ * when only the file may open.
  */
 export function skillFolder(policy: ReadPolicy, skillFile: string): string | undefined {
   if (basename(skillFile) !== "SKILL.md") return undefined;
   // The folder of the file itself: a SKILL.md that is a link opens where it leads.
   const folder = dirname(canonicalPath(skillFile));
   if (namedLikeSecret(folder)) return undefined;
-  // A SKILL.md lying directly in one of the home's dot-folders (~/.agents) opens only itself.
+  // A SKILL.md lying directly in a folder of the home (~/.agents, or ~/Documents through a link)
+  // opens only itself: such a folder holds much more than one skill.
   const home = canonicalPath(policy.home);
   const fromHome = inside(folder, home) ? folder.slice(home.length + 1) : undefined;
-  if (fromHome !== undefined && fromHome.startsWith(".") && !fromHome.includes(sep)) return undefined;
+  if (fromHome !== undefined && !fromHome.includes(sep)) return undefined;
   // The home, and any folder holding it, hold the secret folders too: one check refuses them all.
   if (policy.closed.some((dir) => inside(dir, folder))) return undefined;
   return folder;

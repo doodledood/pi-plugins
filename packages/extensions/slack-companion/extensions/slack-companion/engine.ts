@@ -49,10 +49,12 @@ export interface WatchState {
   endedAt?: number;
   /** Why it is paused. Owner input lifts only a send-limit pause; a spend-cap pause waits for the owner's resume. */
   pause?: "sendLimit" | "spendCap";
-  /** A reply the helper wrote while the watch was paused: sent as written on resume, never written again. */
-  heldReply?: string;
-  /** The newest message the held reply answers: a rejoin read that finds another session's post after it drops the reply. */
-  heldThrough?: string;
+  /**
+   * A reply the helper wrote while the watch was paused: sent as written on resume, never written
+   * again; unless a rejoin read finds another session's post after `through`, the newest message it
+   * answers, which drops it.
+   */
+  held?: { reply: string; through?: string };
   /** Reads in a row that failed for a reason that may pass; the watch stops at MAX_READ_FAILURES. */
   readFailures?: number;
   /** What happened lately, newest last, for the panel. */
@@ -137,6 +139,8 @@ const MAX_PENDING_PER_WATCH = 10;
 /** Reads in a row that may fail for a passing reason before the watch stops. */
 export const MAX_READ_FAILURES = 5;
 const MAX_OWN_POSTS = 200;
+/** Main's sends kept for matching by text until read back (see mainSendsUnrecorded). */
+const MAX_UNRECORDED_SENDS = 20;
 const MAX_LEDGER = 100;
 /** Stops remembered: a stopped conversation stays stopped across the last this many stops. */
 export const MAX_TOMBSTONES = 1000;
@@ -181,7 +185,8 @@ export function salvageState(data: unknown): { approvals: Approval[]; tombstones
 
 function watchOk(w: any): boolean {
   return Boolean(w && typeof w.key === "string" && w.conversation && typeof w.conversation.channelId === "string"
-    && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox));
+    && typeof w.since === "string" && w.point && Array.isArray(w.point.seen) && Array.isArray(w.ownPosts) && Array.isArray(w.context) && Array.isArray(w.inbox)
+    && (w.held === undefined || (typeof w.held?.reply === "string" && (w.held.through === undefined || typeof w.held.through === "string"))));
 }
 
 function approvalOk(a: any): a is Approval {
@@ -275,6 +280,11 @@ export class Engine {
   private lastPersisted = "";
   private readonly running = new Map<string, { promise: Promise<void>; abort: AbortController }>();
   private readonly inFlightSends = new Set<string>();
+  /**
+   * Messages main is sending, or sent with a result that named no message, by their marked text:
+   * read back before their ts is known, they are this session's own, not another session's.
+   */
+  private readonly mainSendsUnrecorded = new Map<string, string>();
   private polling: Promise<void> | undefined;
   private disposed = false;
 
@@ -400,6 +410,34 @@ export class Engine {
     return keys.some((key) => this.watch(key)?.agentLineSent === true);
   }
 
+  /** Main is about to send this marked text into a watched conversation. */
+  mainSendStarting(callId: string, text: string): void {
+    this.mainSendsUnrecorded.set(callId, text.trim());
+    // Results that never name their message stay until read back; keep only the latest few.
+    while (this.mainSendsUnrecorded.size > MAX_UNRECORDED_SENDS) this.mainSendsUnrecorded.delete(this.mainSendsUnrecorded.keys().next().value!);
+  }
+
+  /** Main's send named its message (onMainSend records it): it no longer needs matching by text. */
+  mainSendRecorded(callId: string): void {
+    this.mainSendsUnrecorded.delete(callId);
+  }
+
+  /**
+   * Is this owner post one of this session's own whose ts is not recorded yet: main's send still
+   * running or whose result named no message, or a helper or owner-note send not settled yet?
+   */
+  private ownUnrecorded(watch: WatchState, raw: SlackMessage): boolean {
+    const text = raw.text.trim();
+    for (const [callId, sent] of this.mainSendsUnrecorded) {
+      if (sent !== text) continue;
+      this.mainSendsUnrecorded.delete(callId);
+      watch.ownPosts = [...watch.ownPosts, raw.ts].slice(-MAX_OWN_POSTS);
+      return true;
+    }
+    // A tracked send settles by its own result or by reconcile, which then records the ts.
+    return this.state.ledger.some((e) => e.watchKey === watch.key && (e.status === "sending" || e.status === "uncertain") && e.text.trim() === text);
+  }
+
   /** Main sent a message (any route). Start or continue watching, and remember the post. */
   async onMainSend(input: { channelId: string; ts: string; threadTs?: string; addressedTo?: string; text?: string }): Promise<void> {
     if (this.disposed) return;
@@ -495,9 +533,7 @@ export class Engine {
       primary ??= this.startWatch(conversation, "attach", plan.from);
     }
     this.save();
-    // A pass already running may have listed its watches before this one existed: let it end, then read.
-    if (this.polling) await this.polling;
-    await this.poll();
+    await this.readSoon();
     return primary;
   }
 
@@ -588,11 +624,7 @@ export class Engine {
     watch.rejoining = 0;
     this.note(watch, "watching again");
     this.save();
-    // Read now; a pass already running listed its watches before this one came back, so wait for it.
-    void (async () => {
-      if (this.polling) await this.polling;
-      await this.poll();
-    })();
+    void this.readSoon();
   }
 
   stop(key: string, reason = "stopped by you"): void {
@@ -634,9 +666,8 @@ export class Engine {
       watch.context = watch.context.filter((m) => m.ts === root);
       watch.ownPosts = watch.ownPosts.filter((ts) => !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
     }
-    if (watch.heldReply) {
-      delete watch.heldReply;
-      delete watch.heldThrough;
+    if (watch.held) {
+      delete watch.held;
       this.note(watch, "a held reply was not sent");
     }
     if (explicit && !this.state.tombstones.includes(watch.key)) this.state.tombstones.push(watch.key);
@@ -683,6 +714,20 @@ export class Engine {
     if (watch && isLive(watch)) {
       await this.sendTracked(watch, deniedNote((await this.owner()).name, approval.text), { fromOwner: true });
       this.save();
+    }
+  }
+
+  /**
+   * Read now, for a watch that just started or came back: a pass already running listed its
+   * watches before, so wait for it, then read. A failure is told to the owner, never left unhandled
+   * (Pi exits on an unhandled rejection).
+   */
+  private async readSoon(): Promise<void> {
+    try {
+      if (this.polling) await this.polling.catch(() => undefined);
+      await this.poll();
+    } catch (error) {
+      if (!this.disposed) this.deps.notify("error", `Slack: reading failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -795,7 +840,7 @@ export class Engine {
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text };
       watch.lastActivityAt = this.deps.now();
       this.remember(watch, message);
-      if (own.has(message.ts)) {
+      if (own.has(message.ts) || (raw.userId === owner.userId && this.ownUnrecorded(watch, raw))) {
         watch.lastAgentPostOurs = true;
         continue;
       }
@@ -816,16 +861,18 @@ export class Engine {
             watch.inbox = watch.inbox.filter((m) => compareTs(m.ts, message.ts) > 0);
           }
           // A reply held for messages from before that post: that session may have answered them.
-          if (watch.heldReply !== undefined && watch.heldThrough && compareTs(watch.heldThrough, message.ts) < 0) heldAnsweredElsewhere = true;
+          if (watch.held?.through && compareTs(watch.held.through, message.ts) < 0) heldAnsweredElsewhere = true;
         }
         continue;
       }
       // Someone else's agent (a post with the agent footer under their name): context only, so two
-      // agents never answer each other in a loop. The owner is told once per conversation.
+      // agents never answer each other in a loop. Each one is noted on the watch (the line and the
+      // panel show it), and the owner is told once per conversation.
       if (message.agentFooter) {
+        this.note(watch, `${message.userName}'s agent posted; not answered: answer it yourself`);
         if (!watch.agentPostSeen) {
           watch.agentPostSeen = true;
-          this.deps.notify("info", `Slack: ${message.userName} posted through an agent in ${watchLabel(watch)}; agent posts are read but not answered, so two agents never answer each other. Answer it yourself if it needs you: "${firstLine(message.text, 80)}"`);
+          this.deps.notify("info", `Slack: in ${watchLabel(watch)}, ${message.userName}'s agent posted. Agent posts are not answered, so two agents never answer each other; answer it yourself if it needs you: "${firstLine(message.text, 80)}"`);
         }
         continue;
       }
@@ -841,9 +888,8 @@ export class Engine {
       queued.add(message.ts);
     }
     if (heldAnsweredElsewhere) {
-      delete watch.heldReply;
-      delete watch.heldThrough;
-      this.note(watch, "held reply not sent: another of your sessions posted after its messages");
+      delete watch.held;
+      this.note(watch, "held reply dropped: another session answered");
       this.deps.notify("info", `Slack: the reply held in ${watchLabel(watch)} is not sent: while this session was away, another of your Pi sessions posted after the messages it answers. Check in Slack that they were answered.`);
     }
     if (answeredElsewhere.length) {
@@ -897,7 +943,7 @@ export class Engine {
   }
 
   private schedule(watch: WatchState): void {
-    if (this.disposed || watch.status !== "active" || (!watch.inbox.length && !watch.heldReply) || this.running.has(watch.key)) return;
+    if (this.disposed || watch.status !== "active" || (!watch.inbox.length && !watch.held) || this.running.has(watch.key)) return;
     if (watch.rejoining !== undefined) return; // a read catches up first
     const abort = new AbortController();
     const promise = this.process(watch, abort.signal)
@@ -912,7 +958,7 @@ export class Engine {
         this.running.delete(watch.key);
         this.deps.changed();
         // Messages that arrived while the helper ran form the next batch.
-        if (!this.disposed && watch.status === "active" && (watch.inbox.length || watch.heldReply)) this.schedule(watch);
+        if (!this.disposed && watch.status === "active" && (watch.inbox.length || watch.held)) this.schedule(watch);
       });
     this.running.set(watch.key, { promise, abort });
     this.deps.changed();
@@ -926,16 +972,13 @@ export class Engine {
   }
 
   private async process(watch: WatchState, signal: AbortSignal): Promise<void> {
-    if (watch.heldReply) {
+    if (watch.held) {
       // Written before the pause: sent as written, so its hand-offs and requests are not made twice.
-      const held = watch.heldReply;
-      const sent = await this.sendTracked(watch, held, { commit: () => { delete watch.heldReply; delete watch.heldThrough; } });
+      const held = watch.held.reply;
+      const sent = await this.sendTracked(watch, held, { commit: () => { delete watch.held; } });
       // Every outcome but a pause settles the held reply (sent, blocked as secret-shaped, or the
       // conversation ended); keeping it would schedule the same attempt again without end.
-      if (sent !== "paused") {
-        delete watch.heldReply;
-        delete watch.heldThrough;
-      }
+      if (sent !== "paused") delete watch.held;
       if (sent === "paused" || this.disposed || signal.aborted || !isLive(watch)) {
         this.save();
         return;
@@ -1011,8 +1054,8 @@ export class Engine {
     }
     if (sent === "paused") {
       // The batch is handled; only its reply waits, and goes out as written on resume.
-      watch.heldReply = reply;
-      watch.heldThrough = batch.at(-1)?.ts;
+      const through = batch.at(-1)?.ts;
+      watch.held = { reply, ...(through ? { through } : {}) };
       finish("helper's reply held until you resume");
       return;
     }
@@ -1079,8 +1122,9 @@ export class Engine {
     if (watch.status !== "active") return;
     watch.status = "paused";
     watch.pause = "sendLimit";
-    watch.reason = `sent ${watch.sendsWithoutOwner} messages without you`;
-    this.deps.notify("info", `Slack: paused ${watchLabel(watch)} after ${watch.sendsWithoutOwner} messages without you. Open the panel (/slack) to resume.`);
+    const sent = `${watch.sendsWithoutOwner} message${watch.sendsWithoutOwner === 1 ? "" : "s"} without you`;
+    watch.reason = `sent ${sent}`;
+    this.deps.notify("info", `Slack: paused ${watchLabel(watch)} after ${sent}. Open the panel (/slack) to resume.`);
   }
 
   /** A send whose outcome is unknown is settled by reading the conversation, never by sending again. */
