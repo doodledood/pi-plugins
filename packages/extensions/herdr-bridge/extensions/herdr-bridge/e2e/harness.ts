@@ -291,7 +291,6 @@ export function classifyInstalled(sources: readonly string[], localFiles: readon
   return { load, leftOut };
 }
 
-/** The person's installed Pi extensions, as files Pi can load read-only from where they are, with the package sources left out. */
 /** The name in the package.json nearest above `path`, or undefined when there is none. */
 export function packageNameOf(path: string): string | undefined {
   for (let dir = dirname(path); ; dir = dirname(dir)) {
@@ -302,10 +301,15 @@ export function packageNameOf(path: string): string | undefined {
 }
 
 /** This package's name: an installed copy of it is replaced by the copy under test. */
-export const UNDER_TEST = packageNameOf(BRIDGE_EXTENSION)!;
+export const UNDER_TEST = ((): string => {
+  const name = packageNameOf(BRIDGE_EXTENSION);
+  if (!name) throw new Error(`no named package.json above ${BRIDGE_EXTENSION}`);
+  return name;
+})();
 
 /**
- * The extension files of the person's installed packages, as the real-setup run loads them. An
+ * The person's installed Pi extensions, as files Pi can load read-only from where they are, with
+ * the package sources left out: what the real-setup run loads. An
  * installed copy of this package is left out (`replaced`): the copy under test is loaded instead,
  * and two copies register the same flags, which Pi refuses at startup.
  */
