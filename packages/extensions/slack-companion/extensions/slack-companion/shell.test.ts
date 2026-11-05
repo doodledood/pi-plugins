@@ -119,3 +119,13 @@ test("with TMPDIR set elsewhere, the shell still closes the per-user temp and ca
     rmSync(elsewhere, { recursive: true, force: true });
   }
 });
+
+test("on macOS, a system that does not name the per-user folder leaves the helper without a shell, never with that folder open", () => {
+  if (process.platform !== "darwin") return; // the per-user folder is macOS's
+  const home = fakeHome();
+  const script = `import(${JSON.stringify(join(import.meta.dirname, "sandbox.ts"))}).then((m) => m.startShellSandbox({ cwd: ${JSON.stringify(home)}, home: ${JSON.stringify(home)}, allowedDomains: [] })).then((r) => console.log(JSON.stringify(r)))`;
+  const out = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8", env: { ...process.env, PATH: "/nonexistent" } });
+  const result = JSON.parse(out.trim().split("\n").at(-1)!);
+  assert.equal(result.ok, false, out);
+  assert.match(result.reason, /could not start: .*getconf/, result.reason);
+});

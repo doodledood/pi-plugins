@@ -1,7 +1,7 @@
 // Holds docs/adr/20261104-start-watching-when-the-session-messages-someone.md: one session owns a
 // conversation on this machine, and a lock is taken only from a holder that is gone.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -195,4 +195,23 @@ test("a ps that cannot run reads as unknown, and a session started then still ke
   const working = new LockManager(dir, { pid: 4242, sessionId: "working" }, () => true, processStart);
   assert.equal(working.acquire("D1/top").ok, false, "the holder runs: a start it never recorded is no reason to take its lock");
   assert.ok(blind.holds("D1/top"));
+});
+
+test("a holder whose pid answers but whose process reads as gone has released the lock", () => {
+  const dir = mkdtempSync(join(tmpdir(), "locks-"));
+  new LockManager(dir, { pid: 1, sessionId: "a" }, () => true, () => started("t1")).acquire("D1/top");
+  const taker = new LockManager(dir, { pid: 2, sessionId: "b" }, () => true, (pid): StartReading => (pid === 1 ? { kind: "gone" } : started("t2")));
+  assert.deepEqual(taker.acquire("D1/top"), { ok: true });
+});
+
+test("a sweep that cannot remove a folder for a reason other than a new lock says so", (t) => {
+  if (process.getuid?.() === 0) return; // root ignores folder permissions
+  const dir = mkdtempSync(join(tmpdir(), "locks-"));
+  const m = machine({ 2: "t2" });
+  new LockManager(dir, { pid: 9, sessionId: "crashed" }, () => true, () => started("t9")).acquire("D1/top");
+  const old = (Date.now() - OLD_LOCK_MS - 60_000) / 1000;
+  for (const file of readdirSync(join(dir, "D1_top"))) utimesSync(join(dir, "D1_top", file), old, old);
+  chmodSync(dir, 0o500); // the folder's files can go, the folder itself cannot
+  t.after(() => chmodSync(dir, 0o700));
+  assert.throws(() => new LockManager(dir, { pid: 2, sessionId: "b" }, m.alive, m.startOf).sweep(), /EACCES|EPERM/);
 });

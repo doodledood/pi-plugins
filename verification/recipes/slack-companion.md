@@ -51,7 +51,8 @@ Line: 3.4 s on darwin-arm64-12cpu
 ## Gotchas
 
 - `test/run.mjs` runs the tests with a temp folder of their own and removes it afterwards; run a
-  single file the same way (`node test/run.mjs extensions/slack-companion/<file>.test.ts`), or
+  single file the same way from `packages/extensions/slack-companion`
+  (`node test/run.mjs extensions/slack-companion/<file>.test.ts`), or
   with `npx tsx --test` when its leftovers do not matter.
 
 - The real shell scenarios need macOS Seatbelt. On Linux the helper has no shell by decision

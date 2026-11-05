@@ -1452,13 +1452,14 @@ test("another person's agent post is read as context, never answered: two agents
   assert.equal(log.triage.length, 0, "no model woken");
   assert.equal(log.helpers.length, 0);
   assert.equal(log.notices.filter((n) => /Robin Colleague's agent posted\. Agent posts are not answered/.test(n)).length, 1, "the owner is told");
-  assert.equal(engine.watch(`${DM}/${q.ts}`)!.lastNote, "Robin Colleague's agent posted; not answered: answer it yourself", "the line and the panel say so");
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.lastNote, "agent post not answered; check it", "the line says so");
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 and again\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
   await settle(engine);
   assert.equal(log.notices.filter((n) => /agent posted/.test(n)).length, 1, "told once per conversation");
-  assert.equal(engine.watch(`${DM}/${q.ts}`)!.activity!.filter((a) => /agent posted/.test(a.text)).length, 2, "every agent post is noted");
+  const activity = engine.watch(`${DM}/${q.ts}`)!.activity!.map((a) => a.text);
+  assert.deepEqual(activity.filter((a) => /agent post/.test(a)), ["2 agent posts not answered; check them"], "one running count, not one entry per post");
   const panel = renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
-  assert.match(panel, /Robin Colleague \(agent\): 🤖 and again/, "the latest post shows, marked");
+  assert.match(panel, /Robin Colleague \(agent\): and again/, "the latest post shows, marked once");
 });
 
 test("a reply held by a pause is not sent after a gap in which another session answered the messages it was for", async () => {
@@ -1549,7 +1550,7 @@ test("watching again after main's own send whose result named no message: that p
   engine.stop(key);
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a question while stopped", q.ts);
   const marked = "🤖 one more thing from main";
-  engine.mainSendStarting("call-1", marked);
+  engine.mainSendStarting("call-1", { text: marked, channelId: DM, threadTs: q.ts });
   slack.post(DM, slack.ownerId, slack.ownerName, `${marked}\n*Sent using* <@A0FAKEAPP|Slack MCP>`, q.ts); // its result named no message
   engine.rewatch(key);
   await new Promise((r) => setTimeout(r, 50));
@@ -1613,7 +1614,7 @@ test("while this session holds a conversation throughout, another agent post of 
   await settle(a.engine);
   assert.equal(a.engine.watch(key)!.held?.reply, "re: one", "no other Pi session read it meanwhile");
   const panel = renderPanel({ enabled: true, engine: a.engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
-  assert.match(panel, /you \(other session\): from a desktop agent/, "the panel shows the conversation moved on");
+  assert.match(panel, /you \(another agent\): from a desktop agent/, "the panel shows the conversation moved on");
   a.engine.ownerInput();
   await a.engine.idle();
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("re: one")), "sent on resume");
@@ -1637,4 +1638,48 @@ test("a rejoin read keeps a held reply when the other session's post is older th
   resumed.engine.ownerInput();
   await resumed.engine.idle();
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("re: one")), "sent on resume");
+});
+
+const panelOf = (engine: Engine, slack: FakeSlack) =>
+  renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
+
+test("after a stop and watching again, main's own opening post is still this session's: the panel names no other agent", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack);
+  const root = await mainSends(slack, engine, CHANNEL, "Could someone look at the deploy?");
+  const key = `${CHANNEL}/${root.ts}`;
+  await settle(engine);
+  engine.stop(key);
+  engine.rewatch(key);
+  await new Promise((r) => setTimeout(r, 50));
+  await settle(engine);
+  assert.ok(engine.watch(key)!.ownPosts.includes(root.ts), "the kept root stays this session's own");
+  assert.doesNotMatch(panelOf(engine, slack), /another agent|\(agent\)/);
+});
+
+test("main's send that named no message claims only its own conversation: the same words from another session elsewhere are that session's", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "A asks");
+  const key = `${DM}/${q.ts}`;
+  engine.stop(key);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a question while stopped", q.ts);
+  const marked = "🤖 On it.";
+  engine.mainSendStarting("call-elsewhere", { text: marked, channelId: "D0FAKE0003" }); // main's send went to another conversation
+  slack.post(DM, slack.ownerId, slack.ownerName, `${marked}\n*Sent using* <@A0FAKEAPP|Slack MCP>`, q.ts); // another session's identical words here
+  engine.rewatch(key);
+  await new Promise((r) => setTimeout(r, 50));
+  await settle(engine);
+  assert.equal(log.helpers.length, 0, "left to the session that answered");
+  assert.ok(log.notices.some((n) => /another of your Pi sessions posted after it/.test(n)), log.notices.join("\n"));
+});
+
+test("a colleague's message with the same words as main's send in flight is still theirs, and answered", async () => {
+  const slack = new FakeSlack();
+  const { engine, log } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "A asks");
+  engine.mainSendStarting("call-1", { text: "sounds good", channelId: DM, threadTs: q.ts });
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "sounds good", q.ts);
+  await settle(engine);
+  assert.ok(log.helpers.some((h) => h.messages.some((m) => m.text === "sounds good")), "a colleague's words are never main's");
 });

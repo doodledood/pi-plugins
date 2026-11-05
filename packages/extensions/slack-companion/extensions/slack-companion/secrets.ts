@@ -126,8 +126,8 @@ function namedLikeSecret(path: string): boolean {
 /**
  * What the helper's file tools may read: an allowlist, so another spelling of a path (other case,
  * the data-volume path, /dev/fd) is closed rather than missed. A path is readable only when its
- * canonical spelling is inside a root, or is one of the exact files (skill files, then saved files after the closed folders), and nothing in it is named
- * like a secret. See docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
+ * canonical spelling is inside a root, or is one of the exact files (skill files before the closed
+ * folders, saved files after them), and nothing in it is named like a secret. See docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
  */
 export interface ReadPolicy {
   home: string;

@@ -363,7 +363,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     }
     const marked = markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs), { cut: false });
     call.setMessage(marked);
-    engine.mainSendStarting(event.toolCallId, marked);
+    engine.mainSendStarting(event.toolCallId, { text: marked, channelId: call.channelId, ...(call.threadTs ? { threadTs: call.threadTs } : {}) });
   });
 
   pi.on("tool_result", async (event) => {
@@ -378,7 +378,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     } catch {
       if (!event.parentToolCallId && !/message_context/.test(text)) {
         // A send whose result names no message: the watch cannot start, so say so rather than stay silent.
-        notify("warning", "Slack: a message was sent but its result named no message, so its conversation is not watched.");
+        notify("warning", "Slack: a message was sent but its result named no message, so a conversation it would start is not watched.");
       }
       return;
     }

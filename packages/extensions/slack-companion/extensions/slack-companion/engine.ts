@@ -20,6 +20,17 @@ import { triageInput, type TriageInput } from "./triage.ts";
 
 export type WatchStatus = "active" | "paused" | "stopped" | "error";
 
+/**
+ * Who a kept message came from, as the engine judged it when it read it: this session (main or its
+ * helper), another of the owner's agents, someone else's agent, the owner by hand, or a person.
+ */
+export type Origin = "this session" | "other session" | "agent" | "owner" | "person";
+
+export interface ContextMessage extends SlackMessage {
+  /** Unset in state saved before origins were kept. */
+  origin?: Origin;
+}
+
 export interface WatchState {
   key: string;
   conversation: Conversation;
@@ -30,7 +41,7 @@ export interface WatchState {
   /** Messages this session posted here, by ts. */
   ownPosts: string[];
   /** Recent messages, the session's own included, for the helper's and the triage call's context. */
-  context: SlackMessage[];
+  context: ContextMessage[];
   /** Confirmed messages from others not handled yet. */
   inbox: SlackMessage[];
   sendsWithoutOwner: number;
@@ -63,6 +74,8 @@ export interface WatchState {
   channelName?: string;
   /** A post through someone else's agent was seen and the owner told; told once per conversation. */
   agentPostSeen?: boolean;
+  /** Posts through someone else's agent, never answered: the running count in the latest note. */
+  agentPostsUnanswered?: number;
   /** Waiting messages dropped since the waiting list was last answered: the note shows this total. */
   droppedWaiting?: number;
   /**
@@ -132,6 +145,7 @@ const MAX_INBOX = 20;
 /** Reads a rejoining watch waits for a read to catch up before it answers anyway (a burst that never ends). */
 const MAX_REJOIN_READS = 5;
 const DROPPED_NOTE = /^\d+ older dropped; /;
+const AGENT_POSTS_NOTE = /agent posts? not answered; /;
 /** Characters of a waiting message kept. */
 const MAX_INBOX_TEXT = 4000;
 /** Requests from one conversation that may wait for the owner at once. */
@@ -284,7 +298,7 @@ export class Engine {
    * Messages main is sending, or sent with a result that named no message, by their marked text:
    * read back before their ts is known, they are this session's own, not another session's.
    */
-  private readonly mainSendsUnrecorded = new Map<string, string>();
+  private readonly mainSendsUnrecorded = new Map<string, { text: string; channelId: string; threadTs?: string }>();
   private polling: Promise<void> | undefined;
   private disposed = false;
 
@@ -410,9 +424,12 @@ export class Engine {
     return keys.some((key) => this.watch(key)?.agentLineSent === true);
   }
 
-  /** Main is about to send this marked text into a watched conversation. */
-  mainSendStarting(callId: string, text: string): void {
-    this.mainSendsUnrecorded.set(callId, text.trim());
+  /**
+   * Main is about to send this marked text to a channel (or a user id, for a direct message) and
+   * perhaps a thread. Kept even when the result is an error: the message may have gone out anyway.
+   */
+  mainSendStarting(callId: string, send: { text: string; channelId: string; threadTs?: string }): void {
+    this.mainSendsUnrecorded.set(callId, { ...send, text: send.text.trim() });
     // Results that never name their message stay until read back; keep only the latest few.
     while (this.mainSendsUnrecorded.size > MAX_UNRECORDED_SENDS) this.mainSendsUnrecorded.delete(this.mainSendsUnrecorded.keys().next().value!);
   }
@@ -428,8 +445,10 @@ export class Engine {
    */
   private ownUnrecorded(watch: WatchState, raw: SlackMessage): boolean {
     const text = raw.text.trim();
+    const { conversation } = watch;
     for (const [callId, sent] of this.mainSendsUnrecorded) {
-      if (sent !== text) continue;
+      if (sent.text !== text || this.channelFor(sent.channelId) !== conversation.channelId) continue;
+      if (sent.threadTs && !(conversation.kind === "thread" && conversation.threadTs === sent.threadTs)) continue;
       this.mainSendsUnrecorded.delete(callId);
       watch.ownPosts = [...watch.ownPosts, raw.ts].slice(-MAX_OWN_POSTS);
       return true;
@@ -458,7 +477,7 @@ export class Engine {
       if (input.text && !watch.context.some((m) => m.ts === input.ts)) {
         const self = this.state.owner;
         // Kept as main wrote it: the marker and the agent line are the package's, not its words.
-        this.remember(watch, { ts: input.ts, userId: self?.userId ?? "self", userName: self?.name ?? "the owner's agent", text: ownerWords(input.text, this.deps.config().marker), agentFooter: true });
+        this.remember(watch, { ts: input.ts, userId: self?.userId ?? "self", userName: self?.name ?? "the owner's agent", text: ownerWords(input.text, this.deps.config().marker), agentFooter: true, origin: "this session" });
       }
     }
     this.save();
@@ -664,7 +683,8 @@ export class Engine {
     if (status === "stopped") {
       const root = watch.conversation.kind === "thread" ? watch.conversation.threadTs : undefined;
       watch.context = watch.context.filter((m) => m.ts === root);
-      watch.ownPosts = watch.ownPosts.filter((ts) => !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
+      // The kept root stays this session's own when it was (watching again reads it as such).
+      watch.ownPosts = watch.ownPosts.filter((ts) => ts === root || !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
     }
     if (watch.held) {
       delete watch.held;
@@ -839,8 +859,11 @@ export class Engine {
       const text = stripControl(raw.userId === owner.userId && raw.agentFooter ? ownerWords(raw.text, marker) : raw.text);
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text };
       watch.lastActivityAt = this.deps.now();
-      this.remember(watch, message);
-      if (own.has(message.ts) || (raw.userId === owner.userId && this.ownUnrecorded(watch, raw))) {
+      const byOwner = raw.userId === owner.userId;
+      const ownPost = own.has(message.ts) || (byOwner && this.ownUnrecorded(watch, raw));
+      const origin: Origin = ownPost ? "this session" : byOwner ? (raw.agentFooter ? "other session" : "owner") : raw.agentFooter ? "agent" : "person";
+      this.remember(watch, { ...message, origin });
+      if (ownPost) {
         watch.lastAgentPostOurs = true;
         continue;
       }
@@ -866,10 +889,11 @@ export class Engine {
         continue;
       }
       // Someone else's agent (a post with the agent footer under their name): context only, so two
-      // agents never answer each other in a loop. Each one is noted on the watch (the line and the
-      // panel show it), and the owner is told once per conversation.
+      // agents never answer each other in a loop. One running count is noted on the watch (the line
+      // shows it; the panel shows the post), and the owner is told once per conversation.
       if (message.agentFooter) {
-        this.note(watch, `${message.userName}'s agent posted; not answered: answer it yourself`);
+        const count = (watch.agentPostsUnanswered = (watch.agentPostsUnanswered ?? 0) + 1);
+        this.note(watch, count === 1 ? "agent post not answered; check it" : `${count} agent posts not answered; check them`, { replacing: AGENT_POSTS_NOTE });
         if (!watch.agentPostSeen) {
           watch.agentPostSeen = true;
           this.deps.notify("info", `Slack: in ${watchLabel(watch)}, ${message.userName}'s agent posted. Agent posts are not answered, so two agents never answer each other; answer it yourself if it needs you: "${firstLine(message.text, 80)}"`);
@@ -928,7 +952,7 @@ export class Engine {
   }
 
   /** Keep a message as context, its text cut to what a restart needs. */
-  private remember(watch: WatchState, message: SlackMessage): void {
+  private remember(watch: WatchState, message: ContextMessage): void {
     const kept = message.text.length > MAX_CONTEXT_TEXT ? { ...message, text: `${message.text.slice(0, MAX_CONTEXT_TEXT)}…` } : message;
     watch.context = [...watch.context.filter((m) => m.ts !== message.ts), kept].slice(-MAX_CONTEXT);
   }

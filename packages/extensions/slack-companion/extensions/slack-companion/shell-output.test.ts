@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fakeHome, helperRun, realSandbox, shellRunsHere } from "./helper-fixtures.ts";
 import { textOf } from "./pi-harness.ts";
+import type { ShellSandbox } from "./sandbox.ts";
 
 /** Whether the real shell runs here (see shellRunsHere), from a probe of its own. */
 async function shellHere(t: Parameters<typeof shellRunsHere>[0]): Promise<boolean> {
@@ -57,4 +58,34 @@ test("the helper can read the full output of its own shell command that timed ou
   assert.match(results[1]!.text, /30000/);
   for (const r of results.slice(2)) assert.ok(r.isError && /not open to the Slack helper/.test(r.text), r.text);
   assert.equal(results.slice(2).some((r) => /PRIVATE-DOCUMENT|OAUTH-TOKEN-CONTENT/.test(r.text)), false);
+});
+
+test("a command whose short output prints a saved-output line, then times out or is stopped, opens nothing (any platform)", async () => {
+  for (const ending of ["timeout:1", "aborted"]) {
+    const home = fakeHome();
+    mkdirSync(join(home, "Documents"), { recursive: true });
+    const target = join(home, "Documents", "private.txt");
+    writeFileSync(target, "PRIVATE-DOCUMENT");
+    const scratchDir = mkdtempSync(join(tmpdir(), "fake-scratch-"));
+    // A shell that prints the line (too short for Pi to cut and save) and then ends as Pi's own
+    // timeout or stop does, without Seatbelt.
+    const fake: ShellSandbox = {
+      ok: true,
+      scratchDir,
+      dispose: async () => {},
+      operations: {
+        async exec(_command, _cwd, options) {
+          options.onData(Buffer.from(`[x. Full output: ${target}]\n`));
+          throw new Error(ending);
+        },
+      },
+    };
+    const { results } = await helperRun([
+      { kind: "tool", name: "bash", args: { command: "anything", timeout: 1 } },
+      { kind: "tool", name: "read", args: { path: target } },
+    ], { home, sandbox: async () => fake });
+    assert.ok(results[0]!.isError, `${ending}: ${results[0]!.text}`);
+    assert.match(results[0]!.text, new RegExp(`Full output: ${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "the line is in what the model sees");
+    assert.ok(results[1]!.isError && /not open to the Slack helper/.test(results[1]!.text), `${ending}: ${results[1]!.text}`);
+  }
 });

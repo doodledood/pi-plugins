@@ -3,7 +3,7 @@
 // never as rows in main's transcript. Graphite: brightness carries hierarchy, color only state;
 // the line stays quiet (muted) until something needs the owner.
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { type Approval, DM_MARK, dmLabel, type EngineState, isLive, type WatchState, watchLabel } from "./engine.ts";
+import { type Approval, type ContextMessage, DM_MARK, dmLabel, type EngineState, isLive, type WatchState, watchLabel } from "./engine.ts";
 import { isDirectMessage } from "./conversation.ts";
 
 export type PaintColor = "accent" | "dim" | "muted" | "warning" | "error" | "success" | "text" | "border" | "borderMuted";
@@ -30,7 +30,30 @@ export function cut(text: string, width: number): string {
   return `${out.trimEnd()}…`;
 }
 
-/** Cut a name from the middle, keeping its start and its end (where names that share a start differ). */
+/**
+ * Cut a channel's name so it reads apart from the others shown: keep its start, skip what it
+ * shares with them at the start, and show from just before where it differs. A name that shares
+ * nothing is cut from the middle.
+ */
+export function cutApart(name: string, others: readonly string[], width: number): string {
+  if (visibleWidth(name) <= width) return name;
+  const chars = [...name];
+  let shared = 0;
+  for (const other of others) {
+    if (other === name) continue;
+    const o = [...other];
+    let n = 0;
+    while (n < chars.length && n < o.length && chars[n] === o[n]) n += 1;
+    shared = Math.max(shared, n);
+  }
+  // Recognizable start, then from two characters before the difference.
+  const head = chars.slice(0, 3).join("");
+  const from = Math.max(3, shared - 2);
+  if (shared < 4 || visibleWidth(head) + 2 >= width) return cutMiddle(name, width);
+  return `${head}…${cut(chars.slice(from).join(""), width - visibleWidth(head) - 1)}`;
+}
+
+/** Cut a name from the middle, keeping its start and its end. */
 export function cutMiddle(text: string, width: number): string {
   if (visibleWidth(text) <= width) return text;
   if (width <= 2) return cut(text, width);
@@ -113,37 +136,49 @@ const CHANNEL_NAME_CELLS = 14;
 const PANEL_OPENING_CELLS = 8;
 /** The fewest cells a cut channel name keeps in the panel. */
 const CHANNEL_NAME_MIN_CELLS = 7;
+/** What quoting first words adds after a prefix: a space and two quotes. */
+const QUOTED_EXTRA = 3;
 
 /**
  * A conversation as the line and the panel name it before anyone has answered: a DM by its first
  * words, a channel thread by its channel and first words. One spelling for both surfaces. `room`
  * is the cells the whole label may take (the panel's); without it, the line's budget is used.
  */
-function unnamedLabel(watch: WatchState, room?: number): string {
+function unnamedLabel(watch: WatchState, others: readonly string[], room?: number): string {
   const dm = isDirectMessage(watch.conversation.channelId);
-  const channel = watch.channelName || watch.conversation.channelId;
+  const channel = channelOf(watch);
   // The panel names the channel whole unless its first words would get too few cells; the line
   // caps it. Either cuts from the middle, so channels that share a start still read apart.
-  const channelCells = room === undefined ? CHANNEL_NAME_CELLS : Math.max(CHANNEL_NAME_MIN_CELLS, room - 4 - PANEL_OPENING_CELLS);
-  const prefix = dm ? "DM" : `#${cutMiddle(channel, channelCells)}`;
-  // The first words get what is left after the prefix, a space and two quotes.
-  const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - 3;
+  const channelCells = room === undefined ? CHANNEL_NAME_CELLS : Math.max(CHANNEL_NAME_MIN_CELLS, room - 1 - QUOTED_EXTRA - PANEL_OPENING_CELLS);
+  const prefix = dm ? "DM" : `#${cutApart(channel, others, channelCells)}`;
+  const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - QUOTED_EXTRA;
   const opening = cells >= 4 ? openingWords(watch, cells) : undefined;
   if (opening) return `${prefix} "${opening}"`;
   return dm ? dmLabel(undefined) : prefix;
 }
 
 /** A conversation as the line names it: the person, and the channel when it is not a DM; before anyone answers, unnamedLabel. */
-function lineLabel(watch: WatchState): string {
+function lineLabel(watch: WatchState, others: readonly string[]): string {
   const person = watch.partner?.name;
-  if (!person) return unnamedLabel(watch);
-  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${watch.channelName || watch.conversation.channelId}`;
+  if (!person) return unnamedLabel(watch, others);
+  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${cutApart(channelOf(watch), others, CHANNEL_NAME_CELLS)}`;
 }
 
-export type ActiveState = "answering" | "catching up" | "watching";
+function channelOf(watch: WatchState): string {
+  return watch.channelName || watch.conversation.channelId;
+}
+
+/** The channel names of every watch shown, so each cut name reads apart from the rest. */
+function channelNames(surface: SurfaceState): string[] {
+  return [...new Set(surface.engine.watches.filter((w) => !isDirectMessage(w.conversation.channelId)).map(channelOf))];
+}
+
+type ActiveState = "answering" | "catching up" | "watching";
+/** The order a group of watches takes its state word in: the first state any of them is in. */
+const ACTIVE_ORDER: readonly ActiveState[] = ["answering", "catching up", "watching"];
 
 /** What an active watch is doing, as both the line and the panel say it. */
-export function activeState(watch: WatchState, answering: boolean): ActiveState {
+function activeState(watch: WatchState, answering: boolean): ActiveState {
   if (answering) return "answering";
   return watch.rejoining !== undefined ? "catching up" : "watching";
 }
@@ -155,25 +190,32 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const id = isDirectMessage(watch.conversation.channelId) ? watch.conversation.channelId : watch.key;
     groups.set(id, [...(groups.get(id) ?? []), watch]);
   }
+  const others = channelNames(surface);
   const ranked = [...groups.values()].map((watches) => {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
     const paused = watches.some((w) => w.status === "paused");
     const states = watches.map((w) => activeState(w, surface.answering.has(w.key)));
-    const answering = states.includes("answering");
+    const state: LineState = paused ? "paused" : ACTIVE_ORDER.find((s) => states.includes(s))!;
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-    const entry: LineEntry = {
-      label: lineLabel(named),
-      paused,
-      ...(paused ? { word: { text: "paused", color: "warning" as const } } : answering ? { word: LINE_WORD.answering } : states.includes("catching up") ? { word: LINE_WORD["catching up"] } : {}),
-      note: latest.find((w) => w.lastNote)?.lastNote ?? "watching",
-    };
-    return { entry, rank: paused ? 0 : answering ? 1 : 2, at: latest[0]!.lastActivityAt };
+    const word = LINE_WORD[state];
+    const entry: LineEntry = { label: lineLabel(named, others), paused, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
+    return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
 }
 
-/** The line's word for an active state; plain watching has none. */
-const LINE_WORD = { answering: { text: "answering…", color: "accent" as const }, "catching up": { text: "catching up", color: "accent" as const } };
+/** A line entry's state: paused (any of its watches), else the first active state in ACTIVE_ORDER. */
+type LineState = "paused" | ActiveState;
+
+/** The line's word for a state; plain watching has none, so its note shows. */
+const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>> = {
+  paused: { text: "paused", color: "warning" },
+  answering: { text: "answering…", color: "accent" },
+  "catching up": { text: "catching up", color: "accent" },
+};
+
+/** What needs the owner first on the line. */
+const LINE_RANK: Record<LineState, number> = { paused: 0, answering: 1, "catching up": 2, watching: 2 };
 
 /** The panel's status for an active state. */
 const PANEL_STATUS: Record<ActiveState, { text: string; color: "accent" | "success" }> = {
@@ -376,10 +418,20 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   let label = watchLabel(watch);
-  if (!watch.partner) {
+  if (watch.partner && !isDirectMessage(watch.conversation.channelId)) {
+    // The person first; the channel gets what is left, cut from the middle. Where the long form
+    // leaves the channel too little, the short one (as on the line) keeps it.
+    const channel = channelOf(watch);
+    const head = `${watch.partner.name}'s thread in #`;
+    if (labelRoom - visibleWidth(head) >= CHANNEL_NAME_MIN_CELLS) label = `${head}${cutApart(channel, channelNames(surface), labelRoom - visibleWidth(head))}`;
+    else {
+      const person = cut(watch.partner.name, Math.max(4, labelRoom - 2 - CHANNEL_NAME_MIN_CELLS));
+      label = `${person} #${cutApart(channel, channelNames(surface), Math.max(CHANNEL_NAME_MIN_CELLS, labelRoom - visibleWidth(person) - 2))}`;
+    }
+  } else if (!watch.partner) {
     // Before anyone has answered: the same first words as on the line, cut to leave the kind whole.
     const kind = isDirectMessage(watch.conversation.channelId) ? ` · ${bareKind}` : "";
-    label = `${unnamedLabel(watch, labelRoom - visibleWidth(kind))}${kind}`;
+    label = `${unnamedLabel(watch, channelNames(surface), labelRoom - visibleWidth(kind))}${kind}`;
   } else if (isDirectMessage(watch.conversation.channelId)) {
     // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
     // snippet gives way to a bare "thread" when too little is left for it.
@@ -392,14 +444,31 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
-  // The latest post not this session's, so the owner sees where the conversation stands: an agent
-  // post is marked, and one from another of the owner's own sessions says so.
-  const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts));
+  // The latest post not this session's, so the owner sees where the conversation stands, named by
+  // who the engine judged it came from when it read it.
+  const last = [...watch.context].reverse().find((m) => (m.origin ? m.origin !== "this session" : !watch.ownPosts.includes(m.ts) && !m.agentFooter));
   if (last && isLive(watch) && !answering) {
-    const who = !last.agentFooter ? last.userName : last.userId === surface.engine.owner?.userId ? "you (other session)" : `${last.userName} (agent)`;
-    rows.push(...indent([paint.fg("muted", cut(`${who}: ${last.text.replace(/\s+/g, " ")}`, inner - 3))]));
+    const text = (last.origin === "agent" ? last.text.replace(LEADING_SYMBOLS, "") : last.text).replace(/\s+/g, " ");
+    rows.push(...indent([paint.fg("muted", cut(`${postedBy(last)}: ${text}`, inner - 3))]));
   }
   return { rows, pinned: 1 };
+}
+
+/** An agent's marker (an emoji or two) in front of its post: "(agent)" already says it. */
+const LEADING_SYMBOLS = /^(?:[\p{Extended_Pictographic}\uFE0F\u200D]+\s*)+/u;
+
+/** Who posted a kept message, as the panel names them. */
+function postedBy(message: ContextMessage): string {
+  switch (message.origin) {
+    case "other session":
+      return "you (another agent)";
+    case "owner":
+      return "you";
+    case "agent":
+      return `${message.userName} (agent)`;
+    default:
+      return message.userName;
+  }
 }
 
 /** The selection column in front of every item row ("› " or two spaces). */

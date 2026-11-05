@@ -7,7 +7,7 @@
 // docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md (told once on Linux) and
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md (the closed home, as wired).
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
@@ -398,4 +398,40 @@ test("a session start removes lock folders released more than a day ago", async 
   await first.session.dispose();
   await createHarness({ reopen: first, replies: script("question", () => ({ kind: "text", text: "done" })) });
   assert.equal(existsSync(join(locks, "D0OLD_top")), false);
+});
+
+test("main's own send whose result named no message is read back as this session's: a reply after it is answered", async () => {
+  const h = await createHarness({
+    replies: (context: Context, role: Role): Reply => {
+      if (role === "triage") return { kind: "text", text: "YES" };
+      if (role === "helper") return { kind: "tool", name: "reply_in_slack", args: { text: "on it" } };
+      const last = textOf((context.messages.filter((m: any) => m.role !== "system").at(-1) as any)?.content);
+      if (/ask Robin/.test(last)) return { kind: "tool", name: "slack_send_message", args: { channel_id: DM, message: "question" } };
+      if (/follow up/.test(last)) return { kind: "tool", name: "slack_send_message", args: { channel_id: DM, message: "one more thing" } };
+      return { kind: "text", text: "ok" };
+    },
+  });
+  await h.session.prompt("ask Robin");
+  await h.engine().poll();
+  h.slack.failures.set("slack_send_message", ["garbage"]); // it posts, but its result names no message
+  await h.session.prompt("follow up");
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "my answer to both");
+  await h.engine().poll();
+  await h.engine().idle();
+  assert.equal(h.notices.some((n) => /after another session's message/.test(n.text)), false, h.notices.map((n) => n.text).join("\n"));
+  assert.ok(h.calls.some((c) => c.role === "helper"), "the reply is answered");
+});
+
+test("a session start whose lock sweep fails warns and still starts", async () => {
+  const first = await createHarness({ persistSession: true, replies: script("question", () => ({ kind: "text", text: "done" })) });
+  const locks = join(first.agentDir, "slack-companion", "locks");
+  mkdirSync(locks, { recursive: true });
+  chmodSync(locks, 0o000); // the sweep cannot list it
+  try {
+    await first.session.dispose();
+    const second = await createHarness({ reopen: first, replies: script("question", () => ({ kind: "text", text: "done" })) });
+    if (process.getuid?.() !== 0) assert.ok(second.notices.some((n) => n.level === "warning" && /old lock folders could not be removed/.test(n.text)), second.notices.map((n) => n.text).join("\n"));
+  } finally {
+    chmodSync(locks, 0o700);
+  }
 });

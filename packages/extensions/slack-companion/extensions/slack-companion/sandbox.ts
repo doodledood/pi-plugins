@@ -93,23 +93,22 @@ function userTempFolders(): string[] {
   return [...new Set(folders)];
 }
 
+let userFolders: { perUser: string; temp: string } | undefined;
+
 /**
- * The per-user folder and its temp folder as macOS names them, whatever TMPDIR says; undefined
- * elsewhere, or when the system does not answer in that shape (then only the temp folder in use
- * is closed).
+ * The per-user folder and its temp folder as macOS names them, whatever TMPDIR says (asked once:
+ * the answer does not change while the process runs); undefined on other platforms. A system that
+ * does not answer, or answers in another shape, throws: the shell then does not start, rather than
+ * start with that folder open.
  */
 function darwinUserFolders(): { perUser: string; temp: string } | undefined {
   if (process.platform !== "darwin") return undefined;
+  if (userFolders) return userFolders;
   const ask = (name: string) => canonicalPath(execFileSync("getconf", [name], { encoding: "utf8", timeout: 2000 }).trim());
-  let userDir: string;
-  let temp: string;
-  try {
-    userDir = ask("DARWIN_USER_DIR");
-    temp = ask("DARWIN_USER_TEMP_DIR");
-  } catch {
-    return undefined;
-  }
-  return PER_USER_FOLDER.test(dirname(userDir)) ? { perUser: dirname(userDir), temp } : undefined;
+  const userDir = ask("DARWIN_USER_DIR");
+  if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`the system named an unexpected per-user folder: ${userDir}`);
+  userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
+  return userFolders;
 }
 
 /** sandbox-runtime lets every command write here and points TMPDIR here; the helper writes only to its scratch folder. */

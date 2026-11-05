@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { emptyState, type Approval, type EngineState, type WatchState } from "./engine.ts";
-import { cutMiddle, layoutPanel, Panel, renderLine, renderPanel, type Paint, type PanelAction, type SurfaceState } from "./ui.ts";
+import { cutApart, cutMiddle, layoutPanel, Panel, renderLine, renderPanel, type Paint, type PanelAction, type SurfaceState } from "./ui.ts";
 
 const plain: Paint = { fg: (_c, t) => t, bold: (t) => t };
 const DOWN = "\u001b[B";
@@ -394,6 +394,8 @@ test("channels that share a long start read apart: the panel names them whole wh
   }
   assert.equal(cutMiddle("release-train-2026-q4", 9), "rele…6-q4");
   assert.equal(cutMiddle("short", 9), "short");
+  assert.equal(cutApart("release-train-2026-q4-coordination", ["release-train-2026-q3-coordination"], 12), "rel…-q4-coo…", "from just before where it differs");
+  assert.equal(cutApart("general-chatter-and-more", ["eval"], 9), cutMiddle("general-chatter-and-more", 9), "nothing shared: cut from the middle");
 });
 
 test("an active watch's state is one decision for the line and the panel", () => {
@@ -405,4 +407,17 @@ test("an active watch's state is one decision for the line and the panel", () =>
     else assert.doesNotMatch(line!, /answering|catching up/);
     assert.match(renderPanel(state, 0, plain, 80, 0).join("\n"), new RegExp(status));
   }
+});
+
+test("rows that name a person keep the end of a long channel name, where channels that share a start differ", () => {
+  const named = (i: number, channelName: string) => channelWatch(i, { channelName, partner: { userId: "U9", name: "Taylor QA" } });
+  const state = surface({ watches: [named(1, "release-train-2026-q3-coordination"), named(2, "release-train-2026-q4-coordination")] });
+  for (const width of [40, 60, 80]) {
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("Taylor QA"));
+    assert.equal(rows.length, 2, `${width}`);
+    assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `rows read apart at ${width}: ${rows.join(" | ")}`);
+  }
+  const [line] = renderLine(state, plain, 200);
+  assert.match(line!, /q3/);
+  assert.match(line!, /q4/);
 });

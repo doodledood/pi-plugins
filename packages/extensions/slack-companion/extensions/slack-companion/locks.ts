@@ -219,8 +219,9 @@ export class LockManager {
     let names: string[];
     try {
       names = readdirSync(this.dir);
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // no lock taken yet
+      throw error;
     }
     for (const name of names) {
       const folder = join(this.dir, name);
