@@ -1466,7 +1466,7 @@ test("another person's agent post is read as context, never answered: two agents
   assert.equal(log.notices.filter((n) => /agent posted/.test(n)).length, 1, "told once per conversation");
   assert.equal(engine.watch(`${DM}/${q.ts}`)!.activity?.some((a) => /agent post/.test(a.text)) ?? false, false, "the count is not an event in the log");
   const panel = panelOf(engine, slack);
-  assert.match(panel, /2 agent posts since you wrote: Robin Colleague \(agent\): and again/);
+  assert.match(panel, /2 agent posts since you wrote, the latest:[^\n]*\n[^\n]*Robin Colleague \(agent\): and again/);
   assert.equal(panel.split("\n").filter((row) => row.includes("and again")).length, 1, "the latest post shows once, marked");
 });
 
@@ -1835,7 +1835,7 @@ test("the helper's own reply leaves the agent-post count: it never answers agent
   const watch = engine.watch(key)!;
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("Will do")));
   assert.equal(watch.agentPostsWaiting, 1, "still waiting on the owner");
-  assert.match(panelOf(engine, slack), /1 agent post since you wrote: Robin Colleague \(agent\): which migration id\?/);
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote, the latest:[^\n]*\n[^\n]*Robin Colleague \(agent\): which migration id\?/);
   assert.equal(watch.context.find((m) => m.text.includes("Will do"))?.origin, "helper");
 });
 
@@ -1909,7 +1909,7 @@ test("an agent post that waits on the owner stays on the line and in the panel h
   await settle(engine);
   assert.ok(agentPosts(slack, DM, q.ts).filter((p) => p.text.includes("Sure, on it.")).length >= 3);
   assert.match(lineOf(engine, slack), /agent post waits/);
-  assert.match(panelOf(engine, slack), /1 agent post since you wrote(: Robin Colleague \(agent\): which migration id\?|; check it)/, "the post itself once it has left the kept messages: the count still");
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote(, the latest:|; check it)/, "the count, with the post while it is still kept");
 });
 
 test("a note or reply read back while its send runs, whose send then ends uncertain, is settled as sent: never reported lost", async () => {
@@ -1947,4 +1947,19 @@ test("a note or reply read back while its send runs, whose send then ends uncert
     assert.equal(watch.agentPostsWaiting, by === "helper" ? 1 : undefined, `${by}: only the owner's note answers the agent post`);
     if (by === "helper") assert.ok(watch.helperPosts?.length, "recorded as the helper's");
   }
+});
+
+test("a stop keeps the helper's posts only among the posts it keeps as this session's", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack);
+  const q = await mainSends(slack, engine, DM, "q");
+  const key = `${DM}/${q.ts}`;
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "a question", q.ts);
+  await settle(engine);
+  await settle(engine); // the helper's reply is read back
+  assert.ok(engine.watch(key)!.helperPosts?.length, "the helper replied");
+  engine.stop(key);
+  const watch = engine.watch(key)!;
+  assert.ok((watch.helperPosts ?? []).every((ts) => watch.ownPosts.includes(ts)), JSON.stringify({ own: watch.ownPosts, helper: watch.helperPosts }));
+  assert.ok(watch.helperPosts === undefined || watch.helperPosts.length > 0, "an empty list is dropped");
 });

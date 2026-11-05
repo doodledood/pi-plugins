@@ -171,10 +171,8 @@ function isUnseenError(surface: SurfaceState, watch: WatchState): boolean {
 
 interface LineEntry {
   label: string;
-  /** Any of the conversation's watches is paused (counted once per conversation). */
-  paused: boolean;
-  /** Agent posts wait on the owner there, and it is not paused (counted once per conversation). */
-  agent: boolean;
+  /** The conversation's state: the first in LINE_ORDER any of its watches is in. */
+  state: LineState;
   /** A state word shown whole, in its color; or none, and the note shows instead. */
   word?: { text: string; color: PaintColor };
   note: string;
@@ -233,13 +231,18 @@ function channelNames(surface: SurfaceState): string[] {
   return [...new Set(surface.engine.watches.filter((w) => !isDirectMessage(w.conversation.channelId)).map(channelOf))];
 }
 
-type ActiveState = "answering" | "catching up" | "watching";
-/** Priority of a group's state word: the first of these that any watch in the group is in. */
-const ACTIVE_ORDER: readonly ActiveState[] = ["answering", "catching up", "watching"];
+/**
+ * What a live conversation needs or is doing, in the order the owner should see it: the one
+ * source for the line's words, counts and order and the panel's order and status.
+ */
+const LINE_ORDER = ["paused", "agent posts", "answering", "catching up", "watching"] as const;
+type LineState = (typeof LINE_ORDER)[number];
 
-/** What an active watch is doing, as both the line and the panel say it. */
-function activeState(watch: WatchState, answering: boolean): ActiveState {
-  if (answering) return "answering";
+/** A live watch's state (a conversation takes the first of its watches' in LINE_ORDER). */
+function watchState(watch: WatchState, surface: SurfaceState): LineState {
+  if (watch.status === "paused") return "paused";
+  if (watch.agentPostsWaiting) return "agent posts";
+  if (surface.answering.has(watch.key)) return "answering";
   return watch.rejoining !== undefined ? "catching up" : "watching";
 }
 
@@ -253,23 +256,16 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
   const others = channelNames(surface);
   const ranked = [...groups.values()].map((watches) => {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
-    const paused = watches.some((w) => w.status === "paused");
-    const states = watches.map((w) => activeState(w, surface.answering.has(w.key)));
+    const states = watches.map((w) => watchState(w, surface));
+    const state = LINE_ORDER.find((s) => states.includes(s))!;
     const agentPosts = watches.reduce((sum, w) => sum + (w.agentPostsWaiting ?? 0), 0);
-    const state: LineState = paused ? "paused" : agentPosts ? "agent posts" : ACTIVE_ORDER.find((s) => states.includes(s))!;
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const word = state === "agent posts" ? { text: agentPosts === 1 ? "agent post waits" : `${agentPosts} agent posts wait`, color: "warning" as const } : LINE_WORD[state];
-    const entry: LineEntry = { label: lineLabel(named, others), paused, agent: state === "agent posts", ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
+    const entry: LineEntry = { label: lineLabel(named, others), state, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
     return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
 }
-
-/**
- * A line entry's state: paused (any of its watches), else agent posts waiting on the owner, else
- * the first active state in ACTIVE_ORDER.
- */
-type LineState = "paused" | "agent posts" | ActiveState;
 
 /** Agent posts that wait on the owner, as the panel says it. */
 function agentPostsWord(count: number): string {
@@ -283,11 +279,23 @@ const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>>
   "catching up": { text: "catching up", color: "accent" },
 };
 
-/** What needs the owner first on the line. */
+/** What needs the owner first, on the line and in the panel (catching up and watching tie: newest first). */
 const LINE_RANK: Record<LineState, number> = { paused: 0, "agent posts": 1, answering: 2, "catching up": 3, watching: 3 };
 
-/** The panel's status per active state: a mark before the word, since a row has room the line lacks. */
-const PANEL_STATUS: Record<ActiveState, { text: string; color: "accent" | "success" }> = {
+/**
+ * The states the line counts on their own when it does not name them all, never folded into
+ * "watching", and that turn its dot to warning: what waits on the owner. In LINE_ORDER.
+ */
+const LINE_COUNTED: Partial<Record<LineState, { long: (n: number) => string; short: (n: number) => string }>> = {
+  paused: { long: (n) => `${n} paused`, short: (n) => `${n} paused` },
+  "agent posts": { long: (n) => `${n} with agent posts`, short: (n) => (n === 1 ? "1 agent post" : `${n} agent posts`) },
+};
+const countedStates = LINE_ORDER.filter((state) => LINE_COUNTED[state]);
+
+/** The panel's status per live state: a mark before the word, since a row has room the line lacks. */
+const PANEL_STATUS: Record<LineState, { text: string; color: PaintColor }> = {
+  paused: { text: "○ paused", color: "warning" },
+  "agent posts": { text: "◐ agent post waits", color: "warning" },
   answering: { text: "● answering…", color: "accent" },
   "catching up": { text: "◌ catching up", color: "accent" },
   watching: { text: "● watching", color: "success" },
@@ -323,19 +331,19 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   const entries = lineEntries(surface);
   const waiting = surface.engine.approvals.filter((a) => a.status === "pending").length;
   // Paused conversations, counted as the line shows them: a DM's top level and its threads are one.
-  const pausedCount = entries.filter((e) => e.paused).length;
-  // Conversations where agent posts wait on the owner, counted the same way.
-  const agentCount = entries.filter((e) => e.agent).length;
+  const counted = (list: readonly LineEntry[], state: LineState) => list.filter((e) => e.state === state).length;
   const stopped = surface.engine.watches.filter((w) => isUnseenError(surface, w)).length;
   if (!entries.length && !waiting && !stopped) return [];
-  const dot: PaintColor = stopped ? "error" : waiting || pausedCount || agentCount ? "warning" : "muted";
-  // Counts in the order they matter: waiting first, then stops, pauses and agent posts. A count
-  // covers the conversations of its kind the line does not name.
-  const counts = (short: boolean, shown: { paused: number; agent: number }) => [
+  const dot: PaintColor = stopped ? "error" : waiting || entries.some((e) => LINE_COUNTED[e.state]) ? "warning" : "muted";
+  // Counts in the order they matter: waiting first, then stops, then the counted states. A count
+  // appears when the line leaves any of its kind unnamed, and counts all of them.
+  const counts = (short: boolean, shown: readonly LineEntry[]) => [
     waiting ? paint.fg("warning", short ? `${waiting} waiting` : `${waiting} waiting for you`) : "",
     stopped ? paint.fg("error", `${stopped} stopped`) : "",
-    pausedCount > shown.paused ? paint.fg("warning", `${pausedCount} paused`) : "",
-    agentCount > shown.agent ? paint.fg("warning", short ? `${agentCount} agent` : `${agentCount} with agent posts`) : "",
+    ...countedStates.map((state) => {
+      const total = counted(entries, state);
+      return total > counted(shown, state) ? paint.fg("warning", LINE_COUNTED[state]![short ? "short" : "long"](total)) : "";
+    }),
   ].filter(Boolean);
 
   // Watch entries at their natural width, in rank order: an entry shows only if its whole label
@@ -343,24 +351,22 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   // Each form (long words, short words) is built; the long one wins only if it names as many
   // conversations, since the people are what the owner glances for.
   const form = (long: boolean): { line: string; named: number } | undefined => {
-    const countsWidth = (shown: { paused: number; agent: number }) => counts(!long, shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
+    const countsWidth = (shown: readonly LineEntry[]) => counts(!long, shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
     const chosen: LineEntry[] = [];
     const need = (e: LineEntry) => visibleWidth(e.label) + (e.word ? 1 + visibleWidth(e.word.text) : PAIR.length + Math.min(visibleWidth(e.note), NOTE_MIN));
     const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
-    // Folded watches are counted as "watching"; a paused one, or one where agent posts wait, is
-    // already in its own count.
-    const foldCount = (k: number) => entries.slice(k).filter((e) => !e.paused && !e.agent).length;
+    // Folded watches are counted as "watching", but a counted state is in its own count.
+    const foldCount = (k: number) => entries.slice(k).filter((e) => !LINE_COUNTED[e.state]).length;
     const fold = (k: number) => (foldCount(k) ? SEP.length + visibleWidth(`${k ? "+" : ""}${foldCount(k)} watching`) : 0);
-    const shownOf = (list: LineEntry[]) => ({ paused: list.filter((e) => e.paused).length, agent: list.filter((e) => e.agent).length });
     for (const entry of entries) {
       const next = [...chosen, entry];
-      const total = used() + SEP.length + need(entry) + fold(next.length) + countsWidth(shownOf(next));
+      const total = used() + SEP.length + need(entry) + fold(next.length) + countsWidth(next);
       if (total > room) break;
       chosen.push(entry);
     }
     // Space left over goes to the shown notes, in rank order.
-    let spare = room - used() - fold(chosen.length) - countsWidth(shownOf(chosen));
+    let spare = room - used() - fold(chosen.length) - countsWidth(chosen);
     if (spare < 0) return undefined;
     const parts = chosen.map((e) => {
       // A state word (paused, answering…) reads as the conversation's state; a note, as an event.
@@ -371,7 +377,7 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
       return `${paint.fg("muted", e.label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
     });
     if (foldCount(chosen.length)) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${foldCount(chosen.length)} watching`));
-    const left = [head(dot), ...parts, ...counts(!long, shownOf(chosen))].join(sep);
+    const left = [head(dot), ...parts, ...counts(!long, chosen)].join(sep);
     return fits(left, long) ? { line: compose(left, long), named: chosen.length } : undefined;
   };
   const long = form(true);
@@ -379,7 +385,7 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   if (long && (!short || long.named >= short.named)) return [long.line];
   if (short) return [short.line];
   // Too narrow even for the counts in full: keep them in priority order until they fit.
-  const all = counts(true, { paused: 0, agent: 0 });
+  const all = counts(true, []);
   // Keep "slack" and drop the lowest count first; only then drop the word.
   for (let k = all.length; k >= 1; k -= 1) {
     const left = [head(dot), ...all.slice(0, k)].join(sep);
@@ -416,18 +422,17 @@ export function panelItems(surface: SurfaceState, openedAt: number, allEnded = f
     .map((approval) => ({ kind: "approval", approval }));
   const byActivity = (a: WatchState, b: WatchState) => b.lastActivityAt - a.lastActivityAt;
   const byEnd = (a: WatchState, b: WatchState) => (b.endedAt ?? 0) - (a.endedAt ?? 0);
-  const live = state.watches.filter(isLive);
-  const paused = live.filter((w) => w.status === "paused").sort(byActivity);
-  // In the line's order: paused, then where agent posts wait on the owner, then answering.
-  const agent = live.filter((w) => w.status === "active" && w.agentPostsWaiting).sort(byActivity);
-  const answering = live.filter((w) => w.status === "active" && !w.agentPostsWaiting && surface.answering.has(w.key)).sort(byActivity);
-  const rest = live.filter((w) => w.status === "active" && !w.agentPostsWaiting && !surface.answering.has(w.key)).sort(byActivity);
+  // Live watches in the line's order (LINE_RANK), newest first within a rank; unseen stops follow
+  // the paused ones.
+  const live = state.watches.filter(isLive).sort((a, b) => LINE_RANK[watchState(a, surface)] - LINE_RANK[watchState(b, surface)] || byActivity(a, b));
+  const paused = live.filter((w) => watchState(w, surface) === "paused");
+  const others = live.filter((w) => watchState(w, surface) !== "paused");
   const errors = state.watches.filter((w) => w.status === "error").sort(byEnd);
   const unseen = errors.filter((w) => isUnseenError(surface, w));
   const seen = errors.filter((w) => !isUnseenError(surface, w));
   const quiet = state.watches.filter((w) => w.status === "stopped").sort(byEnd);
   const shownQuiet = allEnded ? quiet : quiet.slice(0, ENDED_SHOWN);
-  const watches: PanelItem[] = [...paused, ...unseen, ...agent, ...answering, ...rest, ...seen, ...shownQuiet].map((watch) => ({ kind: "watch", watch }));
+  const watches: PanelItem[] = [...paused, ...unseen, ...others, ...seen, ...shownQuiet].map((watch) => ({ kind: "watch", watch }));
   if (quiet.length > shownQuiet.length) watches.push({ kind: "ended", count: quiet.length - shownQuiet.length });
   return [...approvals, ...watches];
 }
@@ -484,21 +489,24 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
-  const active = PANEL_STATUS[activeState(watch, answering)];
-  const status = {
-    active: paint.fg(active.color, active.text),
-    paused: paint.fg("warning", "○ paused"),
-    stopped: paint.fg("muted", "· ended"),
-    error: paint.fg("error", "× stopped"),
-  }[watch.status];
+  const live = isLive(watch) ? PANEL_STATUS[watchState(watch, surface)] : undefined;
+  const status = live ? paint.fg(live.color, live.text) : watch.status === "error" ? paint.fg("error", "× stopped") : paint.fg("muted", "· ended");
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
-  const label = panelLabel(watch, labelRoom, channels);
+  // The people of the other threads in this channel, so a cut name still tells the rows apart.
+  const people = surface.engine.watches.filter((w) => w.conversation.channelId === watch.conversation.channelId && w.partner).map((w) => w.partner!.name);
+  const label = panelLabel(watch, labelRoom, channels, people);
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
-  // Agent posts that wait on the owner stay in view until he or his session writes there.
+  // Agent posts that wait on the owner stay in view until he or his session writes there: the
+  // count, then the latest such post on rows of its own (two at most), so its words show.
   const latestAgentPost = watch.agentPostsWaiting && isLive(watch) ? [...watch.context].reverse().find((m) => m.origin === "someone's agent") : undefined;
   if (watch.agentPostsWaiting && isLive(watch)) {
-    const what = latestAgentPost ? `: ${postedBy(latestAgentPost)}: ${agentText(latestAgentPost)}` : `; check ${watch.agentPostsWaiting === 1 ? "it" : "them"}`;
-    rows.push(...indent([paint.fg("warning", cut(`${agentPostsWord(watch.agentPostsWaiting)}${what}`, inner - 3))]));
+    const n = watch.agentPostsWaiting;
+    rows.push(...indent([paint.fg("warning", cut(`${agentPostsWord(n)}${latestAgentPost ? ", the latest:" : `; check ${n === 1 ? "it" : "them"}`}`, inner - 3))]));
+    if (latestAgentPost) {
+      const wrapped = wrapTextWithAnsi(`${postedBy(latestAgentPost)}: ${agentText(latestAgentPost)}`, inner - 3);
+      const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
+      rows.push(...indent(shown.map((row) => paint.fg("warning", row))));
+    }
   }
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
@@ -514,7 +522,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
 }
 
 /** A watch as its panel row names it, in `room` cells; `channels` are the channel names shown. */
-function panelLabel(watch: WatchState, room: number, channels: readonly string[]): string {
+function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[] = []): string {
   const dm = isDirectMessage(watch.conversation.channelId);
   const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   if (!watch.partner) {
@@ -535,7 +543,8 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     // so no later cut drops where it differs.
     const personRoom = room - 2 - channelNeeds;
     if (personRoom < 2) return `#${cutApart(channel, channels, room - 1)}`;
-    const person = cut(watch.partner.name, personRoom);
+    // Cut where the person differs from the others in that channel, as channels are cut.
+    const person = cutApart(watch.partner.name, people, personRoom);
     return `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`;
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's

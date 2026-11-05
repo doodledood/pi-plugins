@@ -1223,7 +1223,7 @@ export class Engine {
     } catch (error) {
       entry.status = error instanceof SendUncertainError ? "uncertain" : "failed";
       // Already read back in the conversation: reconcile confirms it; no warning to take back.
-      if (!this.disposed && !entry.readBack) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
+      if (!this.disposed && !(entry.readBack && entry.status === "uncertain")) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
     } finally {
       this.inFlightSends.delete(entry.id);
     }

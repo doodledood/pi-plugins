@@ -95,6 +95,9 @@ function userTempFolders(): string[] {
 
 let userFolders: { perUser: string; temp: string } | { failed: Error; at: number } | undefined;
 
+/** How long getconf may take to answer. */
+const GETCONF_TIMEOUT_MS = 2000;
+
 /** How long a failed answer is kept before the system is asked again. */
 const USER_FOLDERS_RETRY_MS = 10 * 60 * 1000;
 
@@ -112,18 +115,21 @@ function darwinUserFolders(): { perUser: string; temp: string } | undefined {
     try {
       const ask = (name: string) => {
         try {
-          return canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "pipe"] }).trim());
+          return canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: GETCONF_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] }).trim());
         } catch (error) {
           const said = String((error as { stderr?: unknown }).stderr ?? "").trim().split("\n")[0];
           const code = (error as NodeJS.ErrnoException).code;
-          throw new Error(said || (code === "ETIMEDOUT" ? `getconf ${name} did not answer in 2 s` : code === "ENOENT" ? "getconf is missing" : `getconf ${name} failed`));
+          if (said) throw new Error(said);
+          if (code === "ETIMEDOUT") throw new Error(`getconf ${name} did not answer in ${GETCONF_TIMEOUT_MS / 1000} s`);
+          if (code === "ENOENT") throw new Error("getconf is missing");
+          throw new Error(`getconf ${name} failed (${code ?? `exit ${(error as { status?: number }).status ?? "unknown"}`})`);
         }
       };
       const userDir = ask("DARWIN_USER_DIR");
       if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
       userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
     } catch (error) {
-      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again in 10 minutes`), at: Date.now() };
+      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again ${USER_FOLDERS_RETRY_MS / 60_000} minutes after this`), at: Date.now() };
     }
   }
   if ("failed" in userFolders) throw userFolders.failed;

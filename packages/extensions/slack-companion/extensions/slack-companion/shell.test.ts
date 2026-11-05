@@ -132,5 +132,5 @@ test("on macOS, a system that does not name the per-user folder leaves the helpe
   const out = execFileSync(process.execPath, ["--import", preload, "--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8" });
   const result = JSON.parse(out.trim().split("\n").at(-1)!);
   assert.equal(result.ok, false, out);
-  assert.equal(result.reason, "macOS gave no usable per-user temp folder (getconf DARWIN_USER_DIR did not answer in 2 s); macOS is asked again in 10 minutes");
+  assert.equal(result.reason, "macOS gave no usable per-user temp folder (getconf DARWIN_USER_DIR did not answer in 2 s); macOS is asked again 10 minutes after this");
 });

@@ -459,18 +459,42 @@ test("the panel's latest post skips this session's helper replies as well as mai
 });
 
 test("a conversation where agent posts wait is never folded into 'watching': the line counts it in warning, and the panel lists it right after the paused", () => {
-  const plainLine = (w: number, state: SurfaceState) => renderLine(state, plain, w)[0] ?? "";
   const colored: Paint = { fg: (c, t) => `<${c}>${t}</${c}>`, bold: (t) => t };
   const agentWatch = channelWatch(9, { channelName: "general", partner: { userId: "U9", name: "Casey Ops" }, agentPostsWaiting: 1, lastActivityAt: 1 });
   const others = [1, 2, 3, 4, 5].map((i) => channelWatch(i, { lastActivityAt: 10 + i }));
-  const state = surface({ watches: [...others, agentWatch] }, { answering: new Set([others[0]!.key]) });
-  for (const width of [40, 50, 60, 80]) {
-    const line = plainLine(width, state);
-    assert.match(line, /Casey Ops #general agent post waits|1 agent\b|1 with agent posts/, `${width}: ${line}`);
-  }
+  const state = surface({ watches: [...others, agentWatch] }, { answering: new Set([others[0]!.key, agentWatch.key]) });
+  assert.match(renderLine(state, plain, 50)[0]!, / 5 watching · 1 agent post /, "counted on its own, not in 'watching'");
+  assert.match(renderLine(state, plain, 100)[0]!, /Casey Ops #general agent post waits/, "named first: it outranks the answering one");
+  assert.doesNotMatch(renderLine(state, plain, 100)[0]!, /6 watching/);
   assert.match(renderLine(state, colored, 40)[0]!, /<warning>●<\/warning>/, "the dot says something waits");
-  const order = renderPanel(state, 0, plain, 80, 0, 60).filter((r) => /Person \d|Casey Ops/.test(r) && /●|○/.test(r));
-  assert.match(order[0]!, /Casey Ops/, `first after the paused: ${order.join(" | ")}`);
+  // The panel: paused, then unseen stops, then where agent posts wait (once, though answering too), then answering.
+  const paused = channelWatch(7, { status: "paused", lastActivityAt: 0 });
+  const stop = channelWatch(8, { status: "error", reason: "x", endedAt: 5, lastActivityAt: 0 });
+  const panelState = surface({ watches: [...others, agentWatch, paused, stop] }, { answering: new Set([others[0]!.key, agentWatch.key]) });
+  const heads = renderPanel(panelState, 0, plain, 80, 0, 80).filter((r) => /Person \d|Casey Ops/.test(r) && /●|○|◐|×/.test(r));
+  assert.deepEqual(heads.slice(0, 4).map((r) => /Person 7|Person 8|Casey Ops|Person 1/.exec(r)?.[0]), ["Person 7", "Person 8", "Casey Ops", "Person 1"], heads.join(" | "));
+  assert.equal(heads.filter((r) => r.includes("Casey Ops")).length, 1, "listed once");
+  assert.match(heads.find((r) => r.includes("Casey Ops"))!, /◐ agent post waits/);
+});
+
+test("the agent post that waits shows its words in the panel at every width", () => {
+  const w = channelWatch(9, { channelName: "general", partner: { userId: "U9", name: "Casey Ops" }, agentPostsWaiting: 1, context: [
+    { ts: "1.000001", userId: "U9", userName: "Casey Ops", text: "🤖 Can you approve the rollback window for tonight?", agentFooter: true, origin: "someone's agent" },
+  ] });
+  for (const width of [40, 56, 80]) {
+    const panel = renderPanel(surface({ watches: [w] }), 0, plain, width, 0, 40).join("\n");
+    assert.match(panel, /1 agent post since you wrote/, `${width}`);
+    assert.match(panel.replace(/[│\n ]+/g, " "), /Can you approve the/, `${width}: ${panel}`);
+  }
+});
+
+test("threads by people whose names start alike, in one long channel, read apart in a narrow panel", () => {
+  const long = "alerts-prod-payments";
+  const state = surface({ watches: [channelWatch(1, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "1.0" }, partner: { userId: "U1", name: "Daniel Fischer" } }), channelWatch(2, { channelName: long, conversation: { kind: "thread", channelId: "C1", threadTs: "2.0" }, partner: { userId: "U2", name: "Daniel Fogarty" } })] });
+  for (const width of [34, 36, 38]) {
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#"));
+    assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `${width}: ${rows.join(" | ")}`);
+  }
 });
 
 test("threads with different people in one long channel keep the people in a narrow panel", () => {
