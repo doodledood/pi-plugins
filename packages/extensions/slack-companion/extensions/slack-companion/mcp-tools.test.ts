@@ -72,7 +72,7 @@ test("the cache is read whole; a missing cache is no cache, a broken one is an e
 
 test("every server in the private list is closed to the helper unless a tool is listed", () => {
   const privateServers = DEFAULT_CONFIG.privateServers;
-  assert.deepEqual(privateServers, ["chrome-devtools", "playwright", "puppeteer"], "the browser servers, by default");
+  assert.deepEqual(privateServers, ["chrome-devtools", "playwright", "puppeteer", "filesystem"], "the browser and file servers, always");
   const browsers: McpCache = new Map(privateServers.map((server) => [server, [tool(`${server.replace(/-/g, "_")}_list_requests`, true)]]));
   const reach = (listed: string[]) => helperMcpTools(browsers, new Set(), listed, { blocked: [], privateServers }).catalog.map((t) => t.name).sort();
   assert.deepEqual(reach([]), []);

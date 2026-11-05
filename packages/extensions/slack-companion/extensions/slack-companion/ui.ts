@@ -32,37 +32,68 @@ export function cut(text: string, width: number): string {
 
 /**
  * Cut a channel's name so it reads apart from the others shown: keep its start, skip what it
- * shares with them, and show from just before where it differs, the first differing character
- * always included. The start takes whatever room the rest leaves. A name that shares little is
- * cut from the middle.
+ * shares with them, and show from just before where it differs, the differing character included.
+ * Each name is first cut where it differs from its nearest neighbour; a cut that two names still
+ * share moves to where the name differs from another, then to a cut from the middle. The whole set
+ * is decided at once, so every row computes the same cuts.
  */
 export function cutApart(name: string, others: readonly string[], width: number): string {
-  if (visibleWidth(name) <= width) return name;
-  const chars = [...name];
-  let shared = 0;
-  for (const other of others) {
-    if (other === name) continue;
-    const o = [...other];
-    let n = 0;
-    while (n < chars.length && n < o.length && chars[n] === o[n]) n += 1;
-    shared = Math.max(shared, n);
+  return cutSet([name, ...others], width).get(name)!;
+}
+
+function cutSet(names: readonly string[], width: number): Map<string, string> {
+  const unique = [...new Set(names)].sort();
+  const choices = new Map<string, string[]>();
+  for (const name of unique) {
+    if (visibleWidth(name) <= width) {
+      choices.set(name, [name]);
+      continue;
+    }
+    const chars = [...name];
+    // Where it differs from each other name, nearest neighbour first.
+    const differences = [...new Set(unique.filter((o) => o !== name).map((o) => {
+      const other = [...o];
+      let n = 0;
+      while (n < chars.length && n < other.length && chars[n] === other[n]) n += 1;
+      return n;
+    }))].sort((a, b) => b - a);
+    const cuts = differences.map((at) => cutAt(chars, at, width)).filter((c): c is string => c !== undefined);
+    choices.set(name, [...new Set([...cuts, cutMiddle(name, width)])]);
   }
-  if (shared < 4) return cutMiddle(name, width);
-  // Where the name differs falls inside an end cut: nothing needs skipping.
-  if (shared < width - 1) return cut(name, width);
+  const chosen = new Map(unique.map((name) => [name, choices.get(name)![0]!]));
+  for (const name of unique) {
+    const takenByOther = (cut: string) => unique.some((other) => other !== name && chosen.get(other) === cut);
+    if (!takenByOther(chosen.get(name)!)) continue;
+    const free = choices.get(name)!.find((cut) => !takenByOther(cut));
+    if (free) chosen.set(name, free);
+  }
+  return chosen;
+}
+
+/** A name cut to show where it differs at character `at`, or undefined when that cannot fit. */
+function cutAt(chars: readonly string[], at: number, width: number): string | undefined {
+  const cells = (from: number, to: number) => visibleWidth(chars.slice(from, to).join(""));
+  // The difference falls inside the start a middle cut keeps (which shows the end too), or else
+  // inside an end cut (width - 1 cells and the mark).
+  if (cells(0, at + 1) <= Math.floor((width - 1) / 2)) return cutMiddle(chars.join(""), width);
+  if (cells(0, at + 1) <= width - 1) return cut(chars.join(""), width);
   const room = width - 1; // cells besides the skip mark
-  const tailRoom = room - 3; // the start keeps at least three characters
-  if (tailRoom < 2) return cutMiddle(name, width);
-  // Up to two characters of lead-in before the difference, so that a cut tail still shows it.
-  const lead = Math.max(0, Math.min(2, tailRoom - 2));
-  const tail = chars.slice(shared - lead).join("");
-  const tailCells = Math.min(visibleWidth(tail), tailRoom);
-  let head = "";
-  for (const char of chars.slice(0, shared - lead)) {
-    if (visibleWidth(head + char) > room - tailCells) break;
-    head += char;
+  const tailRoom = room - cells(0, 3); // the start keeps at least three characters
+  // Up to two characters of lead-in before the difference, fewer where room is short.
+  for (let lead = 2; lead >= 0; lead -= 1) {
+    const from = at - lead;
+    const whole = cells(from, chars.length);
+    // A tail that is cut needs its mark as well as the characters through the difference.
+    if ((whole <= tailRoom ? whole : cells(from, at + 1) + 1) > tailRoom) continue;
+    const tailCells = Math.min(whole, tailRoom);
+    let head = "";
+    for (const char of chars.slice(0, from)) {
+      if (visibleWidth(head + char) > room - tailCells) break;
+      head += char;
+    }
+    return `${head}…${cut(chars.slice(from).join(""), tailCells)}`;
   }
-  return `${head}…${cut(tail, tailCells)}`;
+  return undefined;
 }
 
 /** Cut a name from the middle, keeping its start and its end. */
@@ -146,8 +177,8 @@ const LINE_OPENING_CELLS = 16;
 const CHANNEL_NAME_CELLS = 14;
 /** Cells the panel keeps for a conversation's first words before it cuts the channel's name. */
 const PANEL_OPENING_CELLS = 8;
-/** The fewest cells a cut channel name keeps in the panel. */
-const CHANNEL_NAME_MIN_CELLS = 7;
+/** The fewest cells a cut channel name keeps in the panel: enough for its start, a mark and three characters where it differs. */
+const CHANNEL_NAME_MIN_CELLS = 8;
 /** What quoting first words adds after a prefix: a space and two quotes. */
 const QUOTED_EXTRA = 3;
 
@@ -229,7 +260,7 @@ const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>>
 /** What needs the owner first on the line. */
 const LINE_RANK: Record<LineState, number> = { paused: 0, answering: 1, "catching up": 2, watching: 2 };
 
-/** The panel's status mark, word and color for each active state. */
+/** The panel's status per active state: a mark before the word, since a row has room the line lacks. */
 const PANEL_STATUS: Record<ActiveState, { text: string; color: "accent" | "success" }> = {
   answering: { text: "● answering…", color: "accent" },
   "catching up": { text: "◌ catching up", color: "accent" },
@@ -433,8 +464,8 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
   // The latest post not this session's, so the owner sees where the conversation stands, named by
-  // who the engine judged it came from when it read it.
-  const last = [...watch.context].reverse().find((m) => m.origin !== "this session");
+  // who the engine judged it came from.
+  const last = [...watch.context].reverse().find((m) => m.origin !== "this session" && m.origin !== "helper");
   if (last && isLive(watch) && !answering) {
     const unmarked = last.origin === "someone's agent" ? last.text.replace(LEADING_SYMBOLS, "") : last.text;
     // A post that is only the marker keeps it: an empty row says nothing.
@@ -459,8 +490,10 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     const channel = channelOf(watch);
     const head = `${threadOf(watch.partner.name)}#`;
     if (room - visibleWidth(head) >= CHANNEL_NAME_MIN_CELLS) return `${head}${cutApart(channel, channels, room - visibleWidth(head))}`;
-    const person = cut(watch.partner.name, Math.max(4, room - 2 - CHANNEL_NAME_MIN_CELLS));
-    return `${person} #${cutApart(channel, channels, Math.max(CHANNEL_NAME_MIN_CELLS, room - visibleWidth(person) - 2))}`;
+    // Too narrow for the person as well: the channel alone, so no later cut drops where it differs.
+    if (room < 4 + 2 + CHANNEL_NAME_MIN_CELLS) return `#${cutApart(channel, channels, room - 1)}`;
+    const person = cut(watch.partner.name, room - 2 - CHANNEL_NAME_MIN_CELLS);
+    return `${person} #${cutApart(channel, channels, room - visibleWidth(person) - 2)}`;
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
   // snippet gives way to a bare "thread" when too little is left for it.
@@ -476,15 +509,22 @@ const LEADING_SYMBOLS = /^(?:[\p{Extended_Pictographic}\uFE0F\u200D]+\s*)+/u;
 
 /** Who posted a kept message, as the panel names them. */
 function postedBy(message: ContextMessage): string {
-  switch (message.origin) {
+  const { origin } = message;
+  switch (origin) {
     case "owner's other agent":
       return "you (another agent)";
     case "owner":
       return "you";
     case "someone's agent":
       return `${message.userName} (agent)`;
-    default:
+    case "person":
+    case "this session":
+    case "helper":
       return message.userName;
+    default: {
+      const unnamed: never = origin;
+      return unnamed;
+    }
   }
 }
 

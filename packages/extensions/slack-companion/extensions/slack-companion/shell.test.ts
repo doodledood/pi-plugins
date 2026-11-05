@@ -125,12 +125,12 @@ test("on macOS, a system that does not name the per-user folder leaves the helpe
   if (process.platform !== "darwin") return; // the per-user folder is macOS's
   const home = fakeHome();
   const script = `import(${JSON.stringify(join(import.meta.dirname, "sandbox.ts"))}).then((m) => m.startShellSandbox({ cwd: ${JSON.stringify(home)}, home: ${JSON.stringify(home)}, allowedDomains: [] })).then((r) => console.log(JSON.stringify(r)))`;
-  // A getconf that does not answer: a folder named like it on PATH would not be used (the full path is).
+  // The system's getconf does not answer (a getconf found on PATH instead would answer: it is not asked).
   const fakeBin = mkdtempSync(join(tmpdir(), "fake-getconf-"));
   const preload = join(fakeBin, "no-getconf.mjs");
-  writeFileSync(preload, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; const real = cp.execFileSync; cp.execFileSync = (file, ...rest) => { if (String(file).endsWith("getconf")) throw new Error("getconf did not answer"); return real(file, ...rest); }; syncBuiltinESMExports();`);
+  writeFileSync(preload, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; const real = cp.execFileSync; cp.execFileSync = (file, ...rest) => { if (file === "/usr/bin/getconf") throw new Error("getconf did not answer"); return real(file, ...rest); }; syncBuiltinESMExports();`);
   const out = execFileSync(process.execPath, ["--import", preload, "--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8" });
   const result = JSON.parse(out.trim().split("\n").at(-1)!);
   assert.equal(result.ok, false, out);
-  assert.match(result.reason, /macOS did not name the per-user temp folder, which the shell must close: getconf did not answer/, result.reason);
+  assert.equal(result.reason, "the helper has no shell: macOS gave no usable per-user temp folder (getconf DARWIN_USER_DIR gave no answer); it asks again in 10 minutes");
 });

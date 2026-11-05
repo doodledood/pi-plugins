@@ -61,7 +61,7 @@ export const DEFAULT_CONFIG: SlackCompanionConfig = {
   panelKey: "alt+s",
   allowedDomains: [],
   investigativeTools: [],
-  privateServers: ["chrome-devtools", "playwright", "puppeteer"],
+  privateServers: ["chrome-devtools", "playwright", "puppeteer", "filesystem"],
   readableFolders: [],
 };
 

@@ -93,28 +93,39 @@ function userTempFolders(): string[] {
   return [...new Set(folders)];
 }
 
-let userFolders: { perUser: string; temp: string } | Error | undefined;
+let userFolders: { perUser: string; temp: string } | { failed: Error; at: number } | undefined;
+
+/** How long a failed answer is kept before the system is asked again. */
+const USER_FOLDERS_RETRY_MS = 10 * 60 * 1000;
 
 /**
  * The per-user folder and its temp folder as macOS names them, whatever TMPDIR says (asked once:
  * the answer does not change while the process runs); undefined on other platforms. A system that
  * does not answer, or answers in another shape, throws: the shell then does not start, rather than
- * start with that folder open.
+ * start with that folder open. A failure is kept for USER_FOLDERS_RETRY_MS, so each helper start
+ * does not wait on it again.
  */
 function darwinUserFolders(): { perUser: string; temp: string } | undefined {
   if (process.platform !== "darwin") return undefined;
+  if (userFolders && "failed" in userFolders && Date.now() - userFolders.at > USER_FOLDERS_RETRY_MS) userFolders = undefined;
   if (!userFolders) {
     try {
-      const ask = (name: string) => canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: 2000 }).trim());
+      const ask = (name: string) => {
+        try {
+          return canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "pipe"] }).trim());
+        } catch (error) {
+          const said = String((error as { stderr?: unknown }).stderr ?? "").trim().split("\n")[0];
+          throw new Error(said || `getconf ${name} gave no answer`);
+        }
+      };
       const userDir = ask("DARWIN_USER_DIR");
       if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
       userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
     } catch (error) {
-      // Kept too: asking again would block each helper start for as long.
-      userFolders = new Error(`macOS did not name the per-user temp folder, which the shell must close: ${(error as Error).message}`);
+      userFolders = { failed: new Error(`the helper has no shell: macOS gave no usable per-user temp folder (${(error as Error).message}); it asks again in 10 minutes`), at: Date.now() };
     }
   }
-  if (userFolders instanceof Error) throw userFolders;
+  if ("failed" in userFolders) throw userFolders.failed;
   return userFolders;
 }
 

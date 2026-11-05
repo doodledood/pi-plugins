@@ -17,6 +17,11 @@ export function isDirectMessage(channelId: string): boolean {
   return channelId.startsWith("D");
 }
 
+/** A person's user id, which a send may use as its channel to reach the direct message with them. */
+export function isUserId(id: string): boolean {
+  return /^[UW]/.test(id);
+}
+
 export interface ParsedLink {
   channelId: string;
   messageTs: string;

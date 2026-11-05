@@ -400,6 +400,13 @@ test("channels that share a long start read apart: the panel names them whole wh
     assert.notEqual(a, b, `the difference shows at ${width}: ${a}`);
     assert.ok(visibleWidth(a) <= width);
   }
+  for (const set of [["alerts-dev", "alerts-prod-dev", "alerts-prod-qa"], ["日本語チーム開発本番", "日本語チーム開発検証"], ["dev-payments-alerts", "devops-payments-alerts"]]) {
+    for (const width of [7, 8, 10, 14]) {
+      const cuts = set.map((name) => cutApart(name, set, width));
+      assert.equal(new Set(cuts).size, set.length, `${width}: ${cuts.join(" | ")}`);
+      assert.ok(cuts.every((c) => visibleWidth(c) <= width), `${width}: ${cuts.join(" | ")}`);
+    }
+  }
   assert.equal(cutApart("general-chatter-and-more", ["eval"], 9), cutMiddle("general-chatter-and-more", 9), "nothing shared: cut from the middle");
 });
 
@@ -417,9 +424,10 @@ test("an active watch's state is one decision for the line and the panel", () =>
 test("rows that name a person keep the end of a long channel name, where channels that share a start differ", () => {
   const named = (i: number, channelName: string) => channelWatch(i, { channelName, partner: { userId: "U9", name: "Taylor QA" } });
   const state = surface({ watches: [named(1, "release-train-2026-q3-coordination"), named(2, "release-train-2026-q4-coordination")] });
-  for (const width of [40, 60, 80]) {
-    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("Taylor QA"));
+  for (const width of [24, 28, 30, 34, 40, 60, 80]) {
+    const rows = renderPanel(state, 0, plain, width, 0).filter((r) => r.includes("#"));
     assert.equal(rows.length, 2, `${width}`);
+    if (width <= 28) assert.ok(rows.every((r) => /│ [› ] #rel/.test(r)), `too narrow for the person: the channel alone at ${width}: ${rows.join(" | ")}`);
     assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `rows read apart at ${width}: ${rows.join(" | ")}`);
   }
   for (const width of [120, 200]) {
