@@ -2,7 +2,7 @@
 // PI_CODING_AGENT_DIR). Every key is optional; an invalid file fails loudly and leaves the
 // package off rather than guessing.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { KeyId } from "@earendil-works/pi-tui";
 
 const KEY_RE = /^((ctrl|alt|shift)\+)*([a-z0-9]|f([1-9]|1[0-2])|enter|tab|space|escape|up|down|left|right|home|end|pageup|pagedown)$/;
@@ -31,6 +31,17 @@ export interface SlackCompanionConfig {
   allowedDomains: string[];
   /** MCP tools the helper may use although their server does not mark them read-only. */
   investigativeTools: string[];
+  /**
+   * MCP servers whose tools reach no helper unless listed in investigativeTools, though marked
+   * read-only: by default the ones that drive the owner's logged-in browser. The owner's own Slack
+   * server is always private as well.
+   */
+  privateServers: string[];
+  /**
+   * Folders in the home the helper may read besides the project. The rest of the home is closed
+   * to it: credentials live in too many places there to list them.
+   */
+  readableFolders: string[];
   /** Daily spend cap per conversation in USD; unset means no cap. */
   spendCapUsdPerDay?: number;
 }
@@ -50,6 +61,8 @@ export const DEFAULT_CONFIG: SlackCompanionConfig = {
   panelKey: "alt+s",
   allowedDomains: [],
   investigativeTools: [],
+  privateServers: ["chrome-devtools", "playwright", "puppeteer"],
+  readableFolders: [],
 };
 
 export class ConfigError extends Error {
@@ -119,6 +132,14 @@ export function parseConfig(raw: unknown): SlackCompanionConfig {
   if ("investigativeTools" in input) {
     expect(isTextList(input.investigativeTools), "investigativeTools must be a list of tool names");
     config.investigativeTools = input.investigativeTools;
+  }
+  if ("privateServers" in input) {
+    expect(isTextList(input.privateServers), "privateServers must be a list of MCP server names");
+    config.privateServers = input.privateServers;
+  }
+  if ("readableFolders" in input) {
+    expect(isTextList(input.readableFolders) && input.readableFolders.every((f) => isAbsolute(f) || f.startsWith("~/")), "readableFolders must be a list of absolute folders (or ~/…)");
+    config.readableFolders = input.readableFolders;
   }
   if ("spendCapUsdPerDay" in input) {
     const cap = input.spendCapUsdPerDay;

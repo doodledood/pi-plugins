@@ -1,7 +1,7 @@
 # ADR: Run the Slack helper's shell in an OS sandbox with no network
 
 ## Status
-Accepted; amended by 20261104-give-the-slack-helper-no-shell-on-linux-for-now (on Linux, the helper has no shell)
+Accepted; amended by 20261104-give-the-slack-helper-no-shell-on-linux-for-now (on Linux, the helper has no shell) and 20261104-close-the-home-folder-to-the-slack-helper (the home folder is closed except the project and opened folders)
 
 ## Area
 slack-companion
@@ -35,7 +35,7 @@ Investigations need a shell for searching, history and local analysis, but a she
 - Not yet tested on the owner's machine.
 
 ## Enforced by
-`packages/extensions/slack-companion/extensions/slack-companion/helper.test.ts` ("the sandboxed shell writes only to scratch, reads no secrets and reaches no network", "every file tool is denied secret locations, in every spelling Pi's tools accept", "a sandbox that cannot start leaves the helper without a shell") and `path-parity.test.ts` ("resolveToolPath matches Pi's own resolver on every rule") — pin the shell's confinement, the secret denials in every path spelling and the no-shell fallback; on a platform sandbox-runtime does not support, the shell scenario skips with its reason.
+`packages/extensions/slack-companion/extensions/slack-companion/helper.test.ts` ("the sandboxed shell writes only to scratch, reads no secrets and reaches no network", "every file tool is denied secret locations, in every spelling Pi's tools accept", "a sandbox that cannot start leaves the helper without a shell") and `path-parity.test.ts` ("resolveToolPath matches Pi's own resolver on every rule") — pin the shell's confinement, the secret denials in every path spelling and the no-shell fallback; on Linux the shell scenario checks that there is no shell, and it skips, with its reason, only on a platform sandbox-runtime does not support.
 
 ## Source
 - Session: figure-out on a Slack companion for a running Pi session (2026-11-04), log `~/.manifest-dev/logs/figure-out-log-20261104-121826.md`.

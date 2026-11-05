@@ -1,5 +1,6 @@
 // Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md (secret locations),
-// docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md (no shell on Linux) and
+// docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md (no shell on Linux),
+// docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md (the closed home) and
 // docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md (secret-shaped replies).
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
@@ -20,7 +21,7 @@ function home() {
   symlinkSync(join(root, ".ssh", "id_ed25519"), join(root, "project", "innocent.txt"));
   mkdirSync(join(root, ".pi", "agent", "mcp-oauth"), { recursive: true });
   writeFileSync(join(root, ".pi", "agent", "mcp-oauth", "tokens.json"), "{}");
-  return { root, policy: defaultSecretPolicy(join(root, ".pi", "agent"), root) };
+  return { root, policy: defaultSecretPolicy(join(root, ".pi", "agent"), root, [join(root, "project")]) };
 }
 
 test("secret folders, secret file names and symlinks into them are secret; project code is not", () => {
@@ -32,6 +33,27 @@ test("secret folders, secret file names and symlinks into them are secret; proje
   assert.equal(isSecretPath(policy, cwd, "app.ts"), false);
   assert.equal(walksIntoSecrets(policy, cwd, root), true, "searching the home folder would walk into ~/.ssh");
   assert.equal(walksIntoSecrets(policy, cwd, "."), false);
+});
+
+test("the home folder is closed except the project and the folders the owner opens; secrets stay closed inside those", () => {
+  const { root } = home();
+  const project = join(root, "project");
+  mkdirSync(join(root, ".config", "firebase"), { recursive: true });
+  mkdirSync(join(root, "Documents"), { recursive: true });
+  mkdirSync(join(root, "other-repo", "credentials"), { recursive: true });
+  const policy = defaultSecretPolicy(join(root, ".pi", "agent"), root, [project, join(root, "other-repo")]);
+  // Credentials named nothing a list would know, anywhere else in the home: closed.
+  for (const path of ["~/.config/firebase/x_application_default_credentials.json", "~/.config/configstore/firebase-tools.json", "~/.vault-token", "~/.pypirc", "~/Documents/private.txt", "~/.cargo/credentials.toml", "~/notes.txt"]) {
+    assert.equal(isSecretPath(policy, project, path), true, path);
+  }
+  assert.equal(isSecretPath(policy, project, "app.ts"), false, "the project is open");
+  assert.equal(isSecretPath(policy, project, join(root, "other-repo", "README.md")), false, "a folder the owner opened is open");
+  assert.equal(isSecretPath(policy, project, join(root, "other-repo", "credentials", "default.json")), true, "a folder named like a secret stays closed, as in the shell");
+  assert.equal(walksIntoSecrets(policy, project, "/"), true, "a search from above the home would walk into it");
+  // The home itself, or a folder holding it, never opens it.
+  const wide = defaultSecretPolicy(join(root, ".pi", "agent"), root, [root, "/"]);
+  assert.deepEqual(wide.readable, []);
+  assert.equal(isSecretPath(wide, root, "~/notes.txt"), true);
 });
 
 test("every spelling Pi's tools accept for a secret path is caught: ~, @, file:// and unicode spaces", () => {
@@ -113,5 +135,10 @@ test("every MCP config pi-mcp-adapter imports servers from, and every agent harn
     "~/.config/opencode/opencode.json", "opencode.json", "~/.windsurf/mcp.json", ".vscode/mcp.json",
   ];
   for (const path of adapterSources) assert.equal(isSecretPath(policy, cwd, path), true, path);
-  for (const path of ["~/.pi/agent/models.json", "~/.pi/agent/settings.json", "~/.claude/settings.json", "~/.gemini/settings.json", "~/.claude.json.backup"]) assert.equal(isSecretPath(policy, cwd, path), true, path);
+  // Each harness folder is closed whole: files whose names match no secret pattern, one per folder.
+  for (const path of [
+    "~/.pi/agent/models.json", "~/.pi/agent/settings.json", "~/.claude/settings.json", "~/.codex/history.jsonl", "~/.cursor/cli-config.json",
+    "~/.gemini/oauth_creds.txt", "~/.windsurf/settings.json", "~/.config/opencode/auth-notes.txt", "~/.config/mcp/servers.toml",
+    "~/Library/Application Support/Claude/Cookies", "~/.claude.json.backup",
+  ]) assert.equal(isSecretPath(policy, cwd, path), true, path);
 });

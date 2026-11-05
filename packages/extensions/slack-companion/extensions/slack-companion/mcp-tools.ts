@@ -112,10 +112,12 @@ export function helperMcpTools(
   for (const [server, tools] of cache) {
     for (const tool of tools) {
       if (limits.blocked.includes(tool.name)) continue;
-      const listed = investigative.includes(tool.name) || investigative.includes(`${server}/${tool.name}`);
-      // A private server's tools (the owner's own Slack) are reachable only when listed by name, and
-      // only read-only ones even then: the helper never gets a Slack tool that posts or changes.
-      if (limits.privateServers?.includes(server) && (!listed || !tool.readOnly)) continue;
+      const qualified = investigative.includes(`${server}/${tool.name}`);
+      const listed = qualified || investigative.includes(tool.name);
+      // A private server's tools (the owner's own Slack, his browser) are reachable only when listed
+      // as `server/tool`, so a bare name meant for another server never opens one, and only
+      // read-only ones even then: the helper never gets a private tool that posts or changes.
+      if (limits.privateServers?.includes(server) && (!qualified || !tool.readOnly)) continue;
       if (!listed && !tool.readOnly) continue;
       const active = exposedNamesFor(server, tool.name).some((name) => activeMain.has(name));
       chosen.push({ server, name: tool.name, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.readOnly, shown: listed || active });
@@ -126,13 +128,6 @@ export function helperMcpTools(
   const catalog = chosen.map(({ shown: _shown, ...tool }) => ({ ...tool, exposedName: (count.get(tool.name) ?? 0) > 1 ? `${tool.server}__${tool.name}` : tool.name }));
   return { catalog, direct: catalog.filter((_tool, i) => chosen[i]!.shown) };
 }
-
-/**
- * Servers that drive the owner's live, logged-in browser. Their read-only tools still see cookies,
- * auth headers and private pages, so they are private like the owner's own Slack: reachable only
- * when he lists a tool by name.
- */
-export const BROWSER_SERVERS: readonly string[] = ["chrome-devtools", "playwright", "puppeteer"];
 
 /** The servers that serve the configured Slack tools: the configured `server`, else every server listing one of them. */
 export function slackServers(cache: McpCache | undefined, names: readonly string[], server: string | undefined): string[] {

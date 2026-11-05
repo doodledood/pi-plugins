@@ -3,7 +3,7 @@
 // docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md (secret-shaped replies).
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -24,8 +24,8 @@ export function resolveToolPath(input: string, cwd: string, home = homedir()): s
 
 /**
  * Folders whose contents are credentials, or may hold them. Agent harnesses keep API keys, MCP
- * server environments and tokens in their config folders (Pi's models.json, ~/.claude.json's
- * neighbours, Codex's config.toml), so those folders are closed whole.
+ * server environments and tokens in their config folders (Pi's models.json, ~/.claude's settings,
+ * Codex's config.toml), so those folders are closed whole, even inside a folder the owner opens.
  */
 export function secretDirectories(home = homedir(), agentDir = join(home, ".pi", "agent")): string[] {
   return [
@@ -55,9 +55,8 @@ export function secretDirectories(home = homedir(), agentDir = join(home, ".pi",
 
 /**
  * Names of files that hold credentials wherever they sit, as globs (`*` is any run of characters).
- * The one list both guards use: the file tools match names against it anywhere; the shell sandbox
- * denies the names from the filesystem root on macOS, and on Linux denies the files that
- * sandbox.findSecretFiles finds.
+ * The one list both guards use: the file tools match names against it anywhere, and the shell
+ * sandbox (macOS) denies the names from the filesystem root.
  */
 export const SECRET_FILE_GLOBS: readonly string[] = [
   // Each with its variants and backups (auth.json.bak, .env.local, mcp.json.old, credentials.json~).
@@ -99,19 +98,43 @@ function inside(child: string, parent: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
+/**
+ * What the helper may not read. The home folder is closed except the folders in `readable` (the
+ * project, and any the owner lists): credentials live in too many places there to list them all.
+ * Inside what is open, the secret folders and secret file names stay closed. See
+ * docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
+ */
 export interface SecretPolicy {
+  /** Always closed, wherever they are (unless an opening). */
   directories: string[];
   home: string;
+  /** Folders in the home the helper may read. The home itself, or a folder holding it, is never one. */
+  readable: string[];
+  /**
+   * Folders the file tools may read even inside a closed folder: the folders of the skills the
+   * helper is offered (most live in Pi's agent folder). Secret file names stay denied in them, and
+   * the shell never gets them.
+   */
+  openings?: string[];
 }
 
-export function defaultSecretPolicy(agentDir?: string, home = homedir()): SecretPolicy {
+export function defaultSecretPolicy(agentDir?: string, home = homedir(), readable: readonly string[] = []): SecretPolicy {
   // /proc holds every process's environment (Pi's own API keys among them). Only the file tools
   // deny it; the shell runs with a cleaned environment, and denying /proc there breaks commands.
-  return { directories: [...secretDirectories(home, agentDir), "/proc"], home };
+  return { directories: [...secretDirectories(home, agentDir), "/proc"], home, readable: readableFolders(home, readable) };
 }
 
+/** The folders that open the home: never the home itself or a folder that holds it. */
+export function readableFolders(home: string, folders: readonly string[]): string[] {
+  return [...new Set(folders.map((f) => resolve(f)))].filter((f) => !inside(home, f) && !inside(realOrSelf(home), realOrSelf(f)));
+}
+
+const insideAny = (absolute: string, folders: readonly string[]) => folders.some((dir) => inside(absolute, dir) || inside(absolute, realOrSelf(dir)));
+
 function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {
-  return policy.directories.some((dir) => inside(absolute, dir) || inside(absolute, realOrSelf(dir)));
+  if (insideAny(absolute, policy.openings ?? [])) return false;
+  if (insideAny(absolute, policy.directories)) return true;
+  return insideAny(absolute, [policy.home]) && !insideAny(absolute, policy.readable);
 }
 
 /** Is this file name one of SECRET_FILE_GLOBS (with its copies and backups)? */
@@ -119,10 +142,14 @@ function isSecretFileName(name: string): boolean {
   return SECRET_FILE_NAMES.some((re) => re.test(name));
 }
 
-/** Is this absolute path (symlinks resolved) a secret file, or inside a secret folder? */
+/**
+ * Is this absolute path (symlinks resolved) secret: any part of it named like a secret (as the
+ * shell's sandbox matches, a folder named `credentials` closes what is in it), or inside a closed
+ * folder?
+ */
 export function isSecretAbsolute(policy: SecretPolicy, absolute: string): boolean {
   const real = realOrSelf(absolute);
-  return [absolute, real].some((p) => isSecretFileName(basename(p)) || underSecretDirectory(policy, p));
+  return [absolute, real].some((p) => p.split(sep).some((part) => part !== "" && isSecretFileName(part)) || underSecretDirectory(policy, p));
 }
 
 /** Is the file a tool would open for `path` a secret? */
@@ -135,7 +162,8 @@ export function walksIntoSecrets(policy: SecretPolicy, cwd: string, path: string
   const absolute = resolveToolPath(path, cwd, policy.home);
   const real = realOrSelf(absolute);
   if (isSecretAbsolute(policy, absolute)) return true;
-  return policy.directories.some((dir) => [dir, realOrSelf(dir)].some((d) => inside(d, absolute) || inside(d, real)));
+  // A search from above the home (or a closed folder) would walk into it.
+  return [...policy.directories, policy.home].some((dir) => [dir, realOrSelf(dir)].some((d) => inside(d, absolute) || inside(d, real)));
 }
 
 /**

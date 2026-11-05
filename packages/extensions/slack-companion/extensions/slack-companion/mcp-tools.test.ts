@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { DEFAULT_CONFIG } from "./config.ts";
 import { exposedNamesFor, helperMcpTools, missingSlackTools, readMcpCache, slackServers, type McpCache } from "./mcp-tools.ts";
 
 const tool = (name: string, readOnly: boolean) => ({ name, description: name, inputSchema: { type: "object" }, readOnly });
@@ -67,4 +68,17 @@ test("the cache is read whole; a missing cache is no cache, a broken one is an e
   assert.throws(() => readMcpCache(join(dir, "broken.json")));
   writeFileSync(join(dir, "shape.json"), JSON.stringify({ version: 2, tools: [] }));
   assert.throws(() => readMcpCache(join(dir, "shape.json")), /no "servers" object/);
+});
+
+test("every server in the private list is closed to the helper unless a tool is listed", () => {
+  const privateServers = DEFAULT_CONFIG.privateServers;
+  assert.deepEqual(privateServers, ["chrome-devtools", "playwright", "puppeteer"], "the browser servers, by default");
+  const browsers: McpCache = new Map(privateServers.map((server) => [server, [tool(`${server.replace(/-/g, "_")}_list_requests`, true)]]));
+  const reach = (listed: string[]) => helperMcpTools(browsers, new Set(), listed, { blocked: [], privateServers }).catalog.map((t) => t.name).sort();
+  assert.deepEqual(reach([]), []);
+  assert.deepEqual(reach(["chrome_devtools_list_requests", "playwright_list_requests"]), [], "a bare name never opens a private server's tool");
+  for (const server of privateServers) {
+    const name = `${server.replace(/-/g, "_")}_list_requests`;
+    assert.deepEqual(reach([`${server}/${name}`]), [name], `${server}: reachable once listed`);
+  }
 });

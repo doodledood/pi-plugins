@@ -14,7 +14,7 @@ An agent, during an unattended build, after reviews showed that the shell's secr
 
 ## Decision
 - On Linux, the helper gets no shell. It keeps its guarded file tools, which deny secret names anywhere on every platform, and its read-only MCP tools.
-- The helper's start says why, once, as for any sandbox that cannot start.
+- The owner is told why, once, as for any sandbox that cannot start; the helper's prompt says it has no shell.
 - macOS keeps the sandboxed shell as 20261104-sandbox-the-slack-helpers-shell decides.
 
 ## Alternatives Considered
@@ -25,7 +25,7 @@ An agent, during an unattended build, after reviews showed that the shell's secr
 ## Consequences
 
 ### Positive
-- The invariant holds on every platform with no Linux-only code path that has never run.
+- The invariant holds on every platform: on Linux the shell scenarios check that there is no shell, so the suite passes there too, and no Linux-only shell code exists that has never run.
 - No disk walk, on any platform.
 
 ### Negative
@@ -33,8 +33,12 @@ An agent, during an unattended build, after reviews showed that the shell's secr
 - Bringing the shell back on Linux needs a design proven on Linux, and a new record.
 
 ## Enforced by
-`packages/extensions/slack-companion/extensions/slack-companion/secrets.test.ts` ("on Linux the helper gets no shell, and says why; no sandbox starts") — pins that on Linux no sandbox is configured and the helper is told why.
+`packages/extensions/slack-companion/extensions/slack-companion/secrets.test.ts` ("on Linux the helper gets no shell, and says why; no sandbox starts") and `wiring.test.ts` ("on Linux the owner is told once that the helper has no shell, and the file tools still guard secrets") — pin that on Linux no sandbox is configured, the owner is told once, and the file tools still deny secrets.
+
+## Revisit when
+A Linux machine or CI job can run sandbox-runtime with bubblewrap, so a design that denies the home folder whole and opens the project and toolchains with `allowRead` can be proven there; read from the repository's CI configuration.
 
 ## Source
-- Session: the unattended build of slack-companion (2026-11-04), review rounds 6 and 7 (operational readiness, code-bugs, the acceptance judge on INV-G5).
+- Session: the unattended build of slack-companion (2026-11-04), review rounds 6 to 8 (operational readiness, code-bugs, the acceptance judge on INV-G5).
+- Reopens the "no shell for the helper" alternative that 20261104-sandbox-the-slack-helpers-shell rejected, for Linux only.
 - Related: 20261104-sandbox-the-slack-helpers-shell

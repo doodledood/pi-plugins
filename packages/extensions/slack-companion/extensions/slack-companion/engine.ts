@@ -14,7 +14,7 @@ import { type HelperBatch, type HelperOutcome, MAX_HELPER_TURNS } from "./helper
 import type { LockManager } from "./locks.ts";
 import { approvedNote, deniedNote, firstLine, markMessage, neutralize, waitingNote } from "./messages.ts";
 import { compareTs, tsFromMillis } from "./format.ts";
-import { readNew, type ReadPoint, type SlackMessage } from "./reader.ts";
+import { CHECKPOINT_LAG_MS, MAX_CONFIRMATIONS_PER_POLL, readNew, type ReadPoint, type SlackMessage } from "./reader.ts";
 import { findSecretShape, stripControl } from "./secrets.ts";
 import { triageInput, type TriageInput } from "./triage.ts";
 
@@ -57,11 +57,18 @@ export interface WatchState {
   activity?: Array<{ at: number; text: string }>;
   /** A channel's name once read ("" when the server shows none); unset for direct messages. */
   channelName?: string;
+  /** Waiting messages dropped since the waiting list was last answered: the note shows this total. */
+  droppedWaiting?: number;
   /**
    * Another session took this conversation over (lock lost). What was sent while it held the
    * conversation was that session's to answer, so watching again starts from that moment on.
    */
   handedOver?: boolean;
+  /**
+   * After a hand-over: messages up to this ts were sent while another session held the
+   * conversation. They are read as context and reported, never answered here.
+   */
+  heldElsewhereUntil?: string;
 }
 
 export interface Approval {
@@ -103,7 +110,11 @@ export interface EngineState {
 
 export type SendOutcome = "sent" | "paused" | "blocked" | "revoked" | "uncertain" | "failed";
 
-/** Bumped on every change to the persisted shape; a snapshot of another version is not restored. */
+/**
+ * Bumped when a persisted field is removed, renamed or changes meaning, or a new one is required;
+ * a snapshot of another version is not restored. An added optional field needs no bump: an older
+ * snapshot simply lacks it.
+ */
 export const STATE_VERSION = 2 as const;
 const MAX_CONTEXT = 12;
 /** Characters of one message kept in the persisted context. */
@@ -192,9 +203,9 @@ export function pendingApprovals(state: Pick<EngineState, "approvals">, watchKey
 /** The mark after a person's name that says a conversation is a direct message. */
 export const DM_MARK = "(DM)";
 
-/** A direct message as the owner sees it: the person and the mark. The one place it is spelled. */
+/** A direct message as the owner sees it: the person and the mark, or, before the name is known, what it is. The one place it is spelled. */
 export function dmLabel(name: string | undefined): string {
-  return `${name ?? "someone"} ${DM_MARK}`;
+  return name ? `${name} ${DM_MARK}` : "a direct message";
 }
 
 /** How the owner sees a conversation: who it is with first, then where; a raw id only when no name is known. */
@@ -285,6 +296,8 @@ export class Engine {
     for (const watch of this.liveWatches()) {
       const lock = this.deps.locks.acquire(watch.key);
       if (!lock.ok) this.end(watch, "error", `another Pi session (pid ${lock.holder.pid}) now answers this conversation`, false, { lockLost: true });
+      // Another session held it while this one was closed: it may have answered there.
+      else if (lock.previous) this.resumeAfterHandOver(watch);
     }
     this.save();
     return { ok: true };
@@ -429,9 +442,12 @@ export class Engine {
       // A send-started watch begins at its own message; an attached one at this moment, so a
       // "stop" written before the owner attached is history.
       since: startedBy === "send" && fromTs ? fromTs : tsFromMillis(this.deps.now()),
-      ...(existing?.partner ? { partner: existing.partner } : {}),
       ...(existing?.channelName !== undefined ? { channelName: existing.channelName } : {}),
     };
+    // Who it is with: known from an earlier watch here, or from another watch in the same DM.
+    const sibling = isDirectMessage(conversation.channelId) ? this.state.watches.find((w) => w.conversation.channelId === conversation.channelId && w.partner) : undefined;
+    const partner = existing?.partner ?? sibling?.partner;
+    if (partner) watch.partner = partner;
     this.state.watches = [...this.state.watches.filter((w) => w.key !== key), watch];
     return watch;
   }
@@ -557,17 +573,29 @@ export class Engine {
     watch.since = tsFromMillis(this.deps.now());
     delete watch.reason;
     delete watch.readFailures;
-    if (watch.handedOver) {
-      // Which of those messages the other session answered cannot be told from here: start from
-      // now, and say so, so nothing is answered twice and nothing is dropped without a word.
-      watch.point = { checkpoint: watch.since, seen: [] };
-      watch.inbox = [];
-      delete watch.handedOver;
-      this.deps.notify("info", `Slack: watching ${watchLabel(watch)} again from now. Messages sent while another Pi session held it are left to that session; open the conversation in Slack to check them.`);
-    }
+    if (watch.handedOver || lock.previous) this.resumeAfterHandOver(watch);
     this.note(watch, "watching again");
     this.save();
     this.schedule(watch); // what was waiting when it stopped is answered now
+  }
+
+  /**
+   * Another session held this conversation since this one last read it, and may have answered
+   * there. Which messages it answered cannot be told from here, so this session starts from now and
+   * says so: nothing is answered twice, and nothing is dropped without a word. The boundary is on
+   * Pi's clock, so the read starts CHECKPOINT_LAG_MS before it, and messages up to it are context,
+   * each reported (a clock ahead of Slack's then costs a notice, not a lost message).
+   */
+  private resumeAfterHandOver(watch: WatchState): void {
+    const now = this.deps.now();
+    watch.point = { checkpoint: tsFromMillis(Math.max(0, now - CHECKPOINT_LAG_MS)), seen: [] };
+    watch.heldElsewhereUntil = tsFromMillis(now);
+    watch.since = watch.heldElsewhereUntil;
+    watch.inbox = [];
+    // As far as this session can know, another one spoke last there.
+    watch.lastAgentPostOurs = false;
+    delete watch.handedOver;
+    this.deps.notify("info", `Slack: watching ${watchLabel(watch)} again from now. Another Pi session held it; messages sent meanwhile are left to that session. Check them in Slack.`);
   }
 
   stop(key: string, reason = "stopped by you"): void {
@@ -668,8 +696,13 @@ export class Engine {
         for (const watch of this.liveWatches()) {
           if (this.disposed) return;
           if (!this.deps.locks.refresh(watch.key)) {
+            const unread = await this.unreadSinceLastRead(watch);
             this.end(watch, "error", "another Pi session took this conversation over", false, { lockLost: true });
             this.save();
+            if (unread.length) {
+              const people = [...new Set(unread.map((m) => m.userName))].join(", ");
+              this.deps.notify("warning", `Slack: ${unread.length}${unread.length >= MAX_CONFIRMATIONS_PER_POLL ? "+" : ""} message${unread.length === 1 ? "" : "s"} in ${watchLabel(watch)} since this session last read it (from ${people}; latest: "${firstLine(unread.at(-1)!.text, 80)}") may be answered by no one: another Pi session took the conversation over and may start after them. Check them in Slack.`);
+            }
             continue;
           }
           await this.pollWatch(watch);
@@ -679,6 +712,22 @@ export class Engine {
       }
     })();
     return this.polling;
+  }
+
+  /**
+   * What people wrote since this watch last read, read once more after its lock was lost: the
+   * session that took over starts from its own moment and may never see these. Reported, never
+   * answered here; a failed read is reported too.
+   */
+  private async unreadSinceLastRead(watch: WatchState): Promise<SlackMessage[]> {
+    try {
+      const owner = await this.owner();
+      const outcome = await readNew(this.deps.backend, watch.conversation, watch.point, this.deps.now());
+      return outcome.fresh.filter((m) => m.userId !== owner.userId).map((m) => ({ ...m, userName: clean(m.userName), text: stripControl(m.text) }));
+    } catch (error) {
+      if (!this.disposed) this.deps.notify("warning", `Slack: could not read ${watchLabel(watch)} after another Pi session took it over (${firstLine(error instanceof Error ? error.message : String(error), 80)}); check it in Slack for unanswered messages.`);
+      return [];
+    }
   }
 
   /** Wait for running helpers. */
@@ -747,12 +796,18 @@ export class Engine {
   private ingest(watch: WatchState, fresh: SlackMessage[], owner: Identity): void {
     const own = new Set(watch.ownPosts);
     const queued = new Set(watch.inbox.map((m) => m.ts));
+    const heldElsewhere: SlackMessage[] = [];
     for (const raw of fresh) {
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text: stripControl(raw.text) };
       watch.lastActivityAt = this.deps.now();
       this.remember(watch, message);
       if (own.has(message.ts)) {
         watch.lastAgentPostOurs = true;
+        continue;
+      }
+      if (watch.heldElsewhereUntil && compareTs(message.ts, watch.heldElsewhereUntil) <= 0) {
+        if (message.userId === owner.userId && message.agentFooter) watch.lastAgentPostOurs = false;
+        else if (message.userId !== owner.userId) heldElsewhere.push(message);
         continue;
       }
       if (isStopMessage(message.text) && compareTs(message.ts, watch.since) > 0) {
@@ -764,7 +819,7 @@ export class Engine {
         watch.lastAgentPostOurs = false;
         continue;
       }
-      if (!watch.partner && message.userId !== owner.userId) watch.partner = { userId: message.userId, name: message.userName };
+      if (!watch.partner && message.userId !== owner.userId) this.setPartner(watch, { userId: message.userId, name: message.userName });
       if (queued.has(message.ts)) continue;
       if (watch.conversation.kind === "dm-top" && watch.lastAgentPostOurs === false) {
         // The person may be answering another session's question: tell the owner, do not guess.
@@ -775,13 +830,36 @@ export class Engine {
       watch.inbox = [...watch.inbox, kept];
       queued.add(message.ts);
     }
+    if (heldElsewhere.length) {
+      const people = [...new Set(heldElsewhere.map((m) => m.userName))].join(", ");
+      this.deps.notify("info", `Slack: not answered here, sent while another Pi session held ${watchLabel(watch)}: ${heldElsewhere.length} message${heldElsewhere.length === 1 ? "" : "s"} from ${people} (latest: "${firstLine(heldElsewhere.at(-1)!.text, 80)}").`);
+    }
     if (watch.inbox.length > MAX_INBOX) {
       // While paused, a busy conversation could queue without end: the newest wait, older ones are
       // dropped, and one note per read says how many.
-      const dropped = watch.inbox.length - MAX_INBOX;
+      watch.droppedWaiting = (watch.droppedWaiting ?? 0) + watch.inbox.length - MAX_INBOX;
       watch.inbox = watch.inbox.slice(-MAX_INBOX);
-      this.note(watch, `${dropped} older waiting message${dropped === 1 ? " was" : "s were"} dropped; ${MAX_INBOX} wait for you`);
+      const total = watch.droppedWaiting;
+      this.note(watch, `${total} older waiting message${total === 1 ? "" : "s"} dropped so far; ${MAX_INBOX} wait for you`);
     }
+  }
+
+  /**
+   * Who a conversation is with. A direct message has one other person, so every watch in it (its
+   * top level and its threads) takes the name the first of them learns.
+   */
+  private setPartner(watch: WatchState, partner: { userId: string; name: string }): void {
+    watch.partner = partner;
+    if (!isDirectMessage(watch.conversation.channelId)) return;
+    for (const sibling of this.state.watches) {
+      if (sibling.conversation.channelId === watch.conversation.channelId && !sibling.partner) sibling.partner = partner;
+    }
+  }
+
+  /** Remove answered messages from the waiting list; once it is empty, the dropped count starts over. */
+  private takeFromInbox(watch: WatchState, taken: ReadonlySet<string>): void {
+    watch.inbox = watch.inbox.filter((m) => !taken.has(m.ts));
+    if (!watch.inbox.length) delete watch.droppedWaiting;
   }
 
   /** Keep a message as context, its text cut to what a restart needs. */
@@ -844,7 +922,7 @@ export class Engine {
     const batch = [...watch.inbox];
     const taken = new Set(batch.map((m) => m.ts));
     const finish = (note: string) => {
-      watch.inbox = watch.inbox.filter((m) => !taken.has(m.ts));
+      this.takeFromInbox(watch, taken);
       this.note(watch, note);
       this.save();
     };
@@ -899,7 +977,7 @@ export class Engine {
       return;
     }
     const reply = parts.join("\n\n");
-    const sent = await this.sendTracked(watch, reply, { commit: () => { watch.inbox = watch.inbox.filter((m) => !taken.has(m.ts)); } });
+    const sent = await this.sendTracked(watch, reply, { commit: () => { this.takeFromInbox(watch, taken); } });
     if (this.disposed || signal.aborted) {
       // Stopped during the send (and perhaps watched again since): this run's step is settled by
       // the commit; it must not end, note or finish a watch that is no longer its own.
@@ -929,7 +1007,7 @@ export class Engine {
     const config = this.deps.config();
     const shape = findSecretShape(text);
     if (shape) {
-      this.deps.notify("warning", `Slack: did not send a reply in ${watchLabel(watch)}: it contained something shaped like a ${shape}.`);
+      this.deps.notify("warning", `Slack: did not send ${options.fromOwner ? "your note" : "a reply"} in ${watchLabel(watch)}: it contained something shaped like a ${shape}.`);
       return "blocked";
     }
     if (!options.fromOwner) {
@@ -961,7 +1039,7 @@ export class Engine {
       watch.lastAgentPostOurs = true;
     } catch (error) {
       entry.status = error instanceof SendUncertainError ? "uncertain" : "failed";
-      if (!this.disposed) this.deps.notify("warning", `Slack: a reply in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
+      if (!this.disposed) this.deps.notify("warning", `Slack: ${options.fromOwner ? "your note" : "a reply"} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
     } finally {
       this.inFlightSends.delete(entry.id);
     }
@@ -1010,7 +1088,7 @@ export class Engine {
       } else {
         entry.status = "failed";
         this.note(watch, `${entry.by === "owner" ? "your note" : "helper's reply"} did not go out; not sent again`);
-        this.deps.notify("warning", `Slack: a reply in ${watchLabel(watch)} did not go out; it was not re-sent.`);
+        this.deps.notify("warning", `Slack: ${entry.by === "owner" ? "your note" : "a reply"} in ${watchLabel(watch)} did not go out; it was not re-sent.`);
       }
     }
   }

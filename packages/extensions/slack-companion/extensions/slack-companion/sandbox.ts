@@ -9,7 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
-import { sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
+import { readableFolders, sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
 
 export type ShellSandbox =
   | { ok: true; operations: BashOperations; scratchDir: string; dispose(): Promise<void> }
@@ -20,6 +20,8 @@ export interface SandboxOptions {
   allowedDomains: readonly string[];
   agentDir?: string;
   home?: string;
+  /** Folders in the home the shell may read besides the project (the owner's readableFolders). */
+  readable?: readonly string[];
   /** For tests: the platform (default: this machine's). */
   platform?: NodeJS.Platform;
 }
@@ -34,13 +36,34 @@ export const NO_SHELL_ON_LINUX = "on Linux the helper has no shell yet: its sand
 
 /**
  * The read denials, for Seatbelt (macOS), which matches a root-anchored, any-depth name pattern:
- * the secret folders, the agent folder's files, and every secret file name at any depth.
+ * the secret folders (Pi's agent folder among them) and every secret file name at any depth.
  */
+/**
+ * Where tools a shell command runs keep themselves in the home folder: version managers, user
+ * binaries and git's settings. The home is closed to the shell; these are opened back.
+ */
+export const HOME_TOOLCHAINS: readonly string[] = [
+  ".gitconfig", ".config/git", ".nvm", ".volta", ".fnm", ".bun", ".deno", ".cargo/bin", ".rustup",
+  ".local/bin", ".pyenv", ".rbenv", ".asdf", ".local/share/mise", ".sdkman", "go/bin",
+];
+
+/**
+ * What the shell may read inside the closed home folder: the project and the owner's readable
+ * folders, Pi's `bin` (first on the shell's PATH; its `fd` and `rg` live there), and the
+ * toolchains. Secret folders and names inside them stay denied: Seatbelt keeps a deny that is more
+ * specific than the allow around it.
+ */
+export function allowReadEntries(options: SandboxOptions): string[] {
+  const home = options.home ?? homedir();
+  const agentDir = options.agentDir ?? join(home, ".pi", "agent");
+  return [...readableFolders(home, [options.cwd, ...(options.readable ?? [])]), join(agentDir, "bin"), ...HOME_TOOLCHAINS.map((p) => join(home, p))];
+}
+
 export function denyReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   const roots = [...new Set(["", home, options.cwd, agentDir])];
-  return [...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
+  return [home, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
 /** The part of sandbox-runtime's SandboxManager the package uses; tests pass a recording one. */
@@ -71,9 +94,9 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
     scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
     const config: SandboxRuntimeConfig = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },
-      filesystem: { denyRead: denyReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
+      filesystem: { denyRead: denyReadEntries(options), allowRead: allowReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
     };
-    const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead });
+    const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead, allowRead: config.filesystem.allowRead });
     if (!ready || ready.runtime !== manager) {
       await manager.initialize(config);
       // initialize returns early when an earlier load of this package (before a /reload) already

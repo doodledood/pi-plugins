@@ -3,9 +3,11 @@
 // Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md (the policy the real path builds),
 // docs/adr/20261104-let-slack-input-only-narrow-what-sessions-may-do.md (only the owner's own
 // input resets the send count), docs/adr/20261104-start-watching-when-the-session-messages-someone.md and
-// docs/adr/20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md (the helper's real MCP reach).
+// docs/adr/20261104-keep-the-owners-own-slack-out-of-the-helpers-reach.md (the helper's real MCP reach),
+// docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md (told once on Linux) and
+// docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md (the closed home, as wired).
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
@@ -28,13 +30,15 @@ function script(message: string, helper: (context: Context, call: number) => Rep
 test("the real helper path builds its sandbox and file guards for the owner's home and configured domains", async () => {
   let keyPath = "";
   const h = await createHarness({
-    config: { allowedDomains: ["docs.example.org"] },
-    replies: script("question", (_c, call) => (call === 1 ? { kind: "tool", name: "read", args: { path: keyPath } } : { kind: "text", text: "done" })),
+    config: { allowedDomains: ["docs.example.org"], readableFolders: ["~/shared-notes"] },
+    replies: script("question", (_c, call) => (call === 1 ? { kind: "tool", name: "read", args: { path: keyPath } } : call === 2 ? { kind: "tool", name: "read", args: { path: join(h.home, "shared-notes", "plan.md") } } : { kind: "text", text: "done" })),
   });
   mkdirSync(join(h.home, ".ssh"), { recursive: true });
   // A file only its folder makes secret (its name alone would not), so the home in the policy matters.
   keyPath = join(h.home, ".ssh", "config");
   writeFileSync(keyPath, "PRIVATE-KEY-CONTENT");
+  mkdirSync(join(h.home, "shared-notes"), { recursive: true });
+  writeFileSync(join(h.home, "shared-notes", "plan.md"), "SHARED-PLAN");
   await h.session.prompt("ask Robin");
   const [question] = h.slack.messages(DM);
   h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "can you check your key?", question!.ts);
@@ -43,10 +47,17 @@ test("the real helper path builds its sandbox and file guards for the owner's ho
   const policy = h.sandboxConfigs.at(-1)!;
   assert.ok(policy.filesystem.denyRead.includes(join(h.home, ".ssh")), "the shell may not read the home's ~/.ssh");
   assert.ok(policy.filesystem.denyRead.includes(`${h.home}/**/.env*`));
+  assert.ok(policy.filesystem.denyRead.includes(h.agentDir), "Pi's agent folder is closed to the shell");
+  assert.ok(policy.filesystem.denyRead.includes(h.home), "the home folder is closed to the shell");
+  const allowed = policy.filesystem.allowRead ?? [];
+  for (const open of [h.workspace, join(h.home, "shared-notes"), join(h.agentDir, "bin"), join(h.home, ".nvm"), join(h.home, ".gitconfig")]) {
+    assert.ok(allowed.includes(open), `${open} is opened back`);
+  }
   assert.deepEqual(policy.network.allowedDomains, ["docs.example.org"]);
   const helperCalls = h.calls.filter((c) => c.role === "helper");
   const readResult = helperCalls.at(-1)!.context.messages.find((m: any) => m.role === "toolResult" && m.toolName === "read") as any;
   assert.match(textOf(readResult.content), /secret location/);
+  assert.ok(JSON.stringify(helperCalls.map((c) => c.context)).includes("SHARED-PLAN"), "a folder the owner opened is readable by the file tools");
   assert.equal(JSON.stringify(helperCalls.map((c) => c.context)).includes("PRIVATE-KEY-CONTENT"), false);
 });
 
@@ -165,7 +176,9 @@ test("a session that ends releases its locks", async () => {
   assert.ok(readdirSync(locks).length > 0);
   writeFileSync(join(h.agentDir, "slack-companion.json"), JSON.stringify({ enabled: false }));
   await h.session.reload(); // the old session's runtime shuts down; the new one, disabled, takes nothing
-  assert.deepEqual(readdirSync(locks), []);
+  const files = readdirSync(locks);
+  assert.ok(files.length > 0);
+  for (const file of files) assert.equal(JSON.parse(readFileSync(join(locks, file), "utf8")).released, true, `${file} is released, its marker kept`);
 });
 
 test("the panel opened through Pi fits the overlay it asks for, gates approval on reading, and records seen stops", async () => {
@@ -301,4 +314,31 @@ test("a server that drives the owner's browser is private: its read-only tools r
   assert.equal(hidden.direct.includes("list_network_requests"), false);
   const listed = await run({ investigativeTools: ["chrome-devtools/list_network_requests"] });
   assert.ok(listed.direct.includes("list_network_requests") || /list_network_requests/.test(listed.found), "listed by the owner: reachable");
+  const opened = await run({ privateServers: [] });
+  assert.ok(opened.direct.includes("list_network_requests") || /list_network_requests/.test(opened.found), "the owner's own private list replaces the default");
+});
+
+test("on Linux the owner is told once that the helper has no shell, and the file tools still guard secrets", async () => {
+  let keyPath = "";
+  const h = await createHarness({
+    platform: "linux",
+    replies: script("question", (_c, call) => (call % 2 === 1 ? { kind: "tool", name: "read", args: { path: keyPath } } : { kind: "text", text: "done" })),
+  });
+  mkdirSync(join(h.home, ".ssh"), { recursive: true });
+  keyPath = join(h.home, ".ssh", "id_ed25519");
+  writeFileSync(keyPath, "PRIVATE-KEY-CONTENT");
+  await h.session.prompt("ask Robin");
+  const [question] = h.slack.messages(DM);
+  for (const text of ["first", "second"]) {
+    h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, text, question!.ts);
+    await h.engine().poll();
+    await h.engine().idle();
+  }
+  const helperRuns = h.calls.filter((c) => c.role === "helper");
+  assert.ok(helperRuns.length >= 2, "two helper runs");
+  assert.equal(helperRuns.some((c) => c.tools.includes("bash")), false, "no shell on Linux");
+  assert.equal(h.sandboxConfigs.length, 0, "no sandbox is configured");
+  assert.equal(h.notices.filter((n) => /runs without a shell: on Linux/.test(n.text)).length, 1, "said once, not per run");
+  const reads = helperRuns.map((c) => JSON.stringify(c.context.messages)).join("");
+  assert.equal(reads.includes("PRIVATE-KEY-CONTENT"), false, "the file tools still deny secrets");
 });

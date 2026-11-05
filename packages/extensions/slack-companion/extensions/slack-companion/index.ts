@@ -9,6 +9,7 @@
 import type { BuildSystemPromptOptions, ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { McpSlackBackend, RUNTIME_TOOL_CALL_EVENT, type SlackBackend } from "./backend.ts";
 import { ConfigError, DEFAULT_CONFIG, enableInConfig, loadConfig, type SlackCompanionConfig } from "./config.ts";
@@ -18,7 +19,7 @@ import { parseSendResult } from "./format.ts";
 import { selectForkBranch } from "./fork.ts";
 import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { BROWSER_SERVERS, type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
+import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, pruneOrphanRecords, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
@@ -39,6 +40,8 @@ export interface Overrides {
   backend?: (pi: ExtensionAPI, config: SlackCompanionConfig) => SlackBackend;
   /** sandbox-runtime itself; the package's own policy and options still flow through startShellSandbox. */
   sandboxRuntime?: SandboxRuntime;
+  /** The platform the shell sandbox is built for (default: this machine's). */
+  platform?: NodeJS.Platform;
   now?: () => number;
   /** Starts and clears the poll timer; tests pass one that records and never fires, and drive polls themselves. */
   scheduler?: Scheduler;
@@ -155,7 +158,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         blocked: [config.tools.sendMessage],
         // The owner's own Slack (search, other channels, private messages) is not read for people in
         // a watched conversation unless he lists those tools: his other conversations are his.
-        privateServers: [...slackServers(cache, Object.values(config.tools), config.server), ...BROWSER_SERVERS],
+        // The servers in config.privateServers (by default those that drive his logged-in browser)
+        // likewise: their read-only tools see cookies, auth headers and private pages.
+        privateServers: [...slackServers(cache, Object.values(config.tools), config.server), ...config.privateServers],
       });
     } catch (error) {
       if (!warnedCache) {
@@ -170,12 +175,14 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
   const runHelperFor: EngineDeps["runHelper"] = async ({ batch, signal }) => {
     const ctx = ctxRef;
     if (!live || !ctx?.model) throw new Error("the main session is not available");
-    const sandbox = await startShellSandbox({ cwd: ctx.cwd, allowedDomains: config.allowedDomains, agentDir, home }, overrides.sandboxRuntime);
+    // The owner's readable folders, with ~ meaning his home.
+    const readable = config.readableFolders.map((f) => (f.startsWith("~/") ? join(home, f.slice(2)) : f));
+    const sandbox = await startShellSandbox({ cwd: ctx.cwd, allowedDomains: config.allowedDomains, agentDir, home, readable, ...(overrides.platform ? { platform: overrides.platform } : {}) }, overrides.sandboxRuntime);
     if (signal.aborted) {
       if (sandbox.ok) await sandbox.dispose();
       throw new Error("the helper was stopped before it answered");
     }
-    // Said once per reason, not on every helper run.
+    // Said once per reason: on Linux every run has no shell, and a warning per run would be noise.
     if (!sandbox.ok && sandbox.reason !== lastNoShellReason) notify("warning", `Slack helper runs without a shell: ${sandbox.reason}`);
     lastNoShellReason = sandbox.ok ? undefined : sandbox.reason;
     const sections = { ...(lastPromptOptions?.sections ?? {}) };
@@ -193,7 +200,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         events: pi.events,
         mcpTools: mcpToolsForHelper(),
         sandbox,
-        secrets: defaultSecretPolicy(agentDir, home),
+        secrets: defaultSecretPolicy(agentDir, home, [ctx.cwd, ...readable]),
       }, batch, signal);
     } finally {
       if (sandbox.ok) await sandbox.dispose();
@@ -257,6 +264,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (problem) notify("error", `slack-companion: ${problem.detail}`);
     const backend = overrides.backend ? overrides.backend(pi, config) : new McpSlackBackend(pi.events, config.tools, config.server);
     const locks = new LockManager(`${agentDir}/slack-companion/locks`, { pid: process.pid, sessionId: ctx.sessionManager.getSessionId() }, undefined, Math.max(10 * 60_000, 5 * config.pollSeconds * 1000), now);
+    locks.sweep();
     engine = new Engine({
       backend,
       config: () => config,

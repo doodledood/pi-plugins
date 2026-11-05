@@ -28,11 +28,12 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   watch (an expired login says how to sign in); reads survive pages, truncation, failures and
   restarts (property test).
 - The helper: it loads no extension (no factory runs), has only its allowlisted tools (every
-  read-only MCP tool, main's active ones shown directly, the owner's own Slack only when he lists
-  it, never the send tool), reaches the model
-  with main's credential, stops when stopped and at its turn limit; its file tools and its
-  sandboxed shell refuse secrets in every path form and through symlinks; the real wiring builds
-  that policy.
+  read-only MCP tool, main's active ones shown directly, the owner's own Slack and the private
+  servers only when he lists them as server/tool, never the send tool), reaches the model with
+  main's credential, stops when stopped and at its turn limit; its file tools and its sandboxed
+  shell (macOS) read the project, the opened folders and, for the file tools, the offered skills,
+  and refuse the rest of the home and every secret in every path form and through symlinks; on
+  Linux it has no shell and is told so once; the real wiring builds that policy.
 - Triage, hand-offs, approvals (read to the end before approving; they outlive their watch),
   held replies, limits and their daily reset, stopping, locks and routing between sessions,
   resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and
@@ -46,8 +47,10 @@ Line: 3.4 s on darwin-arm64-12cpu
 
 ## Gotchas
 
-- The sandbox scenarios skip, with the reason printed, where sandbox-runtime cannot run (they need
-  macOS Seatbelt, or bubblewrap, socat and ripgrep on Linux).
+- The real shell scenarios need macOS Seatbelt. On Linux the helper has no shell by decision
+  (docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md), and those scenarios check
+  exactly that instead; they skip, with the reason printed, only where sandbox-runtime does not
+  support the platform.
 - The fixtures in `format.test.ts` keep the real server's layout byte for byte, with every value invented. When the
   server's format changes, `slack-companion-live` fails; its evidence holds
   `scrubbedThreadListing`, the server's raw thread listing with the person's name, ids and emails

@@ -1,6 +1,7 @@
 // The helper's whole runtime, built in a real fork whose parent has a foreign extension and the
 // adapter's `mcp` proxy installed. Holds docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md
-// (no extension, allowlisted tools) and docs/adr/20261104-sandbox-the-slack-helpers-shell.md.
+// (no extension, allowlisted tools), docs/adr/20261104-sandbox-the-slack-helpers-shell.md and
+// docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,11 +9,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import { forkEntriesForChild, selectForkBranch } from "./fork.ts";
 import { HelperAbortedError, MAX_HELPER_TURNS, runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
 import { helperMcpTools, mcpCachePathIn, readMcpCache } from "./mcp-tools.ts";
-import { createHarness, textOf, type Reply } from "./pi-harness.ts";
-import { startShellSandbox, type ShellSandbox } from "./sandbox.ts";
+import { createHarness, systemText, textOf, type Reply } from "./pi-harness.ts";
+import { NO_SHELL_ON_LINUX, startShellSandbox, type ShellSandbox } from "./sandbox.ts";
 import { defaultSecretPolicy } from "./secrets.ts";
 
 const batch: HelperBatch = {
@@ -37,7 +39,26 @@ function fakeHome() {
 
 const realSandbox = (cwd: string, home: string) => startShellSandbox({ cwd, allowedDomains: [], home, agentDir: join(home, ".pi", "agent") });
 
-async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal } = {}) {
+/**
+ * Whether a real shell scenario can run here. On Linux the helper has no shell by decision
+ * (docs/adr/20261104-give-the-slack-helper-no-shell-on-linux-for-now.md): the scenario then checks
+ * exactly that and ends, which is a pass, not a skip. Elsewhere it skips only where sandbox-runtime
+ * does not support the platform; anywhere else, a shell that did not start is a failure.
+ */
+async function shellRunsHere(t: { skip(message?: string): void; diagnostic(message: string): void }, probe: ShellSandbox): Promise<boolean> {
+  if (probe.ok) return true;
+  if (probe.reason === NO_SHELL_ON_LINUX) {
+    assert.equal(process.platform, "linux", "only Linux refuses the shell by decision");
+    t.diagnostic(`no shell on Linux, as decided: ${probe.reason}`);
+    return false;
+  }
+  const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
+  if (SandboxManager.isSupportedPlatform()) assert.fail(`sandbox-runtime supports this platform but did not start: ${probe.reason}`);
+  t.skip(`sandbox-runtime does not support this platform: ${probe.reason}`);
+  return false;
+}
+
+async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal; skills?: (agentDir: string) => Skill[] } = {}) {
   const queue = [...steps];
   const h = await createHarness({
     replies: (_c, role) => (role === "helper" ? (queue.shift() ?? { kind: "text", text: "done" }) : { kind: "text", text: "ok" }),
@@ -64,7 +85,7 @@ async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cw
     thinkingLevel: "off",
     streamSimple: (m, c, o) => h.registry.streamSimple(m, c, o),
     branch: selectForkBranch(h.session.sessionManager.getBranch() as SessionEntry[], true),
-    systemPromptOptions: { cwd: h.workspace },
+    systemPromptOptions: { cwd: h.workspace, ...(options.skills ? { skills: options.skills(h.agentDir) } : {}) },
     events: h.events,
     mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], { blocked: ["slack_send_message"] }),
     sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
@@ -148,13 +169,7 @@ test("every file tool is denied secret locations, in every spelling Pi's tools a
 test("the sandboxed shell writes only to scratch, reads no secrets and reaches no network", async (t) => {
   const home = fakeHome();
   const probe = await realSandbox(mkdtempSync(join(tmpdir(), "p-")), home);
-  if (!probe.ok) {
-    // Skip only where sandbox-runtime does not support the platform; anywhere else, not starting is a failure.
-    const { SandboxManager } = await import("@anthropic-ai/sandbox-runtime");
-    if (SandboxManager.isSupportedPlatform()) assert.fail(`sandbox-runtime supports this platform but did not start: ${probe.reason}`);
-    t.skip(`sandbox-runtime does not support this platform: ${probe.reason}`);
-    return;
-  }
+  if (!(await shellRunsHere(t, probe)) || !probe.ok) return;
   await probe.dispose();
   process.env.SLACK_HELPER_TEST_TOKEN = "TOKEN-FROM-ENVIRONMENT";
   t.after(() => { delete process.env.SLACK_HELPER_TEST_TOKEN; });
@@ -198,9 +213,12 @@ test("the sandboxed shell writes only to scratch, reads no secrets and reaches n
 });
 
 test("a sandbox that cannot start leaves the helper without a shell", async () => {
-  const { outcome } = await helperRun([{ kind: "tool", name: "bash", args: { command: "echo hi" } }], { sandbox: async () => ({ ok: false, reason: "test: no sandbox" }) });
+  const { outcome, h } = await helperRun([{ kind: "tool", name: "bash", args: { command: "echo hi" } }], { sandbox: async () => ({ ok: false, reason: "test: no sandbox" }) });
   assert.equal(outcome.toolNames.includes("bash"), false);
-  const sandbox = await startShellSandbox({ cwd: tmpdir(), allowedDomains: [] }, {
+  const prompt = systemText(h.calls.filter((c) => c.role === "helper").at(-1)!.context);
+  assert.match(prompt, /you have no shell/, "the helper is not promised a shell it lacks");
+  assert.doesNotMatch(prompt, /sandboxed shell/);
+  const sandbox = await startShellSandbox({ cwd: tmpdir(), allowedDomains: [], platform: "darwin" }, {
     isSupportedPlatform: () => true,
     initialize: async () => { throw new Error("seatbelt refused"); },
     updateConfig: () => {},
@@ -294,4 +312,70 @@ test("grep and find refuse a secret folder reached through a symlink", async () 
     { kind: "tool", name: "find", args: { pattern: "*", path: "linked-ssh" } },
   ], { home, sandbox: async (cwd, h2) => { symlinkSync(join(home, ".ssh"), join(cwd, "linked-ssh")); return realSandbox(cwd, h2); } });
   assert.ok(results.every((r) => r.isError && /secret location/.test(r.text)), JSON.stringify(results));
+});
+
+test("the helper can load the skills it is offered from Pi's agent folder, and nothing else there", async () => {
+  const home = fakeHome();
+  const agentDir = join(home, ".pi", "agent");
+  const skillDir = join(agentDir, "git", "example.com", "pkg", "skills", "triage-notes");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "SKILL-BODY");
+  writeFileSync(join(skillDir, ".env"), "SKILL-SECRET");
+  writeFileSync(join(agentDir, "models.json"), "MODELS-KEY");
+  mkdirSync(join(agentDir, "skills", "not-offered"), { recursive: true });
+  writeFileSync(join(agentDir, "skills", "not-offered", "SKILL.md"), "OTHER-BODY");
+  const skill = { name: "triage-notes", description: "notes", filePath: join(skillDir, "SKILL.md"), baseDir: skillDir, sourceInfo: { path: join(skillDir, "SKILL.md"), source: "package", scope: "user" } as any, disableModelInvocation: false };
+  const { results } = await helperRun([
+    { kind: "tool", name: "read", args: { path: join(skillDir, "SKILL.md") } },
+    { kind: "tool", name: "read", args: { path: join(skillDir, ".env") } },
+    { kind: "tool", name: "read", args: { path: join(agentDir, "models.json") } },
+    { kind: "tool", name: "read", args: { path: join(agentDir, "skills", "not-offered", "SKILL.md") } },
+  ], { home, skills: () => [skill] });
+  const [body, secret, models, other] = results;
+  assert.equal(body!.isError, false);
+  assert.match(body!.text, /SKILL-BODY/, "an offered skill loads");
+  for (const [r, what] of [[secret, "a secret name inside the skill"], [models, "models.json"], [other, "a skill not offered"]] as const) {
+    assert.ok(r!.isError && /secret location/.test(r!.text), `${what} stays closed`);
+  }
+});
+
+test("the real shell reads Pi's bin folder, and nothing else in Pi's agent folder", async (t) => {
+  const home = fakeHome();
+  const agent = join(home, ".pi", "agent");
+  mkdirSync(join(agent, "bin"), { recursive: true });
+  writeFileSync(join(agent, "bin", "tool-notes"), "BIN-CONTENT");
+  writeFileSync(join(agent, "models.json"), "MODELS-KEY");
+  const cwd = mkdtempSync(join(tmpdir(), "p-"));
+  const sandbox = await realSandbox(cwd, home);
+  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return;
+  t.after(() => sandbox.dispose());
+  let out = "";
+  await sandbox.operations.exec(`cat '${join(agent, "bin", "tool-notes")}'; cat '${join(agent, "models.json")}'; echo END`, cwd, { onData: (d) => { out += d.toString(); }, env: process.env });
+  assert.match(out, /BIN-CONTENT/, "Pi's bin is readable");
+  assert.doesNotMatch(out, /MODELS-KEY/, "the rest of the agent folder is not");
+  assert.match(out, /END/);
+});
+
+test("the real shell reads the project inside the home and the toolchains, and nothing else there; secrets in the project stay closed", async (t) => {
+  const home = fakeHome();
+  const project = join(home, "code", "app");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "notes.md"), "PROJECT-NOTES");
+  writeFileSync(join(project, ".env.local"), "PROJECT-ENV-SECRET");
+  mkdirSync(join(home, ".config", "firebase"), { recursive: true });
+  writeFileSync(join(home, ".config", "firebase", "me_application_default_credentials.json"), "FIREBASE-REFRESH-TOKEN");
+  mkdirSync(join(home, "Documents"), { recursive: true });
+  writeFileSync(join(home, "Documents", "private.txt"), "PRIVATE-DOC");
+  mkdirSync(join(home, ".nvm"), { recursive: true });
+  writeFileSync(join(home, ".nvm", "nvm.sh"), "NVM-SCRIPT");
+  const sandbox = await startShellSandbox({ cwd: project, allowedDomains: [], home, agentDir: join(home, ".pi", "agent") });
+  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return;
+  t.after(() => sandbox.dispose());
+  let out = "";
+  const files = ["notes.md", ".env.local", join(home, ".config", "firebase", "me_application_default_credentials.json"), join(home, "Documents", "private.txt"), join(home, ".nvm", "nvm.sh")];
+  await sandbox.operations.exec(`${files.map((f) => `cat '${f}' 2>/dev/null`).join("; ")}; echo END`, project, { onData: (d) => { out += d.toString(); }, env: process.env });
+  assert.match(out, /PROJECT-NOTES/, "the project is readable");
+  assert.match(out, /NVM-SCRIPT/, "a toolchain is readable");
+  for (const secret of ["PROJECT-ENV-SECRET", "FIREBASE-REFRESH-TOKEN", "PRIVATE-DOC"]) assert.doesNotMatch(out, new RegExp(secret), `${secret} stays closed`);
+  assert.match(out, /END/);
 });

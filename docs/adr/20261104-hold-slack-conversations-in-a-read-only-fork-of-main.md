@@ -1,7 +1,7 @@
 # ADR: Hold Slack conversations in a read-only fork of the main session, with changes behind the owner's approval
 
 ## Status
-Accepted; amended by 20261104-keep-the-owners-own-slack-out-of-the-helpers-reach (the owner's own Slack tools only when he lists them)
+Accepted; amended by 20261104-keep-the-owners-own-slack-out-of-the-helpers-reach (private MCP servers' tools only when he lists them) and 20261104-close-the-home-folder-to-the-slack-helper (the home folder is closed except the project and opened folders)
 
 ## Area
 slack-companion

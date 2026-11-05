@@ -133,6 +133,8 @@ export interface HarnessOptions {
   ui?: { rows: number };
   /** Raw config file text, to test a broken file. */
   rawConfig?: string;
+  /** The platform the package builds its shell sandbox for (default: macOS, whose policy the recording runtime records). */
+  platform?: NodeJS.Platform;
 }
 
 export async function createHarness(options: HarnessOptions): Promise<Harness> {
@@ -227,6 +229,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     scheduler,
     now: () => slack.nowMs(),
     sandboxRuntime,
+    platform: options.platform ?? "darwin",
     onEngine: (e) => { engine = e; },
     onNotify: (level, text) => notices.push({ level, text }),
   };

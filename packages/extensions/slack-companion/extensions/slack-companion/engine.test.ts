@@ -14,7 +14,7 @@ import { Engine, type EngineDeps, type EngineState, MAX_READ_FAILURES, StoppedCo
 import { FakeSlack, memoryBus } from "./fake-slack.ts";
 import type { HelperBatch, HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { renderLine } from "./ui.ts";
+import { renderLine, renderPanel } from "./ui.ts";
 import { compareTs } from "./format.ts";
 import { markMessage, MAX_REPLY_CHARS } from "./messages.ts";
 import type { TriageInput } from "./triage.ts";
@@ -612,7 +612,7 @@ test("after a lock loss, watching again starts from now, says so, and answers on
   b.engine.dispose();
   now = slack.clockMs() + 1000; // after the newest message, on Slack's clock
   a.engine.rewatch(key);
-  assert.ok(a.log.notices.some((n) => /again from now\. Messages sent while another Pi session held it are left to that session/.test(n)), "the owner is told what is not answered here");
+  assert.ok(a.log.notices.some((n) => /again from now\. Another Pi session held it; messages sent meanwhile are left to that session/.test(n)), "the owner is told what is not answered here");
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "after", q.ts);
   await settle(a.engine);
   await settle(a.engine);
@@ -661,7 +661,7 @@ test("a message waiting in a paused session is not answered after another sessio
   assert.deepEqual(a.log.helpers.flatMap((h) => h.messages.map((m) => m.text)), ["zero"], "not answered after the hand-over");
 });
 
-test("messages dropped from a full waiting list are counted, and the counts add up", async () => {
+test("messages dropped from a full waiting list are counted, and the latest note gives the total", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack, { config: { pauseAfterSends: 1 } });
   const q = await mainSends(slack, engine, DM, "q");
@@ -673,9 +673,16 @@ test("messages dropped from a full waiting list are counted, and the counts add 
   const watch = engine.watch(key)!;
   assert.equal(watch.status, "paused");
   assert.equal(watch.inbox.length, 20);
-  const counted = (watch.activity ?? []).map((e) => /^(\d+) older waiting messages? (was|were) dropped/.exec(e.text)).filter(Boolean).map((m) => Number(m![1]));
-  assert.equal(counted.reduce((a, b) => a + b, 0), 11, `the notes add up to what was dropped: ${counted}`);
   assert.deepEqual(watch.inbox.map((m) => m.text), Array.from({ length: 20 }, (_, i) => `m${i + 11}`), "the newest wait");
+  assert.equal(watch.lastNote, "11 older waiting messages dropped so far; 20 wait for you", "the latest note carries the running total");
+  for (let i = 0; i < 6; i += 1) {
+    slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, `late${i}`, q.ts);
+    await settle(engine);
+  }
+  assert.equal(engine.watch(key)!.lastNote, "17 older waiting messages dropped so far; 20 wait for you", "across many reads, still the total");
+  engine.resume(key);
+  await engine.idle();
+  assert.equal(engine.watch(key)!.droppedWaiting, undefined, "answered: the count starts over");
 });
 
 test("a polling session keeps its locks; disposing releases them; restoring under another live holder ends the watch", async () => {
@@ -693,8 +700,8 @@ test("a polling session keeps its locks; disposing releases them; restoring unde
   assert.equal(b.engine.watch(`${DM}/top`), undefined, "a refreshed lock is not stale");
   const saved = a.log.persisted.at(-1)!;
   a.engine.dispose();
-  const holders = readdirSync(lockDir).map((f) => JSON.parse(readFileSync(join(lockDir, f), "utf8")).sessionId);
-  assert.equal(holders.includes("A"), false, "disposing released every lock A held");
+  const holders = readdirSync(lockDir).map((f) => JSON.parse(readFileSync(join(lockDir, f), "utf8")));
+  assert.ok(holders.filter((h) => h.sessionId === "A").every((h) => h.released), "disposing released every lock A held, leaving its marker");
   const c = makeEngine(slack, { lockDir, sessionId: "C", pid: 1003, alive: () => true, now: () => now });
   await mainSends(slack, c.engine, DM, "C asks"); // C now owns the top level
   const d = makeEngine(slack, { lockDir, sessionId: "D", pid: 1004, alive: () => true, now: () => now });
@@ -1278,7 +1285,7 @@ test("the notes the line shows name the helper as the one who acted, never the p
 
 test("an approval note whose send was unsure is settled as the owner's note, not the helper's", async () => {
   const slack = new FakeSlack();
-  const { engine } = makeEngine(slack, { helper: (batch) => (batch.messages.some((m) => m.text === "merge it") ? { reply: { text: "", done: false }, handoffs: [{ kind: "action", text: "merge it" }] } : {}) });
+  const { engine, log } = makeEngine(slack, { helper: (batch) => (batch.messages.some((m) => m.text === "merge it") ? { reply: { text: "", done: false }, handoffs: [{ kind: "action", text: "merge it" }] } : {}) });
   const q = await mainSends(slack, engine, DM, "q");
   const key = `${DM}/${q.ts}`;
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "merge it", q.ts);
@@ -1288,4 +1295,124 @@ test("an approval note whose send was unsure is settled as the owner's note, not
   await engine.approve(request!.id);
   await settle(engine);
   assert.equal(engine.watch(key)!.lastNote, "your note went out");
+  assert.ok(log.notices.some((n) => /your note in .* may not have gone out/.test(n)), "the warning names it as the owner's note");
+});
+
+test("a session resumed after another one answered there does not answer again, and says so", async () => {
+  const slack = new FakeSlack();
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  let now = slack.nowMs();
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, now: () => now });
+  const q = await mainSends(slack, a.engine, DM, "A asks");
+  const saved = JSON.parse(JSON.stringify(a.log.persisted.at(-1)!));
+  a.engine.dispose(); // the owner quits A; its watch stays active in the session file
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true, now: () => now });
+  await mainSends(slack, b.engine, DM, "B follows up", q.ts);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "question B answers", q.ts);
+  await settle(b.engine);
+  assert.equal(b.log.helpers.length, 1);
+  b.engine.dispose();
+  now = slack.clockMs() + 1000;
+  const resumed = makeEngine(slack, { lockDir, sessionId: "A", pid: 1003, alive: () => true, now: () => now });
+  resumed.engine.restore(saved);
+  await settle(resumed.engine);
+  await settle(resumed.engine);
+  assert.equal(resumed.log.helpers.length, 0, "B's conversation is not answered again");
+  assert.ok(resumed.log.notices.some((n) => /again from now\. Another Pi session held it/.test(n)));
+  assert.ok(resumed.log.notices.some((n) => /not answered here, sent while another Pi session held .*question B answers/.test(n)), "what fell in the boundary is reported");
+});
+
+test("after a hand-over at a DM's top level, a reply is not answered as if this session had asked", async () => {
+  const slack = new FakeSlack();
+  slack.secondsPerMessage = 200;
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  let now = slack.nowMs();
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, now: () => now });
+  await mainSends(slack, a.engine, DM, "A asks: which env?");
+  now += 11 * 60_000;
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true, now: () => now });
+  await mainSends(slack, b.engine, DM, "B asks: may I delete the branch?");
+  await a.engine.poll();
+  assert.equal(a.engine.watch(`${DM}/top`)!.status, "error");
+  b.engine.dispose();
+  now = slack.clockMs() + 3 * 60_000; // B's question is older than the read's lag
+  a.engine.rewatch(`${DM}/top`);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "yes, go ahead"); // 200 s after B's: after the boundary
+  now = slack.nowMs();
+  await settle(a.engine);
+  assert.equal(a.log.helpers.length, 0, "the yes may answer the other session's question: not answered here");
+  assert.ok(a.log.notices.some((n) => /after another session's message; not answered here/.test(n)));
+});
+
+test("after a hand-over, a message whose Slack time falls before Pi's boundary is reported, not lost", async () => {
+  const slack = new FakeSlack();
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  let now = slack.nowMs();
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, now: () => now });
+  const q = await mainSends(slack, a.engine, DM, "A asks");
+  now += 11 * 60_000;
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true, now: () => now });
+  await mainSends(slack, b.engine, DM, "B follows up", q.ts);
+  await a.engine.poll();
+  b.engine.dispose();
+  now = slack.clockMs() + 5000; // Pi's clock runs 5 s ahead of Slack's
+  a.engine.rewatch(`${DM}/${q.ts}`);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "posted after w", q.ts); // Slack stamps it before Pi's boundary
+  await settle(a.engine);
+  assert.ok(a.log.notices.some((n) => /not answered here, sent while another Pi session held .*posted after w/.test(n)), "the owner hears of it");
+});
+
+test("watching again a conversation that another session took up after this one stopped starts from now", async () => {
+  const slack = new FakeSlack();
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  let now = slack.nowMs();
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, now: () => now });
+  const q = await mainSends(slack, a.engine, DM, "A asks");
+  const key = `${DM}/${q.ts}`;
+  a.engine.stop(key); // the owner stops it in A
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true, now: () => now });
+  await mainSends(slack, b.engine, DM, "B follows up", q.ts);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "question B answers", q.ts);
+  await settle(b.engine);
+  b.engine.dispose();
+  now = slack.clockMs() + 3 * 60_000;
+  a.engine.rewatch(key);
+  await settle(a.engine);
+  assert.equal(a.log.helpers.length, 0, "what B answered is not answered again");
+  assert.ok(a.log.notices.some((n) => /again from now\. Another Pi session held it/.test(n)));
+});
+
+test("a DM is never 'someone': before anyone speaks it is named by its first words, then every watch in it takes the person's name", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack);
+  const q1 = await mainSends(slack, engine, DM, "Three quick questions about the deploy");
+  await mainSends(slack, engine, "D0FAKE0003", "Can you review the eval change?");
+  const surface = () => ({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() });
+  const plain = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+  const [fresh] = renderLine(surface(), plain, 160);
+  assert.doesNotMatch(fresh!, /someone/);
+  assert.match(fresh!, /DM "Three quick questions ab…"/);
+  assert.match(fresh!, /DM "Can you review the eval…"/, `two fresh DMs can be told apart: ${fresh}`);
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "sure", q1.ts); // the person answers in the thread only
+  await settle(engine);
+  assert.equal(engine.watch(`${DM}/top`)!.partner?.name, COLLEAGUE.name, "the DM's top level takes the name its thread learned");
+  const panel = renderPanel(surface(), 0, plain, 100, 0).join("\n");
+  assert.doesNotMatch(panel, /someone/);
+  assert.match(panel, /Robin Colleague \(DM\) · top level/, "one DM, one name across its watches");
+});
+
+test("when another session takes a conversation over, what came since this session's last read is reported, not left silent", async () => {
+  const slack = new FakeSlack();
+  const lockDir = mkdtempSync(join(tmpdir(), "locks-"));
+  let now = slack.nowMs();
+  const a = makeEngine(slack, { lockDir, sessionId: "A", pid: 1001, alive: () => true, now: () => now });
+  await mainSends(slack, a.engine, DM, "A asks");
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "X: written while A slept"); // top level, before B starts
+  now += 11 * 60_000;
+  const b = makeEngine(slack, { lockDir, sessionId: "B", pid: 1002, alive: () => true, now: () => now });
+  await mainSends(slack, b.engine, DM, "B asks");
+  await a.engine.poll();
+  assert.equal(a.engine.watch(`${DM}/top`)!.status, "error");
+  assert.ok(a.log.notices.some((n) => /1 message in .* since this session last read it \(from Robin Colleague; latest: "X: written while A slept"\) may be answered by no one/.test(n)), a.log.notices.join("\n"));
+  assert.equal(a.log.helpers.length, 0, "reported, not answered");
 });
