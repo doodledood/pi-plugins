@@ -1,4 +1,4 @@
-# ADR: Keep the owner's own Slack out of the Slack helper's reach unless he lists its tools
+# ADR: Keep the owner's own Slack and browser out of the Slack helper's reach unless he lists their tools
 
 ## Status
 Accepted
@@ -10,11 +10,12 @@ slack-companion
 An agent, during an unattended build, from the owner's ruling that the helper gets "all read-only stuff" but "no secrets", after a review pointed out what all read-only reach includes. The owner has not reviewed this decision or this record's text; the build report asks him to confirm it.
 
 ## Context
-20261104-hold-slack-conversations-in-a-read-only-fork-of-main gives the helper every MCP tool its server marks read-only. The owner's Slack MCP server marks its search and read tools read-only: searching public and private channels, reading any channel or thread, reading his direct messages. The helper serves anyone who posts in a watched conversation (20261104-serve-anyone-in-a-watched-conversation). So a channel member could ask the helper to look up and quote the owner's private conversations with other people. The owner's other conversations are his, much as his credentials are.
+20261104-hold-slack-conversations-in-a-read-only-fork-of-main gives the helper every MCP tool its server marks read-only. The owner's Slack MCP server marks its search and read tools read-only: searching public and private channels, reading any channel or thread, reading his direct messages. The helper serves anyone who posts in a watched conversation (20261104-serve-anyone-in-a-watched-conversation). So a channel member could ask the helper to look up and quote the owner's private conversations with other people. The owner's other conversations are his, much as his credentials are. The same holds for a server that drives his live browser (chrome-devtools and the like): its read-only tools list network requests, console messages and page contents of a logged-in browser, which carry cookies, auth headers and private pages.
 
 ## Decision
 - The helper does not get the tools of the MCP server that serves the configured Slack tools (the configured `server`, else every server listing one of them), even when they are marked read-only.
-- The owner can give it any of its read-only tools by listing it by name in `investigativeTools` (`tool` or `server/tool`).
+- Nor does it get the tools of a server that drives the owner's browser, known by name: `chrome-devtools`, `playwright`, `puppeteer`.
+- The owner can give it any of their read-only tools by listing it by name in `investigativeTools` (`tool` or `server/tool`).
 - A tool of that server that is not read-only (it posts or changes something) is never reachable, listed or not; neither is the configured send tool on any server.
 
 ## Alternatives Considered
@@ -24,14 +25,15 @@ An agent, during an unattended build, from the owner's ruling that the helper ge
 ## Consequences
 
 ### Positive
-- People in a watched conversation cannot reach the owner's other Slack conversations through the helper.
+- People in a watched conversation cannot reach the owner's other Slack conversations, or his browser's state, through the helper.
 
 ### Negative
 - The helper cannot look up a Slack link someone pastes, unless the owner lists the read tools.
 - A gateway that serves Slack and other tools as one MCP server hides those other tools from the helper too, unless listed.
+- A browser server under another name is not recognized; the owner's config can name it in no list today.
 
 ## Enforced by
-`packages/extensions/slack-companion/extensions/slack-companion/mcp-tools.test.ts` ("the owner's own Slack server is private: its tools are reachable only when he lists them") and `wiring.test.ts` ("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed") — pin the exclusion, the opt-in by name, and the production wiring.
+`packages/extensions/slack-companion/extensions/slack-companion/mcp-tools.test.ts` ("the owner's own Slack server is private: its tools are reachable only when he lists them") and `wiring.test.ts` ("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed", "a server that drives the owner's browser is private: its read-only tools reach no helper unless listed") — pin the exclusion, the opt-in by name, and the production wiring.
 
 ## Source
 - Session: the unattended build of slack-companion (2026-11-04), review round 4; execution log `~/.manifest-dev/logs/do-manifest-20261104-191921-e6fcc51c.md`.

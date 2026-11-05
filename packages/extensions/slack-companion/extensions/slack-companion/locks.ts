@@ -67,16 +67,16 @@ export class LockManager {
   }
 
   /**
-   * Keep an owned lock fresh. False when another session now holds it (it took over a lock this
-   * session left unrefreshed, for example across a long sleep): this session must stop answering.
+   * Keep an owned lock fresh. False when the lock is no longer this session's: another session
+   * holds it, or held it and let it go (it took over a lock this session left unrefreshed, for
+   * example across a long sleep). Either way that session may have answered here, so this one must
+   * stop rather than take the lock back unawares.
    */
   refresh(key: string): boolean {
     const holder = this.read(key);
-    if (holder && holder.sessionId === this.self.sessionId && holder.pid === this.self.pid) {
-      writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: this.now() }), { mode: 0o600 });
-      return true;
-    }
-    return this.acquire(key).ok;
+    if (!holder || holder.sessionId !== this.self.sessionId || holder.pid !== this.self.pid) return false;
+    writeFileSync(this.path(key), JSON.stringify({ ...this.self, at: this.now() }), { mode: 0o600 });
+    return true;
   }
 
   release(key: string): void {

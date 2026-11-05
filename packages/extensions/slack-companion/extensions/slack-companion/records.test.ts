@@ -77,6 +77,9 @@ test("only a deleted session's old records are removed; live, new, current and f
   writeFileSync(join(sessions, "extensions", "slack-companion", "index.ts"), "code"); // not records at all
   record("current", "current", 2 * ORPHAN_AGE_MS); // the running session, its file not written yet
   record("borrowed", "someone-else", 2 * ORPHAN_AGE_MS); // records naming another session: not this folder's
+  mkdirSync(join(sessions, "odd", "slack-companion"), { recursive: true });
+  writeFileSync(join(sessions, "odd", "slack-companion", "r.jsonl"), "null\n"); // valid JSON, not a header
+  utimesSync(join(sessions, "odd", "slack-companion", "r.jsonl"), (now - 2 * ORPHAN_AGE_MS) / 1000, (now - 2 * ORPHAN_AGE_MS) / 1000);
   mkdirSync(join(sessions, "notes", "slack-companion"), { recursive: true });
   writeFileSync(join(sessions, "notes", "slack-companion", "log.jsonl"), `${JSON.stringify({ type: "note" })}\n`); // jsonl, but not a record
   utimesSync(join(sessions, "notes", "slack-companion", "log.jsonl"), (now - 2 * ORPHAN_AGE_MS) / 1000, (now - 2 * ORPHAN_AGE_MS) / 1000);
@@ -85,6 +88,7 @@ test("only a deleted session's old records are removed; live, new, current and f
   assert.ok(existsSync(join(sessions, "gone-new", "slack-companion")), "recent records stay");
   assert.ok(existsSync(join(sessions, "current", "slack-companion")), "the current session's records stay");
   assert.ok(existsSync(join(sessions, "borrowed", "slack-companion")), "records of another session stay");
+  assert.ok(existsSync(join(sessions, "odd", "slack-companion")), "a file that is not a record header stays, and nothing throws");
   assert.ok(existsSync(join(sessions, "notes", "slack-companion", "log.jsonl")), "a jsonl that is not a record stays");
   assert.ok(existsSync(join(sessions, "extensions", "slack-companion", "index.ts")), "a folder that is not records stays");
   assert.equal(existsSync(join(sessions, "gone")), false, "an emptied folder goes");

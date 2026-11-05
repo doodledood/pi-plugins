@@ -152,6 +152,9 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
       { name: "data_lookup", description: "look data up", inputSchema: { type: "object", properties: { q: { type: "string" } } }, annotations: { readOnlyHint: true } },
       { name: "data_write", description: "write data", inputSchema: { type: "object", properties: { q: { type: "string" } } } },
     ] },
+    "chrome-devtools": { tools: [
+      { name: "list_network_requests", description: "list the browser's network requests", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+    ] },
   } }));
   writeFileSync(join(agentDir, "slack-companion.json"), options.rawConfig ?? JSON.stringify({ enabled: options.enabled ?? true, ...(options.config ?? {}) }));
   const slack = options.reopen?.slack ?? new FakeSlack();

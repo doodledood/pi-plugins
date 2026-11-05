@@ -277,3 +277,28 @@ test("every notice reaches the owner without control codes, whatever text it quo
   assert.ok(h.notices.length > 0, "the failed send was reported");
   for (const { text } of h.notices) assert.equal(/[\u0000-\u0008\u000b-\u001f\u007f\u009b]/.test(text), false, JSON.stringify(text));
 });
+
+test("a server that drives the owner's browser is private: its read-only tools reach no helper unless listed", async () => {
+  const run = async (config: Record<string, unknown>) => {
+    const h = await createHarness({
+      config,
+      replies: script("question", (c) => {
+        const last = c.messages.at(-1) as any;
+        return last?.role === "toolResult" ? { kind: "text", text: "done" } : { kind: "tool", name: "search_read_only_tools", args: { query: "network" } };
+      }),
+    });
+    await h.session.prompt("ask Robin");
+    const [question] = h.slack.messages(DM);
+    h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "what did the browser load?", question!.ts);
+    await h.engine().poll();
+    await h.engine().idle();
+    const helperCalls = h.calls.filter((c) => c.role === "helper");
+    const found = textOf((helperCalls.at(-1)!.context.messages.at(-1) as any).content);
+    return { found, direct: helperCalls[0]!.tools };
+  };
+  const hidden = await run({});
+  assert.doesNotMatch(hidden.found, /list_network_requests/);
+  assert.equal(hidden.direct.includes("list_network_requests"), false);
+  const listed = await run({ investigativeTools: ["chrome-devtools/list_network_requests"] });
+  assert.ok(listed.direct.includes("list_network_requests") || /list_network_requests/.test(listed.found), "listed by the owner: reachable");
+});

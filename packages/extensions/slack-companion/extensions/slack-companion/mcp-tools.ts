@@ -127,6 +127,13 @@ export function helperMcpTools(
   return { catalog, direct: catalog.filter((_tool, i) => chosen[i]!.shown) };
 }
 
+/**
+ * Servers that drive the owner's live, logged-in browser. Their read-only tools still see cookies,
+ * auth headers and private pages, so they are private like the owner's own Slack: reachable only
+ * when he lists a tool by name.
+ */
+export const BROWSER_SERVERS: readonly string[] = ["chrome-devtools", "playwright", "puppeteer"];
+
 /** The servers that serve the configured Slack tools: the configured `server`, else every server listing one of them. */
 export function slackServers(cache: McpCache | undefined, names: readonly string[], server: string | undefined): string[] {
   if (server) return [server];

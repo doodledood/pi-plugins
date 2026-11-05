@@ -20,7 +20,7 @@ It is for people who run Pi with a Slack MCP server and want the conversations t
 - [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter), with a Slack MCP server configured. The package calls Slack's tools from code through the adapter's runtime tool-call event. Pi's built-in MCP support has no such event. Without the adapter, the package loads and tells you that it cannot watch.
 - If pi-mcp-adapter asks you to approve tool calls (`approveTools`), leave the Slack tools that slack-companion reads out of it: the package reads without asking, and a watch stops if a read needs approval.
 - A Slack MCP server whose output the package can read. The package reads the detailed format of the official Slack MCP server, directly or through a gateway that hides emails. You can set the tool names for a server that uses different names.
-- For the helper's shell: [sandbox-runtime](https://github.com/anthropics/sandbox-runtime), which installs with the package. macOS uses its built-in Seatbelt. Linux needs `bubblewrap`, `socat` and `ripgrep`. If the sandbox cannot start, the helper has no shell.
+- For the helper's shell: [sandbox-runtime](https://github.com/anthropics/sandbox-runtime), which installs with the package. macOS uses its built-in Seatbelt. On Linux the helper has no shell yet (see *Known limits*). If the sandbox cannot start, the helper has no shell.
 
 ## Install
 
@@ -79,9 +79,9 @@ One line above the editor shows each watch, what the helper did last, and the re
 
 - A watch ends when the helper says the conversation has what it needed, or when anyone sends `stop`. It also ends when you stop it, or after a quiet period.
 - A watch pauses after it sends 5 messages without you, or when its daily spend cap is reached. Your next message in Pi resumes a watch paused for the message count. A spend-cap pause waits for you to press `r`, which lifts the cap for the rest of that day. A reply the helper wrote during a pause waits and goes out as written when you resume.
-- While a watch is paused, at most 20 messages wait for you. Older ones are dropped. The panel lists how many under that watch. One conversation can have at most 10 requests waiting for you; the helper is told when it is full.
+- While a watch is paused, at most 20 messages wait for you. Older ones are dropped, and the panel's events for that watch say how many. One conversation can have at most 10 requests waiting for you; the helper is told when it is full.
 - If a read fails for a reason that can pass (a rate limit, a dropped connection), the watch tries again at the next read. After 5 failures in a row, or at once for a problem that does not pass, it stops and tells you why. The reason says what to do: for example, run `/mcp-auth` when your Slack login expired. Then press `w`. A result too large for the adapter to save whole is read again in smaller pages once before the watch stops.
-- If another Pi session takes a conversation over (for example, after this machine slept), the watch here stops. What was waiting here is left to that session. If you press `w` later, the helper answers only what came after that session's last reply.
+- If another Pi session takes a conversation over (for example, after this machine slept), the watch here stops, even if that session has let it go again. Messages that waited here are not answered here; a notice says how many and from whom. If you press `w` later, the watch starts from that moment, and a notice says that earlier messages were left to the other session.
 - Requests that wait for you stay in the panel after their watch ends, until you approve or deny them. While the watch is live, your approval or denial is sent to the person, even during a pause. After the watch ends, the person is not told; an approved request still goes to your session, which can report the result there.
 - Watches come back when you resume the session. Pi then reads what arrived while it was closed. Nothing answers while Pi is closed or the machine sleeps.
 
@@ -91,17 +91,21 @@ One line above the editor shows each watch, what the helper did last, and the re
 
 - `read`, `grep`, `find` and `ls`.
 - A `bash` shell. Every command runs under sandbox-runtime. The shell can write only to its scratch folder, `$SCRATCH`. It has no network unless you allow domains. It gets no environment variable whose name looks like a credential.
-- Every MCP tool that its server marks read-only, plus the tools you list as investigative. Your own Slack server's tools (search, other channels, your private messages) are the exception: the helper gets them only if you list them by name, and only those that read. Your other conversations are yours. The ones your session has active now, and the listed ones, are tools of their own. The helper finds and calls the rest through two tools, `search_read_only_tools` and `call_read_only_tool`, so its prompt stays small. The helper calls them all through your session's adapter.
+- Every MCP tool that its server marks read-only, plus the tools you list as investigative. Two kinds of server are the exception: the helper gets their tools only if you list them by name, and only those that read.
+  - Your own Slack server (search, other channels, your private messages): your other conversations are yours.
+  - A server that drives your browser (`chrome-devtools`, `playwright`, `puppeteer`): its read-only tools still see your cookies, logins and private pages.
+
+  The ones your session has active now, and the listed ones, are tools of their own. The helper finds and calls the rest through two tools, `search_read_only_tools` and `call_read_only_tool`, so its prompt stays small. The helper calls them all through your session's adapter.
 - Its own `reply_in_slack` and `hand_off_to_main`.
 
 It has no edit, write or Slack-send tool, and it cannot use your session's other tools. Pi loads no extension for it, so no extension code runs when a helper starts. A helper run stops after 25 model turns.
 
 **Secrets stay out.**
 
-- The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders, `gh`'s login, password stores and keyrings, or MCP token stores (`~/.mcp-auth`, and Pi's own `mcp-auth.json` and `mcp-oauth` in its agent folder).
-- They also cannot read files named like credentials, or their copies and backups (such as `auth.json.bak`). These are `.env*`, `auth.json*`, `.netrc*`, `.npmrc*`, `.pgpass*`, `credentials`, `credentials.json*`, `.git-credentials*`, SSH keys, shell history files, `mcp.json*`, `.mcp.json*`, `mcp-adapter.json*`, `mcp-auth.json*` and `.credentials.json*`. The file tools find these names anywhere on disk. On macOS the shell does too.
-- On Linux, the sandbox would search the disk again before every shell command to find these names. So the package searches once when a helper starts: the whole project and Pi's agent folder, and your home folder to 4 levels deep. It skips `.git`, `node_modules` and caches such as `.cache`, `.npm` and `.cargo`. The shell cannot read what it finds. Outside those folders, on Linux, only the folders named above are closed to the shell. If the search takes more than 3 seconds, or finds more than 2000 files, the helper gets no shell.
-- The file tools cannot read `/proc`, where every process's environment is. The shell gets no credential variables in its own environment. On Linux it runs in its own process namespace, so its `/proc` shows only its own processes.
+- The helper's file tools and shell cannot read `~/.ssh`, cloud credential folders, `gh`'s login, password stores and keyrings, or `~/.mcp-auth`.
+- They cannot read the config folders of agent tools, which hold API keys, MCP servers' keys and tokens: Pi's agent folder (`~/.pi/agent`, with its `models.json` and MCP tokens), `~/.claude`, `~/.codex`, `~/.cursor`, `~/.gemini`, `~/.windsurf`, `~/.config/opencode`, `~/.config/mcp` and Claude's desktop app folder. A project inside one of these folders is closed too.
+- They also cannot read files named like credentials, or their copies and backups (such as `auth.json.bak`). These are `.env*`, `auth.json*`, `.netrc*`, `.npmrc*`, `.pgpass*`, `credentials`, `credentials.json*`, `.git-credentials*`, SSH keys, shell history files, `mcp.json*`, `.mcp.json*`, `mcp-adapter.json*`, `mcp-auth.json*`, `.credentials.json*`, `.claude.json*`, `claude_desktop_config.json*` and `opencode.json*` (every MCP config pi-mcp-adapter imports servers from). The file tools find these names anywhere on disk. On macOS the shell does too.
+- The file tools cannot read `/proc`, where every process's environment is. The shell gets no credential variables in its own environment.
 - The file tools check the path that they will open, so `~`, `@` and `file://` forms do not get past the check. Search output drops lines from these files, context lines too.
 - The package does not send a reply that contains something shaped like a key or token. It tells you instead.
 
@@ -133,7 +137,7 @@ The config file is `~/.pi/agent/slack-companion.json`. The agent folder follows 
 | `marker` | `🤖` | The prefix on every message the agent sends. |
 | `panelKey` | `alt+s` | The key that opens the panel. |
 | `allowedDomains` | `[]` | Domains the helper's shell can reach. An allowed domain can also receive data. |
-| `investigativeTools` | `[]` | MCP tools the helper can use although their server does not mark them read-only, shown to it as tools of their own. This is also how you give it your own Slack server's read tools. A Slack tool that posts or changes anything is never given, even if listed. Write `tool` or `server/tool`. |
+| `investigativeTools` | `[]` | MCP tools the helper can use although their server does not mark them read-only, shown to it as tools of their own. This is also how you give it your own Slack server's or a browser server's read tools. A Slack tool that posts or changes anything is never given, even if listed. Write `tool` or `server/tool`. |
 | `spendCapUsdPerDay` | unset | Pause a conversation when its helpers and checks spend this much in one day. |
 
 ## Files it reads and writes
@@ -143,7 +147,12 @@ The config file is `~/.pi/agent/slack-companion.json`. The agent folder follows 
 - A later version of the package may not read a saved snapshot. It then keeps the requests that wait for you, every `stop`, and `/slack off`, and names the watches it lost. If it cannot tell whether automatic starts were on, it turns them off until you run `/slack on`.
 - It remembers the last 1000 stops, so a conversation someone stopped does not start again when your session sends to it.
 - It writes one lock file per watched conversation under `~/.pi/agent/slack-companion/locks/`. Two sessions on one machine then never answer the same conversation. A session that ends releases its locks. The next session takes over a lock from a session that died. A session that loses a lock to another session stops answering there and tells you.
-- It writes the entries of each helper run, with their usage, under `<session file without .jsonl>/slack-companion/`. Session-tree cost accounting counts them. Pi does not remove that folder when you delete a session. So when a session starts with the package on, it removes such a folder in the same sessions folder if all of these are true: the session file is gone, every file in the folder is a helper record of that session, and the newest is more than a day old. It never removes the folder of the session that is running. A session that is not saved to a file writes no such entries, and the package tells you that their spend cannot be attributed.
+- It writes the entries of each helper run, with their usage, under `<session file without .jsonl>/slack-companion/`. Session-tree cost accounting counts them. Pi does not remove that folder when you delete a session. So when a session starts with the package on, it removes such a folder in the same sessions folder when all of these are true:
+  - The session file is gone.
+  - Every file in the folder is a helper record of that session.
+  - The newest record is more than 30 days old.
+
+  It never removes the folder of the session that is running. A session that is not saved to a file writes no such entries, and the package tells you that their spend cannot be attributed.
 - It records the cost of each check in the session as a small `pi-cost-record` entry, one per check. These go when the session goes.
 - The helper's shell gets a scratch folder in the system temp folder. The package removes it after each run.
 
@@ -153,6 +162,7 @@ The config file is `~/.pi/agent/slack-companion.json`. The agent folder follows 
 - Pi's built-in MCP support gives code no way to call a tool, so the package needs pi-mcp-adapter.
 - Every read is an MCP call, and Slack keeps audit logs of MCP activity. Each watch reads once a minute. Each new message adds two calls. Each send that it must check adds a read and two more calls per match.
 - Locks work on one machine. Two machines that watch the same direct message could both answer.
+- On Linux the helper has no shell. Its sandbox there can deny files only by path, so denying every secret file name would mean searching the disk before each command. The helper still reads the project with its file tools, which deny secret names on every platform.
 - At start, the package checks the Slack tool names against your Slack server's tools in the adapter's cache. If the adapter has not listed that server yet, the first read reports a wrong name instead.
 
 ## Verify

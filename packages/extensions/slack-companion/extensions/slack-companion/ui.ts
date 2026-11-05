@@ -114,8 +114,15 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
 /** Characters of a note an entry must show to be worth showing. */
 const NOTE_MIN = 16;
 const SEP = " · ";
+/** Between a conversation and what happened in it, so the person never reads as the one who acted. */
+const PAIR = " – ";
 
+/** The line above the editor: never wider than `width`, which Pi requires of a widget. */
 export function renderLine(surface: SurfaceState, paint: Paint, width: number): string[] {
+  return composeLine(surface, paint, width).map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width, "") : line));
+}
+
+function composeLine(surface: SurfaceState, paint: Paint, width: number): string[] {
   const sep = paint.fg("dim", SEP);
   const head = (color: PaintColor) => ` ${paint.fg(color, "●")} ${paint.fg("muted", "slack")}`;
   const hint = (long: boolean) => paint.fg("dim", long ? `${surface.panelKey} opens` : surface.panelKey);
@@ -126,10 +133,9 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
   };
   const fits = (left: string, longHint: boolean) => visibleWidth(left) + 2 + visibleWidth(hint(longHint)) <= width;
   if (surface.problem) {
-    const left = `${head("error")} ${paint.fg("text", `can't watch: ${surface.problem.title}`)}`;
     const room = Math.max(8, width - visibleWidth(hint(false)) - 2 - visibleWidth(` ● slack `));
     const short = `${head("error")} ${paint.fg("text", cut(`can't watch: ${surface.problem.title}`, room))}`;
-    return [compose(short, fits(short, true))];
+    return [fits(short, false) ? compose(short, fits(short, true)) : compose(head("error"), false)];
   }
   if (!surface.enabled) return [];
   const entries = lineEntries(surface);
@@ -148,11 +154,13 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
 
   // Watch entries at their natural width, in rank order: an entry shows only if its whole label
   // and its state word (or a useful part of its note) fit; the rest fold into "+N watching".
-  for (const long of [true, false]) {
+  // Each form (long words, short words) is built; the long one wins only if it names as many
+  // conversations, since the people are what the owner glances for.
+  const form = (long: boolean): { line: string; named: number } | undefined => {
     const countsWidth = (shownPaused: number) => counts(!long, shownPaused).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
     const chosen: LineEntry[] = [];
-    const need = (e: LineEntry) => visibleWidth(e.label) + 1 + (e.word ? visibleWidth(e.word.text) : Math.min(visibleWidth(e.note), NOTE_MIN));
+    const need = (e: LineEntry) => visibleWidth(e.label) + (e.word ? 1 + visibleWidth(e.word.text) : PAIR.length + Math.min(visibleWidth(e.note), NOTE_MIN));
     const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
     // Folded watches are counted as "watching"; a paused one is already in the paused count.
     const foldCount = (k: number) => entries.slice(k).filter((e) => !e.paused).length;
@@ -166,35 +174,33 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
     }
     // Space left over goes to the shown notes, in rank order.
     let spare = room - used() - fold(chosen.length) - countsWidth(shownPausedOf(chosen));
-    if (spare < 0 && chosen.length === 0 && !long) {
-      // Too narrow even for the counts in full: keep them in priority order until they fit.
-      const all = counts(true, 0);
-      // Keep "slack" and drop the lowest count first; only then drop the word.
-      for (let k = all.length; k >= 1; k -= 1) {
-        const left = [head(dot), ...all.slice(0, k)].join(sep);
-        if (fits(left, false)) return [compose(left, false)];
-      }
-      for (let k = all.length; k >= 1; k -= 1) {
-        const left = [` ${paint.fg(dot, "●")}`, ...all.slice(0, k)].join(sep);
-        if (fits(left, false)) return [compose(left, false)];
-      }
-      return [compose(head(dot), false)];
-    }
-    if (spare < 0) continue;
+    if (spare < 0) return undefined;
     const parts = chosen.map((e) => {
-      let state: string;
-      if (e.word) state = paint.fg(e.word.color, e.word.text);
-      else {
-        const base = Math.min(visibleWidth(e.note), NOTE_MIN);
-        const extra = Math.max(0, Math.min(visibleWidth(e.note) - base, spare));
-        spare -= extra;
-        state = paint.fg("muted", cut(e.note, base + extra));
-      }
-      return `${paint.fg("muted", e.label)} ${state}`;
+      // A state word (paused, answering…) reads as the conversation's state; a note, as an event.
+      if (e.word) return `${paint.fg("muted", e.label)} ${paint.fg(e.word.color, e.word.text)}`;
+      const base = Math.min(visibleWidth(e.note), NOTE_MIN);
+      const extra = Math.max(0, Math.min(visibleWidth(e.note) - base, spare));
+      spare -= extra;
+      return `${paint.fg("muted", e.label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
     });
     if (foldCount(chosen.length)) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${foldCount(chosen.length)} watching`));
     const left = [head(dot), ...parts, ...counts(!long, shownPausedOf(chosen))].join(sep);
-    if (fits(left, long)) return [compose(left, long)];
+    return fits(left, long) ? { line: compose(left, long), named: chosen.length } : undefined;
+  };
+  const long = form(true);
+  const short = form(false);
+  if (long && (!short || long.named >= short.named)) return [long.line];
+  if (short) return [short.line];
+  // Too narrow even for the counts in full: keep them in priority order until they fit.
+  const all = counts(true, 0);
+  // Keep "slack" and drop the lowest count first; only then drop the word.
+  for (let k = all.length; k >= 1; k -= 1) {
+    const left = [head(dot), ...all.slice(0, k)].join(sep);
+    if (fits(left, false)) return [compose(left, false)];
+  }
+  for (let k = all.length; k >= 1; k -= 1) {
+    const left = [` ${paint.fg(dot, "●")}`, ...all.slice(0, k)].join(sep);
+    if (fits(left, false)) return [compose(left, false)];
   }
   return [compose(head(dot), false)];
 }

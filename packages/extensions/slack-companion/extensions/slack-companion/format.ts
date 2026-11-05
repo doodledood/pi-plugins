@@ -230,10 +230,10 @@ export function parseThreadListing(toolText: string): ParsedListing & { parent?:
 
 /**
  * The genuine message of a lookup (`slack_read_thread` on one message's ts, limit 1). Its first
- * header is never preceded by message text, so it cannot be forged; its text runs to the
- * server's trailer — "No thread messages" at the very end for a message without replies, or the
- * first replies banner for one with replies (text before that banner is the message's own, so
- * only its author could plant one, cutting only their own text).
+ * header is never preceded by message text, so it cannot be forged. Its text runs to the first
+ * replies banner when the message has replies (text before that banner is the message's own, so
+ * only its author could plant one, cutting only their own text), or else to the server's own
+ * "No thread messsages" line at the very end.
  */
 export function parseLookup(toolText: string): CandidateMessage {
   const { body } = parseEnvelope(toolText, "messages");

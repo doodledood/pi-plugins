@@ -48,7 +48,7 @@ Line: 3.4 s on darwin-arm64-12cpu
 
 - The sandbox scenarios skip, with the reason printed, where sandbox-runtime cannot run (they need
   macOS Seatbelt, or bubblewrap, socat and ripgrep on Linux).
-- The fixtures in `format.test.ts` are scrubbed captures of the real server's output. When the
+- The fixtures in `format.test.ts` keep the real server's layout byte for byte, with every value invented. When the
   server's format changes, `slack-companion-live` fails; its evidence holds
   `scrubbedThreadListing`, the server's raw thread listing with the person's name, ids and emails
   replaced by the fixtures' invented ones, to refresh them from.

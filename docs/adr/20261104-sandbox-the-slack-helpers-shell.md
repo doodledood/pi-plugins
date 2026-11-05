@@ -1,7 +1,7 @@
 # ADR: Run the Slack helper's shell in an OS sandbox with no network
 
 ## Status
-Accepted; amended by 20261104-find-the-shells-secret-files-once-per-helper-run-on-linux (on Linux, the shell's name denial covers what a bounded walk finds)
+Accepted; amended by 20261104-give-the-slack-helper-no-shell-on-linux-for-now (on Linux, the helper has no shell)
 
 ## Area
 slack-companion

@@ -286,7 +286,7 @@ test("a paused watch is counted once: as paused, not also as watching", () => {
 });
 
 test("a DM row keeps the name whole before the snippet, and a cut label keeps its color and weight to the end", () => {
-  const long = "Christopher Johnson";
+  const long = "Bartholomew Quillfeather";
   // Real SGR codes (zero width), one color per name, so a reset inside a label shows.
   const codes: Record<string, number> = { text: 37, muted: 90 };
   const painted: Paint = { fg: (c, t) => `\u001b[${codes[c] ?? 36}m${t}\u001b[39m`, bold: (t) => `\u001b[1m${t}\u001b[22m` };
@@ -295,7 +295,7 @@ test("a DM row keeps the name whole before the snippet, and a cut label keeps it
   const channel = channelWatch(1, { channelName: "release-coordination-and-incident-follow-ups", partner: { userId: "U2", name: long } });
   for (const width of [44, 60, 80, 120]) {
     const rows = renderPanel(surface({ watches: [thread, ended, channel] }), 0, painted, width, 0);
-    const channelRow = rows.find((r) => r.includes("Christ") && !r.includes("(DM)"))!;
+    const channelRow = rows.find((r) => r.includes("Bartho") && !r.includes("(DM)"))!;
     assert.equal(channelRow.includes("\u001b[0m"), false, `a cut channel label keeps its paint at ${width}`);
     const labels = rows.filter((r) => r.includes("(DM)"));
     assert.ok(labels.length >= 2, `both rows at ${width}`);
@@ -315,4 +315,29 @@ test("paused conversations are counted as the line shows them: a DM's top level 
     const [line] = renderLine(surface({ watches: [top, thread, ...others] }), plain, width);
     assert.equal(/2 paused/.test(line!), false, `one conversation is paused, not two (${width}): ${line}`);
   }
+});
+
+test("the line is never wider than the terminal, at any width, in any state", () => {
+  const states: SurfaceState[] = [
+    surface({}, { problem: { title: "pi-mcp-adapter is not installed", detail: "x" } }),
+    surface({ watches: [watch({ lastNote: "helper replied: Checked" })], approvals: [approval()] }),
+    surface({ watches: [watch({ status: "paused", pause: "spendCap" }), ...[1, 2, 3, 4, 5].map((i) => channelWatch(i, { lastNote: `helper replied: answer ${i}` }))] }),
+    surface({ watches: [watch({ status: "error", reason: "x", endedAt: 1 })] }),
+  ];
+  for (const state of states) for (let width = 10; width <= 60; width += 1) {
+    for (const line of renderLine(state, plain, width)) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
+  }
+});
+
+test("the line names the people before it spends room on long words", () => {
+  const request = surface({ watches: [watch({ lastNote: "helper asked you to approve" })], approvals: [approval()] });
+  const [one] = renderLine(request, plain, 66);
+  assert.match(one!, /Robin Colleague/, `the requester is named at 66 columns: ${one}`);
+  const two = surface({
+    watches: [watch({ lastNote: "helper asked you to approve" }), channelWatch(1, { partner: { userId: "U2", name: "Sam Teammate" }, channelName: "eval", lastNote: "helper asked you to approve", lastActivityAt: 5 })],
+    approvals: [approval(), approval({ id: "a2", watchKey: "C1/1.0", requester: "Sam Teammate", label: "Sam Teammate's thread in #eval" })],
+  });
+  const [both] = renderLine(two, plain, 110);
+  assert.match(both!, /Robin Colleague/);
+  assert.match(both!, /Sam Teammate/, `both requesters are named at 110 columns: ${both}`);
 });

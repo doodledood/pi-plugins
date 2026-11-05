@@ -28,8 +28,12 @@ export function writeHelperRecord(parentSessionFile: string | undefined, cwd: st
   return path;
 }
 
-/** How old a deleted session's records must be before they are removed (a new session's file may not exist yet). */
-export const ORPHAN_AGE_MS = 24 * 60 * 60 * 1000;
+/**
+ * How old a deleted session's records must be before they are removed. Pi writes a session's file
+ * only once it holds a message, so a running session that has only used /slack has records and no
+ * file; no running session goes this long without a message.
+ */
+export const ORPHAN_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Is every file in `dir` a helper record of exactly `parentSessionFile`, the newest older than the age? */
 function onlyOldRecordsOf(dir: string, parentSessionFile: string, now: number): boolean {
@@ -40,13 +44,15 @@ function onlyOldRecordsOf(dir: string, parentSessionFile: string, now: number): 
     const path = join(dir, file.name);
     if (now - statSync(path).mtimeMs < ORPHAN_AGE_MS) return false;
     const first = readFileSync(path, "utf8").split("\n", 1)[0] ?? "";
-    let header: { type?: unknown; parentSession?: unknown };
+    let header: unknown;
     try {
       header = JSON.parse(first);
     } catch {
       return false;
     }
-    if (header.type !== "session" || header.parentSession !== parentSessionFile) return false;
+    if (!header || typeof header !== "object") return false;
+    const { type, parentSession } = header as Record<string, unknown>;
+    if (type !== "session" || parentSession !== parentSessionFile) return false;
   }
   return true;
 }

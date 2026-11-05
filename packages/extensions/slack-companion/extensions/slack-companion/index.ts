@@ -18,7 +18,7 @@ import { parseSendResult } from "./format.ts";
 import { selectForkBranch } from "./fork.ts";
 import { runHelper, type HelperOutcome } from "./helper.ts";
 import { LockManager } from "./locks.ts";
-import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
+import { BROWSER_SERVERS, type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools, readMcpCache, slackServers } from "./mcp-tools.ts";
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, pruneOrphanRecords, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
@@ -155,7 +155,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         blocked: [config.tools.sendMessage],
         // The owner's own Slack (search, other channels, private messages) is not read for people in
         // a watched conversation unless he lists those tools: his other conversations are his.
-        privateServers: slackServers(cache, Object.values(config.tools), config.server),
+        privateServers: [...slackServers(cache, Object.values(config.tools), config.server), ...BROWSER_SERVERS],
       });
     } catch (error) {
       if (!warnedCache) {
@@ -166,6 +166,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     }
   };
 
+  let lastNoShellReason: string | undefined;
   const runHelperFor: EngineDeps["runHelper"] = async ({ batch, signal }) => {
     const ctx = ctxRef;
     if (!live || !ctx?.model) throw new Error("the main session is not available");
@@ -174,7 +175,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
       if (sandbox.ok) await sandbox.dispose();
       throw new Error("the helper was stopped before it answered");
     }
-    if (!sandbox.ok) notify("warning", `Slack helper runs without a shell: ${sandbox.reason}`);
+    // Said once per reason, not on every helper run.
+    if (!sandbox.ok && sandbox.reason !== lastNoShellReason) notify("warning", `Slack helper runs without a shell: ${sandbox.reason}`);
+    lastNoShellReason = sandbox.ok ? undefined : sandbox.reason;
     const sections = { ...(lastPromptOptions?.sections ?? {}) };
     delete sections[PROMPT_SECTION];
     let outcome: HelperOutcome;

@@ -22,9 +22,22 @@ export function resolveToolPath(input: string, cwd: string, home = homedir()): s
   return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
 }
 
-/** Folders whose contents are credentials. */
+/**
+ * Folders whose contents are credentials, or may hold them. Agent harnesses keep API keys, MCP
+ * server environments and tokens in their config folders (Pi's models.json, ~/.claude.json's
+ * neighbours, Codex's config.toml), so those folders are closed whole.
+ */
 export function secretDirectories(home = homedir(), agentDir = join(home, ".pi", "agent")): string[] {
   return [
+    agentDir,
+    join(home, ".claude"),
+    join(home, ".codex"),
+    join(home, ".cursor"),
+    join(home, ".gemini"),
+    join(home, ".windsurf"),
+    join(home, ".config", "opencode"),
+    join(home, ".config", "mcp"),
+    join(home, "Library", "Application Support", "Claude"),
     join(home, ".ssh"),
     join(home, ".aws"),
     join(home, ".gnupg"),
@@ -37,15 +50,14 @@ export function secretDirectories(home = homedir(), agentDir = join(home, ".pi",
     join(home, ".config", "gh"),
     join(home, ".password-store"),
     join(home, ".local", "share", "keyrings"),
-    join(agentDir, "mcp-oauth"),
-    join(agentDir, "mcp-oauth-encrypted"),
   ];
 }
 
 /**
  * Names of files that hold credentials wherever they sit, as globs (`*` is any run of characters).
- * The one list both guards use: the file tools match names against it, and the shell sandbox
- * denies the name at any depth under the home and the project.
+ * The one list both guards use: the file tools match names against it anywhere; the shell sandbox
+ * denies the names from the filesystem root on macOS, and on Linux denies the files that
+ * sandbox.findSecretFiles finds.
  */
 export const SECRET_FILE_GLOBS: readonly string[] = [
   // Each with its variants and backups (auth.json.bak, .env.local, mcp.json.old, credentials.json~).
@@ -65,6 +77,10 @@ export const SECRET_FILE_GLOBS: readonly string[] = [
   "mcp-adapter.json*",
   "mcp-auth.json*",
   ".credentials.json*",
+  // MCP configs that pi-mcp-adapter imports servers from; they carry servers' keys and headers.
+  ".claude.json*",
+  "claude_desktop_config.json*",
+  "opencode.json*",
   ".git-credentials*",
   ".*_history",
 ];
@@ -99,7 +115,7 @@ function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {
 }
 
 /** Is this file name one of SECRET_FILE_GLOBS (with its copies and backups)? */
-export function isSecretFileName(name: string): boolean {
+function isSecretFileName(name: string): boolean {
   return SECRET_FILE_NAMES.some((re) => re.test(name));
 }
 

@@ -58,8 +58,8 @@ export interface WatchState {
   /** A channel's name once read ("" when the server shows none); unset for direct messages. */
   channelName?: string;
   /**
-   * Another session took this conversation over (lock lost). When watched again, waiting messages
-   * older than that session's latest marked post are its answered ones, not this session's to answer.
+   * Another session took this conversation over (lock lost). What was sent while it held the
+   * conversation was that session's to answer, so watching again starts from that moment on.
    */
   handedOver?: boolean;
 }
@@ -83,6 +83,8 @@ export interface LedgerEntry {
   at: number;
   status: "sending" | "sent" | "uncertain" | "failed";
   ts?: string;
+  /** Who the message speaks for: the owner's approval or decline note, or (unset) the helper. */
+  by?: "owner";
 }
 
 export interface EngineState {
@@ -187,7 +189,6 @@ export function pendingApprovals(state: Pick<EngineState, "approvals">, watchKey
   return state.approvals.filter((a) => a.status === "pending" && (!watchKey || a.watchKey === watchKey));
 }
 
-/** How the owner sees a conversation: who it is with first, then where; a raw id only when no name is known. */
 /** The mark after a person's name that says a conversation is a direct message. */
 export const DM_MARK = "(DM)";
 
@@ -196,6 +197,7 @@ export function dmLabel(name: string | undefined): string {
   return `${name ?? "someone"} ${DM_MARK}`;
 }
 
+/** How the owner sees a conversation: who it is with first, then where; a raw id only when no name is known. */
 export function watchLabel(watch: Pick<WatchState, "conversation" | "partner" | "channelName">): string {
   const { conversation, partner } = watch;
   if (isDirectMessage(conversation.channelId)) return dmLabel(partner?.name);
@@ -555,6 +557,14 @@ export class Engine {
     watch.since = tsFromMillis(this.deps.now());
     delete watch.reason;
     delete watch.readFailures;
+    if (watch.handedOver) {
+      // Which of those messages the other session answered cannot be told from here: start from
+      // now, and say so, so nothing is answered twice and nothing is dropped without a word.
+      watch.point = { checkpoint: watch.since, seen: [] };
+      watch.inbox = [];
+      delete watch.handedOver;
+      this.deps.notify("info", `Slack: watching ${watchLabel(watch)} again from now. Messages sent while another Pi session held it are left to that session; open the conversation in Slack to check them.`);
+    }
     this.note(watch, "watching again");
     this.save();
     this.schedule(watch); // what was waiting when it stopped is answered now
@@ -581,7 +591,13 @@ export class Engine {
     watch.reason = stripControl(reason);
     watch.endedAt = this.deps.now();
     // A stop with an error keeps what was waiting: watching again (w) answers it. Not after a lock
-    // loss: the session that took the conversation over answers those messages itself.
+    // loss: which of those the other session answers cannot be told from here (it may never read
+    // them), so they are dropped, and the owner is told how many and from whom.
+    if (options.lockLost && watch.inbox.length) {
+      const people = [...new Set(watch.inbox.map((m) => m.userName))].join(", ");
+      const count = watch.inbox.length;
+      this.deps.notify("warning", `Slack: ${count} message${count === 1 ? "" : "s"} waiting in ${watchLabel(watch)} (from ${people}) ${count === 1 ? "was" : "were"} not answered here: another Pi session took the conversation over. Check them in Slack.`);
+    }
     if (status === "stopped" || options.lockLost) watch.inbox = [];
     if (options.lockLost) watch.handedOver = true;
     else if (status === "stopped") delete watch.handedOver;
@@ -743,15 +759,9 @@ export class Engine {
         this.end(watch, "stopped", `${message.userName} said stop`, true);
         return;
       }
-      // Another of the owner's agents posted it: context only, never answered. After a hand-over,
-      // what came before it was that session's to answer.
+      // Another of the owner's agents posted it: context only, never answered.
       if (message.userId === owner.userId && message.agentFooter) {
         watch.lastAgentPostOurs = false;
-        if (watch.handedOver) {
-          watch.inbox = watch.inbox.filter((m) => compareTs(m.ts, message.ts) > 0);
-          queued.clear();
-          for (const m of watch.inbox) queued.add(m.ts);
-        }
         continue;
       }
       if (!watch.partner && message.userId !== owner.userId) watch.partner = { userId: message.userId, name: message.userName };
@@ -764,14 +774,14 @@ export class Engine {
       const kept = message.text.length > MAX_INBOX_TEXT ? { ...message, text: `${message.text.slice(0, MAX_INBOX_TEXT)}…` } : message;
       watch.inbox = [...watch.inbox, kept];
       queued.add(message.ts);
-      if (watch.inbox.length > MAX_INBOX) {
-        // While paused, a busy conversation could queue without end: the newest wait, older ones are dropped.
-        const dropped = watch.inbox.length - MAX_INBOX;
-        watch.inbox = watch.inbox.slice(-MAX_INBOX);
-        this.note(watch, `${dropped} older waiting message${dropped === 1 ? " was" : "s were"} dropped; ${MAX_INBOX} wait for you`);
-      }
     }
-    delete watch.handedOver; // one full read after watching again settles it
+    if (watch.inbox.length > MAX_INBOX) {
+      // While paused, a busy conversation could queue without end: the newest wait, older ones are
+      // dropped, and one note per read says how many.
+      const dropped = watch.inbox.length - MAX_INBOX;
+      watch.inbox = watch.inbox.slice(-MAX_INBOX);
+      this.note(watch, `${dropped} older waiting message${dropped === 1 ? " was" : "s were"} dropped; ${MAX_INBOX} wait for you`);
+    }
   }
 
   /** Keep a message as context, its text cut to what a restart needs. */
@@ -934,7 +944,7 @@ export class Engine {
     }
     const owner = await this.owner();
     const marked = markMessage(text, config.marker, owner.name, !watch.agentLineSent);
-    const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending" };
+    const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending", ...(options.fromOwner ? { by: "owner" as const } : {}) };
     // The step this send completes is recorded in the same save as the send itself, so a crash
     // during the send is settled by reconcile and the step is never redone.
     options.commit?.();
@@ -996,10 +1006,10 @@ export class Engine {
         entry.status = "sent";
         entry.ts = found.ts;
         watch.ownPosts = [...watch.ownPosts, found.ts].slice(-MAX_OWN_POSTS);
-        this.note(watch, "helper's reply went out");
+        this.note(watch, entry.by === "owner" ? "your note went out" : "helper's reply went out");
       } else {
         entry.status = "failed";
-        this.note(watch, "helper's reply did not go out; not sent again");
+        this.note(watch, `${entry.by === "owner" ? "your note" : "helper's reply"} did not go out; not sent again`);
         this.deps.notify("warning", `Slack: a reply in ${watchLabel(watch)} did not go out; it was not re-sent.`);
       }
     }
