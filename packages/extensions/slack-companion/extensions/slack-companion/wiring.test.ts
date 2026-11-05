@@ -12,6 +12,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
 import { applyPanelAction } from "./index.ts";
+import { canonicalPath } from "./secrets.ts";
 import { createHarness, textOf, type Reply, type Role } from "./pi-harness.ts";
 
 const DM = "D0FAKE0001";
@@ -50,13 +51,13 @@ test("the real helper path builds its sandbox and file guards for the owner's ho
   assert.ok(policy.filesystem.denyRead.includes(h.agentDir), "Pi's agent folder is closed to the shell");
   assert.ok(policy.filesystem.denyRead.includes(h.home), "the home folder is closed to the shell");
   const allowed = policy.filesystem.allowRead ?? [];
-  for (const open of [h.workspace, join(h.home, "shared-notes"), join(h.agentDir, "bin"), join(h.home, ".nvm"), join(h.home, ".gitconfig")]) {
+  for (const open of [canonicalPath(h.workspace), canonicalPath(join(h.home, "shared-notes")), join(h.agentDir, "bin"), join(h.home, ".nvm"), join(h.home, ".gitconfig")]) {
     assert.ok(allowed.includes(open), `${open} is opened back`);
   }
   assert.deepEqual(policy.network.allowedDomains, ["docs.example.org"]);
   const helperCalls = h.calls.filter((c) => c.role === "helper");
   const readResult = helperCalls.at(-1)!.context.messages.find((m: any) => m.role === "toolResult" && m.toolName === "read") as any;
-  assert.match(textOf(readResult.content), /secret location/);
+  assert.match(textOf(readResult.content), /not open to the Slack helper/);
   assert.ok(JSON.stringify(helperCalls.map((c) => c.context)).includes("SHARED-PLAN"), "a folder the owner opened is readable by the file tools");
   assert.equal(JSON.stringify(helperCalls.map((c) => c.context)).includes("PRIVATE-KEY-CONTENT"), false);
 });
@@ -176,9 +177,7 @@ test("a session that ends releases its locks", async () => {
   assert.ok(readdirSync(locks).length > 0);
   writeFileSync(join(h.agentDir, "slack-companion.json"), JSON.stringify({ enabled: false }));
   await h.session.reload(); // the old session's runtime shuts down; the new one, disabled, takes nothing
-  const files = readdirSync(locks);
-  assert.ok(files.length > 0);
-  for (const file of files) assert.equal(JSON.parse(readFileSync(join(locks, file), "utf8")).released, true, `${file} is released, its marker kept`);
+  assert.deepEqual(readdirSync(locks), [], "every lock was let go, and nothing is left behind");
 });
 
 test("the panel opened through Pi fits the overlay it asks for, gates approval on reading, and records seen stops", async () => {
@@ -314,8 +313,9 @@ test("a server that drives the owner's browser is private: its read-only tools r
   assert.equal(hidden.direct.includes("list_network_requests"), false);
   const listed = await run({ investigativeTools: ["chrome-devtools/list_network_requests"] });
   assert.ok(listed.direct.includes("list_network_requests") || /list_network_requests/.test(listed.found), "listed by the owner: reachable");
-  const opened = await run({ privateServers: [] });
-  assert.ok(opened.direct.includes("list_network_requests") || /list_network_requests/.test(opened.found), "the owner's own private list replaces the default");
+  const added = await run({ privateServers: ["mail"] });
+  assert.doesNotMatch(added.found, /list_network_requests/, "adding a private server keeps the browser servers private");
+  assert.equal(added.direct.includes("list_network_requests"), false);
 });
 
 test("on Linux the owner is told once that the helper has no shell, and the file tools still guard secrets", async () => {
@@ -341,4 +341,26 @@ test("on Linux the owner is told once that the helper has no shell, and the file
   assert.equal(h.notices.filter((n) => /runs without a shell: on Linux/.test(n.text)).length, 1, "said once, not per run");
   const reads = helperRuns.map((c) => JSON.stringify(c.context.messages)).join("");
   assert.equal(reads.includes("PRIVATE-KEY-CONTENT"), false, "the file tools still deny secrets");
+});
+
+test("through the real send path, a fresh DM is named by the words main wrote, never by the package's agent line", async () => {
+  for (const marker of ["🤖", ""]) {
+    const h = await createHarness({
+      ui: { rows: 30 },
+      config: { marker },
+      replies: (context: Context, role: Role) => {
+        if (role !== "main") return { kind: "text", text: "ok" };
+        const last = textOf((context.messages.filter((m: any) => m.role !== "system").at(-1) as any)?.content);
+        if (/ask Robin/.test(last)) return { kind: "tool", name: "slack_send_message", args: { channel_id: DM, message: "Which build should I ship today?" } };
+        if (/ask Sam/.test(last)) return { kind: "tool", name: "slack_send_message", args: { channel_id: "D0FAKE0003", message: "Can you review the eval change?" } };
+        return { kind: "text", text: "ok" };
+      },
+    });
+    await h.session.prompt("ask Robin");
+    await h.session.prompt("ask Sam");
+    const [line] = h.line(160);
+    assert.match(line!, /DM "Which build should I shi…"/, `marker ${JSON.stringify(marker)}: ${line}`);
+    assert.match(line!, /DM "Can you review the eval…"/, "two fresh DMs read apart");
+    assert.doesNotMatch(line!, /agent\*\*|Dana Owner/, "the package's agent line is not the name");
+  }
 });

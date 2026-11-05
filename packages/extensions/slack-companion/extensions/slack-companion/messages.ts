@@ -57,6 +57,15 @@ export function markMessage(text: string, marker: string, ownerName: string, fir
   return first ? `${prefix}${agentLine(ownerName)}\n\n${body}` : `${prefix}${body}`;
 }
 
+/**
+ * The words main wrote, without what markMessage added (the marker and the agent line). The agent
+ * line is recognized by its shape, so a name the package does not know yet is still removed.
+ */
+export function ownerWords(text: string, marker: string): string {
+  const body = marker && text.startsWith(`${marker} `) ? text.slice(marker.length + 1) : text;
+  return body.replace(/^\*\*[^*\n]+'s agent\*\* — [^\n]*\n\n/, "");
+}
+
 export function waitingNote(ownerName: string, requests: readonly string[]): string {
   const list = requests.map((r) => `• ${firstLine(r)}`).join("\n");
   return `_Waiting on ${ownerName}'s OK for:_\n${list}`;

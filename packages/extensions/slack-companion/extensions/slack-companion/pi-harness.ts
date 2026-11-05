@@ -76,17 +76,6 @@ export function roleOf(context: Context): Role {
   return "main";
 }
 
-/** The newest tool results of this context, newest last. */
-export function lastToolResults(context: Context): string[] {
-  const out: string[] = [];
-  for (let i = context.messages.length - 1; i >= 0; i -= 1) {
-    const m = context.messages[i] as any;
-    if (m.role !== "toolResult") break;
-    out.unshift(textOf(m.content));
-  }
-  return out;
-}
-
 export interface Harness {
   session: AgentSession;
   slack: FakeSlack;

@@ -32,9 +32,9 @@ export interface SlackCompanionConfig {
   /** MCP tools the helper may use although their server does not mark them read-only. */
   investigativeTools: string[];
   /**
-   * MCP servers whose tools reach no helper unless listed in investigativeTools, though marked
-   * read-only: by default the ones that drive the owner's logged-in browser. The owner's own Slack
-   * server is always private as well.
+   * MCP servers whose tools reach no helper unless listed as `server/tool` in investigativeTools,
+   * though marked read-only: the ones that drive the owner's logged-in browser, plus any the owner
+   * adds. The owner's own Slack server is always private as well.
    */
   privateServers: string[];
   /**
@@ -135,7 +135,8 @@ export function parseConfig(raw: unknown): SlackCompanionConfig {
   }
   if ("privateServers" in input) {
     expect(isTextList(input.privateServers), "privateServers must be a list of MCP server names");
-    config.privateServers = input.privateServers;
+    // Added to the built-in list, never in place of it: adding a mail server must not open the browser.
+    config.privateServers = [...new Set([...DEFAULT_CONFIG.privateServers, ...input.privateServers])];
   }
   if ("readableFolders" in input) {
     expect(isTextList(input.readableFolders) && input.readableFolders.every((f) => isAbsolute(f) || f.startsWith("~/")), "readableFolders must be a list of absolute folders (or ~/…)");

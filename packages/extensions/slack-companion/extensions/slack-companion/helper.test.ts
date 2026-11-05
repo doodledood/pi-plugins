@@ -3,6 +3,7 @@
 // (no extension, allowlisted tools), docs/adr/20261104-sandbox-the-slack-helpers-shell.md and
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,9 +14,10 @@ import type { Skill } from "@earendil-works/pi-coding-agent";
 import { forkEntriesForChild, selectForkBranch } from "./fork.ts";
 import { HelperAbortedError, MAX_HELPER_TURNS, runHelper, type HelperBatch, type HelperEnvironment } from "./helper.ts";
 import { helperMcpTools, mcpCachePathIn, readMcpCache } from "./mcp-tools.ts";
-import { createHarness, systemText, textOf, type Reply } from "./pi-harness.ts";
+import type { Context } from "@earendil-works/pi-ai";
+import { createHarness, type Harness, systemText, textOf, type Reply } from "./pi-harness.ts";
 import { NO_SHELL_ON_LINUX, startShellSandbox, type ShellSandbox } from "./sandbox.ts";
-import { defaultSecretPolicy } from "./secrets.ts";
+import { readPolicy } from "./secrets.ts";
 
 const batch: HelperBatch = {
   conversationLabel: "DM with Robin Colleague",
@@ -58,11 +60,18 @@ async function shellRunsHere(t: { skip(message?: string): void; diagnostic(messa
   return false;
 }
 
-async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal; skills?: (agentDir: string) => Skill[] } = {}) {
+type Step = Reply | ((context: Context) => Reply);
+
+async function helperRun(steps: Step[], options: { home?: string; sandbox?: (cwd: string, home: string) => Promise<ShellSandbox>; signal?: AbortSignal; skills?: (agentDir: string) => Skill[]; prepare?: (h: Harness) => void } = {}) {
   const queue = [...steps];
   const h = await createHarness({
-    replies: (_c, role) => (role === "helper" ? (queue.shift() ?? { kind: "text", text: "done" }) : { kind: "text", text: "ok" }),
+    replies: (c, role) => {
+      if (role !== "helper") return { kind: "text", text: "ok" };
+      const next = queue.shift() ?? { kind: "text", text: "done" };
+      return typeof next === "function" ? next(c) : next;
+    },
   });
+  options.prepare?.(h);
   await h.session.prompt("hello");
   const home = options.home ?? fakeHome();
   writeFileSync(join(h.workspace, ".env"), "TOKEN=secret-value");
@@ -89,7 +98,7 @@ async function helperRun(steps: Reply[], options: { home?: string; sandbox?: (cw
     events: h.events,
     mcpTools: helperMcpTools(readMcpCache(mcpCachePathIn(h.agentDir)), new Set(h.session.getActiveToolNames()), [], { blocked: ["slack_send_message"] }),
     sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
-    secrets: defaultSecretPolicy(join(home, ".pi", "agent"), home),
+    reads: readPolicy({ home, agentDir: join(home, ".pi", "agent"), roots: [h.workspace] }),
   };
   const outcome = await runHelper(env, batch, options.signal);
   const results = outcome.ownEntries
@@ -161,8 +170,8 @@ test("every file tool is denied secret locations, in every spelling Pi's tools a
   ], { home });
   const reads = results.filter((r) => r.tool === "read");
   assert.equal(reads.length, 6);
-  for (const r of reads) assert.ok(r.isError && /secret location/.test(r.text), r.text);
-  assert.equal(results.some((r) => /PRIVATE-KEY-CONTENT|OAUTH-TOKEN-CONTENT|secret-value|tokens\.json|id_ed25519/.test(r.text) && !/secret location/.test(r.text)), false, "no secret content or name came back");
+  for (const r of reads) assert.ok(r.isError && /not open to the Slack helper/.test(r.text), r.text);
+  assert.equal(results.some((r) => /PRIVATE-KEY-CONTENT|OAUTH-TOKEN-CONTENT|secret-value|tokens\.json|id_ed25519/.test(r.text) && !/not open to the Slack helper/.test(r.text)), false, "no secret content or name came back");
   assert.match(results.find((r) => r.tool === "grep" && /config\.ts/.test(r.text))!.text, /line one/, "ordinary search still works");
 });
 
@@ -279,7 +288,7 @@ test("every file tool and the shell are denied Pi's auth file, cloud credentials
     },
   });
   assert.ok(h);
-  assert.equal(results.filter((r) => r.tool === "read").every((r) => r.isError && /secret location/.test(r.text)), true, "read");
+  assert.equal(results.filter((r) => r.tool === "read").every((r) => r.isError && /not open to the Slack helper/.test(r.text)), true, "read");
   assert.equal(results.some((r) => /AWS-CREDENTIAL-CONTENT|PI-AUTH-CONTENT|PI-AUTH-BACKUP-CONTENT|SSH-CONFIG-CONTENT/.test(r.text)), false, "no tool returned a secret, a backup of one included");
   assert.ok(results.filter((r) => r.tool === "ls" || r.tool === "find").every((r) => r.isError), "find and ls refuse secret folders, through a symlink too");
   if (!probe.ok) t.diagnostic(`shell part not run: ${probe.reason}`);
@@ -311,7 +320,7 @@ test("grep and find refuse a secret folder reached through a symlink", async () 
     { kind: "tool", name: "grep", args: { pattern: "CONTENT", path: "linked-ssh" } },
     { kind: "tool", name: "find", args: { pattern: "*", path: "linked-ssh" } },
   ], { home, sandbox: async (cwd, h2) => { symlinkSync(join(home, ".ssh"), join(cwd, "linked-ssh")); return realSandbox(cwd, h2); } });
-  assert.ok(results.every((r) => r.isError && /secret location/.test(r.text)), JSON.stringify(results));
+  assert.ok(results.every((r) => r.isError && /not open to the Slack helper/.test(r.text)), JSON.stringify(results));
 });
 
 test("the helper can load the skills it is offered from Pi's agent folder, and nothing else there", async () => {
@@ -335,7 +344,7 @@ test("the helper can load the skills it is offered from Pi's agent folder, and n
   assert.equal(body!.isError, false);
   assert.match(body!.text, /SKILL-BODY/, "an offered skill loads");
   for (const [r, what] of [[secret, "a secret name inside the skill"], [models, "models.json"], [other, "a skill not offered"]] as const) {
-    assert.ok(r!.isError && /secret location/.test(r!.text), `${what} stays closed`);
+    assert.ok(r!.isError && /not open to the Slack helper/.test(r!.text), `${what} stays closed`);
   }
 });
 
@@ -378,4 +387,84 @@ test("the real shell reads the project inside the home and the toolchains, and n
   assert.match(out, /NVM-SCRIPT/, "a toolchain is readable");
   for (const secret of ["PROJECT-ENV-SECRET", "FIREBASE-REFRESH-TOKEN", "PRIVATE-DOC"]) assert.doesNotMatch(out, new RegExp(secret), `${secret} stays closed`);
   assert.match(out, /END/);
+});
+
+test("before main's first prompt, the skills the loader offers can be loaded", async () => {
+  // No prompt options yet (a restored watch answering before the owner types): the loader finds its own skills.
+  let skillPath = "";
+  const { results } = await helperRun([() => ({ kind: "tool", name: "read", args: { path: skillPath } })], {
+    prepare: (h) => {
+      const dir = join(h.agentDir, "skills", "triage-notes");
+      mkdirSync(dir, { recursive: true });
+      skillPath = join(dir, "SKILL.md");
+      writeFileSync(skillPath, "---\nname: triage-notes\ndescription: how to triage\n---\nSKILL-BODY");
+    },
+  });
+  assert.equal(results[0]!.isError, false, results[0]!.text);
+  assert.match(results[0]!.text, /SKILL-BODY/);
+});
+
+test("a result the helper's own call saved to a file can be read; other saved results cannot", async () => {
+  const other = mkdtempSync(join(tmpdir(), "fake-guard-"));
+  writeFileSync(join(other, "output.txt"), "SOMEONE-ELSES-RESULT");
+  const savedPath = (c: Context) => /Full text saved to: ([^\]\s]+)\]/.exec(textOf((c.messages.at(-1) as any)?.content))?.[1] ?? "";
+  const { results } = await helperRun([
+    { kind: "tool", name: "call_read_only_tool", args: { tool: "slack_read_user_profile", arguments: { response_format: "detailed" } } },
+    (c) => ({ kind: "tool", name: "read", args: { path: savedPath(c) } }),
+    { kind: "tool", name: "read", args: { path: join(other, "output.txt") } },
+  ], { prepare: (h) => h.slack.failures.set("slack_read_user_profile", ["truncate"]) });
+  const [, own, foreign] = results;
+  assert.equal(own!.isError, false, own!.text);
+  assert.match(own!.text, /Display Name: Dana Owner/);
+  assert.ok(foreign!.isError && /not open to the Slack helper/.test(foreign!.text));
+});
+
+async function runInShell(t: any, cwd: string, home: string, command: string, agentDir = join(home, ".pi", "agent")): Promise<string | undefined> {
+  const sandbox = await startShellSandbox({ cwd, allowedDomains: [], home, agentDir });
+  if (!(await shellRunsHere(t, sandbox)) || !sandbox.ok) return undefined;
+  t.after(() => sandbox.dispose());
+  let out = "";
+  await sandbox.operations.exec(command, cwd, { onData: (d) => { out += d.toString(); }, env: process.env });
+  return out;
+}
+
+test("the real shell writes only to its scratch folder: not to sandbox-runtime's shared temp, and TMPDIR is the scratch folder", async (t) => {
+  const home = fakeHome();
+  const cwd = mkdtempSync(join(tmpdir(), "p-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "other-"));
+  writeFileSync(join(elsewhere, "pi-bash-log.txt"), "MAIN-SESSION-OUTPUT");
+  const marker = `zz-${process.pid}-${Date.now()}`;
+  const out = await runInShell(t, cwd, home, `echo x > /tmp/claude/${marker} 2>/dev/null && echo WROTE-SHARED; echo y > "$SCRATCH/ok" && echo WROTE-SCRATCH; [ "$TMPDIR" = "$SCRATCH" ] && echo TMPDIR-IS-SCRATCH; cat '${join(elsewhere, "pi-bash-log.txt")}' 2>/dev/null; echo END`);
+  if (out === undefined) return;
+  assert.doesNotMatch(out, /WROTE-SHARED/, "sandbox-runtime's shared /tmp/claude is not writable");
+  assert.match(out, /WROTE-SCRATCH/);
+  assert.match(out, /TMPDIR-IS-SCRATCH/);
+  assert.doesNotMatch(out, /MAIN-SESSION-OUTPUT/, "other files in the temp folder are closed");
+  assert.match(out, /END/);
+});
+
+test("the real shell opens nothing when the project is a secret folder, such as Pi's agent folder", async (t) => {
+  const home = fakeHome();
+  const agent = join(home, ".pi", "agent");
+  writeFileSync(join(agent, "models.json"), "MODELS-KEY");
+  const out = await runInShell(t, agent, home, `cat '${join(agent, "models.json")}' 2>/dev/null; echo END`);
+  if (out === undefined) return;
+  assert.doesNotMatch(out, /MODELS-KEY/);
+  assert.match(out, /END/);
+});
+
+test("git works in the real shell from a linked worktree, whose repository lies outside the project", async (t) => {
+  const home = fakeHome();
+  const main = join(home, "code", "repo");
+  mkdirSync(main, { recursive: true });
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { stdio: "ignore" });
+  git(main, "init", "-q");
+  writeFileSync(join(main, "a.txt"), "a");
+  git(main, "add", "a.txt");
+  git(main, "commit", "-qm", "first commit here");
+  const worktree = join(home, "code", "repo-wt");
+  git(main, "worktree", "add", "-q", worktree);
+  const out = await runInShell(t, worktree, home, "git log --oneline -1; echo END");
+  if (out === undefined) return;
+  assert.match(out, /first commit here/, out);
 });

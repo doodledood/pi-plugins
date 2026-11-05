@@ -197,7 +197,7 @@ test("ended watches fold into an expandable count", () => {
 });
 
 test("rows say which conversation a DM watch is, and what happened lately", () => {
-  const thread = watch({ context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text: "🤖 **Dana Owner's agent** — …\n\nThree quick questions about the eval", agentFooter: true }], activity: [{ at: Date.UTC(2026, 10, 4, 14, 29), text: "replied: Checked" }, { at: Date.UTC(2026, 10, 4, 14, 41), text: "stayed silent on 1 message" }] });
+  const thread = watch({ context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text: "Three quick questions about the eval", agentFooter: true }], activity: [{ at: Date.UTC(2026, 10, 4, 14, 29), text: "replied: Checked" }, { at: Date.UTC(2026, 10, 4, 14, 41), text: "stayed silent on 1 message" }] });
   const top = watch({ key: "D1/top", conversation: { kind: "dm-top", channelId: "D1" } });
   const text = flat(renderPanel(surface({ watches: [top, thread] }), 0, plain, 100, 0, 40));
   assert.match(text, /Robin Colleague \(DM\) · thread "Three quick questions about the…"/);

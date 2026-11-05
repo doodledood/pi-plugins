@@ -38,7 +38,7 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   held replies, limits and their daily reset, stopping, locks and routing between sessions,
   resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and
   helper and cost records.
-Line: 6.0 s on darwin-arm64-12cpu; raised: the suite grew in review rounds 2 to 4 (forgery, crash, lock, triage, wiring and layout coverage)
+Line: 8.4 s on darwin-arm64-12cpu; raised: round 9 added real-Seatbelt scenarios (closed home and temp folder, scratch-only writes, a project that is a secret folder, git in a linked worktree) and real-wiring checks of skills and saved results, each starts a real sandbox or helper
 
 ### types
 Run: `npm run typecheck --workspace @doodledood/pi-slack-companion`

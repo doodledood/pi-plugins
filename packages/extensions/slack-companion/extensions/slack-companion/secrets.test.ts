@@ -9,7 +9,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { denyReadEntries, NO_SHELL_ON_LINUX, startShellSandbox } from "./sandbox.ts";
-import { defaultSecretPolicy, filterSecretLines, findSecretShape, isSecretPath, sanitizeEnv, stripControl, walksIntoSecrets } from "./secrets.ts";
+import { canonicalPath, filterUnreadableLines, findSecretShape, isReadablePath, readableRoots, readPolicy, type ReadPolicy, sanitizeEnv, secretDirectories, stripControl } from "./secrets.ts";
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), "home-"));
@@ -21,66 +21,70 @@ function home() {
   symlinkSync(join(root, ".ssh", "id_ed25519"), join(root, "project", "innocent.txt"));
   mkdirSync(join(root, ".pi", "agent", "mcp-oauth"), { recursive: true });
   writeFileSync(join(root, ".pi", "agent", "mcp-oauth", "tokens.json"), "{}");
-  return { root, policy: defaultSecretPolicy(join(root, ".pi", "agent"), root, [join(root, "project")]) };
+  const agentDir = join(root, ".pi", "agent");
+  return { root, agentDir, policy: readPolicy({ home: root, agentDir, roots: [join(root, "project")] }) };
 }
 
-test("secret folders, secret file names and symlinks into them are secret; project code is not", () => {
+const closed = (policy: ReadPolicy, cwd: string, path: string) => !isReadablePath(policy, cwd, path);
+
+test("the file tools read only the project; secret names, symlinks out of it and the rest of the home are closed", () => {
   const { root, policy } = home();
   const cwd = join(root, "project");
-  assert.equal(isSecretPath(policy, cwd, join(root, ".ssh", "id_ed25519")), true);
-  assert.equal(isSecretPath(policy, cwd, ".env"), true);
-  assert.equal(isSecretPath(policy, cwd, "innocent.txt"), true, "a symlink is judged by where it leads");
-  assert.equal(isSecretPath(policy, cwd, "app.ts"), false);
-  assert.equal(walksIntoSecrets(policy, cwd, root), true, "searching the home folder would walk into ~/.ssh");
-  assert.equal(walksIntoSecrets(policy, cwd, "."), false);
-});
-
-test("the home folder is closed except the project and the folders the owner opens; secrets stay closed inside those", () => {
-  const { root } = home();
-  const project = join(root, "project");
-  mkdirSync(join(root, ".config", "firebase"), { recursive: true });
-  mkdirSync(join(root, "Documents"), { recursive: true });
-  mkdirSync(join(root, "other-repo", "credentials"), { recursive: true });
-  const policy = defaultSecretPolicy(join(root, ".pi", "agent"), root, [project, join(root, "other-repo")]);
-  // Credentials named nothing a list would know, anywhere else in the home: closed.
-  for (const path of ["~/.config/firebase/x_application_default_credentials.json", "~/.config/configstore/firebase-tools.json", "~/.vault-token", "~/.pypirc", "~/Documents/private.txt", "~/.cargo/credentials.toml", "~/notes.txt"]) {
-    assert.equal(isSecretPath(policy, project, path), true, path);
+  assert.equal(closed(policy, cwd, "app.ts"), false);
+  assert.equal(closed(policy, cwd, "@app.ts"), false);
+  assert.equal(closed(policy, cwd, pathToFileURL(join(cwd, "app.ts")).href), false);
+  assert.equal(closed(policy, cwd, ".env"), true);
+  assert.equal(closed(policy, cwd, "innocent.txt"), true, "a symlink is judged by where it leads");
+  for (const path of [join(root, ".ssh", "id_ed25519"), "~/.ssh/id_ed25519", "@~/.ssh/id_ed25519", "~/.pi/agent/mcp-oauth/tokens.json", "../.ssh/id_ed25519", "~", "~/notes.txt", "/proc/self/environ", "/dev/fd/0", tmpdir()]) {
+    assert.equal(closed(policy, cwd, path), true, path);
   }
-  assert.equal(isSecretPath(policy, project, "app.ts"), false, "the project is open");
-  assert.equal(isSecretPath(policy, project, join(root, "other-repo", "README.md")), false, "a folder the owner opened is open");
-  assert.equal(isSecretPath(policy, project, join(root, "other-repo", "credentials", "default.json")), true, "a folder named like a secret stays closed, as in the shell");
-  assert.equal(walksIntoSecrets(policy, project, "/"), true, "a search from above the home would walk into it");
-  // The home itself, or a folder holding it, never opens it.
-  const wide = defaultSecretPolicy(join(root, ".pi", "agent"), root, [root, "/"]);
-  assert.deepEqual(wide.readable, []);
-  assert.equal(isSecretPath(wide, root, "~/notes.txt"), true);
+  for (const name of [".env.local", "credentials.json~", ".mcp.json", ".git-credentials", ".zsh_history", "auth.json.bak", "mcp-auth.json"]) assert.equal(closed(policy, cwd, name), true, name);
+  for (const name of ["credentials.ts", "environment.md", "authorization.json"]) assert.equal(closed(policy, cwd, name), false, `${name} is ordinary code`);
 });
 
-test("every spelling Pi's tools accept for a secret path is caught: ~, @, file:// and unicode spaces", () => {
+test("another spelling of a path is closed, not missed: case, the data volume, a secret name in capitals", () => {
   const { root, policy } = home();
   const cwd = join(root, "project");
-  for (const spelling of [
-    "~/.ssh/id_ed25519",
-    "@~/.ssh/id_ed25519",
-    "~/.pi/agent/mcp-oauth/tokens.json",
-    `@${join(root, ".ssh", "id_ed25519")}`,
-    pathToFileURL(join(root, ".ssh", "id_ed25519")).href,
-    `@${pathToFileURL(join(root, ".aws", "credentials")).href}`,
-    "@.env",
-    "~/.ssh",
-    "../.ssh/id_ed25519",
-    "~/.pi/agent/mcp-adapter.json",
-  ]) assert.equal(isSecretPath(policy, cwd, spelling), true, spelling);
-  for (const spelling of ["~", "@~", "~/.pi", pathToFileURL(root).href]) assert.equal(walksIntoSecrets(policy, cwd, spelling), true, spelling);
-  for (const path of ["/proc/self/environ", "~/.config/gh/hosts.yml", "~/.git-credentials", "~/.zsh_history", "~/.pi/agent/auth.json.bak-openai1m", "~/.pi/agent/mcp.json.2026-11-01.bak", ".env.local", "credentials.json~", "~/.pi/agent/mcp-auth.json", "~/.pi/agent/mcp-auth.json.bak", ".mcp.json", "~/.claude/.credentials.json"]) assert.equal(isSecretPath(policy, cwd, path), true, path);
-  for (const path of ["credentials.ts", "environment.md", "authorization.json"]) assert.equal(isSecretPath(policy, cwd, path), false, `${path} is ordinary code`);
-  assert.equal(isSecretPath(policy, cwd, "@app.ts"), false);
+  writeFileSync(join(cwd, "AUTH.JSON"), "x");
+  for (const path of [".ENV", "AUTH.JSON", "Credentials.Json", join(root.toUpperCase(), ".ssh", "id_ed25519"), join("/System/Volumes/Data", root, ".ssh", "id_ed25519"), join("/System/Volumes/Data", cwd, "app.ts")]) {
+    assert.equal(closed(policy, cwd, path), true, path);
+  }
+  // On a case-insensitive disk, the project's own files read in any case; the check uses the stored spelling.
+  if (process.platform === "darwin") assert.equal(closed(policy, cwd, join(cwd.toUpperCase(), "APP.TS")), false);
+});
+
+test("the folders that open the home: never the home, a folder holding it, a secret folder or one inside it", () => {
+  const { root, agentDir } = home();
+  mkdirSync(join(root, ".config", "gcloud"), { recursive: true });
+  writeFileSync(join(root, ".config", "gcloud", "adc.json"), "x");
+  writeFileSync(join(root, ".config", "notes.txt"), "x");
+  mkdirSync(join(root, "repo", "credentials"), { recursive: true });
+  const roots = readableRoots(root, [root, "/", agentDir, join(agentDir, "skills"), join(root, ".aws"), join(root, "repo", "credentials"), join(root, "repo")], agentDir);
+  assert.deepEqual(roots, [canonicalPath(join(root, "repo"))]);
+  // A folder the owner opens that holds a secret folder: the secret folder stays closed.
+  const policy = readPolicy({ home: root, agentDir, roots: [join(root, "project"), join(root, ".config")] });
+  assert.equal(closed(policy, root, "~/.config/notes.txt"), false);
+  for (const path of ["~/.config/gcloud/adc.json", "~/.config/gh/hosts.yml", "~/.config/opencode/x.txt", "~/.config/mcp/servers.toml"]) assert.equal(closed(policy, root, path), true, path);
+  const library = readPolicy({ home: root, agentDir, roots: [join(root, "Library")] });
+  assert.equal(closed(library, root, "~/Library/Application Support/Claude/Cookies"), true);
+});
+
+test("exact files open: an offered skill's file and a result the helper's own call saved, nothing beside them", () => {
+  const { root, agentDir } = home();
+  const skill = join(agentDir, "skills", "notes", "SKILL.md");
+  mkdirSync(join(agentDir, "skills", "notes"), { recursive: true });
+  writeFileSync(skill, "x");
+  writeFileSync(join(agentDir, "skills", "notes", "other.md"), "x");
+  const policy = readPolicy({ home: root, agentDir, roots: [join(root, "project")], files: [skill] });
+  assert.equal(closed(policy, root, skill), false);
+  assert.equal(closed(policy, root, join(agentDir, "skills", "notes", "other.md")), true);
+  assert.equal(closed(policy, root, join(agentDir, "models.json")), true);
 });
 
 test("the shell sandbox denies every secret folder, and secret file names at any depth from the root", () => {
-  const { root, policy } = home();
-  const entries = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir: join(root, ".pi", "agent"), allowedDomains: [] });
-  for (const dir of policy.directories.filter((d) => d !== "/proc")) assert.ok(entries.includes(dir), `${dir} is denied`);
+  const { root, agentDir } = home();
+  const entries = denyReadEntries({ cwd: join(root, "project"), home: root, agentDir, allowedDomains: [] });
+  for (const dir of secretDirectories(root, agentDir)) assert.ok(entries.includes(dir), `${dir} is denied`);
   assert.equal(entries.includes("/proc"), false, "/proc is for the file tools only");
   for (const name of [".env*", "auth.json*", ".git-credentials*", ".*_history"]) assert.ok(entries.includes(`/**/${name}`), `${name} anywhere`);
   assert.ok(entries.includes(join(root, ".pi", "agent")), "Pi's agent folder, closed whole");
@@ -97,12 +101,14 @@ test("a sandboxed command sees no credential variables, and the owner sees no co
   assert.equal(stripControl("ok\u001b[2J\u001b]0;title\u0007 done\u0000"), "ok done");
 });
 
-test("output lines naming secret files are dropped", () => {
+test("output lines naming what the helper may not read are dropped; other text stays", () => {
   const { root, policy } = home();
   const cwd = join(root, "project");
-  const grepOut = ["app.ts:1: code", ".env:1: TOKEN=x", ".env-2- SECRET=y", "release-2-notes.md-3- text", "sub/.env.local-4- K=v", "README.md-2- text"].join("\n");
-  assert.equal(filterSecretLines(policy, cwd, ".", grepOut), ["app.ts:1: code", "release-2-notes.md-3- text", "README.md-2- text"].join("\n"), "match and context lines alike");
-  assert.equal(filterSecretLines(policy, cwd, ".", "app.ts\n.env\ninnocent.txt\nsrc/"), "app.ts\nsrc/", "bare paths from find and ls");
+  writeFileSync(join(cwd, "release-2-notes.md"), "x");
+  writeFileSync(join(cwd, "README.md"), "x");
+  const grepOut = ["app.ts:1: code", ".env:1: TOKEN=x", ".env-2- SECRET=y", "release-2-notes.md-3- text", "innocent.txt:1: key", "README.md-2- text", "No more matches"].join("\n");
+  assert.equal(filterUnreadableLines(policy, cwd, ".", grepOut), ["app.ts:1: code", "release-2-notes.md-3- text", "README.md-2- text", "No more matches"].join("\n"), "match and context lines alike");
+  assert.equal(filterUnreadableLines(policy, cwd, ".", "app.ts\n.env\ninnocent.txt"), "app.ts", "bare paths from find and ls");
 });
 
 test("common credential shapes are recognized; ordinary text is not", () => {
@@ -125,8 +131,10 @@ test("on Linux the helper gets no shell, and says why; no sandbox starts", async
 });
 
 test("every MCP config pi-mcp-adapter imports servers from, and every agent harness's config folder, is secret", () => {
-  const { root, policy } = home();
+  const { root, agentDir } = home();
   const cwd = join(root, "project");
+  // Closed even when the owner opens the folders holding them (the home's dot-folders, ~/Library) and the project.
+  const policy = readPolicy({ home: root, agentDir, roots: [cwd, join(root, ".config"), join(root, "Library"), join(root, ".agents"), join(root, ".vscode")] });
   // pi-mcp-adapter 7.0.1, config.ts: its own configs and every import source (IMPORT_PATHS).
   const adapterSources = [
     "~/.config/mcp/mcp.json", "~/.agents/mcp.json", "~/.agents/mcp/mcp.json", ".mcp.json", ".pi/mcp.json", "~/.pi/agent/mcp.json", "~/.pi/agent/mcp-adapter.json",
@@ -134,11 +142,11 @@ test("every MCP config pi-mcp-adapter imports servers from, and every agent harn
     "~/Library/Application Support/Claude/claude_desktop_config.json", "~/.codex/config.toml", "~/.codex/config.json",
     "~/.config/opencode/opencode.json", "opencode.json", "~/.windsurf/mcp.json", ".vscode/mcp.json",
   ];
-  for (const path of adapterSources) assert.equal(isSecretPath(policy, cwd, path), true, path);
+  for (const path of adapterSources) assert.equal(closed(policy, cwd, path), true, path);
   // Each harness folder is closed whole: files whose names match no secret pattern, one per folder.
   for (const path of [
     "~/.pi/agent/models.json", "~/.pi/agent/settings.json", "~/.claude/settings.json", "~/.codex/history.jsonl", "~/.cursor/cli-config.json",
     "~/.gemini/oauth_creds.txt", "~/.windsurf/settings.json", "~/.config/opencode/auth-notes.txt", "~/.config/mcp/servers.toml",
     "~/Library/Application Support/Claude/Cookies", "~/.claude.json.backup",
-  ]) assert.equal(isSecretPath(policy, cwd, path), true, path);
+  ]) assert.equal(closed(policy, cwd, path), true, path);
 });

@@ -81,18 +81,31 @@ interface LineEntry {
   note: string;
 }
 
-/** A conversation as the line names it: the person, and the channel when it is not a DM. */
+/** The first words of a conversation (the thread's first message, else the first one kept), to name it before anyone answers. */
+function openingWords(watch: WatchState, max: number): string | undefined {
+  const { conversation } = watch;
+  const root = conversation.kind === "thread" ? watch.context.find((m) => m.ts === conversation.threadTs) : watch.context[0];
+  const text = root?.text.replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
 /**
- * A conversation as the line names it: the person, and the channel when it is not a DM. Before
- * anyone has spoken, what is known instead: a DM by the first words sent, a thread by its channel.
+ * A conversation as the line and the panel name it before anyone has answered: a DM by its first
+ * words, a channel thread by its channel and first words. One spelling for both surfaces.
  */
-function lineLabel(watch: WatchState): string {
+function unnamedLabel(watch: WatchState, max = 24): string {
+  const opening = openingWords(watch, max);
+  if (isDirectMessage(watch.conversation.channelId)) return opening ? `DM "${opening}"` : dmLabel(undefined);
   const channel = `#${watch.channelName || watch.conversation.channelId}`;
+  return opening ? `${channel} "${opening}"` : channel;
+}
+
+/** A conversation as the line names it: the person, and the channel when it is not a DM; before anyone answers, unnamedLabel. */
+function lineLabel(watch: WatchState): string {
   const person = watch.partner?.name;
-  if (!isDirectMessage(watch.conversation.channelId)) return person ? `${person} ${channel}` : channel;
-  if (person) return person;
-  const opening = watch.context[0]?.text.split("\n")[0]?.replace(/\s+/g, " ").trim();
-  return opening ? `DM "${opening.length > 24 ? `${opening.slice(0, 24).trimEnd()}…` : opening}"` : "a DM";
+  if (!person) return unnamedLabel(watch);
+  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${watch.channelName || watch.conversation.channelId}`;
 }
 
 /** One entry per person in a direct message (its top level and its threads), one per channel thread; what needs the owner first. */
@@ -264,11 +277,8 @@ function clock(at: number): string {
 function kindLabel(watch: WatchState): string {
   const { conversation } = watch;
   if (conversation.kind === "dm-top") return "top level";
-  const root = watch.context.find((m) => m.ts === conversation.threadTs);
-  // The root as the person wrote it: the package's marker and agent line are not its words.
-  const text = root?.text.split("\n").filter((line) => !/^\S+ \*\*.+'s agent\*\*/.test(line)).join(" ").replace(/\s+/g, " ").trim() ?? "";
-  if (!text) return "thread";
-  return `thread "${text.length > 32 ? `${text.slice(0, 32).trimEnd()}…` : text}"`;
+  const text = openingWords(watch, 32);
+  return text ? `thread "${text}"` : "thread";
 }
 
 /** Who asked, and where, without saying the person twice. */
@@ -317,9 +327,10 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     // The name and "(DM)" first (or "a direct message" before the name is known); the kind of
     // conversation gets what is left, and a thread's snippet gives way to a bare "thread" when too
     // little is left for it.
-    const who = watch.partner ? `${cut(watch.partner.name, Math.max(6, labelRoom - DM_MARK.length - 12))} ${DM_MARK}` : dmLabel(undefined);
+    const who = watch.partner ? `${cut(watch.partner.name, Math.max(6, labelRoom - DM_MARK.length - 12))} ${DM_MARK}` : unnamedLabel(watch);
     const room = labelRoom - visibleWidth(`${who} · `);
-    const kind = kindLabel(watch);
+    // Unnamed, the first words are already in the name: the kind says only which part.
+    const kind = watch.partner ? kindLabel(watch) : watch.conversation.kind === "thread" ? "thread" : "top level";
     const shortKind = visibleWidth(kind) <= room ? kind : watch.conversation.kind === "thread" && room >= 16 ? cut(kind, room) : watch.conversation.kind === "thread" ? "thread" : "top level";
     label = `${who} · ${shortKind}`;
   }

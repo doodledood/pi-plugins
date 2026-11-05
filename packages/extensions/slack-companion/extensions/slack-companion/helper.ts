@@ -30,7 +30,7 @@ import { forkEntriesForChild } from "./fork.ts";
 import { firstLine, neutralize, quoteSlackMessage } from "./messages.ts";
 import type { SlackMessage } from "./reader.ts";
 import type { ShellSandbox } from "./sandbox.ts";
-import { filterSecretLines, isSecretAbsolute, isSecretPath, walksIntoSecrets, type SecretPolicy } from "./secrets.ts";
+import { canonicalPath, filterUnreadableLines, isReadableAbsolute, isReadablePath, type ReadPolicy } from "./secrets.ts";
 
 export const HELPER_PROMPT_MARKER = "[slack-companion helper]";
 export const REPLY_TOOL = "reply_in_slack";
@@ -79,7 +79,8 @@ export interface HelperEnvironment {
   /** The MCP tools the helper may call (read-only, or listed as investigative). */
   mcpTools: HelperMcpReach;
   sandbox: ShellSandbox;
-  secrets: SecretPolicy;
+  /** What the file tools may read; the helper adds its offered skills' files and its own MCP results' files. */
+  reads: ReadPolicy;
 }
 
 const HELPER_PROMPT = (owner: string, shell: boolean) => `${HELPER_PROMPT_MARKER}
@@ -107,19 +108,20 @@ function textResult(text: string) {
 
 type AnyTool = ToolDefinition<any, any, any>;
 
-function guardedReadTools(cwd: string, secrets: SecretPolicy): AnyTool[] {
-  const denyAbsolute = (absolute: string) => {
-    if (isSecretAbsolute(secrets, absolute)) throw new Error(`${absolute} is a secret location the Slack helper may not read`);
-  };
+/** The refusal every file tool gives for a path outside what the helper may read. */
+export const NOT_OPEN = "is not open to the Slack helper";
+
+function guardedReadTools(cwd: string, reads: ReadPolicy): AnyTool[] {
+  const denied = (path: string) => new Error(`${path} ${NOT_OPEN}`);
   // The read tool's own operations receive the exact path it resolved, so this check is exact.
   const read = createReadToolDefinition(cwd, {
     operations: {
       async readFile(absolute) {
-        denyAbsolute(absolute);
+        if (!isReadableAbsolute(reads, absolute)) throw denied(absolute);
         return readFile(absolute);
       },
       async access(absolute) {
-        denyAbsolute(absolute);
+        if (!isReadableAbsolute(reads, absolute)) throw denied(absolute);
         await access(absolute, constants.R_OK);
       },
     },
@@ -127,55 +129,47 @@ function guardedReadTools(cwd: string, secrets: SecretPolicy): AnyTool[] {
   const grep = createGrepToolDefinition(cwd);
   const find = createFindToolDefinition(cwd);
   const ls = createLsToolDefinition(cwd);
-  const denied = (path: string) => new Error(`${path} is a secret location the Slack helper may not read`);
-  const withoutSecretLines = <R extends { content: Array<{ type: string }> }>(root: string, result: R): R => ({
+  // A search reads below its root; lines naming anything the helper may not read are dropped.
+  const onlyReadable = <R extends { content: Array<{ type: string }> }>(root: string, result: R): R => ({
     ...result,
     content: result.content.map((block: any) =>
-      block.type === "text" ? { ...block, text: filterSecretLines(secrets, cwd, root, block.text) } : block),
+      block.type === "text" ? { ...block, text: filterUnreadableLines(reads, cwd, root, block.text) } : block),
   });
-  const guardedRead: typeof read = {
+  const rooted = <T extends AnyTool>(tool: T, defaultRoot: string): T => ({
+    ...tool,
+    async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+      const root = params.path ?? defaultRoot;
+      if (!isReadablePath(reads, cwd, root)) throw denied(root);
+      return onlyReadable(root, await tool.execute(id, params, signal, onUpdate, ctx));
+    },
+  });
+  const guardedRead = {
     ...read,
-    async execute(id, params, signal, onUpdate, ctx) {
-      if (isSecretPath(secrets, cwd, params.path)) throw denied(params.path);
+    async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+      if (!isReadablePath(reads, cwd, params.path)) throw denied(params.path);
       return read.execute(id, params, signal, onUpdate, ctx);
     },
   };
-  const guardedGrep: typeof grep = {
-    ...grep,
-    async execute(id, params, signal, onUpdate, ctx) {
-      const root = params.path ?? ".";
-      if (walksIntoSecrets(secrets, cwd, root)) throw denied(root);
-      return withoutSecretLines(root, await grep.execute(id, params, signal, onUpdate, ctx));
-    },
-  };
-  const guardedFind: typeof find = {
-    ...find,
-    async execute(id, params, signal, onUpdate, ctx) {
-      const root = params.path ?? ".";
-      if (walksIntoSecrets(secrets, cwd, root)) throw denied(root);
-      return withoutSecretLines(root, await find.execute(id, params, signal, onUpdate, ctx));
-    },
-  };
-  const guardedLs: typeof ls = {
-    ...ls,
-    async execute(id, params, signal, onUpdate, ctx) {
-      const root = params.path ?? ".";
-      if (isSecretPath(secrets, cwd, root)) throw denied(root);
-      return withoutSecretLines(root, await ls.execute(id, params, signal, onUpdate, ctx));
-    },
-  };
-  return [guardedRead, guardedGrep, guardedFind, guardedLs] as unknown as AnyTool[];
+  return [guardedRead, rooted(grep as AnyTool, "."), rooted(find as AnyTool, "."), rooted(ls as AnyTool, ".")] as AnyTool[];
+}
+
+/** A skill file the helper may load: a Markdown file not named like a secret. */
+function isReadableSkillFile(path: string): boolean {
+  return /\.md$/i.test(path) && isReadableAbsolute({ home: "", roots: [], files: new Set([canonicalPath(path)]), closed: [] }, path);
 }
 
 /** The helper's whole tool set. Nothing else exists in the helper. */
 export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome, requestRoom = Number.POSITIVE_INFINITY): AnyTool[] {
-  const tools: AnyTool[] = guardedReadTools(env.cwd, env.secrets);
+  const tools: AnyTool[] = guardedReadTools(env.cwd, env.reads);
   if (env.sandbox.ok) {
     tools.push(createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false }) as unknown as AnyTool);
   }
   // The result exactly as the adapter guards it: a large result arrives as a preview and a file path.
   const invokeMcpTool = async (tool: McpToolInfo, params: Record<string, unknown>) => {
     const result = await runMcpToolGuarded(env.events, tool.name, params, tool.server);
+    // A large result is saved to a file the preview names: that one file becomes readable to this run.
+    const saved = result.details?.outputGuard?.fullOutputPath;
+    if (typeof saved === "string") env.reads.files.add(canonicalPath(saved));
     return { content: result.content as Array<{ type: "text"; text: string }>, details: {} };
   };
   for (const tool of env.mcpTools.direct) {
@@ -322,10 +316,11 @@ export async function runHelper(env: HelperEnvironment, batch: HelperBatch, sign
   await loader.reload();
   throwIfAborted(signal);
 
-  // The skills the helper is offered can be loaded, though most live in Pi's agent folder, which is
-  // otherwise closed to it.
-  const skillFolders = (prompt.skills ?? []).map((skill) => skill.baseDir);
-  const tools = buildHelperTools({ ...env, secrets: { ...env.secrets, openings: [...(env.secrets.openings ?? []), ...skillFolders] } }, outcome, batch.requestRoom);
+  // The skills the helper is offered (as the loader resolved them) can be loaded, though most live
+  // in Pi's agent folder, which is otherwise closed to it: each skill's own file, nothing beside it.
+  const reads: ReadPolicy = { ...env.reads, files: new Set(env.reads.files) };
+  for (const skill of loader.getSkills().skills) if (isReadableSkillFile(skill.filePath)) reads.files.add(canonicalPath(skill.filePath));
+  const tools = buildHelperTools({ ...env, reads }, outcome, batch.requestRoom);
   const { session } = await createAgentSession({
     cwd: env.cwd,
     agentDir: env.agentDir,

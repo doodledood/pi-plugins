@@ -1,9 +1,9 @@
 // What the Slack helper may never read, and what may never leave in a reply.
 // Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md (secret reads) and
 // docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md (secret-shaped replies).
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -84,13 +84,19 @@ export const SECRET_FILE_GLOBS: readonly string[] = [
   ".*_history",
 ];
 
-const SECRET_FILE_NAMES = SECRET_FILE_GLOBS.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`));
+// Matched without regard to case: macOS opens `.ENV` as `.env`.
+const SECRET_FILE_NAMES = SECRET_FILE_GLOBS.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`, "i"));
 
-function realOrSelf(path: string): string {
+/**
+ * The one spelling of a path the filesystem gives back: symlinks resolved and, on macOS, the case
+ * as stored. A path that does not exist is spelled from its nearest existing folder.
+ */
+export function canonicalPath(path: string): string {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
-    return path;
+    const parent = dirname(path);
+    return parent === path ? path : join(canonicalPath(parent), basename(path));
   }
 }
 
@@ -98,92 +104,85 @@ function inside(child: string, parent: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
+/** Is any part of this path named like a secret (a folder named `credentials` closes what is in it)? */
+function namedLikeSecret(path: string): boolean {
+  return path.split(sep).some((part) => part !== "" && SECRET_FILE_NAMES.some((re) => re.test(part)));
+}
+
 /**
- * What the helper may not read. The home folder is closed except the folders in `readable` (the
- * project, and any the owner lists): credentials live in too many places there to list them all.
- * Inside what is open, the secret folders and secret file names stay closed. See
- * docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
+ * What the helper's file tools may read: an allowlist, so another spelling of a path (other case,
+ * the data-volume path, /dev/fd) is closed rather than missed. A path is readable only when its
+ * canonical spelling is inside a root, or is one of the exact files, and nothing in it is named
+ * like a secret. See docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
  */
-export interface SecretPolicy {
-  /** Always closed, wherever they are (unless an opening). */
-  directories: string[];
+export interface ReadPolicy {
   home: string;
-  /** Folders in the home the helper may read. The home itself, or a folder holding it, is never one. */
-  readable: string[];
-  /**
-   * Folders the file tools may read even inside a closed folder: the folders of the skills the
-   * helper is offered (most live in Pi's agent folder). Secret file names stay denied in them, and
-   * the shell never gets them.
-   */
-  openings?: string[];
-}
-
-export function defaultSecretPolicy(agentDir?: string, home = homedir(), readable: readonly string[] = []): SecretPolicy {
-  // /proc holds every process's environment (Pi's own API keys among them). Only the file tools
-  // deny it; the shell runs with a cleaned environment, and denying /proc there breaks commands.
-  return { directories: [...secretDirectories(home, agentDir), "/proc"], home, readable: readableFolders(home, readable) };
-}
-
-/** The folders that open the home: never the home itself or a folder that holds it. */
-export function readableFolders(home: string, folders: readonly string[]): string[] {
-  return [...new Set(folders.map((f) => resolve(f)))].filter((f) => !inside(home, f) && !inside(realOrSelf(home), realOrSelf(f)));
-}
-
-const insideAny = (absolute: string, folders: readonly string[]) => folders.some((dir) => inside(absolute, dir) || inside(absolute, realOrSelf(dir)));
-
-function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {
-  if (insideAny(absolute, policy.openings ?? [])) return false;
-  if (insideAny(absolute, policy.directories)) return true;
-  return insideAny(absolute, [policy.home]) && !insideAny(absolute, policy.readable);
-}
-
-/** Is this file name one of SECRET_FILE_GLOBS (with its copies and backups)? */
-function isSecretFileName(name: string): boolean {
-  return SECRET_FILE_NAMES.some((re) => re.test(name));
+  /** Folders the file tools may read: the project and the owner's readable folders (see readableRoots). */
+  roots: string[];
+  /** Exact files besides: the offered skills' files, and files the helper's own MCP calls returned. */
+  files: Set<string>;
+  /** Secret folders, canonical: closed even inside a root (opening ~/.config does not open ~/.config/gcloud). */
+  closed: string[];
 }
 
 /**
- * Is this absolute path (symlinks resolved) secret: any part of it named like a secret (as the
- * shell's sandbox matches, a folder named `credentials` closes what is in it), or inside a closed
- * folder?
+ * The folders that may be opened, canonical: never the home or a folder holding it, and never a
+ * secret folder or a folder inside one (an allow there would win over the shell's deny).
  */
-export function isSecretAbsolute(policy: SecretPolicy, absolute: string): boolean {
-  const real = realOrSelf(absolute);
-  return [absolute, real].some((p) => p.split(sep).some((part) => part !== "" && isSecretFileName(part)) || underSecretDirectory(policy, p));
+export function readableRoots(home: string, folders: readonly string[], agentDir = join(home, ".pi", "agent")): string[] {
+  const closed = [home, ...secretDirectories(home, agentDir)].map(canonicalPath);
+  const canonicalHome = canonicalPath(home);
+  return [...new Set(folders.map((f) => canonicalPath(resolve(f))))].filter(
+    (f) => !inside(canonicalHome, f) && !closed.slice(1).some((dir) => inside(f, dir)) && !namedLikeSecret(f),
+  );
 }
 
-/** Is the file a tool would open for `path` a secret? */
-export function isSecretPath(policy: SecretPolicy, cwd: string, path: string): boolean {
-  return isSecretAbsolute(policy, resolveToolPath(path, cwd, policy.home));
+export function readPolicy(options: { home?: string; agentDir?: string; roots: readonly string[]; files?: readonly string[] }): ReadPolicy {
+  const home = options.home ?? homedir();
+  const agentDir = options.agentDir ?? join(home, ".pi", "agent");
+  return {
+    home,
+    roots: readableRoots(home, options.roots, agentDir),
+    files: new Set((options.files ?? []).filter((f) => !namedLikeSecret(f)).map(canonicalPath)),
+    closed: secretDirectories(home, agentDir).map(canonicalPath),
+  };
 }
 
-/** Would searching or listing from `path` walk into a secret folder? */
-export function walksIntoSecrets(policy: SecretPolicy, cwd: string, path: string): boolean {
-  const absolute = resolveToolPath(path, cwd, policy.home);
-  const real = realOrSelf(absolute);
-  if (isSecretAbsolute(policy, absolute)) return true;
-  // A search from above the home (or a closed folder) would walk into it.
-  return [...policy.directories, policy.home].some((dir) => [dir, realOrSelf(dir)].some((d) => inside(d, absolute) || inside(d, real)));
+/** May the file tools open this absolute path? */
+export function isReadableAbsolute(policy: ReadPolicy, absolute: string): boolean {
+  const path = canonicalPath(absolute);
+  if (namedLikeSecret(path)) return false;
+  if (policy.files.has(path)) return true;
+  if (policy.closed.some((dir) => inside(path, dir))) return false;
+  return policy.roots.some((root) => inside(path, root));
+}
+
+/** May the file tools open the file a tool would open for `path`? */
+export function isReadablePath(policy: ReadPolicy, cwd: string, path: string): boolean {
+  return isReadableAbsolute(policy, resolveToolPath(path, cwd, policy.home));
 }
 
 /**
- * Drop any output line that names a secret path. Pi's grep prints a match as `path:N: text` and a
- * context line as `path-N- text`, and a path may itself contain `-N-`, so every prefix that ends
- * at either separator is a candidate; one secret candidate drops the line. Listing tools print
- * bare paths, so the whole line is a candidate too.
+ * Drop any output line that names a path the file tools may not read. Pi's grep prints a match as
+ * `path:N: text` and a context line as `path-N- text`, and a path may itself contain `-N-`, so
+ * every prefix that ends at either separator is a candidate; listing tools print bare paths, so
+ * the whole line is a candidate too. A candidate counts only when it names something that exists:
+ * other text is not a path.
  */
-export function filterSecretLines(policy: SecretPolicy, cwd: string, root: string, output: string): string {
+export function filterUnreadableLines(policy: ReadPolicy, cwd: string, root: string, output: string): string {
   const base = resolveToolPath(root, cwd, policy.home);
-  const isSecret = (pathPart: string) => {
+  const denied = (pathPart: string) => {
     const trimmed = pathPart.trim().replace(/\/$/, "");
-    return trimmed !== "" && isSecretAbsolute(policy, isAbsolute(trimmed) ? trimmed : join(base, trimmed));
+    if (trimmed === "") return false;
+    const absolute = isAbsolute(trimmed) ? trimmed : join(base, trimmed);
+    return existsSync(absolute) && !isReadableAbsolute(policy, absolute);
   };
   return output
     .split("\n")
     .filter((line) => {
       const candidates = [line];
       for (const match of line.matchAll(/[:-]\d+[:-]/g)) candidates.push(line.slice(0, match.index));
-      return !candidates.some(isSecret);
+      return !candidates.some(denied);
     })
     .join("\n");
 }

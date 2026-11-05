@@ -6,10 +6,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { join, resolve } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
-import { readableFolders, sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
+import { canonicalPath, readableRoots, sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
 
 export type ShellSandbox =
   | { ok: true; operations: BashOperations; scratchDir: string; dispose(): Promise<void> }
@@ -35,10 +36,6 @@ export interface SandboxOptions {
 export const NO_SHELL_ON_LINUX = "on Linux the helper has no shell yet: its sandbox cannot deny every secret file there without searching the disk before each command";
 
 /**
- * The read denials, for Seatbelt (macOS), which matches a root-anchored, any-depth name pattern:
- * the secret folders (Pi's agent folder among them) and every secret file name at any depth.
- */
-/**
  * Where tools a shell command runs keep themselves in the home folder: version managers, user
  * binaries and git's settings. The home is closed to the shell; these are opened back.
  */
@@ -56,15 +53,38 @@ export const HOME_TOOLCHAINS: readonly string[] = [
 export function allowReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
-  return [...readableFolders(home, [options.cwd, ...(options.readable ?? [])]), join(agentDir, "bin"), ...HOME_TOOLCHAINS.map((p) => join(home, p))];
+  return [...readableRoots(home, [options.cwd, ...(options.readable ?? []), ...gitFolders(options.cwd)], agentDir), join(agentDir, "bin"), ...HOME_TOOLCHAINS.map((p) => join(home, p))];
 }
 
+/**
+ * The repository's own folders when the project is in one: its top folder and the shared `.git`
+ * folder, which for a linked worktree or a subfolder lie outside the project. Without them git
+ * does not work in the shell. Opening them exposes nothing a normal checkout would not.
+ */
+export function gitFolders(cwd: string): string[] {
+  try {
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    return out.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => resolve(cwd, line));
+  } catch {
+    return []; // not a repository, or no git: nothing to open
+  }
+}
+
+/**
+ * The read denials, for Seatbelt (macOS), which matches a root-anchored, any-depth name pattern:
+ * the home and the temp folder (opened back only where allowReadEntries says), the secret folders
+ * (Pi's agent folder among them) and every secret file name at any depth.
+ */
 export function denyReadEntries(options: SandboxOptions): string[] {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
   const roots = [...new Set(["", home, options.cwd, agentDir])];
-  return [home, ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
+  // The temp folder holds Pi's full tool output and pi-mcp-adapter's saved results.
+  return [home, canonicalPath(tmpdir()), ...secretDirectories(home, agentDir), ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
+
+/** sandbox-runtime lets every command write here and points TMPDIR here; the helper writes only to its scratch folder. */
+const RUNTIME_WRITABLE = ["/tmp/claude", "/private/tmp/claude"];
 
 /** The part of sandbox-runtime's SandboxManager the package uses; tests pass a recording one. */
 export interface SandboxRuntime {
@@ -94,7 +114,7 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
     scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
     const config: SandboxRuntimeConfig = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },
-      filesystem: { denyRead: denyReadEntries(options), allowRead: allowReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
+      filesystem: { denyRead: denyReadEntries(options), allowRead: [...allowReadEntries(options), scratchDir], allowWrite: [scratchDir], denyWrite: RUNTIME_WRITABLE },
     };
     const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead, allowRead: config.filesystem.allowRead });
     if (!ready || ready.runtime !== manager) {
@@ -111,8 +131,9 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
     const scratch = scratchDir;
     const operations: BashOperations = {
       async exec(command, cwd, execOptions) {
-        const wrapped = await manager.wrapWithSandbox(command, undefined, config, execOptions.signal);
-        // SCRATCH names the one folder a command may write (sandbox-runtime sets its own TMPDIR).
+        // SCRATCH names the one folder a command may write; TMPDIR is set to it inside the sandbox,
+        // over the one sandbox-runtime sets, so temp files land where a write is allowed.
+        const wrapped = await manager.wrapWithSandbox(`export TMPDIR="$SCRATCH"; ${command}`, undefined, config, execOptions.signal);
         return local.exec(wrapped, cwd, { ...execOptions, env: { ...sanitizeEnv(execOptions.env ?? process.env), SCRATCH: scratch } });
       },
     };
