@@ -3,7 +3,7 @@
 // never as rows in main's transcript. Graphite: brightness carries hierarchy, color only state;
 // the line stays quiet (muted) until something needs the owner.
 import { type Component, Key, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { type Approval, type EngineState, isLive, type WatchState, watchLabel } from "./engine.ts";
+import { type Approval, DM_MARK, dmLabel, type EngineState, isLive, type WatchState, watchLabel } from "./engine.ts";
 import { isDirectMessage } from "./conversation.ts";
 
 export type PaintColor = "accent" | "dim" | "muted" | "warning" | "error" | "success" | "text" | "border" | "borderMuted";
@@ -14,6 +14,21 @@ export interface Paint {
 }
 
 export const WIDGET_KEY = "slack-companion";
+
+/**
+ * Cut plain text to `width` cells with "…". Unlike pi-tui's truncateToWidth it adds no reset code,
+ * so text painted after cutting keeps its color and weight to the end. Cut first, then paint.
+ */
+export function cut(text: string, width: number): string {
+  if (visibleWidth(text) <= width) return text;
+  if (width <= 1) return width === 1 ? "…" : "";
+  let out = "";
+  for (const char of text) {
+    if (visibleWidth(out + char) > width - 1) break;
+    out += char;
+  }
+  return `${out.trimEnd()}…`;
+}
 
 /**
  * The panel's share of the terminal's height. The overlay is opened with exactly this share and
@@ -59,6 +74,8 @@ function isUnseenError(surface: SurfaceState, watch: WatchState): boolean {
 
 interface LineEntry {
   label: string;
+  /** Any of the conversation's watches is paused (counted once per conversation). */
+  paused: boolean;
   /** A state word shown whole, in its color; or none, and the note shows instead. */
   word?: { text: string; color: PaintColor };
   note: string;
@@ -85,6 +102,7 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const entry: LineEntry = {
       label: lineLabel(named),
+      paused,
       ...(paused ? { word: { text: "paused", color: "warning" as const } } : answering ? { word: { text: "answering…", color: "accent" as const } } : {}),
       note: latest.find((w) => w.lastNote)?.lastNote ?? "watching",
     };
@@ -109,12 +127,15 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
   const fits = (left: string, longHint: boolean) => visibleWidth(left) + 2 + visibleWidth(hint(longHint)) <= width;
   if (surface.problem) {
     const left = `${head("error")} ${paint.fg("text", `can't watch: ${surface.problem.title}`)}`;
-    return [compose(truncateToWidth(left, Math.max(8, width - visibleWidth(hint(false)) - 2), "…"), fits(left, true))];
+    const room = Math.max(8, width - visibleWidth(hint(false)) - 2 - visibleWidth(` ● slack `));
+    const short = `${head("error")} ${paint.fg("text", cut(`can't watch: ${surface.problem.title}`, room))}`;
+    return [compose(short, fits(short, true))];
   }
   if (!surface.enabled) return [];
   const entries = lineEntries(surface);
   const waiting = surface.engine.approvals.filter((a) => a.status === "pending").length;
-  const pausedCount = surface.engine.watches.filter((w) => w.status === "paused").length;
+  // Paused conversations, counted as the line shows them: a DM's top level and its threads are one.
+  const pausedCount = entries.filter((e) => e.paused).length;
   const stopped = surface.engine.watches.filter((w) => isUnseenError(surface, w)).length;
   if (!entries.length && !waiting && !stopped) return [];
   const dot: PaintColor = stopped ? "error" : waiting || pausedCount ? "warning" : "muted";
@@ -134,9 +155,9 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
     const need = (e: LineEntry) => visibleWidth(e.label) + 1 + (e.word ? visibleWidth(e.word.text) : Math.min(visibleWidth(e.note), NOTE_MIN));
     const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
     // Folded watches are counted as "watching"; a paused one is already in the paused count.
-    const foldCount = (k: number) => entries.slice(k).filter((e) => e.word?.text !== "paused").length;
+    const foldCount = (k: number) => entries.slice(k).filter((e) => !e.paused).length;
     const fold = (k: number) => (foldCount(k) ? SEP.length + visibleWidth(`${k ? "+" : ""}${foldCount(k)} watching`) : 0);
-    const shownPausedOf = (list: LineEntry[]) => list.filter((e) => e.word?.text === "paused").length;
+    const shownPausedOf = (list: LineEntry[]) => list.filter((e) => e.paused).length;
     for (const entry of entries) {
       const next = [...chosen, entry];
       const total = used() + SEP.length + need(entry) + fold(next.length) + countsWidth(shownPausedOf(next));
@@ -167,7 +188,7 @@ export function renderLine(surface: SurfaceState, paint: Paint, width: number): 
         const base = Math.min(visibleWidth(e.note), NOTE_MIN);
         const extra = Math.max(0, Math.min(visibleWidth(e.note) - base, spare));
         spare -= extra;
-        state = paint.fg("muted", truncateToWidth(e.note, base + extra, "…"));
+        state = paint.fg("muted", cut(e.note, base + extra));
       }
       return `${paint.fg("muted", e.label)} ${state}`;
     });
@@ -240,7 +261,7 @@ function kindLabel(watch: WatchState): string {
 /** Who asked, and where, without saying the person twice. */
 function requestSource(approval: Approval): string {
   const ownThread = `${approval.requester}'s thread in `;
-  if (approval.label === `${approval.requester} (DM)`) return approval.label;
+  if (approval.label === dmLabel(approval.requester)) return approval.label;
   if (approval.label.startsWith(ownThread)) return `${approval.requester} in ${approval.label.slice(ownThread.length)}`;
   return `${approval.requester} · ${approval.label}`;
 }
@@ -267,7 +288,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
       : paint.fg("muted", approval.status === "approved" ? "✓ approved — sent to your session" : "✗ declined");
     // The whole request, wrapped, never cut: exactly what main receives if approved.
     const body = wrapTextWithAnsi(approval.text, inner - 3).map((row) => (pending ? paint.fg("text", row) : paint.fg("dim", row)));
-    return { rows: [head, ...indent([paint.fg("muted", truncateToWidth(`from ${requestSource(approval)}`, inner - 3, "…"))]), ...indent(body)], pinned: 2 };
+    return { rows: [head, ...indent([paint.fg("muted", cut(`from ${requestSource(approval)}`, inner - 3))]), ...indent(body)], pinned: 2 };
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
@@ -280,20 +301,19 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   let label = watchLabel(watch);
   if (isDirectMessage(watch.conversation.channelId)) {
-    // "(DM)" and the kind tell a DM's rows apart: the thread's snippet gives way first, then the name.
-    const name = watch.partner?.name ?? "someone";
+    // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
+    // snippet gives way to a bare "thread" when too little is left for it.
+    const name = cut(watch.partner?.name ?? "someone", Math.max(6, labelRoom - DM_MARK.length - 12));
+    const room = labelRoom - visibleWidth(`${name} ${DM_MARK} · `);
     const kind = kindLabel(watch);
-    const fixed = ` (DM) · `;
-    const kindRoom = Math.max(6, labelRoom - visibleWidth(fixed) - Math.min(visibleWidth(name), 16));
-    const shortKind = truncateToWidth(kind, kindRoom, "…");
-    const nameRoom = Math.max(4, labelRoom - visibleWidth(fixed) - visibleWidth(shortKind));
-    label = `${truncateToWidth(name, nameRoom, "…")}${fixed}${shortKind}`;
+    const shortKind = visibleWidth(kind) <= room ? kind : watch.conversation.kind === "thread" && room >= 16 ? cut(kind, room) : watch.conversation.kind === "thread" ? "thread" : "top level";
+    label = `${name} ${DM_MARK} · ${shortKind}`;
   }
-  const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(truncateToWidth(label, labelRoom, "…")))}  ${status}`];
+  const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
-  for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", truncateToWidth(`${clock(entry.at)}  ${entry.text}`, inner - 3, "…"))]));
+  for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
   const last = [...watch.context].reverse().find((m) => !watch.ownPosts.includes(m.ts) && !m.agentFooter);
-  if (last && isLive(watch) && !answering) rows.push(...indent([paint.fg("muted", truncateToWidth(`${last.userName}: ${last.text.replace(/\s+/g, " ")}`, inner - 3, "…"))]));
+  if (last && isLive(watch) && !answering) rows.push(...indent([paint.fg("muted", cut(`${last.userName}: ${last.text.replace(/\s+/g, " ")}`, inner - 3))]));
   return { rows, pinned: 1 };
 }
 
@@ -307,8 +327,9 @@ function frame(rows: string[], width: number, title: string, paint: Paint): stri
   const titleWidth = visibleWidth(title);
   const top = `${paint.fg("border", "╭─ ")}${title}${paint.fg("border", ` ${"─".repeat(Math.max(0, width - titleWidth - 5))}╮`)}`;
   const body = rows.map((row) => {
-    const cut = truncateToWidth(row, inner, "…");
-    return `${paint.fg("border", "│")} ${cut}${" ".repeat(Math.max(0, inner - visibleWidth(cut)))} ${paint.fg("border", "│")}`;
+    // Rows are cut plain before painting; this only guards a row that still came out too wide.
+    const fitted = truncateToWidth(row, inner, "…");
+    return `${paint.fg("border", "│")} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${paint.fg("border", "│")}`;
   });
   return [top, ...body, paint.fg("border", `╰${"─".repeat(width - 2)}╯`)];
 }
@@ -389,7 +410,7 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
           [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page", more],
           [`↓ ${below} more line${below === 1 ? "" : "s"}`, unread ? "read to the end to approve" : "", "space next page"],
           [`↓ ${below} more`, unread ? "read all to approve" : "", "space pages"],
-          [`↓ ${below} more`, "space pages"],
+          [`↓ ${below} more`, unread ? "read all to approve" : "space pages"],
           [`↓ ${below} more`],
         ]
       : [["(end of this item)", more], ["(end of this item)"]];

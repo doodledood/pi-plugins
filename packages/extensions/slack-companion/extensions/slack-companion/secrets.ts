@@ -61,7 +61,10 @@ export const SECRET_FILE_GLOBS: readonly string[] = [
   "id_ecdsa*",
   "id_ed25519*",
   "mcp.json*",
+  ".mcp.json*",
   "mcp-adapter.json*",
+  "mcp-auth.json*",
+  ".credentials.json*",
   ".git-credentials*",
   ".*_history",
 ];
@@ -95,10 +98,15 @@ function underSecretDirectory(policy: SecretPolicy, absolute: string): boolean {
   return policy.directories.some((dir) => inside(absolute, dir) || inside(absolute, realOrSelf(dir)));
 }
 
+/** Is this file name one of SECRET_FILE_GLOBS (with its copies and backups)? */
+export function isSecretFileName(name: string): boolean {
+  return SECRET_FILE_NAMES.some((re) => re.test(name));
+}
+
 /** Is this absolute path (symlinks resolved) a secret file, or inside a secret folder? */
 export function isSecretAbsolute(policy: SecretPolicy, absolute: string): boolean {
   const real = realOrSelf(absolute);
-  return [absolute, real].some((p) => SECRET_FILE_NAMES.some((re) => re.test(basename(p))) || underSecretDirectory(policy, p));
+  return [absolute, real].some((p) => isSecretFileName(basename(p)) || underSecretDirectory(policy, p));
 }
 
 /** Is the file a tool would open for `path` a secret? */

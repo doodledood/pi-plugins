@@ -57,6 +57,11 @@ export interface WatchState {
   activity?: Array<{ at: number; text: string }>;
   /** A channel's name once read ("" when the server shows none); unset for direct messages. */
   channelName?: string;
+  /**
+   * Another session took this conversation over (lock lost). When watched again, waiting messages
+   * older than that session's latest marked post are its answered ones, not this session's to answer.
+   */
+  handedOver?: boolean;
 }
 
 export interface Approval {
@@ -183,9 +188,17 @@ export function pendingApprovals(state: Pick<EngineState, "approvals">, watchKey
 }
 
 /** How the owner sees a conversation: who it is with first, then where; a raw id only when no name is known. */
+/** The mark after a person's name that says a conversation is a direct message. */
+export const DM_MARK = "(DM)";
+
+/** A direct message as the owner sees it: the person and the mark. The one place it is spelled. */
+export function dmLabel(name: string | undefined): string {
+  return `${name ?? "someone"} ${DM_MARK}`;
+}
+
 export function watchLabel(watch: Pick<WatchState, "conversation" | "partner" | "channelName">): string {
   const { conversation, partner } = watch;
-  if (isDirectMessage(conversation.channelId)) return `${partner?.name ?? "someone"} (DM)`;
+  if (isDirectMessage(conversation.channelId)) return dmLabel(partner?.name);
   const where = watch.channelName ? `#${watch.channelName}` : `#${conversation.channelId}`;
   return partner ? `${partner.name}'s thread in ${where}` : `a thread in ${where}`;
 }
@@ -213,12 +226,12 @@ export function isStopMessage(text: string): boolean {
 
 /** What the line and panel say after a send, by its outcome. */
 const NOTE_FOR: Record<SendOutcome, (reply: string) => string> = {
-  sent: (reply) => (reply ? `replied: ${firstLine(reply, 60)}` : "asked you to approve"),
-  paused: () => "reply held until you resume",
-  blocked: () => "reply blocked: it looked like a secret",
-  revoked: () => "conversation ended before the reply",
-  uncertain: () => "reply may not have gone out; checking",
-  failed: () => "reply did not go out",
+  sent: (reply) => (reply ? `helper replied: ${firstLine(reply, 60)}` : "helper asked you to approve"),
+  paused: () => "helper's reply held until you resume",
+  blocked: () => "helper's reply blocked: it looked like a secret",
+  revoked: () => "conversation ended before the helper replied",
+  uncertain: () => "helper's reply may not have gone out; checking",
+  failed: () => "helper's reply did not go out",
 };
 
 function dayOf(ms: number): string {
@@ -269,7 +282,7 @@ export class Engine {
     this.lastPersisted = JSON.stringify(this.state);
     for (const watch of this.liveWatches()) {
       const lock = this.deps.locks.acquire(watch.key);
-      if (!lock.ok) this.end(watch, "error", `another Pi session (pid ${lock.holder.pid}) now answers this conversation`, false);
+      if (!lock.ok) this.end(watch, "error", `another Pi session (pid ${lock.holder.pid}) now answers this conversation`, false, { lockLost: true });
     }
     this.save();
     return { ok: true };
@@ -563,12 +576,15 @@ export class Engine {
    * from restarting on a later send; a quiet end, a finished conversation or an error does not.
    * Waiting approvals stay waiting: only the owner resolves them.
    */
-  private end(watch: WatchState, status: "stopped" | "error", reason: string, explicit: boolean): void {
+  private end(watch: WatchState, status: "stopped" | "error", reason: string, explicit: boolean, options: { lockLost?: boolean } = {}): void {
     watch.status = status;
     watch.reason = stripControl(reason);
     watch.endedAt = this.deps.now();
-    // A stop with an error keeps what was waiting: watching again (w) answers it.
-    if (status === "stopped") watch.inbox = [];
+    // A stop with an error keeps what was waiting: watching again (w) answers it. Not after a lock
+    // loss: the session that took the conversation over answers those messages itself.
+    if (status === "stopped" || options.lockLost) watch.inbox = [];
+    if (options.lockLost) watch.handedOver = true;
+    else if (status === "stopped") delete watch.handedOver;
     delete watch.pause;
     delete watch.readFailures;
     // A conversation that ended quietly keeps what the panel needs, not its conversation; one that
@@ -636,7 +652,7 @@ export class Engine {
         for (const watch of this.liveWatches()) {
           if (this.disposed) return;
           if (!this.deps.locks.refresh(watch.key)) {
-            this.end(watch, "error", "another Pi session took this conversation over", false);
+            this.end(watch, "error", "another Pi session took this conversation over", false, { lockLost: true });
             this.save();
             continue;
           }
@@ -694,12 +710,14 @@ export class Engine {
       // was and reads again next time; only repeated or lasting failures stop the watch.
       if (isPassingFailure(error) && (watch.readFailures ?? 0) + 1 < MAX_READ_FAILURES) {
         watch.readFailures = (watch.readFailures ?? 0) + 1;
-        this.note(watch, `could not read Slack (${error instanceof BackendError ? error.code ?? "error" : "error"}); trying again`);
+        const code = error instanceof BackendError ? error.code : undefined;
+        this.note(watch, code === "not_ready" ? "Slack is still starting; trying again" : `could not read Slack (${code ?? "error"}); trying again`);
         this.save();
         return;
       }
       const hint = error instanceof BackendError ? FAILURE_HINTS[error.code ?? ""] : undefined;
-      this.end(watch, "error", hint ? `${hint} (${firstLine(message, 80)})` : message, false);
+      const repeated = isPassingFailure(error) ? `Slack reads failed ${MAX_READ_FAILURES} times in a row; stopped so nothing is skipped` : undefined;
+      this.end(watch, "error", `${hint ?? repeated ?? "Slack could not be read"} (${firstLine(message, 80)})`, false);
       this.save();
       return;
     }
@@ -725,9 +743,15 @@ export class Engine {
         this.end(watch, "stopped", `${message.userName} said stop`, true);
         return;
       }
-      // Another of the owner's agents posted it: context only, never answered.
+      // Another of the owner's agents posted it: context only, never answered. After a hand-over,
+      // what came before it was that session's to answer.
       if (message.userId === owner.userId && message.agentFooter) {
         watch.lastAgentPostOurs = false;
+        if (watch.handedOver) {
+          watch.inbox = watch.inbox.filter((m) => compareTs(m.ts, message.ts) > 0);
+          queued.clear();
+          for (const m of watch.inbox) queued.add(m.ts);
+        }
         continue;
       }
       if (!watch.partner && message.userId !== owner.userId) watch.partner = { userId: message.userId, name: message.userName };
@@ -747,6 +771,7 @@ export class Engine {
         this.note(watch, `${dropped} older waiting message${dropped === 1 ? " was" : "s were"} dropped; ${MAX_INBOX} wait for you`);
       }
     }
+    delete watch.handedOver; // one full read after watching again settles it
   }
 
   /** Keep a message as context, its text cut to what a restart needs. */
@@ -828,7 +853,7 @@ export class Engine {
     if (this.disposed || signal.aborted || !isLive(watch)) return;
     watch.spend.usd += triage.usd;
     if (!triage.speak) {
-      finish(`stayed silent on ${batch.length} message${batch.length === 1 ? "" : "s"}`);
+      finish(`helper stayed silent on ${batch.length} message${batch.length === 1 ? "" : "s"}`);
       return;
     }
     const helperBatch: HelperBatch = {
@@ -860,7 +885,7 @@ export class Engine {
     }
     const parts = [outcome.reply?.text, newRequests.length ? waitingNote(owner.name, newRequests) : undefined].filter((p): p is string => Boolean(p));
     if (!parts.length) {
-      finish(newRequests.length ? "asked you to approve" : outcome.handoffs.length ? "told your session" : "stayed silent");
+      finish(newRequests.length ? "helper asked you to approve" : outcome.handoffs.length ? "helper told your session" : "helper stayed silent");
       return;
     }
     const reply = parts.join("\n\n");
@@ -874,7 +899,7 @@ export class Engine {
     if (sent === "paused") {
       // The batch is handled; only its reply waits, and goes out as written on resume.
       watch.heldReply = reply;
-      finish("reply held until you resume");
+      finish("helper's reply held until you resume");
       return;
     }
     finish(NOTE_FOR[sent](outcome.reply?.text ?? ""));
@@ -971,8 +996,10 @@ export class Engine {
         entry.status = "sent";
         entry.ts = found.ts;
         watch.ownPosts = [...watch.ownPosts, found.ts].slice(-MAX_OWN_POSTS);
+        this.note(watch, "helper's reply went out");
       } else {
         entry.status = "failed";
+        this.note(watch, "helper's reply did not go out; not sent again");
         this.deps.notify("warning", `Slack: a reply in ${watchLabel(watch)} did not go out; it was not re-sent.`);
       }
     }

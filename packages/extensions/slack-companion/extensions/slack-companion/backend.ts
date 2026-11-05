@@ -75,9 +75,8 @@ interface RuntimeToolCallRequest {
   result?: Promise<{ ok: true; result: { content: unknown[]; details?: any } } | { ok: false; error: Error }>;
 }
 
-/** The adapter is starting (it may pass); "is not initialized" means its start-up failed (it does not). */
+/** The adapter is still starting (it may pass; a failed start-up arrives as its own error and is retried, since every call starts it again). */
 const NOT_READY = /require an active Pi session|initialization is still in progress/i;
-const START_FAILED = /MCP is not initialized/i;
 
 /** Call an MCP tool through pi-mcp-adapter; the result exactly as the adapter guards it. */
 export async function runMcpToolGuarded(events: EventBus, tool: string, args: Record<string, unknown>, server?: string): Promise<{ content: unknown[]; details?: any }> {
@@ -90,7 +89,6 @@ export async function runMcpToolGuarded(events: EventBus, tool: string, args: Re
   if (!outcome.ok) {
     const message = outcome.error.message;
     if (NOT_READY.test(message)) throw new BackendNotReadyError(`${tool}: ${message}`, "not_ready");
-    if (START_FAILED.test(message)) throw new BackendError(`${tool}: ${message}`, "adapter_not_started");
     const code = /MCP tool call failed: (\S+)/.exec(message)?.[1];
     throw new BackendError(`${tool} failed: ${message}`, code);
   }
@@ -114,11 +112,12 @@ export async function runMcpTool(events: EventBus, tool: string, args: Record<st
 }
 
 const PAGE_LIMIT = 100;
+const SMALL_PAGE_LIMIT = 20;
 const MAX_PAGES = 50;
 /** Failures that retrying cannot fix: a misconfigured tool or server, or a result the package cannot use whole. */
 const LASTING_CODES = new Set([
   "tool_not_found", "tool_not_found_after_reconnect", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool",
-  "no_adapter", "adapter_not_started", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required",
+  "no_adapter", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required",
   "approval_required", "approval_denied",
 ]);
 
@@ -129,7 +128,6 @@ export const FAILURE_HINTS: Readonly<Record<string, string>> = {
   ambiguous_tool: "more than one MCP server has this tool; set \"server\" in slack-companion.json",
   url_elicitation_required: "your Slack MCP server asks you to open a link; use one of its tools in Pi once to answer it",
   tool_not_found: "the tool name is wrong; set the right name under \"tools\" in slack-companion.json",
-  adapter_not_started: "pi-mcp-adapter did not start; check /mcp-adapter, then /reload",
   approval_required: "pi-mcp-adapter asks to approve each Slack read; slack-companion reads without asking, so take its Slack tools out of approveTools",
   approval_denied: "a Slack read was declined; slack-companion reads without asking, so take its Slack tools out of approveTools",
   too_many_ids: "this conversation's text names too many message ids that do not exist; watch it again after that message is edited",
@@ -164,10 +162,20 @@ export class McpSlackBackend implements SlackBackend {
   }
 
   async readSince(conversation: Conversation, oldest: string | undefined): Promise<CandidateMessage[]> {
+    try {
+      return await this.readPages(conversation, oldest, PAGE_LIMIT);
+    } catch (error) {
+      // A page too large for the adapter to save whole: read it again in smaller pages, once.
+      if (error instanceof BackendError && error.code === "truncated") return this.readPages(conversation, oldest, SMALL_PAGE_LIMIT);
+      throw error;
+    }
+  }
+
+  private async readPages(conversation: Conversation, oldest: string | undefined, limit: number): Promise<CandidateMessage[]> {
     const collected: CandidateMessage[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      const base: Record<string, unknown> = { channel_id: conversation.channelId, limit: PAGE_LIMIT, response_format: "detailed" };
+    for (let page = 0; page < MAX_PAGES * (PAGE_LIMIT / limit); page += 1) {
+      const base: Record<string, unknown> = { channel_id: conversation.channelId, limit, response_format: "detailed" };
       if (oldest) base.oldest = oldest;
       if (cursor) base.cursor = cursor;
       if (conversation.kind === "thread") {
@@ -183,8 +191,9 @@ export class McpSlackBackend implements SlackBackend {
       }
       if (!cursor) return collected;
     }
-    throw new BackendError(`more than ${MAX_PAGES} pages of new messages; reading stopped rather than skip any`, "too_many_pages");
+    throw new BackendError(`more than ${MAX_PAGES * PAGE_LIMIT} new messages; reading stopped rather than skip any`, "too_many_pages");
   }
+
 
   async lookupMessage(channelId: string, ts: string): Promise<CandidateMessage> {
     return parseLookup(await this.call(this.tools.readThread, { channel_id: channelId, message_ts: ts, limit: 1, response_format: "detailed" }));

@@ -8,7 +8,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { createLocalBashOperations, type BashOperations } from "@earendil-works/pi-coding-agent";
-import { sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
+import { isSecretFileName, sanitizeEnv, SECRET_FILE_GLOBS, secretDirectories } from "./secrets.ts";
 
 export type ShellSandbox =
   | { ok: true; operations: BashOperations; scratchDir: string; dispose(): Promise<void> }
@@ -19,33 +19,72 @@ export interface SandboxOptions {
   allowedDomains: readonly string[];
   agentDir?: string;
   home?: string;
-  /** For tests: the platform, and the folders at the filesystem root (default: this machine's). */
+  /** For tests: the platform (default: this machine's). */
   platform?: NodeJS.Platform;
-  rootFolders?: readonly string[];
+  /** Linux: the secret-named files found by findSecretFiles, as literal paths (see denyReadEntries). */
+  linuxSecretFiles?: readonly string[];
+  /** For tests: the clock the Linux walk's deadline is measured on. */
+  now?: () => number;
 }
 
-/** Top-level folders that hold the system, not user data: not walked for secret names on Linux. */
-const SYSTEM_ROOT_FOLDERS = new Set(["proc", "sys", "dev", "run", "usr", "lib", "lib32", "lib64", "libx32", "bin", "sbin", "boot", "snap", "etc", "lost+found"]);
+/** Folders not walked for secret names: version control, installed packages, caches and toolchains. */
+const UNWALKED = new Set([".git", "node_modules", ".cache", ".npm", ".nvm", ".cargo", ".rustup", ".pyenv", ".gradle", ".m2", ".vscode-server", ".local/share/Trash"]);
+/** How deep the Linux walk goes in the home folder outside the project and the agent folder. */
+export const HOME_WALK_DEPTH = 4;
+/** How long the Linux walk may take per helper run, and how many files it may name, before the shell is refused. */
+export const SECRET_WALK_MS = 3000;
+export const MAX_SECRET_FILES = 2000;
 
-/** The read denials, as absolute paths and anchored patterns (bare patterns do not match on macOS). */
-export function denyReadEntries(options: SandboxOptions): string[] {
+/**
+ * Secret-named files under `roots` (each to its depth, unlimited when none), found by a
+ * breadth-first walk that stops at `deadline`. Incomplete when it ran out of time: the caller then
+ * refuses the shell rather than miss one.
+ */
+export function findSecretFiles(roots: ReadonlyArray<{ dir: string; depth?: number }>, deadline: number, now: () => number = Date.now): { files: string[]; complete: boolean } {
+  const files = new Set<string>();
+  // Unlimited roots first, so a folder inside both is walked to its full depth.
+  const queue = [...roots].sort((a, b) => (a.depth ?? Infinity) - (b.depth ?? Infinity)).reverse().map((r) => ({ dir: r.dir, left: r.depth ?? Infinity, base: r.dir }));
+  const visited = new Set<string>();
+  while (queue.length) {
+    if (now() > deadline) return { files: [...files], complete: false };
+    const { dir, left, base } = queue.shift()!;
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable to Pi is unreadable to the shell too
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (isSecretFileName(entry.name)) files.add(path);
+      const fromBase = path.slice(base.length + 1);
+      if (left > 1 && entry.isDirectory() && !entry.isSymbolicLink() && !UNWALKED.has(entry.name) && !UNWALKED.has(fromBase)) queue.push({ dir: path, left: left - 1, base });
+    }
+  }
+  return { files: [...files], complete: true };
+}
+
+/**
+ * The read denials. macOS (Seatbelt) matches a root-anchored, any-depth name pattern, so secret
+ * names are denied at any depth from the filesystem root. Linux (bubblewrap) would expand each
+ * pattern by walking the disk again for every command, so there the package passes literal paths
+ * instead (marked literal, so a name holding "[" or "*" is never read as a pattern): the secret
+ * folders, the agent folder's files, and the secret-named files that findSecretFiles found once
+ * per helper run in the project and the agent folder (whole) and the home folder (to
+ * HOME_WALK_DEPTH).
+ */
+export function denyReadEntries(options: SandboxOptions): Array<string | { path: string; literal: true }> {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
-  // Secret file names are denied at any depth from the filesystem root, so a .env or an auth file
-  // outside the home and the project (another checkout, an agent folder elsewhere) is covered too.
-  // macOS matches "/**/name" as a pattern. Linux (bubblewrap) expands each pattern by walking from
-  // its first literal folder and skips one with none, so there each top-level folder that can hold
-  // user data is named. The agent folder's own files are also named outright.
-  const platform = options.platform ?? process.platform;
-  const fromRoot = platform === "linux"
-    ? (options.rootFolders ?? readdirSync("/")).filter((name) => !SYSTEM_ROOT_FOLDERS.has(name)).map((name) => `/${name}`)
-    : [""];
-  const roots = [...new Set([...fromRoot, home, options.cwd, agentDir])];
-  return [
+  const named = [
     ...secretDirectories(home, agentDir),
-    ...["auth.json", "mcp.json", "mcp-adapter.json"].map((name) => join(agentDir, name)),
-    ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`)),
+    ...["auth.json", "mcp.json", "mcp-adapter.json", "mcp-auth.json"].map((name) => join(agentDir, name)),
   ];
+  if ((options.platform ?? process.platform) === "linux") return [...named, ...(options.linuxSecretFiles ?? [])].map((path) => ({ path, literal: true as const }));
+  const roots = [...new Set(["", home, options.cwd, agentDir])];
+  return [...named, ...roots.flatMap((root) => SECRET_FILE_GLOBS.map((name) => `${root}/**/${name}`))];
 }
 
 /** The part of sandbox-runtime's SandboxManager the package uses; tests pass a recording one. */
@@ -72,10 +111,20 @@ export async function startShellSandbox(options: SandboxOptions, runtime?: Sandb
   try {
     const manager = runtime ?? (await loadRuntime());
     if (!manager.isSupportedPlatform()) return { ok: false, reason: "sandbox-runtime does not support this platform" };
+    let linuxSecretFiles: string[] | undefined;
+    if ((options.platform ?? process.platform) === "linux") {
+      const home = options.home ?? homedir();
+      const agentDir = options.agentDir ?? join(home, ".pi", "agent");
+      const now = options.now ?? Date.now;
+      const walk = findSecretFiles([{ dir: options.cwd }, { dir: agentDir }, { dir: home, depth: HOME_WALK_DEPTH }], now() + SECRET_WALK_MS, now);
+      if (!walk.complete) return { ok: false, reason: "the folders to check for secret files are too large to check quickly, so the helper has no shell" };
+      linuxSecretFiles = walk.files;
+      if (linuxSecretFiles.length > MAX_SECRET_FILES) return { ok: false, reason: `the project holds more than ${MAX_SECRET_FILES} secret-named files, so the helper has no shell` };
+    }
     scratchDir = realpathSync(await mkdtemp(join(tmpdir(), "pi-slack-helper-")));
     const config: SandboxRuntimeConfig = {
       network: { allowedDomains: [...options.allowedDomains], deniedDomains: [] },
-      filesystem: { denyRead: denyReadEntries(options), allowWrite: [scratchDir], denyWrite: [] },
+      filesystem: { denyRead: denyReadEntries({ ...options, ...(linuxSecretFiles ? { linuxSecretFiles } : {}) }), allowWrite: [scratchDir], denyWrite: [] },
     };
     const policy = JSON.stringify({ network: config.network, denyRead: config.filesystem.denyRead });
     if (!ready || ready.runtime !== manager) {

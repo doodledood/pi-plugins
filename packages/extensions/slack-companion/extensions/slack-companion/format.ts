@@ -168,11 +168,14 @@ export function parseChannelName(toolText: string): string | undefined {
 }
 
 /**
- * The server's line ending a thread read that holds no reply ("No thread messsages", its own
- * spelling, tolerated with one or more s). The one place the package knows this token.
+ * The server's line ending a thread read that holds no reply: "No thread messsages", in its own
+ * spelling, on a line of its own after a blank line. Only that exact line counts, so a person
+ * writing "No thread messages" in a message is never mistaken for it. If the server ever changes
+ * the line, thread reads fail closed (backend.belongsTo) rather than guess. The one place the
+ * package knows this token.
  */
-const NO_REPLIES_LINE = /^No thread mess+ages\s*$/;
-const NO_REPLIES_AT_END = /\n*No thread mess+ages\s*$/;
+const NO_REPLIES_LINE = /^No thread messsages\s*$/;
+const NO_REPLIES_AT_END = /\n\nNo thread messsages\s*$/;
 
 /** Where a thread read's body ends with the no-replies trailer, or -1. */
 export function noRepliesTrailerAt(body: string): number {
@@ -241,11 +244,13 @@ export function parseLookup(toolText: string): CandidateMessage {
   const block = readThreadBlock(lines, 1);
   if (!block) throw new SlackFormatError("a message lookup's first header is unreadable");
   let rest = lines.slice(block.bodyStart).join("\n");
-  const trailer = noRepliesTrailerAt(rest);
-  if (trailer >= 0) rest = rest.slice(0, trailer);
+  // The first replies banner ends the message: only its own author can plant one earlier, which
+  // cuts only their own text. With no banner, the server's no-replies line ends it.
+  const banner = rest.search(/\n\n=== THREAD REPLIES \(\d+ total\) ===/);
+  if (banner >= 0) rest = rest.slice(0, banner);
   else {
-    const banner = rest.search(/\n\n=== THREAD REPLIES \(\d+ total\) ===/);
-    if (banner >= 0) rest = rest.slice(0, banner);
+    const trailer = noRepliesTrailerAt(rest);
+    if (trailer >= 0) rest = rest.slice(0, trailer);
   }
   const { text, agentFooter } = splitFooter(rest);
   return { ts: block.ts, userId: block.userId, userName: block.userName, text, agentFooter };

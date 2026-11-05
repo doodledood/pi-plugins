@@ -208,6 +208,28 @@ test("the panel opened through Pi fits the overlay it asks for, gates approval o
   }
 });
 
+test("a stop the owner has seen stays quiet on the line after a restart; an unseen one is still shown", async () => {
+  const replies = script("question", () => ({ kind: "text", text: "noted" }));
+  const first = await createHarness({ ui: { rows: 30 }, persistSession: true, replies });
+  await first.session.prompt("ask Robin");
+  const [question] = first.slack.messages(DM);
+  first.slack.failures.set("slack_read_thread", ["garbage"]);
+  first.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "hi", question!.ts);
+  await first.engine().poll();
+  assert.match(first.line(120).join(""), /stopped/, "an unseen stop shows on the line");
+  await first.session.dispose();
+  const unseen = await createHarness({ ui: { rows: 30 }, reopen: first, replies });
+  assert.match(unseen.line(120).join(""), /stopped/, "still shown after a restart while unseen");
+  const closed = unseen.session.prompt("/slack");
+  while (!unseen.opened.length) await new Promise((r) => setTimeout(r, 5));
+  unseen.opened[0]!.component.render(80);
+  unseen.opened[0]!.close();
+  await closed;
+  await unseen.session.dispose();
+  const seen = await createHarness({ ui: { rows: 30 }, reopen: unseen, replies });
+  assert.doesNotMatch(seen.line(120).join(""), /stopped/, "seen before the restart: quiet after it");
+});
+
 test("an information hand-off steers main while it is busy, and main stays usable while a request waits", async () => {
   let release!: () => void;
   const dataGate = new Promise<void>((r) => (release = r));
@@ -241,4 +263,17 @@ test("an information hand-off steers main while it is busy, and main stays usabl
   await h.session.prompt("anything else?");
   assert.equal(h.calls.filter((c) => c.role === "main").length, before + 1, "main answers while a request waits");
   assert.equal(h.engine().pendingApprovals().length, 1, "and the request still waits for the owner");
+});
+
+test("every notice reaches the owner without control codes, whatever text it quotes", async () => {
+  const h = await createHarness({ ui: { rows: 30 }, replies: script("question", (c) => ((c.messages.at(-1) as any)?.role === "toolResult" ? { kind: "text", text: "done" } : { kind: "tool", name: "reply_in_slack", args: { text: "on it" } })) });
+  await h.session.prompt("ask Robin");
+  const [question] = h.slack.messages(DM);
+  h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "hi", question!.ts);
+  h.slack.failures.set("slack_send_message", ["ansi-error"]);
+  await h.engine().poll();
+  await h.engine().idle();
+  await h.engine().poll();
+  assert.ok(h.notices.length > 0, "the failed send was reported");
+  for (const { text } of h.notices) assert.equal(/[\u0000-\u0008\u000b-\u001f\u007f\u009b]/.test(text), false, JSON.stringify(text));
 });

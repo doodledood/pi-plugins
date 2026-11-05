@@ -284,3 +284,35 @@ test("a paused watch is counted once: as paused, not also as watching", () => {
     assert.match(line!, /paused/);
   }
 });
+
+test("a DM row keeps the name whole before the snippet, and a cut label keeps its color and weight to the end", () => {
+  const long = "Christopher Johnson";
+  // Real SGR codes (zero width), one color per name, so a reset inside a label shows.
+  const codes: Record<string, number> = { text: 37, muted: 90 };
+  const painted: Paint = { fg: (c, t) => `\u001b[${codes[c] ?? 36}m${t}\u001b[39m`, bold: (t) => `\u001b[1m${t}\u001b[22m` };
+  const thread = watch({ partner: { userId: "U1", name: long }, context: [{ ts: "1.000001", userId: "U1", userName: long, text: "Three quick questions about the deploy before Friday's release window opens", agentFooter: false }] });
+  const ended = watch({ ...thread, key: "D1/2.0", conversation: { kind: "thread", channelId: "D1", threadTs: "1.000001" }, status: "stopped", endedAt: 1 });
+  const channel = channelWatch(1, { channelName: "release-coordination-and-incident-follow-ups", partner: { userId: "U2", name: long } });
+  for (const width of [44, 60, 80, 120]) {
+    const rows = renderPanel(surface({ watches: [thread, ended, channel] }), 0, painted, width, 0);
+    const channelRow = rows.find((r) => r.includes("Christ") && !r.includes("(DM)"))!;
+    assert.equal(channelRow.includes("\u001b[0m"), false, `a cut channel label keeps its paint at ${width}`);
+    const labels = rows.filter((r) => r.includes("(DM)"));
+    assert.ok(labels.length >= 2, `both rows at ${width}`);
+    for (const row of labels) {
+      assert.equal(row.includes("\u001b[0m"), false, `no reset code cuts the paint at ${width}`);
+      assert.match(row, /\u001b\[(37|90)m(\u001b\[1m)?[^\u001b]*\(DM\)[^\u001b]*(\u001b\[22m)?\u001b\[39m/, `one painted span holds the whole label at ${width}: ${JSON.stringify(row)}`);
+    }
+    if (width >= 60) assert.ok(labels.every((r) => r.includes(`${long} (DM)`)), `the name is whole at ${width}`);
+  }
+});
+
+test("paused conversations are counted as the line shows them: a DM's top level and its thread are one", () => {
+  const top = watch({ key: "D1/top", conversation: { kind: "dm-top", channelId: "D1" }, status: "paused", pause: "sendLimit" });
+  const thread = watch({ status: "paused", pause: "sendLimit" });
+  const others = [1, 2, 3, 4, 5, 6].map((i) => channelWatch(i, { lastNote: `helper replied: answer number ${i} with words` }));
+  for (const width of [40, 60, 80]) {
+    const [line] = renderLine(surface({ watches: [top, thread, ...others] }), plain, width);
+    assert.equal(/2 paused/.test(line!), false, `one conversation is paused, not two (${width}): ${line}`);
+  }
+});

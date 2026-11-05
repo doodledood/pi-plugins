@@ -22,7 +22,7 @@ import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools,
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, pruneOrphanRecords, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
-import { defaultSecretPolicy } from "./secrets.ts";
+import { defaultSecretPolicy, stripControl } from "./secrets.ts";
 import { sendCallOf } from "./send-route.ts";
 import { chooseTriageModel, triageContext, triageVerdict } from "./triage.ts";
 import { Panel, PANEL_HEIGHT_PERCENT, panelRows, renderLine, WIDGET_KEY, type Paint, type PanelAction, type SurfaceProblem, type SurfaceState } from "./ui.ts";
@@ -139,8 +139,10 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     };
   };
 
-  const notify = (level: "info" | "warning" | "error", text: string) => {
+  // Every notice goes through here; it may quote Slack or adapter text, so control codes go first.
+  const notify = (level: "info" | "warning" | "error", raw: string) => {
     if (!live) return;
+    const text = stripControl(raw);
     overrides.onNotify?.(level, text);
     if (ctxRef?.hasUI) ctxRef.ui.notify(text, level);
   };
@@ -290,10 +292,12 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     }
     overrides.onEngine?.(engine);
     // Helper records of deleted sessions are removed when a session starts (Pi leaves them behind).
-    try {
-      pruneOrphanRecords(ctx.sessionManager.getSessionFile());
-    } catch (error) {
-      notify("warning", `slack-companion: could not clean up the records of deleted sessions: ${(error as Error).message}`);
+    if (config.enabled) {
+      try {
+        pruneOrphanRecords(ctx.sessionManager.getSessionFile());
+      } catch (error) {
+        notify("warning", `slack-companion: could not clean up the records of deleted sessions: ${(error as Error).message}`);
+      }
     }
     if (ctx.hasUI) {
       ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {

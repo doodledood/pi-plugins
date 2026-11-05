@@ -51,7 +51,7 @@ export class FakeSlack {
    * adapter's generic code), "post-then-error" (a send that posted, then failed), "truncate",
    * "truncate-unsaved", "garbage" (text the parser cannot read), "not-ready" (the adapter is still starting), "auth" (the login expired), "disabled" (the server is
    * disabled), "ansi-error" (an error whose text carries terminal control sequences), "not-started"
-   * (the adapter's start-up failed).
+   * (the adapter's start-up failed; it arrives as start-up's own error, with no code).
    */
   failures = new Map<string, Array<"ok" | "error" | "post-then-error" | "truncate" | "truncate-unsaved" | "garbage" | "not-ready" | "auth" | "disabled" | "ansi-error" | "not-started">>();
   /** Page size the fake uses regardless of the requested limit, to force pagination. */
@@ -148,7 +148,7 @@ export class FakeSlack {
       const code = /no tool/.test((error as Error).message) ? "tool_not_found" : "tool_error";
       return { ok: false, error: new Error(`MCP tool call failed: ${code}`) };
     }
-    if (failure === "not-started") return { ok: false, error: new Error("MCP is not initialized") };
+    if (failure === "not-started") return { ok: false, error: new Error("pi-mcp-adapter could not start: invalid mcp.json") };
     if (failure === "disabled") return { ok: false, error: new Error("MCP tool call failed: server_disabled") };
     if (failure === "ansi-error") return { ok: false, error: new Error("MCP tool call failed: \u001b[2Jtool_error\u001b]0;pwned\u0007 while reading") };
     if (failure === "auth") return { ok: false, error: new Error("MCP tool call failed: auth_required") };

@@ -104,6 +104,8 @@ export interface Harness {
   events: import("./backend.ts").EventBus;
   /** Components the package opened with ctx.ui.custom (only with the fake UI). */
   opened: Array<{ component: any; options: any; close: () => void }>;
+  /** The dock line as the package renders it now (only with the fake UI; empty when it set none). */
+  line: (width: number) => string[];
   /** The poll timers the package has started and not stopped, by id (ids rise). */
   runningTimers: () => number[];
   /** The fake home folder the package's secret policy and sandbox are built for. */
@@ -291,6 +293,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     sessionManager, settingsManager, modelRuntime, resourceLoader,
   });
   const opened: Harness["opened"] = [];
+  const widgets = new Map<string, { render: (width: number) => string[] } | undefined>();
   if (options.ui) {
     const rows = options.ui.rows;
     const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
@@ -302,13 +305,16 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
         opened.push({ component, options: opts, close: () => resolve() });
       }),
       notify: (text: string, level: string) => notices.push({ level, text }),
+      setWidget: (key: string, factory: any) => {
+        widgets.set(key, factory ? factory(tui, theme) : undefined);
+      },
     } as Record<string, unknown>, { get: (target, prop) => (prop in target ? target[prop as string] : () => undefined) });
     await session.bindExtensions({ uiContext: uiContext as any });
   } else {
     await session.bindExtensions({});
   }
   const harness: Harness = {
-    session, slack, calls, workspace, agentDir, home, sandboxConfigs, opened, runningTimers: () => [...timers], foreign, dataCalls, notices,
+    session, slack, calls, workspace, agentDir, home, sandboxConfigs, opened, line: (width) => widgets.get("slack-companion")?.render(width) ?? [], runningTimers: () => [...timers], foreign, dataCalls, notices,
     allTools: () => piRef!.getAllTools(),
     registry,
     events: piRef!.events,

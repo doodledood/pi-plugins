@@ -2,7 +2,7 @@
 // Holds docs/adr/20261104-run-slack-helpers-in-memory.md: a helper's file holds only its own
 // entries, linked to the parent session, never a copy of main.
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CURRENT_SESSION_VERSION, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
@@ -28,19 +28,47 @@ export function writeHelperRecord(parentSessionFile: string | undefined, cwd: st
   return path;
 }
 
+/** How old a deleted session's records must be before they are removed (a new session's file may not exist yet). */
+export const ORPHAN_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Is every file in `dir` a helper record of exactly `parentSessionFile`, the newest older than the age? */
+function onlyOldRecordsOf(dir: string, parentSessionFile: string, now: number): boolean {
+  const files = readdirSync(dir, { withFileTypes: true });
+  if (!files.length) return true;
+  for (const file of files) {
+    if (!file.isFile() || !file.name.endsWith(".jsonl")) return false;
+    const path = join(dir, file.name);
+    if (now - statSync(path).mtimeMs < ORPHAN_AGE_MS) return false;
+    const first = readFileSync(path, "utf8").split("\n", 1)[0] ?? "";
+    let header: { type?: unknown; parentSession?: unknown };
+    try {
+      header = JSON.parse(first);
+    } catch {
+      return false;
+    }
+    if (header.type !== "session" || header.parentSession !== parentSessionFile) return false;
+  }
+  return true;
+}
+
 /**
  * Remove the helper records of sessions that no longer exist: Pi deletes a session's file but not
- * the folder beside it. Only this package's own subfolder is removed, and its parent folder only
- * when nothing else is left in it. Returns how many record folders went.
+ * the folder beside it. A folder goes only when it is not the current session's, its session file
+ * is missing, every file in it is this package's record naming that very file as its parent, and
+ * the newest is older than ORPHAN_AGE_MS. Its parent folder goes only when nothing else is left.
+ * Returns how many record folders went.
  */
-export function pruneOrphanRecords(sessionFile: string | undefined): number {
+export function pruneOrphanRecords(sessionFile: string | undefined, now = Date.now()): number {
   if (!sessionFile) return 0;
   const sessionsDir = dirname(sessionFile);
+  const current = helperRecordDir(sessionFile);
   let removed = 0;
   for (const entry of readdirSync(sessionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const records = join(sessionsDir, entry.name, HELPER_SESSION_KIND);
-    if (!existsSync(records) || existsSync(join(sessionsDir, `${entry.name}.jsonl`))) continue;
+    const parentFile = join(sessionsDir, `${entry.name}.jsonl`);
+    const records = helperRecordDir(parentFile);
+    if (records === current || !existsSync(records) || existsSync(parentFile)) continue;
+    if (!onlyOldRecordsOf(records, parentFile, now)) continue;
     rmSync(records, { recursive: true, force: true });
     removed += 1;
     if (!readdirSync(join(sessionsDir, entry.name)).length) rmdirSync(join(sessionsDir, entry.name));

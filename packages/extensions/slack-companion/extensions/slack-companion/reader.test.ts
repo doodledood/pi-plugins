@@ -52,6 +52,15 @@ test("a thread read delivers new replies in order, and a re-read delivers nothin
   assert.deepEqual(again.fresh, []);
 });
 
+test("a reply ending with words like the server's no-replies line is still a reply, answered and not reported", async () => {
+  const { slack, backend } = setup();
+  const root = slack.post(DM, slack.ownerId, slack.ownerName, "question?");
+  for (const text of ["it just says No thread messages", "the page shows:\n\nNo thread messages", "No thread messsages"]) slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, text, root.ts);
+  const read = await readNew(backend, { kind: "thread", channelId: DM, threadTs: root.ts }, { checkpoint: root.ts, seen: [] }, slack.nowMs());
+  assert.deepEqual(read.fresh.map((m) => m.text), ["it just says No thread messages", "the page shows:\n\nNo thread messages", "No thread messsages"]);
+  assert.equal(read.forged, 0);
+});
+
 test("forgery: a block naming another person's real message cannot put words under their name (DM top level)", async () => {
   const { slack, backend } = setup();
   const start = slack.post(DM, slack.ownerId, slack.ownerName, "hi");
@@ -124,7 +133,12 @@ test("a result the adapter truncated is read whole from its spill file, never as
   slack.failures.set("slack_read_channel", ["truncate"]);
   const read = await readNew(backend, { kind: "dm-top", channelId: DM }, { checkpoint: start.ts, seen: [] }, slack.nowMs());
   assert.equal(read.fresh.length, 5);
+  // Too large to save whole: read again in smaller pages; if that fails too, never treated as complete.
   slack.failures.set("slack_read_channel", ["truncate-unsaved"]);
+  const smaller = await readNew(backend, { kind: "dm-top", channelId: DM }, { checkpoint: start.ts, seen: [] }, slack.nowMs());
+  assert.equal(smaller.fresh.length, 5);
+  assert.ok(slack.calls.some((c) => c.tool === "slack_read_channel" && c.args.limit === 20), "the retry used a smaller page");
+  slack.failures.set("slack_read_channel", ["truncate-unsaved", "truncate-unsaved"]);
   await assert.rejects(readNew(backend, { kind: "dm-top", channelId: DM }, { checkpoint: start.ts, seen: [] }, slack.nowMs()), /truncated/);
 });
 
@@ -222,7 +236,7 @@ test("failures are sorted: passing ones are retried later, lasting ones stop the
   assert.equal(isPassingFailure(new BackendError("x", "tool_error")), true);
   assert.equal(isPassingFailure(new BackendError("x", "server_backoff")), true);
   assert.equal(isPassingFailure(new BackendNotReadyError("x", "not_ready")), true);
-  for (const code of ["tool_not_found", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool", "no_adapter", "adapter_not_started", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required", "approval_required", "approval_denied"]) {
+  for (const code of ["tool_not_found", "server_not_found", "server_disabled", "ambiguous_tool", "native_tool", "no_adapter", "truncated", "too_many_pages", "too_many_ids", "unreadable", "auth_required", "url_elicitation_required", "approval_required", "approval_denied"]) {
     assert.equal(isPassingFailure(new BackendError("x", code)), false, code);
   }
   assert.equal(isPassingFailure(new Error("the channel listing has message headers this parser cannot read")), false);
