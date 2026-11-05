@@ -5,11 +5,10 @@
 //   npm run contract --workspace @doodledood/pi-herdr-bridge [-- [--runs N] <case> ...]
 //
 // Cases: orchestrate, joke, subagent. With none named, all run; each must pass every run (3 by default).
-import { fileURLToPath } from "node:url";
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_EXTENSION, Failure, RPIV_DIALOG, Run, SCRIPTED_PROVIDER, check, entries, transcript, waitFor, wakeups } from "./harness.ts";
+import { BRIDGE_EXTENSION, Failure, isMain, RPIV_DIALOG, Run, SCRIPTED_PROVIDER, check, entries, transcript, waitFor, wakeups } from "./harness.ts";
 
 const AGENT = join(homedir(), ".pi", "agent");
 const ORCHESTRATE_SKILL = join(AGENT, "git", "github.com", "doodledood", "manifest-dev", "claude-plugins", "manifest-dev", "skills");
@@ -242,4 +241,4 @@ async function main(): Promise<void> {
 }
 
 // Runs only when executed, never when imported.
-if (process.argv[1] === fileURLToPath(import.meta.url)) void main();
+if (isMain(import.meta.url)) void main();

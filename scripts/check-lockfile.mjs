@@ -16,13 +16,16 @@ export const EXIT_UNREACHABLE = 3;
 
 /**
  * The package.json of each workspace the root names, relative to `root`. A pattern is a folder or
- * a folder ending in `/*`, which is all this repository's workspaces use. A `!` exclusion is
- * skipped here, as npm applies it in the copy; any other glob throws.
+ * a folder ending in `/*`, which is all this repository's workspaces use. As in npm, an odd number
+ * of leading `!` excludes and an even number includes: an exclusion is skipped here, as npm
+ * applies it in the copy, and an inclusion is read without its `!`. Any other glob throws.
  */
 export function workspaceManifests(root) {
   const { workspaces = [] } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const folders = workspaces.flatMap((pattern) => {
-    if (pattern.startsWith("!")) return [];
+  const folders = workspaces.flatMap((written) => {
+    const bangs = written.length - written.replace(/^!+/, "").length;
+    if (bangs % 2 === 1) return [];
+    const pattern = written.slice(bangs);
     if (/[*?[\]{}]/.test(pattern.replace(/\/\*$/, ""))) throw new Error(`unsupported workspace pattern: ${pattern}`);
     if (!pattern.endsWith("/*")) return [pattern];
     const parent = pattern.slice(0, -2);

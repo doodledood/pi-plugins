@@ -23,7 +23,7 @@ manifest, every package's metadata, the docs and the setup templates list the sa
 themes, skills and setup files; and the lockfile is what npm writes for the manifests in the tree,
 every workspace on disk counted whether or not git has it. The lockfile check rebuilds it offline
 in a temporary copy, which it removes, and names the command that regenerates it on a mismatch.
-Line: 4.5 s on darwin-arm64-12cpu; raised: the structure scenario now runs the lockfile check (0.5 s) and its tests, which spawn npm offline on fixture repositories (about 3 s), and the old structure tests are no slower
+Line: 4.5 s on darwin-arm64-12cpu; raised: the structure scenario now runs the lockfile check (0.4 s) and its tests, which spawn npm offline on fixture repositories (about 3.6 s), and the old structure tests are no slower
 
 ## Gotchas
 

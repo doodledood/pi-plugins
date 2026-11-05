@@ -19,6 +19,20 @@ export const RPIV_DIALOG = join(homedir(), ".pi", "agent", "npm", "node_modules"
 
 export class Failure extends Error {}
 
+/**
+ * Whether the module at `moduleUrl` is the script being run. Node gives the main module's URL by
+ * its real path, so the path it was given is resolved through any symlink before the compare;
+ * without that, a run started through a symlinked folder does nothing and exits 0.
+ */
+export function isMain(moduleUrl: string, argv: readonly string[] = process.argv): boolean {
+  if (!argv[1]) return false;
+  try {
+    return realpathSync(argv[1]) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
 let passed = 0;
 export function check(condition: unknown, what: string, detail?: unknown): void {
   if (!condition) {

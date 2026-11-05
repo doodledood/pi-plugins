@@ -18,7 +18,7 @@ function writeJson(root, file, json) {
 
 /** A repository with two workspace folders and no dependencies, its lockfile written once by npm. */
 const template = join(scratch, "template");
-writeJson(template, "package.json", { name: "fixture", version: "1.0.0", private: true, workspaces: ["packages/extensions/*", "packages/themes/*", "!packages/themes/skipped"] });
+writeJson(template, "package.json", { name: "fixture", version: "1.0.0", private: true, workspaces: ["packages/extensions/*", "packages/themes/*", "!packages/*/legacy"] });
 writeJson(template, "packages/extensions/one/package.json", { name: "one", version: "0.1.0" });
 execFileSync("npm", NPM_OFFLINE, { cwd: template, stdio: "pipe" });
 
@@ -34,13 +34,18 @@ function repo() {
     assert.deepEqual(readdirSync(tmp), [], "the check removes its temporary copy");
     return result;
   };
-  return { root, check, write: (file, json) => writeJson(root, file, json) };
+  return { root, tmp, check, write: (file, json) => writeJson(root, file, json) };
 }
 
 test("a lockfile npm wrote for the tree's manifests passes, and the check edits nothing", () => {
   const { root, check } = repo();
   assert.deepEqual(check(), { ok: true, detail: "package-lock.json matches the manifests" });
   assert.deepEqual(workspaceManifests(root), ["packages/extensions/one/package.json"], "a folder that does not exist and an exclusion are skipped");
+});
+
+test("the copy is made under the folder the check is given", () => {
+  const { root } = repo();
+  assert.throws(() => checkLockfile(root, { tmp: join(scratch, "no-such-folder") }), /ENOENT.*no-such-folder/);
 });
 
 test("a version bump without regenerating the lockfile fails and names the command that fixes it", () => {
@@ -101,15 +106,23 @@ for (const [name, locked] of [
   });
 }
 
-test("a manifest npm cannot read fails with npm's own words", () => {
+test("a manifest npm cannot read fails with npm's own words, under npm run -s too", () => {
   const { root, check } = repo();
   writeFileSync(join(root, "packages/extensions/one/package.json"), "{ not json");
-  assert.match(check().detail, /^npm could not rebuild the lockfile/);
+  const before = process.env.npm_config_loglevel;
+  try {
+    process.env.npm_config_loglevel = "silent";
+    const { detail } = check();
+    assert.match(detail, /^npm could not rebuild the lockfile:\n/);
+    assert.match(detail, /EJSONPARSE/);
+  } finally {
+    if (before === undefined) delete process.env.npm_config_loglevel;
+    else process.env.npm_config_loglevel = before;
+  }
 });
 
 test("a missing npm is reported as unreachable, and the script exits 3 for it, 1 for stale, 0 for a match", () => {
-  const { root, write } = repo();
-  const tmp = join(scratch, `tmp-${fixtures}`);
+  const { root, tmp, write } = repo();
   const quiet = { log: console.log, error: console.error };
   console.log = console.error = () => {};
   try {
@@ -124,10 +137,15 @@ test("a missing npm is reported as unreachable, and the script exits 3 for it, 1
   assert.deepEqual(readdirSync(tmp), []);
 });
 
-test("workspace patterns: a plain folder is taken as named, and a glob other than a trailing /* throws", () => {
-  const { root, write } = repo();
+test("workspace patterns: a plain folder is taken as named, !! includes as npm reads it, and a glob other than a trailing /* throws", () => {
+  const { root, check, write } = repo();
   write("package.json", { name: "fixture", version: "1.0.0", private: true, workspaces: ["packages/extensions/one"] });
   assert.deepEqual(workspaceManifests(root), ["packages/extensions/one/package.json"]);
+  write("packages/themes/two/package.json", { name: "two", version: "0.1.0" });
+  write("package.json", { name: "fixture", version: "1.0.0", private: true, workspaces: ["!!packages/themes/two", "packages/extensions/*"] });
+  assert.deepEqual(workspaceManifests(root), ["packages/themes/two/package.json", "packages/extensions/one/package.json"]);
+  execFileSync("npm", NPM_OFFLINE, { cwd: root, stdio: "pipe" });
+  assert.equal(check().ok, true, "a lockfile npm wrote for a !! include passes");
   write("package.json", { name: "fixture", version: "1.0.0", private: true, workspaces: ["packages/{a,b}"] });
   assert.throws(() => workspaceManifests(root), /unsupported workspace pattern: packages\/\{a,b\}/);
 });

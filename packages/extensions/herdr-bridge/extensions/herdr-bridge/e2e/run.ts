@@ -5,7 +5,6 @@
 //
 // Scenarios: start, real-setup, bridge, wakeups, quiet, reload, answer. With none named, all run.
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WAKEUP_TYPE } from "../messages.ts";
@@ -13,6 +12,7 @@ import {
   BRIDGE_EXTENSION,
   Failure,
   HERE,
+  isMain,
   RPIV_DIALOG,
   Run,
   SCRIPTED_PROVIDER,
@@ -322,4 +322,4 @@ async function main(): Promise<void> {
 }
 
 // Runs only when executed, never when imported.
-if (process.argv[1] === fileURLToPath(import.meta.url)) void main();
+if (isMain(import.meta.url)) void main();
