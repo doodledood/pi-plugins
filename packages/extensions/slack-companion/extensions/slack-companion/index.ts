@@ -158,8 +158,9 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         blocked: [config.tools.sendMessage],
         // The owner's own Slack (search, other channels, private messages) is not read for people in
         // a watched conversation unless he lists those tools: his other conversations are his.
-        // The servers in config.privateServers (by default those that drive his logged-in browser)
-        // likewise: their read-only tools see cookies, auth headers and private pages.
+        // The servers in config.privateServers likewise (always the ones that drive his logged-in
+        // browser and the reference file server, plus his own): their read-only tools see cookies,
+        // auth headers, private pages and files.
         privateServers: [...slackServers(cache, Object.values(config.tools), config.server), ...config.privateServers],
       });
     } catch (error) {

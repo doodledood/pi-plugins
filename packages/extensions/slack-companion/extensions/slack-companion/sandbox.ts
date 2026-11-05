@@ -115,14 +115,14 @@ function darwinUserFolders(): { perUser: string; temp: string } | undefined {
           return canonicalPath(execFileSync("/usr/bin/getconf", [name], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "pipe"] }).trim());
         } catch (error) {
           const said = String((error as { stderr?: unknown }).stderr ?? "").trim().split("\n")[0];
-          throw new Error(said || `getconf ${name} gave no answer`);
+          throw new Error(said || `getconf ${name}: ${(error as Error).message.split("\n")[0]}`);
         }
       };
       const userDir = ask("DARWIN_USER_DIR");
       if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
       userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
     } catch (error) {
-      userFolders = { failed: new Error(`the helper has no shell: macOS gave no usable per-user temp folder (${(error as Error).message}); it asks again in 10 minutes`), at: Date.now() };
+      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); asked again after 10 minutes`), at: Date.now() };
     }
   }
   if ("failed" in userFolders) throw userFolders.failed;

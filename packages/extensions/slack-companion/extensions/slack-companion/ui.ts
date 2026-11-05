@@ -38,8 +38,19 @@ export function cut(text: string, width: number): string {
  * is decided at once, so every row computes the same cuts.
  */
 export function cutApart(name: string, others: readonly string[], width: number): string {
-  return cutSet([name, ...others], width).get(name)!;
+  const names = [...new Set([name, ...others])].sort();
+  const key = `${width}\u0000${names.join("\u0000")}`;
+  let set = cutSets.get(key);
+  if (!set) {
+    set = cutSet(names, width);
+    // A render asks for the same set once per row: keep the latest few.
+    if (cutSets.size >= 64) cutSets.delete(cutSets.keys().next().value!);
+    cutSets.set(key, set);
+  }
+  return set.get(name)!;
 }
+
+const cutSets = new Map<string, Map<string, string>>();
 
 function cutSet(names: readonly string[], width: number): Map<string, string> {
   const unique = [...new Set(names)].sort();
@@ -78,7 +89,11 @@ function cutAt(chars: readonly string[], at: number, width: number): string | un
   if (cells(0, at + 1) <= Math.floor((width - 1) / 2)) return cutMiddle(chars.join(""), width);
   if (cells(0, at + 1) <= width - 1) return cut(chars.join(""), width);
   const room = width - 1; // cells besides the skip mark
-  const tailRoom = room - cells(0, 3); // the start keeps at least three characters
+  // The start keeps up to three characters, but no more than three cells (one wide character
+  // still counts), so a wide script leaves room for where the names differ.
+  let headMin = 1;
+  while (headMin < 3 && cells(0, headMin + 1) <= 3) headMin += 1;
+  const tailRoom = room - cells(0, headMin);
   // Up to two characters of lead-in before the difference, fewer where room is short.
   for (let lead = 2; lead >= 0; lead -= 1) {
     const from = at - lead;
@@ -238,17 +253,26 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const named = watches.find((w) => w.partner) ?? watches[0]!;
     const paused = watches.some((w) => w.status === "paused");
     const states = watches.map((w) => activeState(w, surface.answering.has(w.key)));
-    const state: LineState = paused ? "paused" : ACTIVE_ORDER.find((s) => states.includes(s))!;
+    const agentPosts = watches.reduce((sum, w) => sum + (w.agentPostsWaiting ?? 0), 0);
+    const state: LineState = paused ? "paused" : agentPosts ? "agent posts" : ACTIVE_ORDER.find((s) => states.includes(s))!;
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-    const word = LINE_WORD[state];
+    const word = state === "agent posts" ? { text: agentPosts === 1 ? "agent post waits" : `${agentPosts} agent posts wait`, color: "warning" as const } : LINE_WORD[state];
     const entry: LineEntry = { label: lineLabel(named, others), paused, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
     return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
 }
 
-/** A line entry's state: paused (any of its watches), else the first active state in ACTIVE_ORDER. */
-type LineState = "paused" | ActiveState;
+/**
+ * A line entry's state: paused (any of its watches), else agent posts waiting on the owner, else
+ * the first active state in ACTIVE_ORDER.
+ */
+type LineState = "paused" | "agent posts" | ActiveState;
+
+/** Agent posts that wait on the owner, as the panel says it. */
+function agentPostsWord(count: number): string {
+  return count === 1 ? "1 agent post since you wrote" : `${count} agent posts since you wrote`;
+}
 
 /** The line's word for a state; plain watching has none, so its note shows. */
 const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>> = {
@@ -258,7 +282,7 @@ const LINE_WORD: Partial<Record<LineState, { text: string; color: PaintColor }>>
 };
 
 /** What needs the owner first on the line. */
-const LINE_RANK: Record<LineState, number> = { paused: 0, answering: 1, "catching up": 2, watching: 2 };
+const LINE_RANK: Record<LineState, number> = { paused: 0, "agent posts": 1, answering: 2, "catching up": 3, watching: 3 };
 
 /** The panel's status per active state: a mark before the word, since a row has room the line lacks. */
 const PANEL_STATUS: Record<ActiveState, { text: string; color: "accent" | "success" }> = {
@@ -461,6 +485,8 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
   const label = panelLabel(watch, labelRoom, channels);
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
+  // Agent posts that wait on the owner stay in view until he or his session writes there.
+  if (watch.agentPostsWaiting && isLive(watch)) rows.push(...indent([paint.fg("warning", cut(`${agentPostsWord(watch.agentPostsWaiting)}; check ${watch.agentPostsWaiting === 1 ? "it" : "them"}`, inner - 3))]));
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));
   for (const entry of (watch.activity ?? []).slice(-3)) rows.push(...indent([paint.fg("dim", cut(`${clock(entry.at)}  ${entry.text}`, inner - 3))]));
   // The latest post not this session's, so the owner sees where the conversation stands, named by
@@ -488,12 +514,16 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     // The person first; the channel gets what is left, cut where it differs from the others.
     // Where the long form leaves the channel too little, the short one (as on the line) keeps it.
     const channel = channelOf(watch);
+    // A short channel needs no more than its own cells.
+    const channelNeeds = Math.min(CHANNEL_NAME_MIN_CELLS, visibleWidth(channel));
     const head = `${threadOf(watch.partner.name)}#`;
-    if (room - visibleWidth(head) >= CHANNEL_NAME_MIN_CELLS) return `${head}${cutApart(channel, channels, room - visibleWidth(head))}`;
-    // Too narrow for the person as well: the channel alone, so no later cut drops where it differs.
-    if (room < 4 + 2 + CHANNEL_NAME_MIN_CELLS) return `#${cutApart(channel, channels, room - 1)}`;
-    const person = cut(watch.partner.name, room - 2 - CHANNEL_NAME_MIN_CELLS);
-    return `${person} #${cutApart(channel, channels, room - visibleWidth(person) - 2)}`;
+    if (room - visibleWidth(head) >= channelNeeds) return `${head}${cutApart(channel, channels, room - visibleWidth(head))}`;
+    // The short form: the channel cut first, the person in what is left (two cells at least, else
+    // the channel alone, so no later cut drops where it differs).
+    const cutChannel = cutApart(channel, channels, Math.max(channelNeeds, room - 2 - 4));
+    const personRoom = room - 2 - visibleWidth(cutChannel);
+    if (personRoom < 2) return `#${cutApart(channel, channels, room - 1)}`;
+    return `${cut(watch.partner.name, personRoom)} #${cutChannel}`;
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
   // snippet gives way to a bare "thread" when too little is left for it.

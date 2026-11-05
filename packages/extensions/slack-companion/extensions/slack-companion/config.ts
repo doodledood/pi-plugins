@@ -33,8 +33,9 @@ export interface SlackCompanionConfig {
   investigativeTools: string[];
   /**
    * MCP servers whose tools reach no helper unless listed as `server/tool` in investigativeTools,
-   * though marked read-only: the ones that drive the owner's logged-in browser, plus any the owner
-   * adds. The owner's own Slack server is always private as well.
+   * though marked read-only: always the ones that drive the owner's logged-in browser and the
+   * reference `filesystem` server, plus any the owner adds. The owner's own Slack server is always
+   * private as well.
    */
   privateServers: string[];
   /**

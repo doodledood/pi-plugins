@@ -76,6 +76,12 @@ async function settle(engine: Engine) {
   await engine.idle();
 }
 
+const lineOf = (engine: Engine, slack: FakeSlack) =>
+  renderLine({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 200)[0] ?? "";
+
+const panelOf = (engine: Engine, slack: FakeSlack) =>
+  renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
+
 const agentPosts = (slack: FakeSlack, channelId: string, threadTs?: string) =>
   slack.messages(channelId).filter((m) => m.userId === slack.ownerId && m.text.startsWith("🤖") && (threadTs === undefined || m.threadTs === threadTs));
 
@@ -477,6 +483,7 @@ test("a send addressed to a user id is tracked by its DM channel, and only the f
   await engine.onMainSend({ channelId: DM, ts: posted.ts, addressedTo: COLLEAGUE.id });
   assert.equal(engine.channelFor(COLLEAGUE.id), DM);
   assert.equal(engine.agentLineSentFor(COLLEAGUE.id, undefined), true);
+  await mainSends(slack, engine, "D0FAKE0003", "to someone not known yet");
   engine.setAutoStart(false);
   assert.equal(engine.sendWillBeWatched(COLLEAGUE.id, undefined), true, "a send into the watched DM is still marked after /slack off");
 });
@@ -1452,13 +1459,14 @@ test("another person's agent post is read as context, never answered: two agents
   assert.equal(log.triage.length, 0, "no model woken");
   assert.equal(log.helpers.length, 0);
   assert.equal(log.notices.filter((n) => /Robin Colleague's agent posted\. Agent posts are not answered/.test(n)).length, 1, "the owner is told");
-  assert.equal(engine.watch(`${DM}/${q.ts}`)!.lastNote, "1 agent post since you wrote; check it", "the line says so");
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.agentPostsWaiting, 1);
+  assert.match(lineOf(engine, slack), /agent post waits/, "the line says so");
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 and again\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
   await settle(engine);
   assert.equal(log.notices.filter((n) => /agent posted/.test(n)).length, 1, "told once per conversation");
-  const activity = engine.watch(`${DM}/${q.ts}`)!.activity!.map((a) => a.text);
-  assert.deepEqual(activity.filter((a) => /agent post/.test(a)), ["2 agent posts since you wrote; check them"], "one running count, not one entry per post");
-  const panel = renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
+  assert.equal(engine.watch(`${DM}/${q.ts}`)!.activity?.some((a) => /agent post/.test(a.text)) ?? false, false, "the count is not an event in the log");
+  const panel = panelOf(engine, slack);
+  assert.match(panel, /2 agent posts since you wrote; check them/);
   assert.match(panel, /Robin Colleague \(agent\): and again/, "the latest post shows, marked once");
 });
 
@@ -1640,9 +1648,6 @@ test("a rejoin read keeps a held reply when the other session's post is older th
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("re: one")), "sent on resume");
 });
 
-const panelOf = (engine: Engine, slack: FakeSlack) =>
-  renderPanel({ enabled: true, engine: engine.snapshot(), panelKey: "alt+s", answering: new Set<string>(), seenErrors: new Set<string>(), now: slack.nowMs() }, 0, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, 100, 0).join("\n");
-
 test("after a stop and watching again, main's own opening post is still this session's: the panel names no other agent", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack);
@@ -1696,14 +1701,14 @@ test("the agent-post note counts only what came since the owner or this session 
   agentPost("first");
   agentPost("second");
   await settle(engine);
-  assert.equal(engine.watch(key)!.lastNote, "2 agent posts since you wrote; check them");
+  assert.equal(engine.watch(key)!.agentPostsWaiting, 2);
   slack.post(DM, slack.ownerId, slack.ownerName, "answered by hand", q.ts);
   await settle(engine);
-  assert.doesNotMatch(engine.watch(key)!.lastNote ?? "", /agent post/, "the owner spoke: nothing counted waits on him");
-  assert.equal(engine.watch(key)!.activity!.some((a) => /agent post/.test(a.text)), false);
+  assert.equal(engine.watch(key)!.agentPostsWaiting, undefined, "the owner spoke: nothing counted waits on him");
+  assert.doesNotMatch(panelOf(engine, slack), /agent posts? since you wrote/);
   agentPost("third");
   await settle(engine);
-  assert.equal(engine.watch(key)!.lastNote, "1 agent post since you wrote; check it", "counted afresh");
+  assert.equal(engine.watch(key)!.agentPostsWaiting, 1, "counted afresh");
 });
 
 test("main's send to a user id is not guessed into a DM whose person is not known yet: the reply after it is set aside with a notice", async () => {
@@ -1783,7 +1788,6 @@ test("the agent-post count holds past the kept context: a busy thread counts eve
   for (let i = 0; i < 13; i += 1) slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, `🤖 more ${i}\n*Sent using* <@A0FAKEAPP|Slack MCP>`, q.ts);
   for (let read = 0; read < 4; read += 1) await settle(engine); // a busy thread takes a few reads
   assert.equal(engine.watch(key)!.agentPostsWaiting, 14, JSON.stringify(engine.watch(key)!.activity));
-  assert.ok(engine.watch(key)!.activity!.some((a) => a.text === "14 agent posts since you wrote; check them"));
 });
 
 test("a post corrected to this session's when its result comes clears the agent-post note it answered", async () => {
@@ -1793,12 +1797,11 @@ test("a post corrected to this session's when its result comes clears the agent-
   const key = `${DM}/top`;
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 an agent asks\n*Sent using* <@A0FAKEAPP|Slack MCP>");
   await settle(engine);
-  assert.equal(engine.watch(key)!.lastNote, "1 agent post since you wrote; check it");
+  assert.equal(engine.watch(key)!.agentPostsWaiting, 1);
   const posted = slack.post(DM, slack.ownerId, slack.ownerName, "🤖 main answers\n*Sent using* <@A0FAKEAPP|Slack MCP>");
   await settle(engine); // read before the send's result: it looks like another agent's
-  assert.equal(engine.watch(key)!.lastNote, "1 agent post since you wrote; check it");
+  assert.equal(engine.watch(key)!.agentPostsWaiting, 1);
   await engine.onMainSend({ channelId: DM, ts: posted.ts, text: "main answers" });
-  assert.doesNotMatch(engine.watch(key)!.lastNote ?? "", /agent post/, "this session answered after it");
   assert.equal(engine.watch(key)!.agentPostsWaiting, undefined);
 });
 
@@ -1810,8 +1813,14 @@ test("with automatic starts off, main's send to a person's user id into their wa
   await settle(engine);
   engine.setAutoStart(false);
   assert.equal(engine.sendWillBeWatched(COLLEAGUE.id, undefined), true, "it lands in a watched DM: marked");
-  assert.equal(engine.sendWillBeWatched(OTHER.id, undefined), false, "another person: not watched");
+  assert.equal(engine.sendWillBeWatched(OTHER.id, undefined), false, "a person with no watched DM: not watched");
   assert.equal(engine.agentLineSentFor(COLLEAGUE.id, undefined), true, "the agent line went out there already");
+  // A DM whose person is not known yet: marked (harmless), but its agent line is not assumed sent.
+  engine.setAutoStart(true);
+  await mainSends(slack, engine, "D0FAKE0003", "to someone not known yet");
+  engine.setAutoStart(false);
+  assert.equal(engine.sendWillBeWatched(OTHER.id, undefined), true, "it may land in that DM: marked");
+  assert.equal(engine.agentLineSentFor(OTHER.id, undefined), false, "the agent line goes out again rather than be missed");
 });
 
 test("the helper's own reply leaves the agent-post note: it never answers agent posts", async () => {
@@ -1826,26 +1835,26 @@ test("the helper's own reply leaves the agent-post note: it never answers agent 
   const watch = engine.watch(key)!;
   assert.ok(agentPosts(slack, DM, q.ts).some((p) => p.text.includes("Will do")));
   assert.equal(watch.agentPostsWaiting, 1, "still waiting on the owner");
-  assert.ok(watch.activity!.some((a) => a.text === "1 agent post since you wrote; check it"));
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote; check it/);
   assert.equal(watch.context.find((m) => m.text.includes("Will do"))?.origin, "helper");
 });
 
-test("main writing in the conversation clears the agent-post note at once, and the line shows what came before it", async () => {
+test("main writing in the conversation clears the agent-post count from the line and the panel", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack, { speak: () => false });
   const q = await mainSends(slack, engine, DM, "q");
   const key = `${DM}/${q.ts}`;
   slack.post(DM, OTHER.id, OTHER.name, "a person's note", q.ts);
   await settle(engine);
-  const before = engine.watch(key)!.lastNote;
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 one\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 two\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
   await settle(engine);
-  assert.equal(engine.watch(key)!.lastNote, "2 agent posts since you wrote; check them");
+  assert.match(lineOf(engine, slack), /2 agent posts wait/);
   await mainSends(slack, engine, DM, "main answers", q.ts);
   await settle(engine);
-  assert.equal(engine.watch(key)!.lastNote, before, "the note before the count shows again");
-  assert.equal(engine.watch(key)!.activity!.some((a) => /agent post/.test(a.text)), false);
+  assert.equal(engine.watch(key)!.agentPostsWaiting, undefined);
+  assert.doesNotMatch(lineOf(engine, slack), /agent posts? wait/);
+  assert.doesNotMatch(panelOf(engine, slack), /agent posts? since you wrote/);
 });
 
 test("main's send by user id into a DM whose person is known is this session's; into another person's DM it claims nothing", async () => {
@@ -1885,4 +1894,55 @@ test("main's top-level send to one DM claims nothing in another DM", async () =>
   const other = slack.post("D0FAKE0003", slack.ownerId, slack.ownerName, "🤖 same words\n*Sent using* <@A0FAKEAPP|Slack MCP>");
   await settle(engine);
   assert.equal(engine.watch("D0FAKE0003/top")!.context.find((m) => m.ts === other.ts)?.origin, "owner's other agent");
+});
+
+test("an agent post that waits on the owner stays on the line and in the panel however many helper replies follow", async () => {
+  const slack = new FakeSlack();
+  const { engine } = makeEngine(slack, { config: { pauseAfterSends: 100 }, helper: () => ({ reply: { text: "Sure, on it.", done: false }, handoffs: [] }) });
+  const q = await mainSends(slack, engine, DM, "q");
+  slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 which migration id?\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
+  await settle(engine);
+  for (let i = 0; i < 6; i += 1) {
+    slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, `question ${i}`, q.ts);
+    await settle(engine);
+  }
+  await settle(engine);
+  assert.ok(agentPosts(slack, DM, q.ts).filter((p) => p.text.includes("Sure, on it.")).length >= 3);
+  assert.match(lineOf(engine, slack), /agent post waits/);
+  assert.match(panelOf(engine, slack), /1 agent post since you wrote; check it/);
+});
+
+test("a note or reply read back while its send runs, whose send then ends uncertain, is settled as sent: never reported lost", async () => {
+  // Seconds after the post (the read point stays behind it), or minutes after (the read point passed it).
+  for (const [by, later] of [["this session", 5000], ["helper", 5000], ["this session", 200_000], ["helper", 200_000]] as const) {
+    const slack = new FakeSlack();
+    const { engine, log } = makeEngine(slack, { now: () => slack.clockMs() + later });
+    const q = await mainSends(slack, engine, DM, "q");
+    const key = `${DM}/${q.ts}`;
+    slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "🤖 an agent asks\n*Sent using* <@A0FAKEAPP|Slack MCP>", q.ts);
+    await settle(engine);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const send = engine["deps"].backend.send.bind(engine["deps"].backend);
+    engine["deps"].backend.send = async (...args: Parameters<typeof send>) => {
+      try {
+        return await send(...args);
+      } catch (error) {
+        await gate; // the post is out; the result is slow, then fails
+        throw error;
+      }
+    };
+    slack.failures.set("slack_send_message", ["post-then-error"]);
+    const sending = engine.sendTracked(engine.watch(key)!, by === "helper" ? "a reply" : "approved: go ahead", { by });
+    await new Promise((r) => setTimeout(r, 20));
+    await engine.poll(); // reads the post while the send runs
+    release();
+    assert.equal(await sending, "uncertain");
+    await settle(engine); // reconcile
+    const watch = engine.watch(key)!;
+    assert.equal(log.notices.some((n) => /did not go out/.test(n)), false, `${by} ${later}: ${log.notices.join("\n")}`);
+    assert.ok(watch.activity!.some((a) => a.text === (by === "helper" ? "helper's reply went out" : "your note went out")), `${by}: ${JSON.stringify(watch.activity)}`);
+    assert.equal(watch.agentPostsWaiting, by === "helper" ? 1 : undefined, `${by}: only the owner's note answers the agent post`);
+    if (by === "helper") assert.ok(watch.helperPosts?.length, "recorded as the helper's");
+  }
 });

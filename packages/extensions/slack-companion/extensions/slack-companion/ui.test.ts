@@ -400,8 +400,8 @@ test("channels that share a long start read apart: the panel names them whole wh
     assert.notEqual(a, b, `the difference shows at ${width}: ${a}`);
     assert.ok(visibleWidth(a) <= width);
   }
-  for (const set of [["alerts-dev", "alerts-prod-dev", "alerts-prod-qa"], ["日本語チーム開発本番", "日本語チーム開発検証"], ["dev-payments-alerts", "devops-payments-alerts"]]) {
-    for (const width of [7, 8, 10, 14]) {
+  for (const set of [["alerts-dev", "alerts-prod-dev", "alerts-prod-qa"], ["日本語チーム開発本番", "日本語チーム開発検証"], ["dev-payments-alerts", "devops-payments-alerts"], ["開発チーム本番環境アラート", "開発チーム検証環境アラート"], ["営業部東京通知", "営業部大阪通知"]]) {
+    for (const width of [7, 8, 9, 10, 14]) {
       const cuts = set.map((name) => cutApart(name, set, width));
       assert.equal(new Set(cuts).size, set.length, `${width}: ${cuts.join(" | ")}`);
       assert.ok(cuts.every((c) => visibleWidth(c) <= width), `${width}: ${cuts.join(" | ")}`);
@@ -435,4 +435,25 @@ test("rows that name a person keep the end of a long channel name, where channel
     assert.match(line!, /q3/, `${width}: ${line}`);
     assert.match(line!, /q4/, `${width}: ${line}`);
   }
+});
+
+test("threads with different people in one short channel read apart in a narrow panel, and a short channel takes no more than its cells", () => {
+  const two = surface({ watches: [channelWatch(1, { channelName: "eng", conversation: { kind: "thread", channelId: "C1", threadTs: "1.0" } }), channelWatch(2, { channelName: "eng", conversation: { kind: "thread", channelId: "C1", threadTs: "2.0" }, partner: { userId: "U9", name: "Robin Colleague" } })] });
+  for (const width of [24, 28, 30, 34, 40]) {
+    const rows = renderPanel(two, 0, plain, width, 0).filter((r) => r.includes("#eng"));
+    assert.equal(rows.length, 2, `${width}`);
+    assert.notEqual(rows[0]!.replace("›", " "), rows[1]!.replace("›", " "), `${width}: ${rows.join(" | ")}`);
+  }
+  const general = surface({ watches: [channelWatch(1, { channelName: "general", partner: { userId: "U9", name: "Robin Colleague" }, status: "paused" })] });
+  assert.match(renderPanel(general, 0, plain, 40, 0).join("\n"), /Robin Colleague #general/, "the whole name fits beside a short channel");
+});
+
+test("the panel's latest post skips this session's helper replies as well as main's", () => {
+  const w = watch({ partner: { userId: "U1", name: "Robin Colleague" }, context: [
+    { ts: "1.000001", userId: "U1", userName: "Robin Colleague", text: "is staging down?", agentFooter: false, origin: "person" },
+    { ts: "1.000002", userId: "U0", userName: "Dana Owner", text: "Checking now.", agentFooter: true, origin: "helper" },
+  ] });
+  const panel = renderPanel(surface({ watches: [w] }), 0, plain, 100, 0).join("\n");
+  assert.match(panel, /Robin Colleague: is staging down\?/);
+  assert.doesNotMatch(panel, /Checking now/);
 });

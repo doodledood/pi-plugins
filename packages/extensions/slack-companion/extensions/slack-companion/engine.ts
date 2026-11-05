@@ -29,6 +29,8 @@ export type WatchStatus = "active" | "paused" | "stopped" | "error";
  */
 const ORIGINS = ["this session", "helper", "owner's other agent", "someone's agent", "owner", "person"] as const;
 export type Origin = (typeof ORIGINS)[number];
+/** Who a message this session sends speaks for: the owner (main, his notes) or the helper on its own. */
+export type OwnAuthor = Extract<Origin, "this session" | "helper">;
 
 export interface ContextMessage extends SlackMessage {
   origin: Origin;
@@ -79,7 +81,7 @@ export interface WatchState {
   channelName?: string;
   /** A post through someone else's agent was seen and the owner told; told once per conversation. */
   agentPostSeen?: boolean;
-  /** Posts through someone else's agent since the owner or this session last wrote here: the note's count. */
+  /** Posts through someone else's agent since the owner, or main or his notes, last wrote here: shown on the line and in the panel. */
   agentPostsWaiting?: number;
   /** Waiting messages dropped since the waiting list was last answered: the note shows this total. */
   droppedWaiting?: number;
@@ -111,8 +113,10 @@ export interface LedgerEntry {
   at: number;
   status: "sending" | "sent" | "uncertain" | "failed";
   ts?: string;
-  /** Who the message speaks for: the owner's approval or decline note, or (unset) the helper. */
-  by?: "owner";
+  /** Who the message speaks for: the owner's approval or decline note ("this session"), or the helper. */
+  by: OwnAuthor;
+  /** A post read back while the send was unsettled, matching it: reconcile confirms this one first. */
+  readBack?: string;
 }
 
 export interface EngineState {
@@ -132,11 +136,12 @@ export interface EngineState {
 export type SendOutcome = "sent" | "paused" | "blocked" | "revoked" | "uncertain" | "failed";
 
 /**
- * Bumped when a persisted field is removed, renamed or changes meaning, or a new one is required;
+ * Bumped when a persisted field is removed, renamed or changes meaning (a value added to a stored
+ * enum included: an older build would reject it), or a new one is required;
  * a snapshot of another version is not restored. An added optional field needs no bump: an older
  * snapshot simply lacks it.
  */
-export const STATE_VERSION = 3 as const;
+export const STATE_VERSION = 4 as const;
 const MAX_CONTEXT = 12;
 /** Characters of one message kept in the persisted context. */
 const MAX_CONTEXT_TEXT = 1000;
@@ -150,7 +155,6 @@ const MAX_INBOX = 20;
 /** Reads a rejoining watch waits for a read to catch up before it answers anyway (a burst that never ends). */
 const MAX_REJOIN_READS = 5;
 const DROPPED_NOTE = /^\d+ older dropped; /;
-const AGENT_POSTS_NOTE = /^\d+ agent posts? since you wrote; /;
 /** Characters of a waiting message kept. */
 const MAX_INBOX_TEXT = 4000;
 /** Requests from one conversation that may wait for the owner at once. */
@@ -242,6 +246,14 @@ export const DM_MARK = "(DM)";
 /** A direct message as the owner sees it: the person and the mark, or, before the name is known, what it is. The one place it is spelled. */
 export function dmLabel(name: string | undefined): string {
   return name ? `${name} ${DM_MARK}` : "a direct message";
+}
+
+/** Who a message read now came from (see Origin). */
+function originOf(message: SlackMessage, seen: { own: boolean; helper: boolean; unrecorded: { kind: "main" } | { kind: "tracked"; entry: LedgerEntry } | undefined; byOwner: boolean }): Origin {
+  if (seen.own) return seen.helper ? "helper" : "this session";
+  if (seen.unrecorded) return seen.unrecorded.kind === "main" ? "this session" : seen.unrecorded.entry.by;
+  if (seen.byOwner) return message.agentFooter ? "owner's other agent" : "owner";
+  return message.agentFooter ? "someone's agent" : "person";
 }
 
 /** How the owner sees a conversation: who it is with first, then where; a raw id only when no name is known. */
@@ -466,21 +478,20 @@ export class Engine {
   }
 
   /**
-   * Is this owner post one of this session's own whose ts is not recorded yet, and whose? "this
-   * session" for main's send still running or whose result named no message, or the owner's note
-   * not settled yet; "helper" for the helper's reply not settled yet; undefined when it is none.
+   * Is this owner post one of this session's own whose ts is not recorded yet? "main" for main's
+   * send still running or whose result named no message (recorded at once); "tracked" for a helper
+   * reply or owner note not settled yet (its entry keeps the post for reconcile to confirm).
    */
-  private ownUnrecorded(watch: WatchState, raw: SlackMessage): "this session" | "helper" | undefined {
+  private ownUnrecorded(watch: WatchState, raw: SlackMessage): { kind: "main" } | { kind: "tracked"; entry: LedgerEntry } | undefined {
     const text = raw.text.trim();
     for (const [callId, sent] of this.mainSendsUnrecorded) {
       if (sent.text !== text || !this.sendReadHere(watch, sent, raw.ts)) continue;
       this.mainSendsUnrecorded.delete(callId);
-      return "this session"; // main's: recorded now
+      return { kind: "main" };
     }
-    // A tracked send settles by its own result or by reconcile, which then records the ts (reconcile
-    // looks for a ts it does not know yet, so it is not recorded here).
-    const tracked = this.state.ledger.find((e) => e.watchKey === watch.key && (e.status === "sending" || e.status === "uncertain") && e.text.trim() === text);
-    return tracked ? (tracked.by === "owner" ? "this session" : "helper") : undefined;
+    // A tracked send settles by its own result or by reconcile, which records the ts then.
+    const entry = this.state.ledger.find((e) => e.watchKey === watch.key && (e.status === "sending" || e.status === "uncertain") && !e.readBack && e.text.trim() === text);
+    return entry ? { kind: "tracked", entry } : undefined;
   }
 
   /**
@@ -502,10 +513,9 @@ export class Engine {
    * Record that the post `ts` is this session's own, written at the owner's direction or by the
    * helper on its own: in ownPosts (and helperPosts) and, when the message is kept, in its origin.
    * The one place these change for a recorded post. (A tracked send's post read back before its
-   * send settles takes its origin at once and is recorded when it settles: reconcile looks for a
-   * ts it does not know yet.)
+   * send settles takes its origin at once, and is recorded when the send or reconcile settles it.)
    */
-  private markOwn(watch: WatchState, ts: string, by: "this session" | "helper"): void {
+  private markOwn(watch: WatchState, ts: string, by: OwnAuthor): void {
     if (!watch.ownPosts.includes(ts)) watch.ownPosts = [...watch.ownPosts, ts].slice(-MAX_OWN_POSTS);
     if (by === "helper" && !watch.helperPosts?.includes(ts)) watch.helperPosts = [...(watch.helperPosts ?? []), ts].slice(-MAX_OWN_POSTS);
     const at = watch.context.findIndex((m) => m.ts === ts);
@@ -514,7 +524,7 @@ export class Engine {
     if (by !== "this session") return;
     // The session wrote there after all: only agent posts after this one still wait on the owner.
     const after = watch.context.slice(at + 1).filter((m) => m.origin === "someone's agent").length;
-    if (after < (watch.agentPostsWaiting ?? 0)) this.noteAgentPosts(watch, after);
+    if (after < (watch.agentPostsWaiting ?? 0)) this.setAgentPostsWaiting(watch, after);
   }
 
   /** Main sent a message (any route). Start or continue watching, and remember the post. */
@@ -745,6 +755,9 @@ export class Engine {
       watch.context = watch.context.filter((m) => m.ts === root);
       // The kept root stays this session's own when it was (watching again reads it as such).
       watch.ownPosts = watch.ownPosts.filter((ts) => ts === root || !watch.point.checkpoint || compareTs(ts, watch.point.checkpoint) > 0);
+      const helperPosts = watch.helperPosts?.filter((ts) => watch.ownPosts.includes(ts));
+      if (helperPosts?.length) watch.helperPosts = helperPosts;
+      else delete watch.helperPosts;
     }
     if (watch.held) {
       delete watch.held;
@@ -775,7 +788,7 @@ export class Engine {
     this.save();
     this.deps.deliverApproved({ approval, ownerName: owner.name });
     if (watch && isLive(watch)) {
-      await this.sendTracked(watch, approvedNote(owner.name, approval.text), { fromOwner: true });
+      await this.sendTracked(watch, approvedNote(owner.name, approval.text), { by: "this session" });
       this.save();
     }
   }
@@ -792,7 +805,7 @@ export class Engine {
     }
     this.save();
     if (watch && isLive(watch)) {
-      await this.sendTracked(watch, deniedNote((await this.owner()).name, approval.text), { fromOwner: true });
+      await this.sendTracked(watch, deniedNote((await this.owner()).name, approval.text), { by: "this session" });
       this.save();
     }
   }
@@ -922,16 +935,13 @@ export class Engine {
       const byOwner = raw.userId === owner.userId;
       const unrecorded = !own.has(message.ts) && byOwner ? this.ownUnrecorded(watch, raw) : undefined;
       const ownPost = own.has(message.ts) || unrecorded !== undefined;
-      const origin: Origin = own.has(message.ts)
-        ? (watch.helperPosts?.includes(message.ts) ? "helper" : "this session")
-        : unrecorded !== undefined
-          ? unrecorded
-          : byOwner ? (raw.agentFooter ? "owner's other agent" : "owner") : raw.agentFooter ? "someone's agent" : "person";
+      const origin = originOf(message, { own: own.has(message.ts), helper: watch.helperPosts?.includes(message.ts) === true, unrecorded, byOwner });
       this.remember(watch, { ...message, origin });
-      if (unrecorded === "this session") this.markOwn(watch, message.ts, "this session");
+      if (unrecorded?.kind === "main") this.markOwn(watch, message.ts, "this session");
+      if (unrecorded?.kind === "tracked") unrecorded.entry.readBack = message.ts;
       // The owner, or the session at his direction, wrote after them: earlier agent posts no longer
       // wait on him. The helper's own replies never answer agent posts, so they leave the count.
-      if (origin === "owner" || origin === "this session") this.noteAgentPosts(watch, 0);
+      if (origin === "owner" || origin === "this session") this.setAgentPostsWaiting(watch, 0);
       if (ownPost) {
         watch.lastAgentPostOurs = true;
         continue;
@@ -958,11 +968,11 @@ export class Engine {
         continue;
       }
       // Someone else's agent (a post with the agent footer under their name): context only, so two
-      // agents never answer each other in a loop. One note counts those since the owner or this
-      // session last spoke (the line shows it; the panel shows the post), and the owner is told
-      // once per conversation.
+      // agents never answer each other in a loop. The watch counts those since the owner (or main or
+      // his notes) last wrote; the line and the panel show the count, and the owner is told once
+      // per conversation.
       if (message.agentFooter) {
-        this.noteAgentPosts(watch, (watch.agentPostsWaiting ?? 0) + 1);
+        this.setAgentPostsWaiting(watch, (watch.agentPostsWaiting ?? 0) + 1);
         if (!watch.agentPostSeen) {
           watch.agentPostSeen = true;
           this.deps.notify("info", `Slack: in ${watchLabel(watch)}, ${message.userName}'s agent posted. Agent posts are not answered, so two agents never answer each other; answer it yourself if it needs you: "${firstLine(message.text, 80)}"`);
@@ -1027,24 +1037,12 @@ export class Engine {
   }
 
   /**
-   * Set how many agent posts wait on the owner, and the one note that counts them; at 0 the note
-   * goes, and the line shows what came before it.
+   * Set how many agent posts wait on the owner (0 clears it). The line and the panel show it from
+   * here, not from the activity log, so later helper replies never push it out of view.
    */
-  private noteAgentPosts(watch: WatchState, count: number): void {
-    if (count > 0) {
-      watch.agentPostsWaiting = count;
-      this.note(watch, count === 1 ? "1 agent post since you wrote; check it" : `${count} agent posts since you wrote; check them`, { replacing: AGENT_POSTS_NOTE });
-      return;
-    }
-    if (watch.agentPostsWaiting === undefined) return;
-    delete watch.agentPostsWaiting;
-    const activity = (watch.activity ?? []).filter((entry) => !AGENT_POSTS_NOTE.test(entry.text));
-    watch.activity = activity;
-    if (watch.lastNote && AGENT_POSTS_NOTE.test(watch.lastNote)) {
-      const previous = activity.at(-1)?.text;
-      if (previous) watch.lastNote = previous;
-      else delete watch.lastNote;
-    }
+  private setAgentPostsWaiting(watch: WatchState, count: number): void {
+    if (count > 0) watch.agentPostsWaiting = count;
+    else delete watch.agentPostsWaiting;
   }
 
   /** What the helper did, for the line (last note) and the panel (the last few, with times). */
@@ -1185,15 +1183,17 @@ export class Engine {
    * and recorded. A note the owner's own action caused (approved, declined) is not held by a pause
    * and does not count toward it.
    */
-  async sendTracked(watch: WatchState, text: string, options: { fromOwner?: boolean; commit?: () => void } = {}): Promise<SendOutcome> {
+  async sendTracked(watch: WatchState, text: string, options: { by?: OwnAuthor; commit?: () => void } = {}): Promise<SendOutcome> {
+    const by = options.by ?? "helper";
+    const what = by === "this session" ? "your note" : "a reply";
     if (this.disposed || !isLive(watch)) return "revoked";
     const config = this.deps.config();
     const shape = findSecretShape(text);
     if (shape) {
-      this.deps.notify("warning", `Slack: did not send ${options.fromOwner ? "your note" : "a reply"} in ${watchLabel(watch)}: it contained something shaped like a ${shape}.`);
+      this.deps.notify("warning", `Slack: did not send ${what} in ${watchLabel(watch)}: it contained something shaped like a ${shape}.`);
       return "blocked";
     }
-    if (!options.fromOwner) {
+    if (by === "helper") {
       if (watch.status === "paused") return "paused";
       // Reserve the slot before awaiting anything, so concurrent sends cannot pass the limit.
       if (watch.sendsWithoutOwner >= config.pauseAfterSends) {
@@ -1205,7 +1205,7 @@ export class Engine {
     }
     const owner = await this.owner();
     const marked = markMessage(text, config.marker, owner.name, !watch.agentLineSent);
-    const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending", ...(options.fromOwner ? { by: "owner" as const } : {}) };
+    const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending", by };
     // The step this send completes is recorded in the same save as the send itself, so a crash
     // during the send is settled by reconcile and the step is never redone.
     options.commit?.();
@@ -1217,16 +1217,16 @@ export class Engine {
       const { ts } = await this.deps.backend.send(watch.conversation.channelId, marked, threadTs);
       entry.status = "sent";
       entry.ts = ts;
-      this.markOwn(watch, ts, options.fromOwner ? "this session" : "helper");
+      this.markOwn(watch, ts, by);
       watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
     } catch (error) {
       entry.status = error instanceof SendUncertainError ? "uncertain" : "failed";
-      if (!this.disposed) this.deps.notify("warning", `Slack: ${options.fromOwner ? "your note" : "a reply"} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
+      if (!this.disposed) this.deps.notify("warning", `Slack: ${what} in ${watchLabel(watch)} may not have gone out (${(error as Error).message}); it will be checked, not re-sent.`);
     } finally {
       this.inFlightSends.delete(entry.id);
     }
-    if (!options.fromOwner && watch.sendsWithoutOwner >= config.pauseAfterSends) this.pauseForLimit(watch);
+    if (by === "helper" && watch.sendsWithoutOwner >= config.pauseAfterSends) this.pauseForLimit(watch);
     // No save here: the caller saves once its step is done. The save before the send already holds
     // the ledger entry, so a crash in between is settled by reconcile, never by sending again.
     return entry.status === "sent" ? "sent" : entry.status === "uncertain" ? "uncertain" : "failed";
@@ -1256,8 +1256,10 @@ export class Engine {
       return genuine.userId === owner.userId && genuine.text.trim() === text.trim();
     };
     for (const entry of pending) {
-      let found: (typeof messages)[number] | undefined;
-      for (const m of messages) {
+      let found: { ts: string } | undefined;
+      // A post read back while the send was unsettled may lie before the checkpoint: confirm it first.
+      if (entry.readBack && !known.has(entry.readBack) && (await confirmed(entry.readBack, entry.text))) found = { ts: entry.readBack };
+      for (const m of found ? [] : messages) {
         if (m.userId === owner.userId && !known.has(m.ts) && m.text.trim() === entry.text.trim() && (await confirmed(m.ts, entry.text))) {
           found = m;
           break;
@@ -1267,12 +1269,12 @@ export class Engine {
         known.add(found.ts);
         entry.status = "sent";
         entry.ts = found.ts;
-        this.markOwn(watch, found.ts, entry.by === "owner" ? "this session" : "helper");
-        this.note(watch, entry.by === "owner" ? "your note went out" : "helper's reply went out");
+        this.markOwn(watch, found.ts, entry.by);
+        this.note(watch, entry.by === "this session" ? "your note went out" : "helper's reply went out");
       } else {
         entry.status = "failed";
-        this.note(watch, `${entry.by === "owner" ? "your note" : "helper's reply"} did not go out; not sent again`);
-        this.deps.notify("warning", `Slack: ${entry.by === "owner" ? "your note" : "a reply"} in ${watchLabel(watch)} did not go out; it was not re-sent.`);
+        this.note(watch, `${entry.by === "this session" ? "your note" : "helper's reply"} did not go out; not sent again`);
+        this.deps.notify("warning", `Slack: ${entry.by === "this session" ? "your note" : "a reply"} in ${watchLabel(watch)} did not go out; it was not re-sent.`);
       }
     }
   }
