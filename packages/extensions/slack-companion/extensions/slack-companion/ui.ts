@@ -73,7 +73,8 @@ function isUnseenError(surface: SurfaceState, watch: WatchState): boolean {
 // ---------------------------------------------------------------------------------------------
 
 interface LineEntry {
-  label: string;
+  /** Ways to name it, longest first, each whole: first words give way before the entry folds. */
+  labels: string[];
   /** The conversation's state: the first in LINE_ORDER any of its watches is in. */
   state: LineState;
   /** Agent posts that wait on the owner across its watches. */
@@ -116,14 +117,16 @@ function unnamedPrefix(watch: WatchState): string {
 }
 
 /**
- * A conversation as the line names it: the person, and the channel when it is not a DM; before
- * anyone answers, unnamedLabel. Names are whole: an entry whose label does not fit folds into
- * "+N watching".
+ * A conversation as the line names it, longest first: the person, and the channel when it is not
+ * a DM; before anyone answers, unnamedLabel, then the same without its first words. Names are
+ * whole: an entry none of whose labels fits is folded into a count.
  */
-function lineLabel(watch: WatchState): string {
+function lineLabels(watch: WatchState): string[] {
   const person = watch.partner?.name;
-  if (!person) return unnamedLabel(watch);
-  return isDirectMessage(watch.conversation.channelId) ? person : `${person} #${channelOf(watch)}`;
+  if (person) return [isDirectMessage(watch.conversation.channelId) ? person : `${person} #${channelOf(watch)}`];
+  const withWords = unnamedLabel(watch);
+  const bare = unnamedLabel(watch, 0);
+  return withWords === bare ? [bare] : [withWords, bare];
 }
 
 function channelOf(watch: WatchState): string {
@@ -159,7 +162,7 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const agentPosts = watches.reduce((sum, w) => sum + (w.agentPostsWaiting ?? 0), 0);
     const latest = [...watches].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const word = state === "agent posts" ? { text: agentPosts === 1 ? "agent post waits" : `${agentPosts} agent posts wait`, color: "warning" as const } : LINE_WORD[state];
-    const entry: LineEntry = { label: lineLabel(named), state, agentPosts, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
+    const entry: LineEntry = { labels: lineLabels(named), state, agentPosts, ...(word ? { word } : {}), note: latest.find((w) => w.lastNote)?.lastNote ?? "watching" };
     return { entry, rank: LINE_RANK[state], at: latest[0]!.lastActivityAt };
   });
   return ranked.sort((a, b) => a.rank - b.rank || b.at - a.at).map((r) => r.entry);
@@ -252,60 +255,60 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
     }),
   ].filter(Boolean);
 
-  // Watch entries at their natural width, in rank order: an entry shows only if its whole label
-  // and its state word (or a useful part of its note) fit; the rest fold into "+N watching".
+  // Watch entries at their natural width, in rank order: an entry shows only if one of its whole
+  // labels and its state word (or a useful part of its note) fit; one that does not is skipped,
+  // so a long name never hides shorter ones after it, and folds into "+N watching" (or its count).
   // Each form (long words, short words) is built; the long one wins only if it names as many
   // conversations, since the people are what the owner glances for.
   const form = (long: boolean): { line: string; named: number } | undefined => {
     const countsWidth = (shown: readonly LineEntry[]) => counts(long ? "long" : "short", shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
-    const chosen: LineEntry[] = [];
-    const need = (e: LineEntry) => visibleWidth(e.label) + (e.word ? 1 + visibleWidth(e.word.text) : PAIR.length + Math.min(visibleWidth(e.note), NOTE_MIN));
-    const used = () => chosen.reduce((w, e) => w + SEP.length + need(e), 0);
+    const chosen: Array<{ entry: LineEntry; label: string }> = [];
+    const shown = () => chosen.map((c) => c.entry);
+    const need = (e: LineEntry, label: string) => visibleWidth(label) + (e.word ? 1 + visibleWidth(e.word.text) : PAIR.length + Math.min(visibleWidth(e.note), NOTE_MIN));
+    const used = () => chosen.reduce((w, c) => w + SEP.length + need(c.entry, c.label), 0);
     // Folded watches are counted as "watching", but a counted state is in its own count.
-    const foldCount = (k: number) => entries.slice(k).filter((e) => !LINE_COUNTED[e.state]).length;
-    const fold = (k: number) => (foldCount(k) ? SEP.length + visibleWidth(`${k ? "+" : ""}${foldCount(k)} watching`) : 0);
+    const foldCount = (named: readonly LineEntry[]) => entries.filter((e) => !named.includes(e) && !LINE_COUNTED[e.state]).length;
+    const foldWords = (named: readonly LineEntry[]) => `${named.length ? "+" : ""}${foldCount(named)} watching`;
+    const fold = (named: readonly LineEntry[]) => (foldCount(named) ? SEP.length + visibleWidth(foldWords(named)) : 0);
     for (const entry of entries) {
-      const next = [...chosen, entry];
-      const total = used() + SEP.length + need(entry) + fold(next.length) + countsWidth(next);
-      if (total > room) break;
-      chosen.push(entry);
+      const next = [...shown(), entry];
+      const label = entry.labels.find((l) => used() + SEP.length + need(entry, l) + fold(next) + countsWidth(next) <= room);
+      if (label !== undefined) chosen.push({ entry, label });
     }
     // Space left over goes to the shown notes, in rank order.
-    let spare = room - used() - fold(chosen.length) - countsWidth(chosen);
+    let spare = room - used() - fold(shown()) - countsWidth(shown());
     if (spare < 0) return undefined;
-    const parts = chosen.map((e) => {
+    const parts = chosen.map(({ entry: e, label }) => {
       // A state word (paused, answering…) reads as the conversation's state; a note, as an event.
-      if (e.word) return `${paint.fg("muted", e.label)} ${paint.fg(e.word.color, e.word.text)}`;
+      if (e.word) return `${paint.fg("muted", label)} ${paint.fg(e.word.color, e.word.text)}`;
       const base = Math.min(visibleWidth(e.note), NOTE_MIN);
       const extra = Math.max(0, Math.min(visibleWidth(e.note) - base, spare));
       spare -= extra;
-      return `${paint.fg("muted", e.label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
+      return `${paint.fg("muted", label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
     });
-    if (foldCount(chosen.length)) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${foldCount(chosen.length)} watching`));
-    const left = [head(dot), ...parts, ...counts(long ? "long" : "short", chosen)].join(sep);
+    if (foldCount(shown())) parts.push(paint.fg("muted", foldWords(shown())));
+    const left = [head(dot), ...parts, ...counts(long ? "long" : "short", shown())].join(sep);
     return fits(left, long) ? { line: compose(left, long), named: chosen.length } : undefined;
   };
   const long = form(true);
   const short = form(false);
   if (long && (!short || long.named >= short.named)) return [long.line];
   if (short) return [short.line];
-  // Too narrow even for the counts in full: keep them in priority order until they fit.
-  // Keep "slack": first every count in short words, then in tight words; then drop the lowest
-  // count first; only then drop the word.
-  for (const form of ["short", "tight"] as const) {
-    const all = counts(form, []);
-    const left = [head(dot), ...all].join(sep);
-    if (fits(left, false)) return [compose(left, false)];
-  }
-  const all = counts("tight", []);
-  for (let k = all.length - 1; k >= 1; k -= 1) {
-    const left = [head(dot), ...all.slice(0, k)].join(sep);
-    if (fits(left, false)) return [compose(left, false)];
-  }
-  for (let k = all.length; k >= 1; k -= 1) {
-    const left = [` ${paint.fg(dot, "●")}`, ...all.slice(0, k)].join(sep);
-    if (fits(left, false)) return [compose(left, false)];
+  // Too narrow even to name one: the counts, the live watches' first as on a wider line, but the
+  // first to go. As many counts as fit; with as many, the word "slack" and then short words win:
+  // each set is tried in short words with "slack", in tight words with it, then in tight words
+  // without it, before the lowest count is dropped.
+  const watching = entries.filter((e) => !LINE_COUNTED[e.state]).length;
+  const kept = (form: "short" | "tight", k: number) => {
+    const owed = counts(form, []);
+    return [...(watching && k > owed.length ? [paint.fg("muted", `${watching} watching`)] : []), ...owed.slice(0, k)];
+  };
+  for (let k = counts("tight", []).length + (watching ? 1 : 0); k >= 1; k -= 1) {
+    for (const [lead, form] of [[head(dot), "short"], [head(dot), "tight"], [` ${paint.fg(dot, "●")}`, "tight"]] as const) {
+      const left = [lead, ...kept(form, k)].join(sep);
+      if (fits(left, false)) return [compose(left, false)];
+    }
   }
   return [compose(head(dot), false)];
 }
@@ -392,24 +395,28 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   if (item.kind === "approval") {
     const { approval } = item;
     const pending = approval.status === "pending";
-    const head = pending
-      ? `${paint.fg("warning", strong("◐ waiting for your OK"))} ${paint.fg("muted", `· ${age(surface.now, approval.at)}`)}`
-      : paint.fg("muted", approval.status === "approved" ? "✓ approved — sent to your session" : "✗ declined");
+    // The head drops its age, then wraps, when the row is narrow.
+    const state = pending ? "◐ waiting for your OK" : approval.status === "approved" ? "✓ approved — sent to your session" : "✗ declined";
+    const when = pending ? ` · ${age(surface.now, approval.at)}` : "";
+    const paintState = (text: string) => (pending ? paint.fg("warning", strong(text)) : paint.fg("muted", text));
+    const head = visibleWidth(state + when) <= inner
+      ? [`${paintState(state)}${paint.fg("muted", when)}`]
+      : wrapTextWithAnsi(state, inner).map(paintState);
     // The whole request, wrapped, never cut: exactly what main receives if approved.
     const body = wrapTextWithAnsi(approval.text, inner - 3).map((row) => (pending ? paint.fg("text", row) : paint.fg("dim", row)));
     // Who asked, whole (a person's name is never cut), wrapped when long.
     const from = wrapTextWithAnsi(`from ${requestSource(approval)}`, inner - 3).map((row) => paint.fg("muted", row));
-    return { rows: [head, ...indent(from), ...indent(body)], pinned: 1 + from.length };
+    return { rows: [...head, ...indent(from), ...indent(body)], pinned: head.length + from.length };
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
   const live = isLive(watch) ? PANEL_STATUS[watchState(watch, surface)] : undefined;
   const status = live ? paint.fg(live.color, live.text) : watch.status === "error" ? paint.fg("error", "× stopped") : paint.fg("muted", "· ended");
-  // Names wrap, so the label takes only what the status leaves.
-  const labelRoom = Math.max(4, inner - visibleWidth(status) - 2);
+  // Names wrap, so the label takes only what the status leaves; with none, it starts a row lower.
+  const labelRoom = Math.max(0, inner - visibleWidth(status) - 2);
   const [first, ...more] = panelLabel(watch, labelRoom, inner - 3);
   const labelColor = isLive(watch) ? "text" : "muted";
-  const rows = [`${paint.fg(labelColor, strong(first!))}  ${status}`, ...indent(more.map((row) => paint.fg(labelColor, strong(row))))];
+  const rows = [first ? `${paint.fg(labelColor, strong(first))}  ${status}` : status, ...indent(more.map((row) => paint.fg(labelColor, strong(row))))];
   // Agent posts that wait on the owner stay in view until he or his session writes there: the
   // count, then the latest such post on rows of its own (two at most), so its words show.
   const latestAgentPost = watch.agentPostsWaiting && isLive(watch) ? [...watch.context].reverse().find((m) => m.origin === "someone's agent") : undefined;
@@ -463,7 +470,8 @@ function panelLabel(watch: WatchState, room: number, rest: number): string[] {
     return [...wrapFirst(name, room, rest), ...wrapTextWithAnsi(channel, rest)];
   }
   // The name and "(DM)" first; the kind of conversation gets what is left: a thread's first words
-  // give way to a bare "thread" when too little is left for them, and that to a row of its own.
+  // give way to a bare "thread" when too little is left for them; with less than that, the kind
+  // (a thread with its first words) goes to a row of its own.
   const who = `${name} ${DM_MARK}`;
   const left = room - visibleWidth(`${who} · `);
   if (left < visibleWidth(bareKind)) return [...wrapFirst(who, room, rest), cut(kindLabel(watch), rest)];
@@ -472,17 +480,23 @@ function panelLabel(watch: WatchState, room: number, rest: number): string[] {
   return [`${who} · ${fitted}`];
 }
 
-/** `text` wrapped: its first row in `first` cells, the rest in `rest`. */
+/**
+ * `text` wrapped: its first row in `first` cells, the rest in `rest`. A first word too wide for
+ * `first` that a whole row holds starts on the next row instead (the first row is then empty), so
+ * a name breaks inside a word only when the word is wider than a row.
+ */
 function wrapFirst(text: string, first: number, rest: number): string[] {
+  const word = visibleWidth(text.split(/\s/, 1)[0] ?? "");
+  if (word > first && (word <= rest || first < 4)) return ["", ...wrapTextWithAnsi(text, rest)];
   const head = wrapTextWithAnsi(text, first)[0] ?? "";
   const remainder = text.slice(head.length).trimStart();
   return remainder ? [head, ...wrapTextWithAnsi(remainder, rest)] : [head];
 }
 
-/** An agent's marker (an emoji or two) in front of its post: "(agent)" already says it. */
+/** An agent's marker (an emoji or two) in front of its post: "(agent)" or "their agent" already says it. */
 const LEADING_SYMBOLS = /^(?:[\p{Extended_Pictographic}\uFE0F\u200D]+\s*)+/u;
 
-/** An agent post's text without its marker ("(agent)" says it), unless the marker is all it has. */
+/** An agent post's text without its marker (its poster's name says it), unless the marker is all it has. */
 function agentText(message: ContextMessage): string {
   const unmarked = message.text.replace(LEADING_SYMBOLS, "");
   return (unmarked.trim() ? unmarked : message.text).replace(/\s+/g, " ");
@@ -490,16 +504,19 @@ function agentText(message: ContextMessage): string {
 
 /**
  * A post as `poster: text`: the text on `rows` rows of `width` cells, wrapped, cut on the last.
- * The poster's name is never cut: one too wide to share a row with the text gets rows of its own.
+ * The poster's name is never cut: one that leaves a row too little room for words (fewer than
+ * POST_WORDS_MIN cells) gets rows of its own, so no row ends a whole name with "…".
  */
 function postRows(poster: string, text: string, width: number, rows: number): string[] {
   const fit = (line: string) => {
     const wrapped = wrapTextWithAnsi(line, width);
     return wrapped.length > rows ? [...wrapped.slice(0, rows - 1), cut(wrapped.slice(rows - 1).join(" "), width)] : wrapped;
   };
-  const name = wrapTextWithAnsi(`${poster}:`, width);
-  return name.length > 1 ? [...name, ...fit(text)] : fit(`${poster}: ${text}`);
+  return visibleWidth(`${poster}: `) + POST_WORDS_MIN > width ? [...wrapTextWithAnsi(`${poster}:`, width), ...fit(text)] : fit(`${poster}: ${text}`);
 }
+
+/** Cells a post's words need beside its poster's name to share the row. */
+const POST_WORDS_MIN = 8;
 
 /** Who posted a kept message, as the panel names them. */
 function postedBy(message: ContextMessage): string {
@@ -589,14 +606,15 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     return { rows, pinned };
   });
   // The keys row wraps by whole keys in a narrow panel; its widest form sets the rows it keeps.
-  const keyRows = (keys: string[]) => keys.reduce<string[]>((rows, key) => {
-    const last = rows.at(-1);
-    if (last !== undefined && visibleWidth(`${last} · ${key}`) <= inner) rows[rows.length - 1] = `${last} · ${key}`;
-    else rows.push(key);
-    return rows;
-  }, []);
-  const widestKeys = keyRows([keysFor(items[selected], true), "esc close"].filter(Boolean).flatMap((k) => k.split(" · ")));
-  const budget = Math.max(4, maxRows - CHROME_ROWS - (widestKeys.length - 1));
+  const keyRows = (item: PanelItem | undefined, approvable: boolean, move: boolean) =>
+    [keysFor(item, approvable), move ? "↑↓ move" : "", "esc close"].filter(Boolean).flatMap((k) => k.split(" · ")).reduce<string[]>((rows, key) => {
+      const last = rows.at(-1);
+      if (last !== undefined && visibleWidth(`${last} · ${key}`) <= inner) rows[rows.length - 1] = `${last} · ${key}`;
+      else rows.push(key);
+      return rows;
+    }, []);
+  const widestKeys = keyRows(items[selected], true, false).length;
+  const budget = Math.max(4, maxRows - CHROME_ROWS - (widestKeys - 1));
   const content: string[] = [];
   const sel = blocks[selected]!;
   const above = selected;
@@ -605,15 +623,20 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   let below = 0;
   let pageRows = 0;
   let shown: PanelItem[] = [];
+  // Where the selected item's last row landed in the content, when it is in it.
+  let selectedEnd = -1;
   if (sel.rows.length + (above ? 1 : 0) + 1 > budget) {
     // Taller than the panel: its header stays pinned, the rest scrolls in a window; one marker
     // row above (items before it) and one below (lines of this item left, and items after it).
-    const scrolling = sel.rows.slice(sel.pinned);
-    pageRows = Math.max(1, budget - (above ? 1 : 0) - sel.pinned - 1);
+    // At most what leaves the window a row and its marker: the rest of the head scrolls with it.
+    const pinned = Math.min(sel.pinned, Math.max(1, budget - (above ? 1 : 0) - 2));
+    const scrolling = sel.rows.slice(pinned);
+    pageRows = Math.max(1, budget - (above ? 1 : 0) - pinned - 1);
     offset = Math.max(0, Math.min(view.offset, scrolling.length - pageRows));
     below = scrolling.length - offset - pageRows;
     if (above) content.push(paint.fg("muted", `↑ ${above} more`));
-    content.push(...sel.rows.slice(0, sel.pinned), ...scrolling.slice(offset, offset + pageRows));
+    content.push(...sel.rows.slice(0, pinned), ...scrolling.slice(offset, offset + pageRows));
+    if (below <= 0) selectedEnd = content.length - 1;
     const selItem = items[selected]!;
     const unread = selItem.kind === "approval" && selItem.approval.status === "pending" && !view.read.has(selItem.approval.id);
     // The marker row: what is left of this item, why to read on, and how to page. Longer forms
@@ -650,17 +673,21 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     blocks.slice(first, last + 1).forEach((block, i) => {
       if (i > 0) content.push("");
       content.push(...block.rows);
+      if (first + i === selected) selectedEnd = content.length - 1;
     });
     if (last < blocks.length - 1) content.push(paint.fg("muted", `↓ ${blocks.length - 1 - last} more`));
     shown = items.slice(first, last + 1);
   }
   const item = items[selected];
-  const endInView = below <= 0;
+  // An item's end counts as seen only when its last row is within the panel's rows (after the
+  // frame's top): Pi's overlay cuts what is taller, so a request is never approvable from rows
+  // that never reached the screen.
+  const endInView = selectedEnd >= 0 && 1 + selectedEnd < maxRows;
   const approvable = item?.kind === "approval" && (endInView || view.read.has(item.approval.id));
   // The keys row: action keys and "esc close" always; "↑↓ move" gives way when the row is short.
-  let keys = [keysFor(item, approvable), items.length > 1 || below > 0 ? "↑↓ move" : "", "esc close"].filter(Boolean);
-  if (keyRows(keys).length > 1) keys = [keysFor(item, approvable), "esc close"].filter(Boolean);
-  content.push("", ...keyRows(keys.flatMap((k) => k.split(" · "))).map((row) => paint.fg("muted", row)));
+  let keys = keyRows(item, approvable, items.length > 1 || below > 0);
+  if (keys.length > 1) keys = keyRows(item, approvable, false);
+  content.push("", ...keys.map((row) => paint.fg("muted", row)));
   return { lines: frame(content, width, title, paint), items, selected, offset, selectedEndInView: endInView, selectedRowsBelow: Math.max(0, below), pageRows, shown };
 }
 

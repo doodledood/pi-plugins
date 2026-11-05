@@ -36,11 +36,11 @@ const flat = (lines: string[]) => lines.join(" ").replace(/[│\s]+/g, " ");
 
 /** A panel's items, each as its rows' text (the pointer blanked), so tests can tell items apart. */
 function itemBlocks(rows: string[]): string[] {
-  const body = rows.slice(1, -1).map((r) => r.replace("›", " ")).filter((r) => !/stop watching|esc|resume ·|watch again|show all|approve ·/.test(r) && r.replace(/[│ ]/g, "") !== "");
+  const body = rows.slice(1, -1).map((r) => r.replace("›", " ")).filter((r) => !/stop watching|esc close|resume ·|watch again|show all|approve ·/.test(r) && r.replace(/[│ ]/g, "") !== "");
   return body.join("\n").split(/\n(?=│ {3}\S)/);
 }
 
-/** A panel's text with every space and frame mark removed: a name wrapped over rows is still found whole. */
+/** A panel's text with every space, frame mark and row status removed: a name wrapped over rows is still found whole. */
 const joined = (rows: string[]) => rows.map((r) => r.replace(/ {2}[●○◐◌×·] [^│]*/, "")).join("").replace(/[│\s]/g, "");
 
 test("no line when off or nothing is watched; a problem shows a short title and the key", () => {
@@ -277,12 +277,24 @@ test("the long-item marker offers paging, and asks to read to the end only while
   assert.equal(/read to the end/.test(approved.lines.join("\n")), false, "approved");
 });
 
-test("when the line is very narrow, it drops the lowest count before the word slack", () => {
-  const engine = { watches: [channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 })], approvals: [approval(), approval({ id: "a2" })] };
-  for (let width = 40; width < 50; width += 1) {
+test("when the line is very narrow, it keeps every count it can, the live watches too, and the word slack only while that costs no count", () => {
+  const engine = { watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 })], approvals: [approval(), approval({ id: "a2" })] };
+  const counts = ["2 waiting", "1 stopped", "1 paused", "3 watching"];
+  let lastShown = counts.length;
+  for (let width = 70; width >= 24; width -= 1) {
     const [line] = renderLine(surface(engine), plain, width);
-    assert.match(line!, /^ ● slack · 2 waiting/, `at ${width}: ${line}`);
+    assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
+    // Counts go lowest first, in order, and never come back at a narrower width.
+    const shown = counts.filter((c) => line!.includes(c)).length;
+    if (shown === counts.length) assert.match(line!, /3 watching · 2 waiting/, `the watches first, as on a wider line, at ${width}`);
+    assert.deepEqual(counts.filter((c) => line!.includes(c)), counts.slice(0, shown), `in priority order at ${width}: ${line}`);
+    assert.ok(shown <= lastShown, `no count returns at ${width}`);
+    lastShown = shown;
+    // "slack" goes only where keeping it would cost a count.
+    if (!line!.includes("slack")) assert.ok(visibleWidth(` ● slack · ${counts.slice(0, shown).join(" · ")}  alt+s`) > width, `slack kept where it fits at ${width}: ${line}`);
   }
+  assert.match(renderLine(surface(engine), plain, 57)[0]!, /^ ● · 3 watching · 2 waiting · 1 stopped · 1 paused {2}alt\+s$/, "every watch counted before the word");
+  assert.match(renderLine(surface(engine), plain, 63)[0]!, /^ ● slack · 3 watching · 2 waiting · 1 stopped · 1 paused {2}alt\+s$/, "the word while all counts fit with it");
 });
 
 test("a paused watch is counted once: as paused, not also as watching", () => {
@@ -478,7 +490,7 @@ test("the agent post that waits shows its words in the panel at every width", ()
 });
 
 /** Wider than the panel's inner width at 80 cells (76) and than the line's room at 120. */
-const HUGE_NAME = "Wolfeschlegelsteinhausenbergerdorff Hubert Blaine Maximiliano Fernández-Oyarzábal de la Vega";
+const HUGE_NAME = "Quillfeatheringtonshaw-Brambleworth Ottoline Vandermolen-Achterberg Okonkwo-Lindqvist de Haan";
 
 test("a person's name is never cut: the panel names everyone whole at any width, wrapping a name wider than its row", () => {
   const agent = (userId: string, userName: string) => ({ ts: "1.000001", userId, userName, text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const });
@@ -637,5 +649,103 @@ test("in a narrow panel the keys wrap by whole keys, so esc close always shows, 
     const keys = rows.slice(rows.findLastIndex((r) => r.replace(/[│ ]/g, "") === "") + 1, -1).join(" ");
     assert.equal(keys.includes("…"), false, `no key cut at ${width}:\n${rows.join("\n")}`);
     assert.match(keys, /esc close/, `esc close at ${width}:\n${rows.join("\n")}`);
+  }
+});
+
+/** Many people asking at once, with long names, in a long channel: a "from" of several rows. */
+function crowdedRequest(text: string): Approval {
+  const requester = ["Alexandra Montgomery-Fitzgerald", "Bartholomew Quillfeather", "Maximiliano Fernández-Oyarzábal", "Robin Colleague", "Daniel Fox Smith"].join(", ");
+  return approval({ requester, label: `Alexandra Montgomery-Fitzgerald's thread in #data-platform-incidents-emea`, text });
+}
+
+test("a request is approvable only after its last line was within the panel's rows, however long who asked is, and the panel keeps its rows", () => {
+  const text = [...Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`), "Last: zebra."].join("\n");
+  for (const width of [24, 28, 32, 40, 60]) for (let maxRows = 3; maxRows <= 24; maxRows += 1) {
+    const actions: PanelAction[] = [];
+    const panel = new Panel(() => surface({ approvals: [crowdedRequest(text)] }), plain, (a) => actions.push(a), () => {}, undefined, () => maxRows);
+    let seenEnd = false;
+    for (let press = 0; press < 80 && !actions.length; press += 1) {
+      const lines = panel.render(width);
+      if (maxRows >= 10) assert.ok(lines.length <= maxRows, `${lines.length} rows > ${maxRows} at ${width}`);
+      // Only what the overlay shows counts as seen: its first maxRows rows.
+      if (lines.slice(0, maxRows).some((l) => l.includes("zebra"))) seenEnd = true;
+      if (maxRows >= 12) assert.ok(joined(lines).includes("◐waitingforyourOK"), `the head whole, never cut by the frame, at ${width}:\n${lines.join("\n")}`);
+      panel.handleInput("a");
+      if (actions.length) assert.ok(seenEnd, `approved at ${width}×${maxRows} before the last line was on screen`);
+      panel.handleInput(" ");
+    }
+    if (maxRows >= 12) assert.equal(actions[0]?.kind, "approve", `approvable once read, at ${width}×${maxRows}`);
+  }
+});
+
+test("who asked stays in view while a request scrolls, as far as the panel's rows allow", () => {
+  const text = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`).join("\n");
+  const view = { selected: 0, offset: 0, allEnded: false, read: new Set<string>() };
+  for (const width of [30, 40, 60]) {
+    const top = layoutPanel(surface({ approvals: [crowdedRequest(text)] }), view, plain, width, 0, 30).lines;
+    const from = top.filter((l) => /from|Fitzgerald|Quillfeather|Oyarzábal|Colleague|Smith|#data-platform/.test(l));
+    for (const offset of [5, 20, 999]) {
+      const lines = layoutPanel(surface({ approvals: [crowdedRequest(text)] }), { ...view, offset }, plain, width, 0, 30).lines;
+      for (const row of from) assert.ok(lines.includes(row), `"${row}" pinned at ${width}, offset ${offset}`);
+    }
+  }
+});
+
+test("a poster's name never ends a row with \u2026: when the row leaves too little for words, the name takes a row of its own", () => {
+  const names = ["Alex Montgomery", "Robert Leeeeee", "Daniel Foxworth", "Maximiliano Fernández-Oyarzábal"];
+  for (const name of names) for (let width = 24; width <= 60; width += 1) {
+    const state = surface({ watches: [channelWatch(1, { channelName: "general", partner: { userId: "U9", name: "Ana" }, context: [{ ts: "1.000002", userId: "U2", userName: name, text: "is staging down for everyone?", agentFooter: false, origin: "person" }] })] });
+    const rows = renderPanel(state, 0, plain, width, 0, 40);
+    assert.equal(rows.some((r) => r.includes(`${name}\u2026`) || r.includes(`${name.split(" ").at(-1)}\u2026`)), false, `${name} at ${width}:\n${rows.join("\n")}`);
+    assert.ok(joined(rows).includes(`${name.replace(/\s/g, "")}:`), `the colon follows the whole name at ${width}:\n${rows.join("\n")}`);
+    assert.ok(rows.some((r) => /is( |$)|staging/.test(r.replace(/[│]/g, ""))), `some of the post's words show at ${width}:\n${rows.join("\n")}`);
+  }
+});
+
+test("a name breaks inside a word only when the word is wider than a row: it starts below the status instead", () => {
+  const names = ["Alexandra Montgomery", "Bartholomew Quillfeather", "Robin Colleague", HUGE_NAME];
+  for (const name of names) for (let width = 24; width <= 80; width += 1) {
+    const rest = width - 4 - 2 - 3;
+    for (const state of [
+      surface({ watches: [watch({ partner: { userId: "U1", name } })] }, { answering: new Set() }),
+      surface({ watches: [watch({ partner: { userId: "U1", name }, rejoining: 0 } as Partial<WatchState>)] }),
+      surface({ watches: [channelWatch(1, { channelName: "alerts-prod-payments", partner: { userId: "U1", name } })] }),
+    ]) {
+      const rows = renderPanel(state, 0, plain, width, 0, 40);
+      for (const word of name.split(" ").filter((w) => visibleWidth(w) <= rest)) assert.ok(rows.some((r) => r.includes(word)), `"${word}" whole on one row at ${width}:\n${rows.join("\n")}`);
+      assert.ok(rows.some((r) => /[●◌] (watching|catching up)( |│)/.test(r)), `the status whole at ${width}:\n${rows.join("\n")}`);
+    }
+  }
+});
+
+test("a narrow DM row tells its top level from its thread, and keeps its status whole", () => {
+  const thread = watch({ key: "D1/1.0", context: [{ ts: "1.000001", userId: "U0", userName: "Owner", text: "Can you check the deploy?", agentFooter: false, origin: "this session" }] });
+  const top = watch({ key: "D1", conversation: { kind: "dm-top", channelId: "D1" } });
+  for (let width = 24; width <= 60; width += 1) {
+    const rows = renderPanel(surface({ watches: [top, thread] }), 0, plain, width, 0, 40);
+    const blocks = itemBlocks(rows);
+    assert.equal(blocks.length, 2, `${width}:\n${rows.join("\n")}`);
+    assert.match(blocks[0]!.replace(/[│\s]+/g, " "), /top level/, `top level at ${width}:\n${rows.join("\n")}`);
+    assert.match(blocks[1]!.replace(/[│\s]+/g, " "), /thread( "Can)?/, `thread at ${width}:\n${rows.join("\n")}`);
+    assert.equal(rows.filter((r) => /● watching( |│)/.test(r)).length, 2, `both statuses whole at ${width}:\n${rows.join("\n")}`);
+  }
+});
+
+test("the line skips a label too long for it and still names the shorter ones after it", () => {
+  const long = channelWatch(1, { channelName: "proj-payments-reconciliation-migration-emea", partner: { userId: "U1", name: "Alexandra Okonkwo-Lindqvist" }, lastActivityAt: 9 });
+  const short = watch({ key: "D2/1.0", conversation: { kind: "thread", channelId: "D2", threadTs: "1.0" }, partner: { userId: "U2", name: "Bo Li" }, lastNote: "replied: Checked the logs", lastActivityAt: 1 });
+  for (let width = 70; width <= 110; width += 1) {
+    const [line] = renderLine(surface({ watches: [long, short] }, { answering: new Set([long.key]) }), plain, width);
+    assert.match(line!, /Bo Li – /, `the short one named at ${width}: ${line}`);
+    if (!line!.includes("Alexandra")) assert.match(line!, /\+1 watching/, `the long one counted at ${width}: ${line}`);
+  }
+});
+
+test("on the line, a fresh thread's first words give way before its whole channel folds", () => {
+  const fresh = (i: number) => channelWatch(i, { channelName: `release-train-2026-q${i}`, partner: undefined, context: [{ ts: "1.0", userId: "U0", userName: "Owner", text: "Deploy checklist for the train, please review before noon", agentFooter: false, origin: "this session" }] });
+  for (let width = 70; width <= 100; width += 1) {
+    const [line] = renderLine(surface({ watches: [fresh(3), fresh(4)] }), plain, width);
+    assert.match(line!, /#release-train-2026-q\d/, `a channel named at ${width}: ${line}`);
+    assert.equal(/#release-train-2026-q\d…|q\d "[^"]*$/.test(line!), false, `whole, never cut at ${width}: ${line}`);
   }
 });
