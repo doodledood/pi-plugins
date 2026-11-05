@@ -290,11 +290,12 @@ const LINE_RANK = Object.fromEntries(LINE_ORDER.map((state, i) => [state, Math.m
  * The states the line counts on their own when it does not name them all, never folded into
  * "watching", and that turn its dot to warning: what waits on the owner. In LINE_ORDER. Each
  * counts in its own unit (`weight`: conversations, or agent posts), and its words take the number
- * of the unnamed ones, with "+" when some are named.
+ * of the unnamed ones, with "+" when some are named. (A paused conversation counts as paused: its
+ * agent posts show in the panel.) `tight` is for the narrowest line, before a count is dropped.
  */
-const LINE_COUNTED: Partial<Record<LineState, { weight: (e: LineEntry) => number; long: (n: number) => string; short: (n: number) => string }>> = {
-  paused: { weight: () => 1, long: (n) => `${n} paused`, short: (n) => `${n} paused` },
-  "agent posts": { weight: (e) => e.agentPosts, long: (n) => `${n} agent post${n === 1 ? "" : "s"} waiting`, short: (n) => `${n} agent post${n === 1 ? "" : "s"}` },
+const LINE_COUNTED: Partial<Record<LineState, { weight: (e: LineEntry) => number; long: (n: number) => string; short: (n: number) => string; tight: (n: number) => string }>> = {
+  paused: { weight: () => 1, long: (n) => `${n} paused`, short: (n) => `${n} paused`, tight: (n) => `${n} paused` },
+  "agent posts": { weight: (e) => e.agentPosts, long: (n) => `${n} agent post${n === 1 ? "" : "s"}`, short: (n) => `${n} agent post${n === 1 ? "" : "s"}`, tight: (n) => `${n} agent` },
 };
 const countedStates = LINE_ORDER.filter((state) => LINE_COUNTED[state]);
 
@@ -344,15 +345,15 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   // Counts in the order they matter: waiting first, then stops, then the counted states. A count
   // appears when the line leaves any of its kind unnamed: it counts the unnamed ones, in its unit,
   // with "+" when some of its kind are named (as "+N watching" does).
-  const counts = (short: boolean, shown: readonly LineEntry[]) => [
-    waiting ? paint.fg("warning", short ? `${waiting} waiting` : `${waiting} waiting for you`) : "",
+  const counts = (form: "long" | "short" | "tight", shown: readonly LineEntry[]) => [
+    waiting ? paint.fg("warning", form === "long" ? `${waiting} waiting for you` : `${waiting} waiting`) : "",
     stopped ? paint.fg("error", `${stopped} stopped`) : "",
     ...countedStates.map((state) => {
       const spec = LINE_COUNTED[state]!;
       const unnamed = entries.filter((e) => e.state === state && !shown.includes(e));
       if (!unnamed.length) return "";
       const n = unnamed.reduce((sum, e) => sum + spec.weight(e), 0);
-      const words = spec[short ? "short" : "long"](n);
+      const words = spec[form](n);
       return paint.fg("warning", counted(shown, state) ? `+${words}` : words);
     }),
   ].filter(Boolean);
@@ -362,7 +363,7 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   // Each form (long words, short words) is built; the long one wins only if it names as many
   // conversations, since the people are what the owner glances for.
   const form = (long: boolean): { line: string; named: number } | undefined => {
-    const countsWidth = (shown: readonly LineEntry[]) => counts(!long, shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
+    const countsWidth = (shown: readonly LineEntry[]) => counts(long ? "long" : "short", shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
     const chosen: LineEntry[] = [];
     const need = (e: LineEntry) => visibleWidth(e.label) + (e.word ? 1 + visibleWidth(e.word.text) : PAIR.length + Math.min(visibleWidth(e.note), NOTE_MIN));
@@ -388,7 +389,7 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
       return `${paint.fg("muted", e.label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
     });
     if (foldCount(chosen.length)) parts.push(paint.fg("muted", `${chosen.length ? "+" : ""}${foldCount(chosen.length)} watching`));
-    const left = [head(dot), ...parts, ...counts(!long, chosen)].join(sep);
+    const left = [head(dot), ...parts, ...counts(long ? "long" : "short", chosen)].join(sep);
     return fits(left, long) ? { line: compose(left, long), named: chosen.length } : undefined;
   };
   const long = form(true);
@@ -396,9 +397,15 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   if (long && (!short || long.named >= short.named)) return [long.line];
   if (short) return [short.line];
   // Too narrow even for the counts in full: keep them in priority order until they fit.
-  const all = counts(true, []);
-  // Keep "slack" and drop the lowest count first; only then drop the word.
-  for (let k = all.length; k >= 1; k -= 1) {
+  // Keep "slack": first every count in short words, then in tight words; then drop the lowest
+  // count first; only then drop the word.
+  for (const form of ["short", "tight"] as const) {
+    const all = counts(form, []);
+    const left = [head(dot), ...all].join(sep);
+    if (fits(left, false)) return [compose(left, false)];
+  }
+  const all = counts("tight", []);
+  for (let k = all.length - 1; k >= 1; k -= 1) {
     const left = [head(dot), ...all.slice(0, k)].join(sep);
     if (fits(left, false)) return [compose(left, false)];
   }
@@ -517,7 +524,8 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     rows.push(...indent([paint.fg("warning", cut(countRow, inner - 3))]));
     if (latestAgentPost) {
       // The row already names its person: their agent's post needs no second name.
-      const poster = latestAgentPost.userId === watch.partner?.userId ? "their agent" : postedBy(latestAgentPost);
+      // Only while the row shows that person's name whole (a narrow row may cut or drop it).
+      const poster = latestAgentPost.userId === watch.partner?.userId && label.includes(watch.partner.name) ? "their agent" : postedBy(latestAgentPost);
       const wrapped = wrapTextWithAnsi(`${poster}: ${agentText(latestAgentPost)}`, inner - 3);
       const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
       rows.push(...indent(shown.map((row) => paint.fg("warning", row))));

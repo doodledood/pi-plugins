@@ -130,9 +130,8 @@ function darwinUserFolders(): { perUser: string; temp: string } | undefined {
       if (!PER_USER_FOLDER.test(dirname(userDir))) throw new Error(`it named ${userDir}`);
       userFolders = { perUser: dirname(userDir), temp: ask("DARWIN_USER_TEMP_DIR") };
     } catch (error) {
-      const retryAt = new Date(Date.now() + USER_FOLDERS_RETRY_MS);
-      const at = `${String(retryAt.getHours()).padStart(2, "0")}:${String(retryAt.getMinutes()).padStart(2, "0")}`;
-      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again at ${at}`), at: Date.now() };
+      // The same words for the same cause (the owner is told once per reason), so no clock time.
+      userFolders = { failed: new Error(`macOS gave no usable per-user temp folder (${(error as Error).message}); macOS is asked again 10 minutes after the failure`), at: Date.now() };
     }
   }
   if ("failed" in userFolders) throw userFolders.failed;

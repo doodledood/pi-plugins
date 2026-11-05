@@ -541,3 +541,24 @@ test("people whose names share their start and end read apart in a narrow panel,
     }
   }
 });
+
+test("the narrowest line keeps the agent-post count beside a pause, in tight words", () => {
+  const paused = channelWatch(1, { status: "paused", lastActivityAt: 2 });
+  const agents = [channelWatch(2, { agentPostsWaiting: 2, lastActivityAt: 1 }), channelWatch(3, { agentPostsWaiting: 1, lastActivityAt: 0 })];
+  const state = surface({ watches: [paused, ...agents] });
+  for (const width of [38, 40, 42, 44]) {
+    const line = renderLine(state, plain, width)[0]!;
+    assert.match(line, /1 paused/, `${width}: ${line}`);
+    assert.match(line, /3 agent/, `${width}: ${line}`);
+  }
+});
+
+test("'their agent' only while the row shows that person's name whole", () => {
+  const post = { ts: "1.000001", userId: "U1", userName: "Robin Colleague", text: "🤖 which migration id?", agentFooter: true, origin: "someone's agent" as const };
+  const w = channelWatch(1, { channelName: "alerts-prod-payments-eu", partner: { userId: "U1", name: "Robin Colleague" }, agentPostsWaiting: 1, context: [post] });
+  const wide = renderPanel(surface({ watches: [w] }), 0, plain, 80, 0).join("\n");
+  assert.match(wide, /their agent: which migration id\?/);
+  const narrow = renderPanel(surface({ watches: [w] }), 0, plain, 30, 0).join("\n");
+  assert.doesNotMatch(narrow, /their agent/, narrow);
+  assert.match(narrow.replace(/[│\n ]+/g, " "), /Robin/, "the post row names the person when the header cannot");
+});
