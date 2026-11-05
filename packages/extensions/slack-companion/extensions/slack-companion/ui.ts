@@ -73,7 +73,7 @@ function isUnseenError(surface: SurfaceState, watch: WatchState): boolean {
 // ---------------------------------------------------------------------------------------------
 
 interface LineEntry {
-  /** Ways to name it, longest first, each whole: first words give way before the entry folds. */
+  /** Ways to name it, each whole, the most telling first (first words); the line names it by the shortest, then the most telling that room allows. */
   labels: string[];
   /** The conversation's state: the first in LINE_ORDER any of its watches is in. */
   state: LineState;
@@ -116,9 +116,9 @@ function unnamedPrefix(watch: WatchState): string {
 }
 
 /**
- * A conversation as the line names it, longest first: the person, and the channel when it is not
- * a DM; before anyone answers, unnamedLabel, then the same without its first words. Names are
- * whole: an entry none of whose labels fits is folded into a count.
+ * A conversation as the line names it: the person, and the channel when it is not a DM; before
+ * anyone answers, unnamedLabel, and bareLabel without first words. Names are whole: an entry none
+ * of whose labels fits is folded into a count.
  */
 function lineLabels(watch: WatchState): string[] {
   const person = watch.partner?.name;
@@ -192,11 +192,11 @@ const LINE_RANK = Object.fromEntries(LINE_ORDER.map((state, i) => [state, Math.m
  * "watching", and that turn its dot to warning: what waits on the owner. In LINE_ORDER. Each
  * counts in its own unit (`weight`: conversations, or agent posts), and its words take the number
  * of the unnamed ones, with "+" when some are named. (A paused conversation counts as paused: its
- * agent posts show in the panel.) `tight` is for the narrowest line, before a count is dropped.
+ * agent posts show in the panel.)
  */
-const LINE_COUNTED: Partial<Record<LineState, { weight: (e: LineEntry) => number; long: (n: number) => string; short: (n: number) => string; tight: (n: number) => string }>> = {
-  paused: { weight: () => 1, long: (n) => `${n} paused`, short: (n) => `${n} paused`, tight: (n) => `${n} paused` },
-  "agent posts": { weight: (e) => e.agentPosts, long: (n) => `${n} agent post${n === 1 ? "" : "s"}`, short: (n) => `${n} agent post${n === 1 ? "" : "s"}`, tight: (n) => `${n} agent` },
+const LINE_COUNTED: Partial<Record<LineState, { weight: (e: LineEntry) => number; words: (n: number) => string }>> = {
+  paused: { weight: () => 1, words: (n) => `${n} paused` },
+  "agent posts": { weight: (e) => e.agentPosts, words: (n) => `${n} agent post${n === 1 ? "" : "s"}` },
 };
 const countedStates = LINE_ORDER.filter((state) => LINE_COUNTED[state]);
 
@@ -246,33 +246,28 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   // Counts in the order they matter: waiting first, then stops, then the counted states. A count
   // appears when the line leaves any of its kind unnamed: it counts the unnamed ones, in its unit,
   // with "+" when some of its kind are named (as "+N watching" does).
-  const counts = (form: "long" | "short" | "tight", shown: readonly LineEntry[]) => [
-    waiting ? paint.fg("warning", form === "long" ? `${waiting} waiting for you` : `${waiting} waiting`) : "",
+  const counts = (long: boolean, shown: readonly LineEntry[]) => [
+    waiting ? paint.fg("warning", long ? `${waiting} waiting for you` : `${waiting} waiting`) : "",
     stopped ? paint.fg("error", `${stopped} stopped`) : "",
     ...countedStates.map((state) => {
       const spec = LINE_COUNTED[state]!;
       const unnamed = entries.filter((e) => e.state === state && !shown.includes(e));
       if (!unnamed.length) return "";
       const n = unnamed.reduce((sum, e) => sum + spec.weight(e), 0);
-      const words = spec[form](n);
+      const words = spec.words(n);
       return paint.fg("warning", counted(shown, state) ? `+${words}` : words);
     }),
   ].filter(Boolean);
 
-  // An entry's shortest whole label; but one that would read the same as another entry's keeps its
-  // first words, so two conversations never look alike.
-  const least = (e: LineEntry) => {
-    const bare = e.labels.at(-1)!;
-    return entries.some((o) => o !== e && o.labels.at(-1) === bare) ? e.labels[0]! : bare;
-  };
-  // Watch entries in rank order, each by its shortest label: an entry shows only if that label and
-  // its state word (or a useful part of its note) fit; one that does not is skipped, so a long name
-  // never hides shorter ones after it, and folds into "+N watching" (or its count). Then the shown
-  // entries take their first words, in rank order, from the room left: words never cost a
-  // conversation its name. Each form (long words, short words) is built; the long one wins only if
-  // it names as many conversations, since the people are what the owner glances for.
+  // Watch entries in rank order, each by its shortest label that no entry already shown has: an
+  // entry shows only if that label and its state word (or a useful part of its note) fit; one that
+  // does not is skipped, so a long name never hides shorter ones after it, and folds into
+  // "+N watching" (or its count). Then the shown entries take longer labels (first words), in rank
+  // order, from the room left: words never cost a conversation its name, and no two shown labels
+  // are the same. Each form (long words, short words) is built; the long one wins only if it names
+  // as many conversations, since the people are what the owner glances for.
   const form = (long: boolean): { line: string; named: number } | undefined => {
-    const countsWidth = (shown: readonly LineEntry[]) => counts(long ? "long" : "short", shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
+    const countsWidth = (shown: readonly LineEntry[]) => counts(long, shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
     const chosen: Array<{ entry: LineEntry; label: string }> = [];
     const shown = () => chosen.map((c) => c.entry);
@@ -282,15 +277,17 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
     const foldCount = (named: readonly LineEntry[]) => entries.filter((e) => !named.includes(e) && !LINE_COUNTED[e.state]).length;
     const foldWords = (named: readonly LineEntry[]) => `${named.length ? "+" : ""}${foldCount(named)} watching`;
     const fold = (named: readonly LineEntry[]) => (foldCount(named) ? SEP.length + visibleWidth(foldWords(named)) : 0);
+    const byWidth = (labels: readonly string[]) => [...labels].sort((a, b) => visibleWidth(a) - visibleWidth(b));
+    const free = (label: string, except?: LineEntry) => !chosen.some((c) => c.entry !== except && c.label === label);
     for (const entry of entries) {
       const next = [...shown(), entry];
-      const label = least(entry);
-      if (used() + SEP.length + need(entry, label) + fold(next) + countsWidth(next) <= room) chosen.push({ entry, label });
+      const label = byWidth(entry.labels).find((l) => free(l));
+      if (label !== undefined && used() + SEP.length + need(entry, label) + fold(next) + countsWidth(next) <= room) chosen.push({ entry, label });
     }
     const limit = room - fold(shown()) - countsWidth(shown());
     for (const c of chosen) {
       const current = need(c.entry, c.label);
-      const longer = c.entry.labels.slice(0, c.entry.labels.indexOf(c.label)).find((l) => used() - current + need(c.entry, l) <= limit);
+      const longer = c.entry.labels.slice(0, c.entry.labels.indexOf(c.label)).find((l) => free(l, c.entry) && used() - current + need(c.entry, l) <= limit);
       if (longer !== undefined) c.label = longer;
     }
     // Space left over goes to the shown notes, in rank order.
@@ -305,22 +302,20 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
       return `${paint.fg("muted", label)}${paint.fg("dim", PAIR)}${paint.fg("muted", cut(e.note, base + extra))}`;
     });
     if (foldCount(shown())) parts.push(paint.fg("muted", foldWords(shown())));
-    const left = [head(dot), ...parts, ...counts(long ? "long" : "short", shown())].join(sep);
+    const left = [head(dot), ...parts, ...counts(long, shown())].join(sep);
     return fits(left, long) ? { line: compose(left, long), named: chosen.length } : undefined;
   };
   const long = form(true);
   const short = form(false);
   if (long && (!short || long.named >= short.named)) return [long.line];
   if (short) return [short.line];
-  // Too narrow even to name one: every count, the live watches' last ("+3" in tight words), so
-  // each watch is still counted. Words give way before a count: each set is tried in short words
-  // with "slack", in tight words with it, then in tight words without it, before the lowest count
-  // (the live watches' first) is dropped; how many approvals wait goes last.
+  // Too narrow even to name one: every count, each with its noun, the live watches' last, so each
+  // watch is still counted. The word "slack" gives way before a count; then the lowest count (the
+  // live watches' first) is dropped; how many approvals wait goes last.
   const watching = entries.filter((e) => !LINE_COUNTED[e.state]).length;
-  const every = (form: "short" | "tight") => [...counts(form, []), ...(watching ? [paint.fg("muted", form === "tight" ? `+${watching}` : `${watching} watching`)] : [])];
-  for (let k = every("tight").length; k >= 1; k -= 1) {
-    for (const [lead, form] of [[head(dot), "short"], [head(dot), "tight"], [` ${paint.fg(dot, "●")}`, "tight"]] as const) {
-      const left = [lead, ...every(form).slice(0, k)].join(sep);
+  const every = [...counts(false, []), ...(watching ? [paint.fg("muted", `${watching} watching`)] : [])];
+  for (let k = every.length; k >= 1; k -= 1) {
+    for (const left of [[head(dot), ...every.slice(0, k)].join(sep), ` ${paint.fg(dot, "●")} ${every.slice(0, k).join(sep)}`]) {
       if (fits(left, false)) return [compose(left, false)];
     }
   }
@@ -403,8 +398,8 @@ function keysFor(item: PanelItem | undefined, approvable: boolean): string {
 
 /**
  * An item's rows, `inner` cells wide. `pins`: how many of its first rows may stay in view while the
- * rest scroll, most first; each ends a whole part (a head, who asked), so a part is pinned whole
- * or scrolls whole.
+ * rest scroll, most first; each ends a whole part (a head, who asked, a name), so a part is pinned
+ * whole or scrolls whole (but a panel too short for even the head pins what it can).
  */
 function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): { rows: string[]; pins: number[] } {
   const indent = (rows: string[]) => rows.map((r) => `   ${r}`);
@@ -430,8 +425,8 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   const answering = surface.answering.has(watch.key);
   const live = isLive(watch) ? PANEL_STATUS[watchState(watch, surface)] : undefined;
   const status = live ? paint.fg(live.color, live.text) : watch.status === "error" ? paint.fg("error", "× stopped") : paint.fg("muted", "· ended");
-  // Names wrap, so the label takes only what the status leaves; it starts a row lower when its
-  // first word does not fit there.
+  // The label sits whole beside the status, or starts on the row below it: a name never runs from
+  // the status row onto the next, so the status row and the name rows are whole parts.
   const labelRoom = Math.max(0, inner - visibleWidth(status) - 2);
   const [first, ...more] = panelLabel(watch, labelRoom, inner - 3);
   const labelColor = isLive(watch) ? "text" : "muted";
@@ -500,17 +495,11 @@ function panelLabel(watch: WatchState, room: number, rest: number): string[] {
 }
 
 /**
- * `text` wrapped: its first row in `first` cells, the rest in `rest`. A first word too wide for
- * `first` that a whole row holds starts on the next row instead (the first row is then empty), so
- * a name breaks inside a word only when the word is wider than a row.
+ * `text` whole in `first` cells, or, when it does not fit there, an empty first row and the text
+ * wrapped in `rest`: a name breaks inside a word only when the word is wider than a row.
  */
 function wrapFirst(text: string, first: number, rest: number): string[] {
-  // Words as pi-tui wraps them: split at plain spaces only.
-  const word = visibleWidth(text.split(" ", 1)[0] ?? "");
-  if (word > first && word <= rest) return ["", ...wrapTextWithAnsi(text, rest)];
-  const head = wrapTextWithAnsi(text, first)[0] ?? "";
-  const remainder = text.slice(head.length).trimStart();
-  return remainder ? [head, ...wrapTextWithAnsi(remainder, rest)] : [head];
+  return visibleWidth(text) <= first ? [text] : ["", ...wrapTextWithAnsi(text, rest)];
 }
 
 /** An agent's marker (an emoji or two) in front of its post: "(agent)" or "their agent" already says it. */
@@ -660,13 +649,25 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   let shown: PanelItem[] = [];
   // Where each of the selected item's rows landed in the content: [content index, row index].
   const placed: Array<[number, number]> = [];
+  const item = items[selected];
+  // A row counts as seen only when it lands within the panel's rows (after the frame's top): Pi's
+  // overlay cuts what is taller. A request is approvable once every one of its rows was seen, at
+  // one layout, however the owner moved: entering it at its end, a resize or a long "from" never
+  // makes it approvable from rows that never reached the screen.
+  const seenNow = (): RowsSeen => {
+    const before = item?.kind === "approval" ? view.progress?.get(item.approval.id) : undefined;
+    const rows = new Set(before && before.width === width && before.count === sel.rows.length ? before.rows : []);
+    for (const [at, row] of placed) if (FRAME_TOP_ROWS + at < maxRows) rows.add(row);
+    return { width, count: sel.rows.length, rows };
+  };
   if (sel.rows.length + (above ? 1 : 0) + 1 > budget) {
     // Taller than the panel: its head stays pinned, the rest scrolls in a window; one marker row
     // above (items before it) and one below (lines of this item left, and items after it). It pins
     // the most whole parts that leave the window PAGE_ROWS_MIN rows (who asked scrolls whole
     // otherwise), and never more than leaves it one.
     const window = (pinned: number) => budget - (above ? 1 : 0) - pinned - 1;
-    const pinned = sel.pins.find((p) => window(p) >= PAGE_ROWS_MIN) ?? Math.min(sel.pins.at(-1)!, Math.max(1, window(1)));
+    const fewest = Math.min(sel.pins.at(-1)!, Math.max(1, window(1)));
+    const pinned = sel.pins.find((p) => window(p) >= PAGE_ROWS_MIN) ?? fewest;
     const scrolling = sel.rows.slice(pinned);
     pageRows = Math.max(1, window(pinned));
     offset = Math.max(0, Math.min(view.offset, scrolling.length - pageRows));
@@ -689,7 +690,9 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
           [`↓ ${below} more`, unread ? "read all to approve" : "space pages"],
           [`↓ ${below} more`],
         ]
-      : [["(end of this item)", more], ["(end of this item)"]];
+      : unread && seenNow().rows.size < sel.rows.length
+        ? [["(end of this item)", "↑ read all to approve", more], ["(end of this item)", "↑ read all to approve"], ["(end)", "↑ read all to approve"], ["(end of this item)"]]
+        : [["(end of this item)", more], ["(end of this item)"]];
     const room = inner - POINTER_WIDTH - 2;
     const marker = forms.map((f) => f.filter(Boolean)).find((f) => visibleWidth(f.join(" · ")) <= room) ?? forms.at(-1)!.filter(Boolean);
     content.push(paint.fg("muted", `  ${marker.join(" · ")}`));
@@ -717,19 +720,11 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     if (last < blocks.length - 1) content.push(paint.fg("muted", `↓ ${blocks.length - 1 - last} more`));
     shown = items.slice(first, last + 1);
   }
-  const item = items[selected];
-  // A row counts as seen only when it lands within the panel's rows (after the frame's top): Pi's
-  // overlay cuts what is taller. A request is approvable once every one of its rows was seen, at
-  // one layout, however the owner moved: entering it at its end, a resize or a long "from" never
-  // makes it approvable from rows that never reached the screen.
-  const before = item?.kind === "approval" ? view.progress?.get(item.approval.id) : undefined;
-  const seenRows = new Set(before && before.width === width && before.count === sel.rows.length ? before.rows : []);
-  for (const [at, row] of placed) if (FRAME_TOP_ROWS + at < maxRows) seenRows.add(row);
-  const selectedSeen: RowsSeen = { width, count: sel.rows.length, rows: seenRows };
-  const allSeen = seenRows.size === sel.rows.length;
+  const selectedSeen = seenNow();
+  const allSeen = selectedSeen.rows.size === sel.rows.length;
   const approvable = item?.kind === "approval" && (allSeen || view.read.has(item.approval.id));
   // The keys row: action keys and "esc close" always; "↑↓ move" gives way when the row is short.
-  let keys = keyRows(item, approvable, items.length > 1 || below > 0);
+  let keys = keyRows(item, approvable, items.length > 1 || below > 0 || offset > 0);
   if (keys.length > 1) keys = keyRows(item, approvable, false);
   content.push("", ...keys.map((row) => paint.fg("muted", row)));
   return { lines: frame(content, width, title, paint), items, selected, offset, selectedAllSeen: allSeen, selectedSeen, selectedRowsBelow: Math.max(0, below), pageRows, shown };
@@ -789,15 +784,28 @@ export class Panel implements Component {
   /** The selected item's identity, so the selection follows it when items are added or reordered. */
   private selectedId: string | undefined;
 
-  private layout(width = this.lastWidth): PanelRender {
+  /**
+   * Lays the panel out. Only a render (`painted`) records what the owner saw (requests read, rows
+   * seen, stops seen): keys that arrive together are handled before Pi paints, so the layouts in
+   * between never reach the screen.
+   */
+  private layout(width = this.lastWidth, painted = false): PanelRender {
     if (this.selectedId !== undefined) {
       const index = panelItems(this.orderedSurface(), this.openedAt, this.view.allEnded).findIndex((i) => itemId(i) === this.selectedId);
       if (index >= 0 && index !== this.view.selected) this.view = { ...this.view, selected: index };
+    }
+    // A request half read at another width starts again at its top: its rows are new.
+    const id = this.selectedId?.startsWith("a:") ? this.selectedId.slice(2) : undefined;
+    const progress = id === undefined ? undefined : this.progress.get(id);
+    if (id !== undefined && progress && progress.width !== width) {
+      this.progress.delete(id);
+      this.view.offset = 0;
     }
     const render = layoutPanel(this.orderedSurface(), { ...this.view, read: this.read, progress: this.progress }, this.paint, width, this.openedAt, this.rows());
     this.view.selected = render.selected;
     this.view.offset = render.offset;
     this.selectedId = render.items[render.selected] ? itemId(render.items[render.selected]!) : undefined;
+    if (!painted) return render;
     const item = render.items[render.selected];
     if (item?.kind === "approval" && !this.read.has(item.approval.id)) {
       if (render.selectedAllSeen) {
@@ -814,7 +822,7 @@ export class Panel implements Component {
 
   render(width: number): string[] {
     this.lastWidth = width;
-    return this.layout(width).lines;
+    return this.layout(width, true).lines;
   }
 
   handleInput(data: string): void {

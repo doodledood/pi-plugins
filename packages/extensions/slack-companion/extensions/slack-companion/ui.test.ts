@@ -127,7 +127,7 @@ test("the panel never exceeds its height, keeps its frame and keys, and shows a 
   assert.match(flat(text.split("\n")).replace(/ /g, ""), /be\/cut\/off\/anywhere/, "a long word is wrapped, not cut");
 });
 
-test("a request taller than the panel scrolls inside itself, keeps its header in view, and cannot be approved before its last line was shown", () => {
+test("a request taller than the panel scrolls inside itself, keeps its header in view, and cannot be approved before every line of it was shown", () => {
   const steps = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`);
   const long = [...steps, "Finally: drop the old results table."].join("\n");
   const state: EngineState = { ...emptyState(), approvals: [approval({ text: long }), approval({ id: "a2", text: "short one" })] };
@@ -139,7 +139,10 @@ test("a request taller than the panel scrolls inside itself, keeps its header in
   assert.equal(/a approve/.test(rendered), false, "the keys do not offer approval yet");
   panel.handleInput("a");
   assert.deepEqual(actions, [], "not approvable yet");
-  for (let i = 0; i < 3; i += 1) panel.handleInput(" "); // a page at a time
+  for (let i = 0; i < 3; i += 1) {
+    panel.handleInput(" "); // a page at a time, each painted
+    panel.render(80);
+  }
   rendered = panel.render(80).join("\n");
   assert.match(rendered, /Finally: drop the old results table\./);
   assert.match(rendered, /◐ waiting for your OK · 31 min ago[\s\S]*from Robin Colleague \(DM\)/, "who asked stays in view at the end");
@@ -188,7 +191,15 @@ test("a stop counts as seen only once its row was on screen, and every error sta
   panel.render(80);
   assert.ok(seen.size > 0 && seen.size < 6, `only the rows shown (${seen.size})`);
   for (let i = 0; i < 6; i += 1) panel.handleInput(DOWN);
-  panel.render(80);
+  assert.ok(seen.size < 6, "keys handled before a paint show nothing");
+  for (let i = 0; i < 6; i += 1) {
+    panel.handleInput("\u001b[A");
+    panel.render(80);
+  }
+  for (let i = 0; i < 6; i += 1) {
+    panel.handleInput(DOWN);
+    panel.render(80);
+  }
   assert.equal(seen.size, 6);
   panel.handleInput("w");
   assert.equal(actions.length, 1);
@@ -277,29 +288,25 @@ test("the long-item marker offers paging, and asks to read to the end only while
   assert.equal(/read to the end/.test(approved.lines.join("\n")), false, "approved");
 });
 
-test("when the line is very narrow, every count shows that fits: waiting first, the live watches last, and words give way before a count", () => {
+test("when the line is very narrow, every count shows that fits, each with its noun: waiting first, the live watches last, and the word slack before a count", () => {
   const engine = { watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 }), channelWatch(6, { agentPostsWaiting: 2 })], approvals: [approval(), approval({ id: "a2" })] };
-  // Each count by what names it in any words, and its tightest words, in the order they are kept.
-  const counts: Array<[RegExp, string]> = [[/2 waiting/, "2 waiting"], [/1 stopped/, "1 stopped"], [/1 paused/, "1 paused"], [/2 agent/, "2 agent"], [/\+3|3 watching/, "+3"]];
-  const fitsWith = (lead: string, k: number, width: number) => visibleWidth(`${lead} · ${counts.slice(0, k).map(([, tight]) => tight).join(" · ")}  alt+s`) <= width;
-  const forms = new Set<string>();
+  const counts = ["2 waiting", "1 stopped", "1 paused", "2 agent posts", "3 watching"];
+  const fitsWith = (lead: string, k: number, width: number) => visibleWidth(`${lead}${counts.slice(0, k).join(" · ")}  alt+s`) <= width;
   for (let width = 21; width <= 80; width += 1) {
     const [line] = renderLine(surface(engine), plain, width);
     assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
-    const present = counts.map(([re]) => re.test(line!));
+    assert.doesNotMatch(line!, /\+\d(?! \w)|· \d+ agent(?! post)/, `every count has its noun at ${width}: ${line}`);
+    const present = counts.map((c) => line!.includes(c));
     const shown = present.filter(Boolean).length;
     assert.deepEqual(present, counts.map((_, i) => i < shown), `kept in order at ${width}: ${line}`);
-    assert.ok(shown >= 1, `the waiting count always, at ${width}: ${line}`);
-    // As many counts as fit: one more would not, even in tight words without "slack".
-    if (shown < counts.length) assert.equal(fitsWith(" ●", shown + 1, width), false, `another count fits at ${width}: ${line}`);
-    // "slack" goes only where keeping it would cost a count.
-    if (!line!.includes("slack")) assert.equal(fitsWith(" ● slack", shown, width), false, `slack kept where it fits at ${width}: ${line}`);
-    if (/2 agent(?! post)/.test(line!)) forms.add("tight agent");
-    if (/\+3/.test(line!)) forms.add("tight watching");
-    if (/3 watching/.test(line!)) forms.add("short watching");
+    if (fitsWith(" ● ", 1, width)) assert.ok(shown >= 1, `the waiting count at ${width}: ${line}`);
+    // As many counts as fit: one more would not, even without "slack".
+    if (shown < counts.length) assert.equal(fitsWith(" ● ", shown + 1, width), false, `another count fits at ${width}: ${line}`);
+    // "slack" goes only where keeping it would cost a count; a bare dot takes no separator.
+    if (!line!.includes("slack")) assert.equal(fitsWith(" ● slack · ", shown, width), false, `slack kept where it fits at ${width}: ${line}`);
+    assert.doesNotMatch(line!, /● ·/, `no separator after a bare dot at ${width}: ${line}`);
   }
-  assert.deepEqual([...forms].sort(), ["short watching", "tight agent", "tight watching"], "each set of words is used somewhere");
-  assert.match(renderLine(surface({ watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" })], approvals: [approval()] }), plain, 40)[0]!, /1 waiting · 1 paused · \+3/, "every watch counted at 40");
+  assert.match(renderLine(surface({ watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" })], approvals: [approval()] }), plain, 43)[0]!, /^ ● 1 waiting · 1 paused · 3 watching {2}alt\+s$/, "every watch counted, the word slack given up first, at 43");
 });
 
 test("a paused watch is counted once: as paused, not also as watching", () => {
@@ -376,7 +383,7 @@ test("before anyone answers, the line and the panel name a conversation by the s
   assert.match(panel, /#general "Deploy is blocked/, "a channel thread is told apart by its first words in the panel too");
   assert.match(panel, /#general "Who owns the flaky/);
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(panel), false, "no emoji is split in half");
-  const [line] = renderLine(state, plain, 120);
+  const [line] = renderLine(state, plain, 160);
   assert.match(line!, /#general "Deploy is block…"/);
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(line!), false);
 });
@@ -663,7 +670,7 @@ function crowdedRequest(text: string): Approval {
   return approval({ requester, label: `Alexandra Montgomery-Fitzgerald's thread in #data-platform-incidents-emea`, text });
 }
 
-test("a request is approvable only after its last line was within the panel's rows, however long who asked is, and the panel keeps its rows", () => {
+test("a request is approvable only after every line of it was within the panel's rows, however long who asked is, and the panel keeps its rows", () => {
   const text = [...Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`), "Last: zebra."].join("\n");
   for (const width of [24, 28, 32, 40, 60]) for (let maxRows = 3; maxRows <= 24; maxRows += 1) {
     const actions: PanelAction[] = [];
@@ -794,6 +801,7 @@ test("who asked is pinned whole or scrolls whole, and the window keeps its rows 
     const pinned = from.filter((row) => end.lines.includes(row)).length;
     assert.ok(pinned === 0 || pinned === from.length, `${pinned} of ${from.length} "from" rows pinned at ${width}×${maxRows}, above ${above}:\n${end.lines.join("\n")}`);
     if (maxRows >= 12) assert.ok(end.pageRows >= 3, `a window of ${end.pageRows} rows at ${width}×${maxRows}`);
+    if (maxRows >= 10) assert.ok(end.lines.length <= maxRows, `${end.lines.length} rows within ${maxRows} at ${width}, above ${above}`);
     if (width <= 30 && maxRows >= 30) assert.ok(joined(end.lines).includes("◐waitingforyourOK"), `the head pinned at ${width}`);
   }
 });
@@ -807,14 +815,24 @@ test("a tall watch keeps its whole name in view while it scrolls, where the pane
     assert.ok(end.pageRows > 0, `tall at ${width}`);
     assert.ok(joined(end.lines).includes("MaximilianoFernández-Oyarzábal"), `the name in view at the end, at ${width}:\n${end.lines.join("\n")}`);
   }
+  // In a shorter panel the name scrolls whole: never its first word pinned and the rest scrolled away.
+  const channel = { ...tall, key: "C1/1.0", conversation: { kind: "thread" as const, channelId: "C1", threadTs: "1.0" }, channelName: "data-platform-incidents-emea" };
+  for (const w of [tall, channel]) for (let width = 24; width <= 80; width += 2) for (let maxRows = 8; maxRows <= 16; maxRows += 1) {
+    const end = layoutPanel(surface({ watches: [w] }), { selected: 0, offset: 999, allEnded: false, read: new Set<string>() }, plain, width, 0, maxRows);
+    const text = joined(end.lines);
+    if (text.includes("Maximiliano")) assert.ok(text.includes("MaximilianoFernández-Oyarzábal"), `part of the name at ${width}×${maxRows}:\n${end.lines.join("\n")}`);
+  }
 });
 
-test("on the line, first words never cost another conversation its name, and two conversations never read alike", () => {
-  const fresh = (i: number, channelName: string, text: string) => channelWatch(i, { channelName, partner: undefined, lastActivityAt: 10 - i, context: [{ ts: "1.0", userId: "U0", userName: "Owner", text, agentFooter: false, origin: "this session" }] });
+test("on the line, first words never cost another conversation its name, and no two named conversations read the same", () => {
+  const fresh = (i: number, channelName: string, text: string, conversation?: WatchState["conversation"]) => channelWatch(i, { channelName, partner: undefined, lastActivityAt: 10 - i, context: [{ ts: "1.0", userId: "U0", userName: "Owner", text, agentFooter: false, origin: "this session" }], ...(conversation ? { conversation, key: `${conversation.channelId}/x${i}` } : {}) });
   const words = "Deploy checklist for the train, please review before noon";
   const apart = [fresh(1, "release-train-2026-q3", words), fresh(2, "release-train-2026-q4", words), channelWatch(3, { channelName: "general", partner: { userId: "U3", name: "Robin Colleague" }, lastActivityAt: 0 })];
   const alike = [fresh(1, "alerts", "Rollback plan for the payments service"), fresh(2, "alerts", "Is staging down for everyone?")];
-  for (let width = 40; width <= 200; width += 1) {
+  const sameWords = [fresh(1, "general", words), fresh(2, "general", words)];
+  const dm = (text: string) => [fresh(1, "", text, { kind: "thread", channelId: "D7", threadTs: "1.0" })];
+  const labels = (line: string) => line.replace(/ {2,}alt\+s.*$/, "").split(" · ").slice(1).map((part) => part.split(/ – | (?=catching up|answering|paused)/)[0]!);
+  for (let width = 30; width <= 200; width += 1) {
     const line = renderLine(surface({ watches: apart }), plain, width)[0]!;
     // Words beside a name while a conversation folds: without them, the next one still would not fit.
     if (line.includes('"') && /\+\d watching/.test(line)) {
@@ -822,8 +840,53 @@ test("on the line, first words never cost another conversation its name, and two
       const next = /q4/.test(line) ? "Robin Colleague #general – watching" : "#release-train-2026-q4 – watching";
       assert.ok(visibleWidth(`${left} · ${next}  alt+s`) > width, `words cost a name at ${width}: ${line}`);
     }
-    const pair = renderLine(surface({ watches: alike }), plain, width)[0]!;
-    assert.doesNotMatch(pair, /#alerts – [^·]*· #alerts – /, `two alike at ${width}: ${pair}`);
-    if (/#alerts/.test(pair)) assert.match(pair, /#alerts "/, `named by its words at ${width}: ${pair}`);
+    for (const state of [alike, sameWords]) {
+      const shown = renderLine(surface({ watches: state }), plain, width)[0]!;
+      const named = labels(shown).filter((l) => l.startsWith("#"));
+      assert.equal(new Set(named).size, named.length, `two alike at ${width}: ${shown}`);
+      // A twin folded into the count leaves the other its bare name, where that fits.
+      if (visibleWidth(" ● slack · #alerts – watching · +1 watching  alt+s") <= width && state === alike) assert.match(shown, /#alerts/, `named where it fits at ${width}: ${shown}`);
+    }
   }
+  assert.match(renderLine(surface({ watches: apart }), plain, 200)[0]!, /#release-train-2026-q3 "Deploy/, "first words where there is room");
+  for (let width = 60; width <= 120; width += 1) assert.match(renderLine(surface({ watches: dm("Can you check the flaky deploy?") }), plain, width)[0]!, /DM "Can you check t…" – watching/, `a fresh DM by its first words at ${width}`);
+  for (let width = 38; width <= 120; width += 1) assert.match(renderLine(surface({ watches: dm("ok?") }), plain, width)[0]!, /DM "ok\?"/, `short first words are the shortest name, at ${width}`);
+});
+
+test("only what Pi paints counts as seen: keys that arrive together before a paint never make a request approvable", () => {
+  const text = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`).join("\n");
+  const actions: PanelAction[] = [];
+  const panel = new Panel(() => surface({ approvals: [approval({ text })] }), plain, (a) => actions.push(a), () => {}, undefined, () => 20);
+  panel.render(80);
+  for (let i = 0; i < 6; i += 1) panel.handleInput(" "); // one burst, then one paint
+  panel.handleInput("a");
+  assert.deepEqual(actions, [], "approved from rows never painted");
+  const end = panel.render(80).join("\n");
+  assert.match(end, /Step 40/);
+  assert.match(end, /↑ read all to approve/, "the end says how to go on");
+  assert.match(end, /↑↓ move/);
+  panel.handleInput("a");
+  assert.deepEqual(actions, [], "the end alone is not all of it");
+});
+
+test("a request half read when the panel's width changes starts again at its top, and is approvable once read at the new width", () => {
+  const text = Array.from({ length: 30 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1} of the results table.`).join("\n");
+  const actions: PanelAction[] = [];
+  const panel = new Panel(() => surface({ approvals: [crowdedRequest(text)] }), plain, (a) => actions.push(a), () => {}, undefined, () => 14);
+  panel.render(60);
+  for (let i = 0; i < 2; i += 1) {
+    panel.handleInput(" ");
+    panel.render(60);
+  }
+  const resized = panel.render(50);
+  assert.ok(joined(resized.slice(0, 14)).includes("fromAlexandra"), `back at the top:\n${resized.join("\n")}`);
+  let presses = 0;
+  while (!actions.length && presses < 60) {
+    panel.handleInput("a");
+    panel.handleInput(" ");
+    panel.render(50);
+    presses += 1;
+  }
+  assert.equal(actions[0]?.kind, "approve", "approvable once read through at the new width");
+  assert.ok(panel.render(50).join("\n").includes("Step 30"));
 });
