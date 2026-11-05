@@ -245,7 +245,7 @@ test("panel keys map to owner actions only", () => {
   panel.handleInput("\u001b");
   assert.deepEqual(actions, [{ kind: "approve", id: "a1" }, { kind: "resume", key: "D1/1.000001" }, { kind: "rewatch", key: "C2/1.0" }]);
   assert.equal(closed, true);
-  assert.equal(layoutPanel(state, { selected: 0, offset: 0, allEnded: false, read: new Set() }, plain, 80, 0, 40).selectedEndInView, true);
+  assert.equal(layoutPanel(state, { selected: 0, offset: 0, allEnded: false, read: new Set() }, plain, 80, 0, 40).selectedAllSeen, true);
 });
 
 test("every key is safe in the panel's message states: off, a problem, nothing watched", () => {
@@ -277,24 +277,29 @@ test("the long-item marker offers paging, and asks to read to the end only while
   assert.equal(/read to the end/.test(approved.lines.join("\n")), false, "approved");
 });
 
-test("when the line is very narrow, it keeps every count it can, the live watches too, and the word slack only while that costs no count", () => {
-  const engine = { watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 })], approvals: [approval(), approval({ id: "a2" })] };
-  const counts = ["2 waiting", "1 stopped", "1 paused", "3 watching"];
-  let lastShown = counts.length;
-  for (let width = 70; width >= 24; width -= 1) {
+test("when the line is very narrow, every count shows that fits: waiting first, the live watches last, and words give way before a count", () => {
+  const engine = { watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" }), channelWatch(3, { status: "error", endedAt: 5 }), channelWatch(6, { agentPostsWaiting: 2 })], approvals: [approval(), approval({ id: "a2" })] };
+  // Each count by what names it in any words, and its tightest words, in the order they are kept.
+  const counts: Array<[RegExp, string]> = [[/2 waiting/, "2 waiting"], [/1 stopped/, "1 stopped"], [/1 paused/, "1 paused"], [/2 agent/, "2 agent"], [/\+3|3 watching/, "+3"]];
+  const fitsWith = (lead: string, k: number, width: number) => visibleWidth(`${lead} · ${counts.slice(0, k).map(([, tight]) => tight).join(" · ")}  alt+s`) <= width;
+  const forms = new Set<string>();
+  for (let width = 21; width <= 80; width += 1) {
     const [line] = renderLine(surface(engine), plain, width);
     assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
-    // Counts go lowest first, in order, and never come back at a narrower width.
-    const shown = counts.filter((c) => line!.includes(c)).length;
-    if (shown === counts.length) assert.match(line!, /3 watching · 2 waiting/, `the watches first, as on a wider line, at ${width}`);
-    assert.deepEqual(counts.filter((c) => line!.includes(c)), counts.slice(0, shown), `in priority order at ${width}: ${line}`);
-    assert.ok(shown <= lastShown, `no count returns at ${width}`);
-    lastShown = shown;
+    const present = counts.map(([re]) => re.test(line!));
+    const shown = present.filter(Boolean).length;
+    assert.deepEqual(present, counts.map((_, i) => i < shown), `kept in order at ${width}: ${line}`);
+    assert.ok(shown >= 1, `the waiting count always, at ${width}: ${line}`);
+    // As many counts as fit: one more would not, even in tight words without "slack".
+    if (shown < counts.length) assert.equal(fitsWith(" ●", shown + 1, width), false, `another count fits at ${width}: ${line}`);
     // "slack" goes only where keeping it would cost a count.
-    if (!line!.includes("slack")) assert.ok(visibleWidth(` ● slack · ${counts.slice(0, shown).join(" · ")}  alt+s`) > width, `slack kept where it fits at ${width}: ${line}`);
+    if (!line!.includes("slack")) assert.equal(fitsWith(" ● slack", shown, width), false, `slack kept where it fits at ${width}: ${line}`);
+    if (/2 agent(?! post)/.test(line!)) forms.add("tight agent");
+    if (/\+3/.test(line!)) forms.add("tight watching");
+    if (/3 watching/.test(line!)) forms.add("short watching");
   }
-  assert.match(renderLine(surface(engine), plain, 57)[0]!, /^ ● · 3 watching · 2 waiting · 1 stopped · 1 paused {2}alt\+s$/, "every watch counted before the word");
-  assert.match(renderLine(surface(engine), plain, 63)[0]!, /^ ● slack · 3 watching · 2 waiting · 1 stopped · 1 paused {2}alt\+s$/, "the word while all counts fit with it");
+  assert.deepEqual([...forms].sort(), ["short watching", "tight agent", "tight watching"], "each set of words is used somewhere");
+  assert.match(renderLine(surface({ watches: [channelWatch(1), channelWatch(4), channelWatch(5), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" })], approvals: [approval()] }), plain, 40)[0]!, /1 waiting · 1 paused · \+3/, "every watch counted at 40");
 });
 
 test("a paused watch is counted once: as paused, not also as watching", () => {
@@ -703,7 +708,7 @@ test("a poster's name never ends a row with \u2026: when the row leaves too litt
 });
 
 test("a name breaks inside a word only when the word is wider than a row: it starts below the status instead", () => {
-  const names = ["Alexandra Montgomery", "Bartholomew Quillfeather", "Robin Colleague", HUGE_NAME];
+  const names = ["Alexandra Montgomery", "Bartholomew Quillfeather", "Robin Colleague", "Ana\u00a0Mariangela López-Gutiérrez", HUGE_NAME];
   for (const name of names) for (let width = 24; width <= 80; width += 1) {
     const rest = width - 4 - 2 - 3;
     for (const state of [
@@ -726,7 +731,8 @@ test("a narrow DM row tells its top level from its thread, and keeps its status 
     const blocks = itemBlocks(rows);
     assert.equal(blocks.length, 2, `${width}:\n${rows.join("\n")}`);
     assert.match(blocks[0]!.replace(/[│\s]+/g, " "), /top level/, `top level at ${width}:\n${rows.join("\n")}`);
-    assert.match(blocks[1]!.replace(/[│\s]+/g, " "), /thread( "Can)?/, `thread at ${width}:\n${rows.join("\n")}`);
+    // On a row of its own, the kind keeps the thread's first words.
+    assert.match(blocks[1]!.replace(/[│\s]+/g, " "), blocks[1]!.split("\n").length > 1 ? /thread "Can/ : /thread/, `thread at ${width}:\n${rows.join("\n")}`);
     assert.equal(rows.filter((r) => /● watching( |│)/.test(r)).length, 2, `both statuses whole at ${width}:\n${rows.join("\n")}`);
   }
 });
@@ -747,5 +753,77 @@ test("on the line, a fresh thread's first words give way before its whole channe
     const [line] = renderLine(surface({ watches: [fresh(3), fresh(4)] }), plain, width);
     assert.match(line!, /#release-train-2026-q\d/, `a channel named at ${width}: ${line}`);
     assert.equal(/#release-train-2026-q\d…|q\d "[^"]*$/.test(line!), false, `whole, never cut at ${width}: ${line}`);
+  }
+});
+
+test("a request entered from below before it was read starts at its top, and is approvable only once every row of it was on screen", () => {
+  const text = [...Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`), "Last: zebra."].join("\n");
+  for (const [width, maxRows] of [[80, 8], [60, 8], [40, 10], [32, 12]] as const) {
+    const engine: EngineState = { ...emptyState(), watches: [watch()] };
+    const actions: PanelAction[] = [];
+    const panel = new Panel(() => surface(engine), plain, (a) => actions.push(a), () => {}, undefined, () => maxRows);
+    panel.render(width);
+    engine.approvals = [crowdedRequest(text)]; // arrives above the selected watch
+    panel.render(width);
+    panel.handleInput("\u001b[A");
+    const lines = panel.render(width);
+    assert.ok(joined(lines.slice(0, maxRows)).includes("fromAlexandra"), `who asked on screen first at ${width}×${maxRows}:\n${lines.join("\n")}`);
+    panel.handleInput("a");
+    assert.deepEqual(actions, [], `not approvable on entry at ${width}×${maxRows}`);
+  }
+  // Rows seen at another width count for nothing: the layout changed.
+  const state = surface({ approvals: [crowdedRequest(text)] });
+  const view = { selected: 0, offset: 999, allEnded: false, read: new Set<string>() };
+  const atEnd = layoutPanel(state, view, plain, 40, 0, 12);
+  assert.equal(atEnd.selectedAllSeen, false, "the end alone is not all of it");
+  const all = new Set(Array.from({ length: atEnd.selectedSeen.count }, (_, i) => i));
+  assert.equal(layoutPanel(state, { ...view, progress: new Map([["a1", { width: 40, count: atEnd.selectedSeen.count, rows: all }]]) }, plain, 40, 0, 12).selectedAllSeen, true, "every row seen at this layout");
+  assert.equal(layoutPanel(state, { ...view, progress: new Map([["a1", { width: 60, count: atEnd.selectedSeen.count, rows: all }]]) }, plain, 40, 0, 12).selectedAllSeen, false, "rows seen at another width");
+});
+
+test("who asked is pinned whole or scrolls whole, and the window keeps its rows in a short panel", () => {
+  const text = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: migrate shard ${i + 1}.`).join("\n");
+  for (const above of [false, true]) for (let width = 24; width <= 80; width += 4) for (let maxRows = 8; maxRows <= 30; maxRows += 1) {
+    const approvals = above ? [approval({ id: "a0", text: "short" }), crowdedRequest(text)] : [crowdedRequest(text)];
+    const view = { selected: above ? 1 : 0, offset: 0, allEnded: false, read: new Set<string>() };
+    const top = layoutPanel(surface({ approvals }), view, plain, width, 0, maxRows).lines;
+    const first = top.findIndex((l) => /from Alexandra/.test(l));
+    const body = top.findIndex((l) => /Step 1:/.test(l));
+    const from = top.slice(first, body >= 0 ? body : undefined).filter((l) => l.startsWith("│") && !/↓|esc close|approve|deny/.test(l) && l.replace(/[│ ]/g, ""));
+    const end = layoutPanel(surface({ approvals }), { ...view, offset: 999 }, plain, width, 0, maxRows);
+    const pinned = from.filter((row) => end.lines.includes(row)).length;
+    assert.ok(pinned === 0 || pinned === from.length, `${pinned} of ${from.length} "from" rows pinned at ${width}×${maxRows}, above ${above}:\n${end.lines.join("\n")}`);
+    if (maxRows >= 12) assert.ok(end.pageRows >= 3, `a window of ${end.pageRows} rows at ${width}×${maxRows}`);
+    if (width <= 30 && maxRows >= 30) assert.ok(joined(end.lines).includes("◐waitingforyourOK"), `the head pinned at ${width}`);
+  }
+});
+
+test("a tall watch keeps its whole name in view while it scrolls, where the panel has room", () => {
+  const activity = Array.from({ length: 3 }, (_, i) => ({ at: i, text: `replied in the thread with a long note number ${i + 1} that wraps nowhere` }));
+  const tall = watch({ partner: { userId: "U1", name: "Maximiliano Fernández-Oyarzábal" }, activity, agentPostsWaiting: 1, context: [{ ts: "1.000002", userId: "U1", userName: "Maximiliano Fernández-Oyarzábal", text: "🤖 which migration id should the run use for the shard, and when?", agentFooter: true, origin: "someone's agent" }] });
+  for (const width of [26, 30]) {
+    const view = { selected: 0, offset: 999, allEnded: false, read: new Set<string>() };
+    const end = layoutPanel(surface({ watches: [tall] }), view, plain, width, 0, 16);
+    assert.ok(end.pageRows > 0, `tall at ${width}`);
+    assert.ok(joined(end.lines).includes("MaximilianoFernández-Oyarzábal"), `the name in view at the end, at ${width}:\n${end.lines.join("\n")}`);
+  }
+});
+
+test("on the line, first words never cost another conversation its name, and two conversations never read alike", () => {
+  const fresh = (i: number, channelName: string, text: string) => channelWatch(i, { channelName, partner: undefined, lastActivityAt: 10 - i, context: [{ ts: "1.0", userId: "U0", userName: "Owner", text, agentFooter: false, origin: "this session" }] });
+  const words = "Deploy checklist for the train, please review before noon";
+  const apart = [fresh(1, "release-train-2026-q3", words), fresh(2, "release-train-2026-q4", words), channelWatch(3, { channelName: "general", partner: { userId: "U3", name: "Robin Colleague" }, lastActivityAt: 0 })];
+  const alike = [fresh(1, "alerts", "Rollback plan for the payments service"), fresh(2, "alerts", "Is staging down for everyone?")];
+  for (let width = 40; width <= 200; width += 1) {
+    const line = renderLine(surface({ watches: apart }), plain, width)[0]!;
+    // Words beside a name while a conversation folds: without them, the next one still would not fit.
+    if (line.includes('"') && /\+\d watching/.test(line)) {
+      const left = line.split(/ {2,}alt\+s/)[0]!.replace(/ "[^"]*"/, "");
+      const next = /q4/.test(line) ? "Robin Colleague #general – watching" : "#release-train-2026-q4 – watching";
+      assert.ok(visibleWidth(`${left} · ${next}  alt+s`) > width, `words cost a name at ${width}: ${line}`);
+    }
+    const pair = renderLine(surface({ watches: alike }), plain, width)[0]!;
+    assert.doesNotMatch(pair, /#alerts – [^·]*· #alerts – /, `two alike at ${width}: ${pair}`);
+    if (/#alerts/.test(pair)) assert.match(pair, /#alerts "/, `named by its words at ${width}: ${pair}`);
   }
 });

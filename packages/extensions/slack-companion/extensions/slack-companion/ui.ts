@@ -32,8 +32,8 @@ export function cut(text: string, width: number): string {
 
 /**
  * The panel's share of the terminal's height. The overlay is opened with exactly this share and
- * the panel lays itself out in exactly as many rows: the overlay cuts what is taller, and "the
- * request was shown to its end" relies on nothing being cut.
+ * cuts what is taller; the panel lays itself out in as many rows, and counts a row as seen only
+ * when it lands within them (see layoutPanel's maxRows).
  */
 export const PANEL_HEIGHT_PERCENT = 80;
 
@@ -107,8 +107,7 @@ function unnamedLabel(watch: WatchState, room?: number): string {
   const prefix = unnamedPrefix(watch);
   const cells = room === undefined ? LINE_OPENING_CELLS : room - visibleWidth(prefix) - QUOTED_EXTRA;
   const opening = cells >= 4 ? openingWords(watch, cells) : undefined;
-  if (opening) return `${prefix} "${opening}"`;
-  return isDirectMessage(watch.conversation.channelId) ? dmLabel(undefined) : prefix;
+  return opening ? `${prefix} "${opening}"` : bareLabel(watch);
 }
 
 /** What names a conversation before its first words: "DM", or its channel. */
@@ -125,8 +124,13 @@ function lineLabels(watch: WatchState): string[] {
   const person = watch.partner?.name;
   if (person) return [isDirectMessage(watch.conversation.channelId) ? person : `${person} #${channelOf(watch)}`];
   const withWords = unnamedLabel(watch);
-  const bare = unnamedLabel(watch, 0);
+  const bare = bareLabel(watch);
   return withWords === bare ? [bare] : [withWords, bare];
+}
+
+/** A conversation before anyone has answered, without its first words. */
+function bareLabel(watch: WatchState): string {
+  return isDirectMessage(watch.conversation.channelId) ? dmLabel(undefined) : unnamedPrefix(watch);
 }
 
 function channelOf(watch: WatchState): string {
@@ -255,11 +259,18 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
     }),
   ].filter(Boolean);
 
-  // Watch entries at their natural width, in rank order: an entry shows only if one of its whole
-  // labels and its state word (or a useful part of its note) fit; one that does not is skipped,
-  // so a long name never hides shorter ones after it, and folds into "+N watching" (or its count).
-  // Each form (long words, short words) is built; the long one wins only if it names as many
-  // conversations, since the people are what the owner glances for.
+  // An entry's shortest whole label; but one that would read the same as another entry's keeps its
+  // first words, so two conversations never look alike.
+  const least = (e: LineEntry) => {
+    const bare = e.labels.at(-1)!;
+    return entries.some((o) => o !== e && o.labels.at(-1) === bare) ? e.labels[0]! : bare;
+  };
+  // Watch entries in rank order, each by its shortest label: an entry shows only if that label and
+  // its state word (or a useful part of its note) fit; one that does not is skipped, so a long name
+  // never hides shorter ones after it, and folds into "+N watching" (or its count). Then the shown
+  // entries take their first words, in rank order, from the room left: words never cost a
+  // conversation its name. Each form (long words, short words) is built; the long one wins only if
+  // it names as many conversations, since the people are what the owner glances for.
   const form = (long: boolean): { line: string; named: number } | undefined => {
     const countsWidth = (shown: readonly LineEntry[]) => counts(long ? "long" : "short", shown).reduce((w, c) => w + visibleWidth(c) + SEP.length, 0);
     const room = width - visibleWidth(head(dot)) - 2 - visibleWidth(hint(long));
@@ -273,8 +284,14 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
     const fold = (named: readonly LineEntry[]) => (foldCount(named) ? SEP.length + visibleWidth(foldWords(named)) : 0);
     for (const entry of entries) {
       const next = [...shown(), entry];
-      const label = entry.labels.find((l) => used() + SEP.length + need(entry, l) + fold(next) + countsWidth(next) <= room);
-      if (label !== undefined) chosen.push({ entry, label });
+      const label = least(entry);
+      if (used() + SEP.length + need(entry, label) + fold(next) + countsWidth(next) <= room) chosen.push({ entry, label });
+    }
+    const limit = room - fold(shown()) - countsWidth(shown());
+    for (const c of chosen) {
+      const current = need(c.entry, c.label);
+      const longer = c.entry.labels.slice(0, c.entry.labels.indexOf(c.label)).find((l) => used() - current + need(c.entry, l) <= limit);
+      if (longer !== undefined) c.label = longer;
     }
     // Space left over goes to the shown notes, in rank order.
     let spare = room - used() - fold(shown()) - countsWidth(shown());
@@ -295,18 +312,15 @@ function composeLine(surface: SurfaceState, paint: Paint, width: number): string
   const short = form(false);
   if (long && (!short || long.named >= short.named)) return [long.line];
   if (short) return [short.line];
-  // Too narrow even to name one: the counts, the live watches' first as on a wider line, but the
-  // first to go. As many counts as fit; with as many, the word "slack" and then short words win:
-  // each set is tried in short words with "slack", in tight words with it, then in tight words
-  // without it, before the lowest count is dropped.
+  // Too narrow even to name one: every count, the live watches' last ("+3" in tight words), so
+  // each watch is still counted. Words give way before a count: each set is tried in short words
+  // with "slack", in tight words with it, then in tight words without it, before the lowest count
+  // (the live watches' first) is dropped; how many approvals wait goes last.
   const watching = entries.filter((e) => !LINE_COUNTED[e.state]).length;
-  const kept = (form: "short" | "tight", k: number) => {
-    const owed = counts(form, []);
-    return [...(watching && k > owed.length ? [paint.fg("muted", `${watching} watching`)] : []), ...owed.slice(0, k)];
-  };
-  for (let k = counts("tight", []).length + (watching ? 1 : 0); k >= 1; k -= 1) {
+  const every = (form: "short" | "tight") => [...counts(form, []), ...(watching ? [paint.fg("muted", form === "tight" ? `+${watching}` : `${watching} watching`)] : [])];
+  for (let k = every("tight").length; k >= 1; k -= 1) {
     for (const [lead, form] of [[head(dot), "short"], [head(dot), "tight"], [` ${paint.fg(dot, "●")}`, "tight"]] as const) {
-      const left = [lead, ...kept(form, k)].join(sep);
+      const left = [lead, ...every(form).slice(0, k)].join(sep);
       if (fits(left, false)) return [compose(left, false)];
     }
   }
@@ -387,11 +401,15 @@ function keysFor(item: PanelItem | undefined, approvable: boolean): string {
   return "w watch again";
 }
 
-/** An item's rows, `inner` cells wide; `pinned` of them stay in view while the rest scroll. */
-function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): { rows: string[]; pinned: number } {
+/**
+ * An item's rows, `inner` cells wide. `pins`: how many of its first rows may stay in view while the
+ * rest scroll, most first; each ends a whole part (a head, who asked), so a part is pinned whole
+ * or scrolls whole.
+ */
+function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: number, selected: boolean): { rows: string[]; pins: number[] } {
   const indent = (rows: string[]) => rows.map((r) => `   ${r}`);
   const strong = (text: string) => (selected ? paint.bold(text) : text);
-  if (item.kind === "ended") return { rows: [paint.fg("muted", `${item.count} more ended`)], pinned: 1 };
+  if (item.kind === "ended") return { rows: [paint.fg("muted", `${item.count} more ended`)], pins: [1] };
   if (item.kind === "approval") {
     const { approval } = item;
     const pending = approval.status === "pending";
@@ -406,13 +424,14 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     const body = wrapTextWithAnsi(approval.text, inner - 3).map((row) => (pending ? paint.fg("text", row) : paint.fg("dim", row)));
     // Who asked, whole (a person's name is never cut), wrapped when long.
     const from = wrapTextWithAnsi(`from ${requestSource(approval)}`, inner - 3).map((row) => paint.fg("muted", row));
-    return { rows: [...head, ...indent(from), ...indent(body)], pinned: head.length + from.length };
+    return { rows: [...head, ...indent(from), ...indent(body)], pins: [head.length + from.length, head.length] };
   }
   const { watch } = item;
   const answering = surface.answering.has(watch.key);
   const live = isLive(watch) ? PANEL_STATUS[watchState(watch, surface)] : undefined;
   const status = live ? paint.fg(live.color, live.text) : watch.status === "error" ? paint.fg("error", "× stopped") : paint.fg("muted", "· ended");
-  // Names wrap, so the label takes only what the status leaves; with none, it starts a row lower.
+  // Names wrap, so the label takes only what the status leaves; it starts a row lower when its
+  // first word does not fit there.
   const labelRoom = Math.max(0, inner - visibleWidth(status) - 2);
   const [first, ...more] = panelLabel(watch, labelRoom, inner - 3);
   const labelColor = isLive(watch) ? "text" : "muted";
@@ -441,7 +460,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     const text = last.origin === "someone's agent" ? agentText(last) : last.text.replace(/\s+/g, " ");
     rows.push(...indent(postRows(postedBy(last), text, inner - 3, 1).map((row) => paint.fg("muted", row))));
   }
-  return { rows, pinned: 1 };
+  return { rows, pins: [1 + more.length, 1] };
 }
 
 /**
@@ -486,8 +505,9 @@ function panelLabel(watch: WatchState, room: number, rest: number): string[] {
  * a name breaks inside a word only when the word is wider than a row.
  */
 function wrapFirst(text: string, first: number, rest: number): string[] {
-  const word = visibleWidth(text.split(/\s/, 1)[0] ?? "");
-  if (word > first && (word <= rest || first < 4)) return ["", ...wrapTextWithAnsi(text, rest)];
+  // Words as pi-tui wraps them: split at plain spaces only.
+  const word = visibleWidth(text.split(" ", 1)[0] ?? "");
+  if (word > first && word <= rest) return ["", ...wrapTextWithAnsi(text, rest)];
   const head = wrapTextWithAnsi(text, first)[0] ?? "";
   const remainder = text.slice(head.length).trimStart();
   return remainder ? [head, ...wrapTextWithAnsi(remainder, rest)] : [head];
@@ -502,6 +522,9 @@ function agentText(message: ContextMessage): string {
   return (unmarked.trim() ? unmarked : message.text).replace(/\s+/g, " ");
 }
 
+/** Cells a post's words need beside its poster's name to share the row. */
+const POST_WORDS_MIN = 8;
+
 /**
  * A post as `poster: text`: the text on `rows` rows of `width` cells, wrapped, cut on the last.
  * The poster's name is never cut: one that leaves a row too little room for words (fewer than
@@ -514,9 +537,6 @@ function postRows(poster: string, text: string, width: number, rows: number): st
   };
   return visibleWidth(`${poster}: `) + POST_WORDS_MIN > width ? [...wrapTextWithAnsi(`${poster}:`, width), ...fit(text)] : fit(`${poster}: ${text}`);
 }
-
-/** Cells a post's words need beside its poster's name to share the row. */
-const POST_WORDS_MIN = 8;
 
 /** Who posted a kept message, as the panel names them. */
 function postedBy(message: ContextMessage): string {
@@ -542,8 +562,12 @@ function postedBy(message: ContextMessage): string {
 
 /** The selection column in front of every item row ("› " or two spaces). */
 const POINTER_WIDTH = 2;
+/** The frame's rows above the content. */
+const FRAME_TOP_ROWS = 1;
 /** Rows the panel adds around its content: the frame's top and bottom, a blank row and the keys. */
-const CHROME_ROWS = 4;
+const CHROME_ROWS = FRAME_TOP_ROWS + 3;
+/** Rows a tall item's window keeps, when pinning less of it leaves that many. */
+const PAGE_ROWS_MIN = 3;
 
 function frame(rows: string[], width: number, title: string, paint: Paint): string[] {
   const inner = width - 4;
@@ -563,8 +587,17 @@ export interface PanelView {
   /** How far the selected item's scrolling rows are scrolled, when it is taller than the panel. */
   offset: number;
   allEnded: boolean;
-  /** Requests whose last line the owner has seen: only those can be approved. */
+  /** Requests every row of which the owner has seen: only those can be approved. */
   read: ReadonlySet<string>;
+  /** For requests not yet read: the rows of each seen so far, at the layout they were seen in. */
+  progress?: ReadonlyMap<string, RowsSeen>;
+}
+
+/** Which of a request's rows reached the screen, at one layout: a new width or row count starts over. */
+export interface RowsSeen {
+  width: number;
+  count: number;
+  rows: ReadonlySet<number>;
 }
 
 export interface PanelRender {
@@ -574,8 +607,10 @@ export interface PanelRender {
   selected: number;
   /** The scroll offset actually used (clamped to the item). */
   offset: number;
-  /** Is the selected item's last row in view? */
-  selectedEndInView: boolean;
+  /** Has every row of the selected item reached the screen, now or in earlier renders at this layout? */
+  selectedAllSeen: boolean;
+  /** The selected item's rows seen so far, this render's included. */
+  selectedSeen: RowsSeen;
   /** Rows of the selected item below the window. */
   selectedRowsBelow: number;
   /** Rows the window shows of a tall item (one page). */
@@ -593,17 +628,17 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   const message = (rows: string[]): PanelRender => ({
     // A message longer than the panel is cut with a mark; the panel never grows past its rows.
     lines: frame([...(rows.length > Math.max(1, maxRows - CHROME_ROWS) ? [...rows.slice(0, Math.max(1, maxRows - CHROME_ROWS) - 1), paint.fg("muted", "…")] : rows), "", paint.fg("muted", "esc close")], width, title, paint),
-    items, selected: 0, offset: 0, selectedEndInView: true, selectedRowsBelow: 0, pageRows: 0, shown: [],
+    items, selected: 0, offset: 0, selectedAllSeen: true, selectedSeen: { width, count: 0, rows: new Set() }, selectedRowsBelow: 0, pageRows: 0, shown: [],
   });
   if (surface.problem) return message([paint.fg("error", `Can't watch: ${surface.problem.title}`), "", ...wrapped(surface.problem.detail, "text")]);
   if (!surface.enabled) return message(wrapped("slack-companion is off. Run /slack on to turn it on. Then each Slack message your session sends starts a watch.", "muted"));
   if (!items.length) return message(wrapped("Nothing watched yet. A Slack message your session sends starts a watch. /slack <link> watches a conversation someone else started.", "muted"));
   const selected = Math.min(view.selected, items.length - 1);
   const blocks = items.map((item, index) => {
-    const { rows, pinned } = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected);
+    const { rows, pins } = itemRows(item, surface, paint, inner - POINTER_WIDTH, index === selected);
     rows[0] = `${index === selected ? paint.fg("accent", "›") : " "} ${rows[0]}`;
     for (let i = 1; i < rows.length; i += 1) rows[i] = `  ${rows[i]}`;
-    return { rows, pinned };
+    return { rows, pins };
   });
   // The keys row wraps by whole keys in a narrow panel; its widest form sets the rows it keeps.
   const keyRows = (item: PanelItem | undefined, approvable: boolean, move: boolean) =>
@@ -623,20 +658,24 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   let below = 0;
   let pageRows = 0;
   let shown: PanelItem[] = [];
-  // Where the selected item's last row landed in the content, when it is in it.
-  let selectedEnd = -1;
+  // Where each of the selected item's rows landed in the content: [content index, row index].
+  const placed: Array<[number, number]> = [];
   if (sel.rows.length + (above ? 1 : 0) + 1 > budget) {
-    // Taller than the panel: its header stays pinned, the rest scrolls in a window; one marker
-    // row above (items before it) and one below (lines of this item left, and items after it).
-    // At most what leaves the window a row and its marker: the rest of the head scrolls with it.
-    const pinned = Math.min(sel.pinned, Math.max(1, budget - (above ? 1 : 0) - 2));
+    // Taller than the panel: its head stays pinned, the rest scrolls in a window; one marker row
+    // above (items before it) and one below (lines of this item left, and items after it). It pins
+    // the most whole parts that leave the window PAGE_ROWS_MIN rows (who asked scrolls whole
+    // otherwise), and never more than leaves it one.
+    const window = (pinned: number) => budget - (above ? 1 : 0) - pinned - 1;
+    const pinned = sel.pins.find((p) => window(p) >= PAGE_ROWS_MIN) ?? Math.min(sel.pins.at(-1)!, Math.max(1, window(1)));
     const scrolling = sel.rows.slice(pinned);
-    pageRows = Math.max(1, budget - (above ? 1 : 0) - pinned - 1);
+    pageRows = Math.max(1, window(pinned));
     offset = Math.max(0, Math.min(view.offset, scrolling.length - pageRows));
     below = scrolling.length - offset - pageRows;
     if (above) content.push(paint.fg("muted", `↑ ${above} more`));
-    content.push(...sel.rows.slice(0, pinned), ...scrolling.slice(offset, offset + pageRows));
-    if (below <= 0) selectedEnd = content.length - 1;
+    for (let r = 0; r < pinned; r += 1) placed.push([content.length + r, r]);
+    content.push(...sel.rows.slice(0, pinned));
+    for (let r = offset; r < Math.min(scrolling.length, offset + pageRows); r += 1) placed.push([content.length + r - offset, pinned + r]);
+    content.push(...scrolling.slice(offset, offset + pageRows));
     const selItem = items[selected]!;
     const unread = selItem.kind === "approval" && selItem.approval.status === "pending" && !view.read.has(selItem.approval.id);
     // The marker row: what is left of this item, why to read on, and how to page. Longer forms
@@ -672,23 +711,28 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     if (first > 0) content.push(paint.fg("muted", `↑ ${first} more`));
     blocks.slice(first, last + 1).forEach((block, i) => {
       if (i > 0) content.push("");
+      if (first + i === selected) block.rows.forEach((_, r) => placed.push([content.length + r, r]));
       content.push(...block.rows);
-      if (first + i === selected) selectedEnd = content.length - 1;
     });
     if (last < blocks.length - 1) content.push(paint.fg("muted", `↓ ${blocks.length - 1 - last} more`));
     shown = items.slice(first, last + 1);
   }
   const item = items[selected];
-  // An item's end counts as seen only when its last row is within the panel's rows (after the
-  // frame's top): Pi's overlay cuts what is taller, so a request is never approvable from rows
-  // that never reached the screen.
-  const endInView = selectedEnd >= 0 && 1 + selectedEnd < maxRows;
-  const approvable = item?.kind === "approval" && (endInView || view.read.has(item.approval.id));
+  // A row counts as seen only when it lands within the panel's rows (after the frame's top): Pi's
+  // overlay cuts what is taller. A request is approvable once every one of its rows was seen, at
+  // one layout, however the owner moved: entering it at its end, a resize or a long "from" never
+  // makes it approvable from rows that never reached the screen.
+  const before = item?.kind === "approval" ? view.progress?.get(item.approval.id) : undefined;
+  const seenRows = new Set(before && before.width === width && before.count === sel.rows.length ? before.rows : []);
+  for (const [at, row] of placed) if (FRAME_TOP_ROWS + at < maxRows) seenRows.add(row);
+  const selectedSeen: RowsSeen = { width, count: sel.rows.length, rows: seenRows };
+  const allSeen = seenRows.size === sel.rows.length;
+  const approvable = item?.kind === "approval" && (allSeen || view.read.has(item.approval.id));
   // The keys row: action keys and "esc close" always; "↑↓ move" gives way when the row is short.
   let keys = keyRows(item, approvable, items.length > 1 || below > 0);
   if (keys.length > 1) keys = keyRows(item, approvable, false);
   content.push("", ...keys.map((row) => paint.fg("muted", row)));
-  return { lines: frame(content, width, title, paint), items, selected, offset, selectedEndInView: endInView, selectedRowsBelow: Math.max(0, below), pageRows, shown };
+  return { lines: frame(content, width, title, paint), items, selected, offset, selectedAllSeen: allSeen, selectedSeen, selectedRowsBelow: Math.max(0, below), pageRows, shown };
 }
 
 /** The panel's rows (at most `maxRows`): see layoutPanel. */
@@ -712,6 +756,8 @@ export class Panel implements Component {
   private view: { selected: number; offset: number; allEnded: boolean } = { selected: 0, offset: 0, allEnded: false };
   private readonly openedAt: number;
   private readonly read = new Set<string>();
+  /** Rows seen of requests not yet read. */
+  private readonly progress = new Map<string, RowsSeen>();
   /** At the end of a tall item, the first ↓ stays; the next one moves on. */
   private heldAtEnd = false;
   private lastWidth = 80;
@@ -748,12 +794,17 @@ export class Panel implements Component {
       const index = panelItems(this.orderedSurface(), this.openedAt, this.view.allEnded).findIndex((i) => itemId(i) === this.selectedId);
       if (index >= 0 && index !== this.view.selected) this.view = { ...this.view, selected: index };
     }
-    const render = layoutPanel(this.orderedSurface(), { ...this.view, read: this.read }, this.paint, width, this.openedAt, this.rows());
+    const render = layoutPanel(this.orderedSurface(), { ...this.view, read: this.read, progress: this.progress }, this.paint, width, this.openedAt, this.rows());
     this.view.selected = render.selected;
     this.view.offset = render.offset;
     this.selectedId = render.items[render.selected] ? itemId(render.items[render.selected]!) : undefined;
     const item = render.items[render.selected];
-    if (render.selectedEndInView && item?.kind === "approval") this.read.add(item.approval.id);
+    if (item?.kind === "approval" && !this.read.has(item.approval.id)) {
+      if (render.selectedAllSeen) {
+        this.read.add(item.approval.id);
+        this.progress.delete(item.approval.id);
+      } else this.progress.set(item.approval.id, render.selectedSeen);
+    }
     // Only stops not seen before: telling the owner's surface again would ask for another frame, forever.
     const known = this.surface().seenErrors;
     const seen = render.shown.flatMap((i) => (i.kind === "watch" && i.watch.status === "error" && !known.has(errorId(i.watch)) ? [errorId(i.watch)] : []));
@@ -771,8 +822,11 @@ export class Panel implements Component {
     const item = before.items[before.selected];
     const select = (index: number, atEnd = false) => {
       if (index < 0 || index >= before.items.length || index === this.view.selected) return;
-      // Entering a tall item from below lands at its end, the way it was left.
-      this.view = { ...this.view, selected: index, offset: atEnd ? Number.MAX_SAFE_INTEGER : 0 };
+      // Entering a tall item from below lands at its end, the way it was left; a request not yet
+      // read starts at its top, where who asked is.
+      const target = before.items[index]!;
+      const unread = target.kind === "approval" && target.approval.status === "pending" && !this.read.has(target.approval.id);
+      this.view = { ...this.view, selected: index, offset: atEnd && !unread ? Number.MAX_SAFE_INTEGER : 0 };
       this.selectedId = itemId(before.items[index]!);
       this.heldAtEnd = false;
     };
