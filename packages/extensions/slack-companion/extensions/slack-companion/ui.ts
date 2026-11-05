@@ -113,6 +113,18 @@ function cutAt(chars: readonly string[], at: number, width: number): string | un
   return undefined;
 }
 
+/**
+ * A person's name in `width` cells: a plain cut, unless it would read like another of `others`
+ * (cut the same way, or the start of their name); then cut where the name differs from them, as
+ * channels are cut.
+ */
+function cutPerson(name: string, others: readonly string[], width: number): string {
+  const plain = cut(name, width);
+  const kept = plain.endsWith("…") ? plain.slice(0, -1) : undefined;
+  const clash = others.some((other) => other !== name && (cut(other, width) === plain || (kept !== undefined && other.startsWith(kept))));
+  return clash ? cutApart(name, others, width) : plain;
+}
+
 /** Cut a name from the middle, keeping its start and its end. */
 export function cutMiddle(text: string, width: number): string {
   if (visibleWidth(text) <= width) return text;
@@ -525,10 +537,9 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     if (latestAgentPost) {
       // The row already names its person: their agent's post needs no second name.
       // Only while the row shows that person's name whole (a narrow row may cut or drop it).
-      // A long name takes at most about half the row, so the post's own words show.
-      const nameCells = Math.max(8, Math.floor((inner - 3) / 2) - " (agent)".length);
-      const poster = latestAgentPost.userId === watch.partner?.userId && personWhole ? "their agent" : `${cut(latestAgentPost.userName, nameCells)} (agent)`;
-      const wrapped = wrapTextWithAnsi(`${poster}: ${agentText(latestAgentPost)}`, inner - 3);
+      const text = agentText(latestAgentPost);
+      const poster = latestAgentPost.userId === watch.partner?.userId && personWhole ? "their agent" : `${nameFor(latestAgentPost, surface, inner - 3, 2, text)} (agent)`;
+      const wrapped = wrapTextWithAnsi(`${poster}: ${text}`, inner - 3);
       const shown = wrapped.length > 2 ? [wrapped[0]!, cut(wrapped.slice(1).join(" "), inner - 3)] : wrapped;
       rows.push(...indent(shown.map((row) => paint.fg("warning", row))));
     }
@@ -541,7 +552,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
   // (Not twice: an agent post that waits is already on the row above.)
   if (last && last !== latestAgentPost && isLive(watch) && !answering) {
     const text = last.origin === "someone's agent" ? agentText(last) : last.text.replace(/\s+/g, " ");
-    rows.push(...indent([paint.fg("muted", cut(`${postedBy(last)}: ${text}`, inner - 3))]));
+    rows.push(...indent([paint.fg("muted", cut(`${postedBy(last, nameFor(last, surface, inner - 3, 1, text))}: ${text}`, inner - 3))]));
   }
   return { rows, pinned: 1 };
 }
@@ -549,6 +560,7 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
 /**
  * A watch as its panel row names it, in `room` cells; `channels` are the channel names shown, and
  * `people` the people of the threads in this watch's channel (a cut name must read apart from them).
+ * Also whether the row shows the partner's whole name (the name itself, not letters of the channel).
  */
 function panelLabel(watch: WatchState, room: number, channels: readonly string[], people: readonly string[]): { text: string; personWhole: boolean } {
   const dm = isDirectMessage(watch.conversation.channelId);
@@ -572,11 +584,7 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
     // so no later cut drops where it differs.
     const personRoom = room - 2 - channelNeeds;
     if (personRoom < 2) return { text: `#${cutApart(channel, channels, room - 1)}`, personWhole: false };
-    // A plain cut, unless it would read like another person's in that channel: then cut where
-    // the person differs from them, as channels are cut.
-    const plain = cut(watch.partner.name, personRoom);
-    const clash = people.some((other) => other !== watch.partner!.name && cut(other, personRoom) === plain);
-    const person = clash ? cutApart(watch.partner.name, people, personRoom) : plain;
+    const person = cutPerson(name, people, personRoom);
     return { text: `${person} #${cutApart(channel, channels, room - 2 - visibleWidth(person))}`, personWhole: person === name };
   }
   // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
@@ -586,8 +594,7 @@ function panelLabel(watch: WatchState, room: number, channels: readonly string[]
   const left = room - visibleWidth(`${who} · `);
   const kind = kindLabel(watch);
   const fitted = visibleWidth(kind) <= left ? kind : watch.conversation.kind === "thread" && left >= 16 ? cut(kind, left) : bareKind;
-  // The row cuts the label to its room afterwards: the name is whole only if it fits in it too.
-  return { text: `${who} · ${fitted}`, personWhole: shownName === name && visibleWidth(name) <= room - 1 };
+  return { text: `${who} · ${fitted}`, personWhole: shownName === name };
 }
 
 /** An agent's marker (an emoji or two) in front of its post: "(agent)" already says it. */
@@ -599,8 +606,22 @@ function agentText(message: ContextMessage): string {
   return (unmarked.trim() ? unmarked : message.text).replace(/\s+/g, " ");
 }
 
-/** Who posted a kept message, as the panel names them. */
-function postedBy(message: ContextMessage): string {
+/**
+ * A poster's name for a post shown on `rows` rows of `width` cells: whole when the post's words
+ * still fit with it (or keep a dozen cells on its first row), else cut only as far as that needs,
+ * and so it reads apart from every other person the panel names.
+ */
+function nameFor(message: ContextMessage, surface: SurfaceState, width: number, rows: number, text: string): string {
+  const name = message.userName;
+  const suffix = message.origin === "someone's agent" ? " (agent): " : ": ";
+  const wholeFits = wrapTextWithAnsi(`${name}${suffix}${text}`, width).length <= rows || visibleWidth(name + suffix) + 12 <= width;
+  if (wholeFits) return name;
+  const names = [...new Set(surface.engine.watches.flatMap((w) => [...(w.partner ? [w.partner.name] : []), ...w.context.map((m) => m.userName)]))];
+  return cutPerson(name, names, Math.max(8, width - visibleWidth(suffix) - 12));
+}
+
+/** Who posted a kept message, as the panel names them (`name`: the poster's name as cut for the row). */
+function postedBy(message: ContextMessage, name = message.userName): string {
   const { origin } = message;
   switch (origin) {
     case "owner's other agent":
@@ -608,11 +629,11 @@ function postedBy(message: ContextMessage): string {
     case "owner":
       return "you";
     case "someone's agent":
-      return `${message.userName} (agent)`;
+      return `${name} (agent)`;
     case "person":
     case "this session":
     case "helper":
-      return message.userName;
+      return name;
     default: {
       const unnamed: never = origin;
       return unnamed;

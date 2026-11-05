@@ -302,12 +302,16 @@ export function findSecretShape(text: string): string | undefined {
   return SECRET_SHAPES.find(({ pattern }) => pattern.test(text))?.name;
 }
 
-/** Remove terminal control and escape sequences, so text shown to the owner is what it says. */
+/**
+ * Remove terminal control and escape sequences and invisible bidirectional controls, so text shown
+ * to the owner is what it says, in the order it is.
+ */
 export function stripControl(text: string): string {
   return text
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/g, "")
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
-    // Bidirectional overrides and isolates: they would show text in another order than it is.
-    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
+    // Invisible bidirectional controls (marks, overrides, isolates): they would show text in
+    // another order than it is. Right-to-left letters themselves stay.
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 }

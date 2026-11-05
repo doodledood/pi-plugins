@@ -441,3 +441,16 @@ test("a forged future id rejected earlier never carries the checkpoint past a ca
   }
   assert.deepEqual([...got].sort(compareTs), real, `lost ${real.filter((ts) => !got.includes(ts)).length}`);
 });
+
+test("a lookup that answers with another message than the one asked for fails closed", async () => {
+  const slack = new FakeSlack();
+  const bus = memoryBus();
+  slack.attach(bus);
+  const backend = new McpSlackBackend(bus, DEFAULT_CONFIG.tools);
+  const root = slack.post("D0FAKE0001", slack.ownerId, slack.ownerName, "question");
+  const reply = slack.post("D0FAKE0001", "U0COLL0001", "Robin Colleague", "answer", root.ts);
+  const real = backend.lookupMessage.bind(backend);
+  backend.lookupMessage = async (channel, ts) => (ts === reply.ts ? real(channel, root.ts) : real(channel, ts));
+  const conversation: Conversation = { kind: "thread", channelId: "D0FAKE0001", threadTs: root.ts };
+  await assert.rejects(readNew(backend, conversation, { checkpoint: root.ts, seen: [] }, slack.clockMs() + 600_000), (e: unknown) => e instanceof BackendError && e.code === "unreadable");
+});

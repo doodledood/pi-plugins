@@ -1213,13 +1213,10 @@ export class Engine {
     this.inFlightSends.add(entry.id);
     this.save();
     const threadTs = watch.conversation.kind === "thread" ? watch.conversation.threadTs : undefined;
+    // Only the send itself is tried: what follows a send that went out must never read as its failure.
+    let sentTs: string | undefined;
     try {
-      const { ts } = await this.deps.backend.send(watch.conversation.channelId, marked, threadTs);
-      entry.status = "sent";
-      entry.ts = ts;
-      this.markOwn(watch, ts, by);
-      watch.agentLineSent = true;
-      watch.lastAgentPostOurs = true;
+      sentTs = (await this.deps.backend.send(watch.conversation.channelId, marked, threadTs)).ts;
     } catch (error) {
       // A send already read back went out, whatever the error says: reconcile confirms it.
       entry.status = error instanceof SendUncertainError || entry.readBack ? "uncertain" : "failed";
@@ -1231,6 +1228,13 @@ export class Engine {
       }
     } finally {
       this.inFlightSends.delete(entry.id);
+    }
+    if (sentTs !== undefined) {
+      entry.status = "sent";
+      entry.ts = sentTs;
+      this.markOwn(watch, sentTs, by);
+      watch.agentLineSent = true;
+      watch.lastAgentPostOurs = true;
     }
     if (by === "helper" && watch.sendsWithoutOwner >= config.pauseAfterSends) this.pauseForLimit(watch);
     // No save here: the caller saves once its step is done. The save before the send already holds

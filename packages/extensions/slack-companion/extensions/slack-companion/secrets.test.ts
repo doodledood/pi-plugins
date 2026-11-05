@@ -109,6 +109,7 @@ test("a sandboxed command sees no credential variables, and the owner sees no co
   assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH"]);
   assert.equal(stripControl("ok\u001b[2J\u001b]0;title\u0007 done\u0000"), "ok done");
   assert.equal(stripControl("approve \u202eexe.\u202c report \u2066x\u2069"), "approve exe. report x", "no text shown in another order than it is");
+  assert.equal(stripControl("\u200f12\u200f,\u200f34\u061c\u200e"), "12,34", "nor through the invisible marks");
 });
 
 test("output lines naming what the helper may not read are dropped; other text stays", () => {

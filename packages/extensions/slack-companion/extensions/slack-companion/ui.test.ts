@@ -587,3 +587,59 @@ test("a long poster name leaves room for the agent post's words", () => {
     assert.match(panel, /Done;/, `${width}: ${panel}`);
   }
 });
+
+test("two agent posts from look-alike people never make two items read the same, in channels or DMs", () => {
+  const post = (userId: string, userName: string) => ({ ts: "1.000001", userId, userName, text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const });
+  const pairs: Array<[string, string]> = [["Robin Cole", "Robin Colleague"], ["Daniel Fox Smith", "Daniel Ray Smith"], ["Alexandra Montgomery", "Alexandra Monroe"]];
+  for (const [a, b] of pairs) {
+    const inChannel = surface({ watches: [
+      channelWatch(1, { channelName: "general", conversation: { kind: "thread", channelId: "C1", threadTs: "1.0" }, partner: { userId: "U1", name: a }, agentPostsWaiting: 1, context: [post("U1", a)] }),
+      channelWatch(2, { channelName: "general", conversation: { kind: "thread", channelId: "C1", threadTs: "2.0" }, partner: { userId: "U2", name: b }, agentPostsWaiting: 1, context: [post("U2", b)] }),
+    ] });
+    const dms = surface({ watches: [
+      watch({ key: "D1/1.0", conversation: { kind: "thread", channelId: "D1", threadTs: "1.0" }, partner: { userId: "U1", name: a }, agentPostsWaiting: 1, context: [post("U1", a)] }),
+      watch({ key: "D2/1.0", conversation: { kind: "thread", channelId: "D2", threadTs: "1.0" }, partner: { userId: "U2", name: b }, agentPostsWaiting: 1, context: [post("U2", b)] }),
+    ] });
+    for (const [state, widths] of [[inChannel, [24, 28, 30, 33, 40]], [dms, [24, 30, 40, 44, 50]]] as const) {
+      for (const width of widths) {
+        const rows = renderPanel(state, 0, plain, width, 0, 40).map((r) => r.replace("›", " ")).filter((r) => r.startsWith("│") && !/esc|stop watching/.test(r) && r.replace(/[│ ]/g, "") !== "");
+        const blocks = rows.join("\n").split(/\n(?=│ {3}\S)/);
+        assert.equal(blocks.length, 2, `${a}/${b} at ${width}:\n${rows.join("\n")}`);
+        assert.equal(new Set(blocks).size, blocks.length, `${a}/${b} at ${width}:\n${rows.join("\n")}`);
+      }
+    }
+  }
+});
+
+test("a poster cut in a narrow panel never reads like the row's own person, and a name that fits stays whole", () => {
+  const post = (userId: string, userName: string) => ({ ts: "1.000001", userId, userName, text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const });
+  const own = channelWatch(1, { channelName: "alerts-prod-payments-eu", partner: { userId: "U1", name: "Robin Colleague" }, agentPostsWaiting: 1, context: [post("U1", "Robin Colleague")] });
+  const other = channelWatch(1, { channelName: "alerts-prod-payments-eu", partner: { userId: "U1", name: "Robin Colleague" }, agentPostsWaiting: 1, context: [post("U2", "Robin Collins")] });
+  for (const width of [34, 38, 44]) {
+    const postRow = (w: WatchState) => renderPanel(surface({ watches: [w] }), 0, plain, width, 0, 40).find((r) => r.includes("(agent)"));
+    assert.notEqual(postRow(own), postRow(other), `${width}: ${postRow(own)} | ${postRow(other)}`);
+  }
+  const long = channelWatch(3, { channelName: "general", partner: { userId: "U3", name: "Ana" }, agentPostsWaiting: 1, context: [post("U9", "Maximiliano Fernández-Oyarzábal")] });
+  assert.match(renderPanel(surface({ watches: [long] }), 0, plain, 80, 0, 40).join("\n"), /Maximiliano Fernández-Oyarzábal \(agent\)/);
+});
+
+test("a cut poster never reads like the start of another person's name", () => {
+  const post = { ts: "1.000001", userId: "U9", userName: "Alex Montgomery-Fitzgerald", text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const };
+  const w = channelWatch(1, { channelName: "release", partner: { userId: "U1", name: "Alex Montgomery" }, agentPostsWaiting: 1, context: [post] });
+  for (const width of [40, 48, 56]) {
+    const row = renderPanel(surface({ watches: [w] }), 0, plain, width, 0, 40).find((r) => r.includes("(agent)")) ?? "";
+    assert.doesNotMatch(row, /Alex Montgom[a-z]*… \(agent\)/, `${width}: ${row}`);
+  }
+});
+
+test("a poster's name that fits stays whole, on the waiting post's rows and on the latest-post row", () => {
+  const w = channelWatch(1, { channelName: "general", partner: { userId: "U1", name: "Ana" }, agentPostsWaiting: 1, context: [
+    { ts: "1.000001", userId: "U9", userName: "Casey Ops", text: "🤖 Can you approve the rollback window for tonight?", agentFooter: true, origin: "someone's agent" },
+  ] });
+  assert.match(renderPanel(surface({ watches: [w] }), 0, plain, 40, 0, 40).join("\n"), /Casey Ops \(agent\): Can/);
+  const person = channelWatch(2, { channelName: "general", partner: { userId: "U2", name: "Ana" }, context: [
+    { ts: "1.000002", userId: "U8", userName: "Alexandra Montgomery-Fitzgerald", text: "is staging down for everyone?", agentFooter: false, origin: "person" },
+  ] });
+  const row = renderPanel(surface({ watches: [person] }), 0, plain, 40, 0, 40).find((r) => r.includes(": "));
+  assert.match(row ?? "", /: is staging/, `the latest post's words show beside a long name: ${row}`);
+});
