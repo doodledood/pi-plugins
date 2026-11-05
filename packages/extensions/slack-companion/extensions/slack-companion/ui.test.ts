@@ -341,3 +341,21 @@ test("the line names the people before it spends room on long words", () => {
   assert.match(both!, /Robin Colleague/);
   assert.match(both!, /Sam Teammate/, `both requesters are named at 110 columns: ${both}`);
 });
+
+test("before anyone answers, the line and the panel name a conversation by the same first words, cut by cells", () => {
+  const fresh = (key: string, channelId: string, text: string, over: Partial<WatchState> = {}) =>
+    watch({ key, conversation: { kind: "thread", channelId, threadTs: "1.000001" }, partner: undefined, context: [{ ts: "1.000001", userId: "U0", userName: "Dana Owner", text, agentFooter: true }], ...over });
+  const state = surface({ watches: [fresh("C1/1.000001", "C0GEN", "Deploy is blocked on the flaky check", { channelName: "general" }), fresh("C2/1.000001", "C0GEN", "Who owns the flaky check now?", { channelName: "general" }), fresh("D9/1.000001", "D9", "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 ship it")] });
+  const panel = renderPanel(state, 0, plain, 100, 0).join("\n");
+  assert.match(panel, /#general "Deploy is blocked/, "a channel thread is told apart by its first words in the panel too");
+  assert.match(panel, /#general "Who owns the flaky/);
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(panel), false, "no emoji is split in half");
+  const [line] = renderLine(state, plain, 120);
+  assert.match(line!, /#general "Deploy is block…"/);
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(line!), false);
+});
+
+test("a watch that is catching up after a gap says so on the line", () => {
+  const [line] = renderLine(surface({ watches: [watch({ rejoining: 1, lastNote: "watching again" })] }), plain, 120);
+  assert.match(line!, /Robin Colleague catching up/);
+});

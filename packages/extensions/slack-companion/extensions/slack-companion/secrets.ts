@@ -1,7 +1,10 @@
 // What the Slack helper may never read, and what may never leave in a reply.
 // Holds docs/adr/20261104-sandbox-the-slack-helpers-shell.md (secret reads) and
 // docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md (secret-shaped replies).
-import { existsSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync, statSync } from "node:fs";
+
+const DATA_VOLUME = "/System/Volumes/Data/";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,7 +96,18 @@ const SECRET_FILE_NAMES = SECRET_FILE_GLOBS.map((glob) => new RegExp(`^${glob.re
  */
 export function canonicalPath(path: string): string {
   try {
-    return realpathSync.native(path);
+    const native = realpathSync.native(path);
+    // macOS reaches the same files through /System/Volumes/Data: fold that spelling into the usual one.
+    if (native.startsWith(DATA_VOLUME)) {
+      const usual = native.slice(DATA_VOLUME.length - 1);
+      try {
+        const [a, b] = [statSync(native), statSync(usual)];
+        if (a.dev === b.dev && a.ino === b.ino) return realpathSync.native(usual);
+      } catch {
+        // not the same file under the usual spelling: keep the data-volume one
+      }
+    }
+    return native;
   } catch {
     const parent = dirname(path);
     return parent === path ? path : join(canonicalPath(parent), basename(path));
@@ -119,8 +133,13 @@ export interface ReadPolicy {
   home: string;
   /** Folders the file tools may read: the project and the owner's readable folders (see readableRoots). */
   roots: string[];
-  /** Exact files besides: the offered skills' files, and files the helper's own MCP calls returned. */
+  /** Exact files besides: a skill that is a lone file, and files the helper's own calls saved. */
   files: Set<string>;
+  /**
+   * The folders of the skills the helper is offered (a SKILL.md and the files beside it), open even
+   * inside a secret folder such as Pi's agent folder: see skillFolder.
+   */
+  skillFolders: string[];
   /** Secret folders, canonical: closed even inside a root (opening ~/.config does not open ~/.config/gcloud). */
   closed: string[];
 }
@@ -137,6 +156,42 @@ export function readableRoots(home: string, folders: readonly string[], agentDir
   );
 }
 
+/**
+ * The repository's own folders when the project is in one: its top folder and the shared `.git`
+ * folder, which for a linked worktree or a subfolder lie outside the project. Opened only when the
+ * repository's top folder could itself be opened, and is not a dot-folder of the home (a dotfiles
+ * repository at ~ or ~/.config would otherwise hand over every committed file through git).
+ */
+export function repositoryFolders(cwd: string, home: string, agentDir: string): string[] {
+  let lines: string[];
+  try {
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "pipe"] });
+    lines = out.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => resolve(cwd, line));
+  } catch (error) {
+    const { status, code } = error as { status?: number; code?: string };
+    if (typeof status === "number" || code === "ENOENT") return []; // not a repository, or no git: nothing to open
+    throw new Error(`could not ask git where the repository is: ${(error as Error).message}`);
+  }
+  const [top, common] = lines;
+  const canonicalHome = canonicalPath(home);
+  const openable = (folder: string) => {
+    const c = canonicalPath(folder);
+    if (readableRoots(home, [c], agentDir).length !== 1) return false;
+    const fromHome = inside(c, canonicalHome) ? c.slice(canonicalHome.length + 1) : undefined;
+    return !fromHome?.startsWith(".");
+  };
+  if (!top || !openable(top)) return [];
+  const folders = [canonicalPath(top)];
+  // A linked worktree's shared folder belongs to the main checkout, which must pass as well.
+  if (common && basename(common) === ".git" && openable(dirname(common))) folders.push(canonicalPath(common));
+  return [...new Set(folders)];
+}
+
+/** The folders opened to the helper, the same for its file tools and its shell: the project, the owner's readable folders and the repository's own. */
+export function openedFolders(options: { home: string; agentDir: string; cwd: string; readable: readonly string[] }): string[] {
+  return [...new Set([...readableRoots(options.home, [options.cwd, ...options.readable], options.agentDir), ...repositoryFolders(options.cwd, options.home, options.agentDir)])];
+}
+
 export function readPolicy(options: { home?: string; agentDir?: string; roots: readonly string[]; files?: readonly string[] }): ReadPolicy {
   const home = options.home ?? homedir();
   const agentDir = options.agentDir ?? join(home, ".pi", "agent");
@@ -144,6 +199,7 @@ export function readPolicy(options: { home?: string; agentDir?: string; roots: r
     home,
     roots: readableRoots(home, options.roots, agentDir),
     files: new Set((options.files ?? []).filter((f) => !namedLikeSecret(f)).map(canonicalPath)),
+    skillFolders: [],
     closed: secretDirectories(home, agentDir).map(canonicalPath),
   };
 }
@@ -153,8 +209,23 @@ export function isReadableAbsolute(policy: ReadPolicy, absolute: string): boolea
   const path = canonicalPath(absolute);
   if (namedLikeSecret(path)) return false;
   if (policy.files.has(path)) return true;
+  if (policy.skillFolders.some((dir) => inside(path, dir))) return true;
   if (policy.closed.some((dir) => inside(path, dir))) return false;
   return policy.roots.some((root) => inside(path, root));
+}
+
+/**
+ * The folder a skill may open: its own folder when the skill is a SKILL.md, never the home, a
+ * folder holding it, a secret folder itself or a folder holding one (a skill file kept loose in
+ * such a place opens only itself). Undefined when only the file may open.
+ */
+export function skillFolder(policy: ReadPolicy, skillFile: string): string | undefined {
+  if (basename(skillFile) !== "SKILL.md") return undefined;
+  const folder = canonicalPath(dirname(skillFile));
+  if (namedLikeSecret(folder)) return undefined;
+  // The home, and any folder holding it, hold the secret folders too: one check refuses them all.
+  if (policy.closed.some((dir) => inside(dir, folder))) return undefined;
+  return folder;
 }
 
 /** May the file tools open the file a tool would open for `path`? */

@@ -60,10 +60,12 @@ export interface WatchState {
   /** Waiting messages dropped since the waiting list was last answered: the note shows this total. */
   droppedWaiting?: number;
   /**
-   * The last read left messages for later reads (reader.MAX_CONFIRMATIONS_PER_POLL): nothing is answered
-   * until a read catches up, so a later post from another of the owner's sessions is seen first.
+   * This session took the conversation (back) after a gap: a restore, or watching again. Another
+   * of the owner's sessions may have answered there meanwhile, so nothing is answered (a held
+   * reply neither) until a read has caught up, and what waits from before such a session's post
+   * is left to it. The number counts the reads so far; see MAX_REJOIN_READS.
    */
-  catchingUp?: boolean;
+  rejoining?: number;
 }
 
 export interface Approval {
@@ -121,6 +123,8 @@ const MAX_ACTIVITY = 5;
 const BOUNDARY_CHECKS = 25;
 /** Messages waiting to be answered in one conversation; older ones beyond it stay as context only. */
 const MAX_INBOX = 20;
+/** Reads a rejoining watch waits for a read to catch up before it answers anyway (a burst that never ends). */
+const MAX_REJOIN_READS = 5;
 const DROPPED_NOTE = /^\d+ older waiting messages? dropped so far/;
 /** Characters of a waiting message kept. */
 const MAX_INBOX_TEXT = 4000;
@@ -198,7 +202,7 @@ export function pendingApprovals(state: Pick<EngineState, "approvals">, watchKey
 
 /** Who holds a conversation's lock, for a notice. */
 function holderText(lock: { holder: LockHolder } | { damaged: true }): string {
-  return "holder" in lock ? `another Pi session (pid ${lock.holder.pid})` : "another Pi session (its lock is being written, or damaged; it clears within a minute)";
+  return "holder" in lock ? `another Pi session (pid ${lock.holder.pid})` : "another Pi session, or a damaged lock file (try again in a minute)";
 }
 
 /** The mark after a person's name that says a conversation is a direct message. */
@@ -297,6 +301,7 @@ export class Engine {
     for (const watch of this.liveWatches()) {
       const lock = this.deps.locks.acquire(watch.key);
       if (!lock.ok) this.end(watch, "error", `${holderText(lock)} now answers this conversation`, false, { lockLost: true });
+      else watch.rejoining = 0; // closed for a while: another session may have answered meanwhile
     }
     this.save();
     return { ok: true };
@@ -573,9 +578,11 @@ export class Engine {
     watch.since = tsFromMillis(this.deps.now());
     delete watch.reason;
     delete watch.readFailures;
+    // Ended for a while: read before answering what waited, in case another session answered it.
+    watch.rejoining = 0;
     this.note(watch, "watching again");
     this.save();
-    this.schedule(watch); // what was waiting when it stopped is answered now
+    void this.poll();
   }
 
   stop(key: string, reason = "stopped by you"): void {
@@ -607,7 +614,7 @@ export class Engine {
       this.deps.notify("warning", `Slack: ${count} message${count === 1 ? "" : "s"} waiting in ${watchLabel(watch)} (from ${people}) ${count === 1 ? "was" : "were"} not answered here: another Pi session took the conversation over. Check them in Slack.`);
     }
     if (status === "stopped" || options.lockLost) watch.inbox = [];
-    delete watch.catchingUp;
+    delete watch.rejoining;
     delete watch.pause;
     delete watch.readFailures;
     // A conversation that ended quietly keeps what the panel needs, not its conversation; one that
@@ -670,24 +677,30 @@ export class Engine {
 
   /** Read every watch once; start helpers where a batch waits. Overlapping calls share one pass. */
   poll(): Promise<void> {
-    this.polling ??= (async () => {
-      try {
-        for (const watch of this.liveWatches()) {
-          if (this.disposed) return;
-          // It may have ended while an earlier watch was read (its helper finished, or the owner stopped it).
-          if (!isLive(watch)) continue;
-          if (!this.deps.locks.holds(watch.key)) {
-            this.end(watch, "error", "another Pi session took this conversation over; press w to watch it again (what that session answered is not answered again)", false, { lockLost: true });
-            this.save();
-            continue;
-          }
-          await this.pollWatch(watch);
-        }
-      } finally {
-        this.polling = undefined;
+    if (this.polling) return this.polling;
+    // The pass is stored before its body runs and cleared only if it is still the stored one: a
+    // pass that finished without awaiting anything must not leave itself behind as "running".
+    const pass = this.pollPass();
+    this.polling = pass;
+    const clear = () => {
+      if (this.polling === pass) this.polling = undefined;
+    };
+    pass.then(clear, clear); // callers awaiting the pass still see its error
+    return pass;
+  }
+
+  private async pollPass(): Promise<void> {
+    for (const watch of this.liveWatches()) {
+      if (this.disposed) return;
+      // It may have ended while an earlier watch was read (its helper finished, or the owner stopped it).
+      if (!isLive(watch)) continue;
+      if (!this.deps.locks.holds(watch.key)) {
+        this.end(watch, "error", "another Pi session took this conversation over", false, { lockLost: true });
+        this.save();
+        continue;
       }
-    })();
-    return this.polling;
+      await this.pollWatch(watch);
+    }
   }
 
   /** Wait for running helpers. */
@@ -723,10 +736,12 @@ export class Engine {
         this.deps.notify("warning", `Slack: in ${watchLabel(watch)}, ${outcome.forged} message id${outcome.forged === 1 ? " was" : "s were"} not found in the conversation and skipped (deleted, or text imitating Slack's format).`);
       }
       this.ingest(watch, outcome.fresh, owner);
-      // Answer only once a read has caught up: a later post from another of the owner's sessions,
-      // still waiting to be read, may already answer what waits here.
-      if (outcome.deferred > 0) watch.catchingUp = true;
-      else delete watch.catchingUp;
+      // A rejoining watch answers once a read has caught up: a post from another of the owner's
+      // sessions, still waiting to be read, may already answer what waits here.
+      if (watch.rejoining !== undefined) {
+        watch.rejoining += 1;
+        if (outcome.deferred === 0 || watch.rejoining >= MAX_REJOIN_READS) delete watch.rejoining;
+      }
       // Quiet only when this read found nothing new: what arrived while Pi was closed is read first.
       const quietMs = this.deps.config().quietHours * 3_600_000;
       if (isLive(watch) && !outcome.fresh.length && !watch.inbox.length && startedAt - watch.lastActivityAt > quietMs) {
@@ -776,18 +791,24 @@ export class Engine {
         this.end(watch, "stopped", `${message.userName} said stop`, true);
         return;
       }
-      // Another of the owner's agents posted it: context only, never answered. That session saw what
-      // came before its post (it held this conversation, or answered from main), so what waits here
-      // from before it is not answered again; the owner is told.
+      // Another of the owner's agents posted it: context only, never answered. While this watch
+      // rejoins after a gap, that session may have answered what waits here from before its post, so
+      // that is left to it, and the owner is told. While this session held the conversation
+      // throughout, no other session read it, and nothing is left.
       if (message.userId === owner.userId && message.agentFooter) {
         watch.lastAgentPostOurs = false;
-        const before = watch.inbox.filter((m) => compareTs(m.ts, message.ts) < 0);
-        if (before.length) {
-          answeredElsewhere.push(...before);
-          watch.inbox = watch.inbox.filter((m) => compareTs(m.ts, message.ts) > 0);
+        if (watch.rejoining !== undefined) {
+          const before = watch.inbox.filter((m) => compareTs(m.ts, message.ts) < 0);
+          if (before.length) {
+            answeredElsewhere.push(...before);
+            watch.inbox = watch.inbox.filter((m) => compareTs(m.ts, message.ts) > 0);
+          }
         }
         continue;
       }
+      // Someone else's agent (a post with the agent footer under their name): context only, so two
+      // agents never answer each other in a loop.
+      if (message.agentFooter) continue;
       if (!watch.partner && message.userId !== owner.userId) this.setPartner(watch, { userId: message.userId, name: message.userName });
       if (queued.has(message.ts)) continue;
       if (watch.conversation.kind === "dm-top" && watch.lastAgentPostOurs === false) {
@@ -802,8 +823,11 @@ export class Engine {
     if (answeredElsewhere.length) {
       const people = [...new Set(answeredElsewhere.map((m) => m.userName))].join(", ");
       const count = answeredElsewhere.length;
-      this.note(watch, `left ${count} message${count === 1 ? "" : "s"} to another of your sessions`);
-      this.deps.notify("info", `Slack: ${count} message${count === 1 ? "" : "s"} in ${watchLabel(watch)} (from ${people}; latest: "${firstLine(answeredElsewhere.at(-1)!.text, 80)}") ${count === 1 ? "is" : "are"} not answered here: another of your Pi sessions posted after ${count === 1 ? "it" : "them"}. Check in Slack that it answered.`);
+      // A reply held from before the gap answered some of these: it is not sent either.
+      const heldToo = watch.heldReply !== undefined;
+      delete watch.heldReply;
+      this.note(watch, `left ${count} message${count === 1 ? "" : "s"} to another of your sessions; check them in Slack`);
+      this.deps.notify("info", `Slack: ${count} message${count === 1 ? "" : "s"} in ${watchLabel(watch)} (from ${people}; latest: "${firstLine(answeredElsewhere.at(-1)!.text, 80)}") ${count === 1 ? "is" : "are"} not answered here${heldToo ? ", nor the reply held for them" : ""}: while this session was away, another of your Pi sessions posted after ${count === 1 ? "it" : "them"}. Check in Slack that ${count === 1 ? "it was" : "they were"} answered.`);
     }
     if (watch.inbox.length > MAX_INBOX) {
       // While paused, a busy conversation could queue without end: the newest wait, older ones are
@@ -811,7 +835,8 @@ export class Engine {
       watch.droppedWaiting = (watch.droppedWaiting ?? 0) + watch.inbox.length - MAX_INBOX;
       watch.inbox = watch.inbox.slice(-MAX_INBOX);
       const total = watch.droppedWaiting;
-      this.note(watch, `${total} older waiting message${total === 1 ? "" : "s"} dropped so far; ${MAX_INBOX} wait for you`, { replacing: DROPPED_NOTE });
+      const who = watch.status === "paused" ? `${MAX_INBOX} wait for you` : `the newest ${MAX_INBOX} are answered`;
+      this.note(watch, `${total} older waiting message${total === 1 ? "" : "s"} dropped so far; ${who}`, { replacing: DROPPED_NOTE });
     }
   }
 
@@ -850,7 +875,7 @@ export class Engine {
 
   private schedule(watch: WatchState): void {
     if (this.disposed || watch.status !== "active" || (!watch.inbox.length && !watch.heldReply) || this.running.has(watch.key)) return;
-    if (watch.catchingUp && !watch.heldReply) return; // the next read catches up first
+    if (watch.rejoining !== undefined) return; // a read catches up first
     const abort = new AbortController();
     const promise = this.process(watch, abort.signal)
       .catch((error) => {

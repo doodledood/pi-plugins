@@ -3,13 +3,14 @@
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md (the closed home) and
 // docs/adr/20261104-hold-slack-conversations-in-a-read-only-fork-of-main.md (secret-shaped replies).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { denyReadEntries, NO_SHELL_ON_LINUX, startShellSandbox } from "./sandbox.ts";
-import { canonicalPath, filterUnreadableLines, findSecretShape, isReadablePath, readableRoots, readPolicy, type ReadPolicy, sanitizeEnv, secretDirectories, stripControl } from "./secrets.ts";
+import { canonicalPath, filterUnreadableLines, findSecretShape, isReadablePath, openedFolders, readableRoots, readPolicy, type ReadPolicy, sanitizeEnv, secretDirectories, skillFolder, stripControl } from "./secrets.ts";
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), "home-"));
@@ -46,9 +47,11 @@ test("another spelling of a path is closed, not missed: case, the data volume, a
   const { root, policy } = home();
   const cwd = join(root, "project");
   writeFileSync(join(cwd, "AUTH.JSON"), "x");
-  for (const path of [".ENV", "AUTH.JSON", "Credentials.Json", join(root.toUpperCase(), ".ssh", "id_ed25519"), join("/System/Volumes/Data", root, ".ssh", "id_ed25519"), join("/System/Volumes/Data", cwd, "app.ts")]) {
+  for (const path of [".ENV", "AUTH.JSON", "Credentials.Json", join(root.toUpperCase(), ".ssh", "id_ed25519"), join("/System/Volumes/Data", root, ".ssh", "id_ed25519")]) {
     assert.equal(closed(policy, cwd, path), true, path);
   }
+  // The data-volume spelling of a project file is that same file, so it reads (on macOS, where it exists).
+  if (process.platform === "darwin") assert.equal(closed(policy, cwd, join("/System/Volumes/Data", canonicalPath(cwd), "app.ts")), false);
   // On a case-insensitive disk, the project's own files read in any case; the check uses the stored spelling.
   if (process.platform === "darwin") assert.equal(closed(policy, cwd, join(cwd.toUpperCase(), "APP.TS")), false);
 });
@@ -149,4 +152,53 @@ test("every MCP config pi-mcp-adapter imports servers from, and every agent harn
     "~/.gemini/oauth_creds.txt", "~/.windsurf/settings.json", "~/.config/opencode/auth-notes.txt", "~/.config/mcp/servers.toml",
     "~/Library/Application Support/Claude/Cookies", "~/.claude.json.backup",
   ]) assert.equal(closed(policy, cwd, path), true, path);
+});
+
+test("a skill opens its own folder, never the home, a folder holding it or one holding a secret folder", () => {
+  const { root, agentDir } = home();
+  const policy = readPolicy({ home: root, agentDir, roots: [join(root, "project")] });
+  const inAgent = join(agentDir, "git", "pkg", "skills", "notes");
+  mkdirSync(inAgent, { recursive: true });
+  assert.equal(skillFolder(policy, join(inAgent, "SKILL.md")), canonicalPath(inAgent), "a folder skill in Pi's agent folder");
+  assert.equal(skillFolder(policy, join(root, "SKILL.md")), undefined, "a SKILL.md at the home's top opens only itself");
+  assert.equal(skillFolder(policy, join(agentDir, "SKILL.md")), undefined, "nor Pi's agent folder");
+  assert.equal(skillFolder(policy, join(root, ".pi", "SKILL.md")), undefined, "nor a folder holding a secret folder");
+  assert.equal(skillFolder(policy, join(inAgent, "handy.md")), undefined, "a loose skill file opens only itself");
+});
+
+test("a repository opens its folders only when its top folder could be opened: never a dotfiles repository at ~ or in ~/.config", () => {
+  const { root, agentDir } = home();
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { stdio: "ignore" });
+  git(root, "init", "-q");
+  mkdirSync(join(root, "scratch-project"));
+  assert.deepEqual(openedFolders({ home: root, agentDir, cwd: join(root, "scratch-project"), readable: [] }), [canonicalPath(join(root, "scratch-project"))], "the home's .git is not opened");
+  mkdirSync(join(root, ".config", "nvim"), { recursive: true });
+  git(join(root, ".config"), "init", "-q");
+  assert.deepEqual(openedFolders({ home: root, agentDir, cwd: join(root, ".config", "nvim"), readable: [] }), [canonicalPath(join(root, ".config", "nvim"))], "a dot-folder repository opens only the project");
+  const repo = join(root, "code", "app");
+  mkdirSync(join(repo, "sub"), { recursive: true });
+  git(repo, "init", "-q");
+  const opened = openedFolders({ home: root, agentDir, cwd: join(repo, "sub"), readable: [] });
+  assert.ok(opened.includes(canonicalPath(repo)), "a subfolder's repository top is opened");
+});
+
+test("a folder whose name begins like an open one is not inside it; a folder named like a secret closes its contents", () => {
+  const { root, agentDir } = home();
+  const app = join(root, "code", "app");
+  mkdirSync(join(app, "credentials"), { recursive: true });
+  mkdirSync(join(app, ".env.d"), { recursive: true });
+  mkdirSync(join(app, "creds"), { recursive: true });
+  mkdirSync(join(root, "code", "app-secrets"), { recursive: true });
+  for (const [path, body] of [[join(app, "credentials", "prod.key"), "k"], [join(app, ".env.d", "prod"), "k"], [join(app, "creds", "notes.md"), "n"], [join(root, "code", "app-secrets", "x"), "s"]] as const) writeFileSync(path, body);
+  const policy = readPolicy({ home: root, agentDir, roots: [app] });
+  assert.equal(closed(policy, app, "../app-secrets/x"), true, "a sibling sharing the project's name as a prefix");
+  assert.equal(closed(policy, app, "credentials/prod.key"), true);
+  assert.equal(closed(policy, app, ".env.d/prod"), true);
+  assert.equal(closed(policy, app, "creds/notes.md"), false);
+});
+
+test("a folder listed in another spelling of the home (the data volume) does not open the home", () => {
+  if (process.platform !== "darwin") return;
+  const { root, agentDir } = home();
+  assert.deepEqual(readableRoots(root, [join("/System/Volumes/Data", canonicalPath(root))], agentDir), []);
 });

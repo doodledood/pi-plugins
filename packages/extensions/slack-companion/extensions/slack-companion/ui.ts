@@ -82,20 +82,23 @@ interface LineEntry {
 }
 
 /** The first words of a conversation (the thread's first message, else the first one kept), to name it before anyone answers. */
-function openingWords(watch: WatchState, max: number): string | undefined {
+function openingWords(watch: WatchState, cells: number): string | undefined {
   const { conversation } = watch;
   const root = conversation.kind === "thread" ? watch.context.find((m) => m.ts === conversation.threadTs) : watch.context[0];
   const text = root?.text.replace(/\s+/g, " ").trim();
-  if (!text) return undefined;
-  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+  return text ? cut(text, Math.max(4, cells)) : undefined; // whole characters, counted in cells
 }
+
+/** Cells the line gives a conversation's first words, so two or three fresh conversations fit. */
+const LINE_OPENING_CELLS = 16;
 
 /**
  * A conversation as the line and the panel name it before anyone has answered: a DM by its first
- * words, a channel thread by its channel and first words. One spelling for both surfaces.
+ * words, a channel thread by its channel and first words. One spelling for both surfaces; `cells`
+ * is what the first words may take.
  */
-function unnamedLabel(watch: WatchState, max = 24): string {
-  const opening = openingWords(watch, max);
+function unnamedLabel(watch: WatchState, cells = LINE_OPENING_CELLS): string {
+  const opening = openingWords(watch, cells);
   if (isDirectMessage(watch.conversation.channelId)) return opening ? `DM "${opening}"` : dmLabel(undefined);
   const channel = `#${watch.channelName || watch.conversation.channelId}`;
   return opening ? `${channel} "${opening}"` : channel;
@@ -123,7 +126,13 @@ function lineEntries(surface: SurfaceState): LineEntry[] {
     const entry: LineEntry = {
       label: lineLabel(named),
       paused,
-      ...(paused ? { word: { text: "paused", color: "warning" as const } } : answering ? { word: { text: "answering…", color: "accent" as const } } : {}),
+      ...(paused
+        ? { word: { text: "paused", color: "warning" as const } }
+        : answering
+          ? { word: { text: "answering…", color: "accent" as const } }
+          : watches.some((w) => w.rejoining !== undefined)
+            ? { word: { text: "catching up", color: "accent" as const } }
+            : {}),
       note: latest.find((w) => w.lastNote)?.lastNote ?? "watching",
     };
     return { entry, rank: paused ? 0 : answering ? 1 : 2, at: latest[0]!.lastActivityAt };
@@ -322,17 +331,20 @@ function itemRows(item: PanelItem, surface: SurfaceState, paint: Paint, inner: n
     error: paint.fg("error", "× stopped"),
   }[watch.status];
   const labelRoom = Math.max(10, inner - visibleWidth(status) - 2);
+  const bareKind = watch.conversation.kind === "thread" ? "thread" : "top level";
   let label = watchLabel(watch);
-  if (isDirectMessage(watch.conversation.channelId)) {
-    // The name and "(DM)" first (or "a direct message" before the name is known); the kind of
-    // conversation gets what is left, and a thread's snippet gives way to a bare "thread" when too
-    // little is left for it.
-    const who = watch.partner ? `${cut(watch.partner.name, Math.max(6, labelRoom - DM_MARK.length - 12))} ${DM_MARK}` : unnamedLabel(watch);
+  if (!watch.partner) {
+    // Before anyone has answered: the same first words as on the line, cut to leave the kind whole.
+    const kind = isDirectMessage(watch.conversation.channelId) ? ` · ${bareKind}` : "";
+    label = `${unnamedLabel(watch, labelRoom - visibleWidth(kind) - 16)}${kind}`;
+  } else if (isDirectMessage(watch.conversation.channelId)) {
+    // The name and "(DM)" first; the kind of conversation gets what is left, and a thread's
+    // snippet gives way to a bare "thread" when too little is left for it.
+    const who = `${cut(watch.partner.name, Math.max(6, labelRoom - DM_MARK.length - 12))} ${DM_MARK}`;
     const room = labelRoom - visibleWidth(`${who} · `);
-    // Unnamed, the first words are already in the name: the kind says only which part.
-    const kind = watch.partner ? kindLabel(watch) : watch.conversation.kind === "thread" ? "thread" : "top level";
-    const shortKind = visibleWidth(kind) <= room ? kind : watch.conversation.kind === "thread" && room >= 16 ? cut(kind, room) : watch.conversation.kind === "thread" ? "thread" : "top level";
-    label = `${who} · ${shortKind}`;
+    const kind = kindLabel(watch);
+    const fitted = visibleWidth(kind) <= room ? kind : watch.conversation.kind === "thread" && room >= 16 ? cut(kind, room) : bareKind;
+    label = `${who} · ${fitted}`;
   }
   const rows = [`${paint.fg(isLive(watch) ? "text" : "muted", strong(cut(label, labelRoom)))}  ${status}`];
   if (watch.reason && watch.status !== "active") rows.push(...indent(wrapTextWithAnsi(watch.reason, inner - 3).map((r) => paint.fg(watch.status === "error" ? "error" : "muted", r))));

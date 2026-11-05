@@ -177,7 +177,9 @@ test("a session that ends releases its locks", async () => {
   assert.ok(readdirSync(locks).length > 0);
   writeFileSync(join(h.agentDir, "slack-companion.json"), JSON.stringify({ enabled: false }));
   await h.session.reload(); // the old session's runtime shuts down; the new one, disabled, takes nothing
-  assert.deepEqual(readdirSync(locks), [], "every lock was let go, and nothing is left behind");
+  for (const folder of readdirSync(locks)) {
+    for (const file of readdirSync(join(locks, folder))) assert.equal(JSON.parse(readFileSync(join(locks, folder, file), "utf8")).released, true, `${folder}/${file} is let go`);
+  }
 });
 
 test("the panel opened through Pi fits the overlay it asks for, gates approval on reading, and records seen stops", async () => {
@@ -359,8 +361,8 @@ test("through the real send path, a fresh DM is named by the words main wrote, n
     await h.session.prompt("ask Robin");
     await h.session.prompt("ask Sam");
     const [line] = h.line(160);
-    assert.match(line!, /DM "Which build should I shi…"/, `marker ${JSON.stringify(marker)}: ${line}`);
-    assert.match(line!, /DM "Can you review the eval…"/, "two fresh DMs read apart");
+    assert.match(line!, /DM "Which build sho…"/, `marker ${JSON.stringify(marker)}: ${line}`);
+    assert.match(line!, /DM "Can you review…"/, "two fresh DMs read apart");
     assert.doesNotMatch(line!, /agent\*\*|Dana Owner/, "the package's agent line is not the name");
   }
 });

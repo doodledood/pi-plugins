@@ -124,6 +124,8 @@ export interface HarnessOptions {
   rawConfig?: string;
   /** The platform the package builds its shell sandbox for (default: macOS, whose policy the recording runtime records). */
   platform?: NodeJS.Platform;
+  /** The fake Slack server writes emails redacted, as a company gateway does. */
+  redactEmails?: boolean;
 }
 
 export async function createHarness(options: HarnessOptions): Promise<Harness> {
@@ -148,7 +150,7 @@ export async function createHarness(options: HarnessOptions): Promise<Harness> {
     ] },
   } }));
   writeFileSync(join(agentDir, "slack-companion.json"), options.rawConfig ?? JSON.stringify({ enabled: options.enabled ?? true, ...(options.config ?? {}) }));
-  const slack = options.reopen?.slack ?? new FakeSlack();
+  const slack = options.reopen?.slack ?? new FakeSlack({ redactEmails: options.redactEmails ?? false });
   const foreign = { handlerRuns: 0, toolRuns: 0 };
   const dataCalls: string[] = [];
   const notices: Array<{ level: string; text: string }> = [];

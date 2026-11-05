@@ -35,9 +35,10 @@ function script(route: Route, helper: (context: Context, call: number) => Reply 
   };
 }
 
-for (const route of ["direct", "deferred", "mcp", "mcp-json", "mcp__slack"] as const) {
-  test(`a send by the ${route} route starts a watch, is marked, and a reply is answered in its thread`, async () => {
-    const h = await createHarness({ replies: script(route) });
+// Every route in the official server's format; one more through a gateway that redacts emails.
+for (const [route, redactEmails] of [["direct", false], ["deferred", false], ["mcp", false], ["mcp-json", false], ["mcp__slack", false], ["direct", true]] as const) {
+  test(`a send by the ${route} route starts a watch, is marked, and a reply is answered in its thread${redactEmails ? " (gateway format)" : ""}`, async () => {
+    const h = await createHarness({ replies: script(route), redactEmails });
     await h.session.prompt("ask Robin the three questions");
     const [question] = h.slack.messages(DM);
     assert.match(question!.text, /^🤖 \*\*Dana Owner's agent\*\* — an AI agent working in Dana Owner's Pi session\.[\s\S]*Three quick questions/);

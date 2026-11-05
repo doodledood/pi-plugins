@@ -23,7 +23,7 @@ import { type HelperMcpReach, helperMcpTools, mcpCachePathIn, missingSlackTools,
 import { approvedActionText, infoHandoffText, MAIN_PROMPT_SECTION, markMessage } from "./messages.ts";
 import { COST_RECORD_TYPE, costOf, pruneOrphanRecords, triageCostRecord, writeHelperRecord } from "./records.ts";
 import { startShellSandbox, type SandboxRuntime } from "./sandbox.ts";
-import { readPolicy, stripControl } from "./secrets.ts";
+import { openedFolders, readPolicy, stripControl } from "./secrets.ts";
 import { sendCallOf } from "./send-route.ts";
 import { chooseTriageModel, triageContext, triageVerdict } from "./triage.ts";
 import { Panel, PANEL_HEIGHT_PERCENT, panelRows, renderLine, WIDGET_KEY, type Paint, type PanelAction, type SurfaceProblem, type SurfaceState } from "./ui.ts";
@@ -200,7 +200,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
         events: pi.events,
         mcpTools: mcpToolsForHelper(),
         sandbox,
-        reads: readPolicy({ home, agentDir, roots: [ctx.cwd, ...readable] }),
+        reads: readPolicy({ home, agentDir, roots: openedFolders({ home, agentDir, cwd: ctx.cwd, readable }) }),
       }, batch, signal);
     } finally {
       if (sandbox.ok) await sandbox.dispose();
@@ -264,6 +264,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     if (problem) notify("error", `slack-companion: ${problem.detail}`);
     const backend = overrides.backend ? overrides.backend(pi, config) : new McpSlackBackend(pi.events, config.tools, config.server);
     const locks = new LockManager(`${agentDir}/slack-companion/locks`, { pid: process.pid, sessionId: ctx.sessionManager.getSessionId() });
+    locks.sweep();
     engine = new Engine({
       backend,
       config: () => config,

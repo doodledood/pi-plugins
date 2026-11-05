@@ -30,7 +30,7 @@ import { forkEntriesForChild } from "./fork.ts";
 import { firstLine, neutralize, quoteSlackMessage } from "./messages.ts";
 import type { SlackMessage } from "./reader.ts";
 import type { ShellSandbox } from "./sandbox.ts";
-import { canonicalPath, filterUnreadableLines, isReadableAbsolute, isReadablePath, type ReadPolicy } from "./secrets.ts";
+import { canonicalPath, filterUnreadableLines, isReadableAbsolute, isReadablePath, type ReadPolicy, skillFolder } from "./secrets.ts";
 
 export const HELPER_PROMPT_MARKER = "[slack-companion helper]";
 export const REPLY_TOOL = "reply_in_slack";
@@ -135,34 +135,42 @@ function guardedReadTools(cwd: string, reads: ReadPolicy): AnyTool[] {
     content: result.content.map((block: any) =>
       block.type === "text" ? { ...block, text: filterUnreadableLines(reads, cwd, root, block.text) } : block),
   });
-  const rooted = <T extends AnyTool>(tool: T, defaultRoot: string): T => ({
+  // The root each tool reads, taken from its own parameter type: a Pi release that renames the
+  // parameter fails to compile here instead of leaving the guard to check the wrong folder.
+  const rooted = <T extends { execute(id: string, params: any, ...rest: any[]): Promise<{ content: Array<{ type: string }> }> }>(tool: T, rootOf: (params: Parameters<T["execute"]>[1]) => string | undefined): T => ({
     ...tool,
-    async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
-      const root = params.path ?? defaultRoot;
+    async execute(id: string, params: Parameters<T["execute"]>[1], ...rest: any[]) {
+      const root = rootOf(params) ?? ".";
       if (!isReadablePath(reads, cwd, root)) throw denied(root);
-      return onlyReadable(root, await tool.execute(id, params, signal, onUpdate, ctx));
+      return onlyReadable(root, await tool.execute(id, params, ...rest));
     },
   });
   const guardedRead = {
     ...read,
-    async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+    async execute(...args: Parameters<typeof read.execute>) {
+      const params = args[1];
       if (!isReadablePath(reads, cwd, params.path)) throw denied(params.path);
-      return read.execute(id, params, signal, onUpdate, ctx);
+      return read.execute(...args);
     },
   };
-  return [guardedRead, rooted(grep as AnyTool, "."), rooted(find as AnyTool, "."), rooted(ls as AnyTool, ".")] as AnyTool[];
-}
-
-/** A skill file the helper may load: a Markdown file not named like a secret. */
-function isReadableSkillFile(path: string): boolean {
-  return /\.md$/i.test(path) && isReadableAbsolute({ home: "", roots: [], files: new Set([canonicalPath(path)]), closed: [] }, path);
+  return [guardedRead, rooted(grep, (p) => p.path), rooted(find, (p) => p.path), rooted(ls, (p) => p.path)] as unknown as AnyTool[];
 }
 
 /** The helper's whole tool set. Nothing else exists in the helper. */
 export function buildHelperTools(env: HelperEnvironment, outcome: HelperOutcome, requestRoom = Number.POSITIVE_INFINITY): AnyTool[] {
   const tools: AnyTool[] = guardedReadTools(env.cwd, env.reads);
   if (env.sandbox.ok) {
-    tools.push(createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false }) as unknown as AnyTool);
+    const bash = createBashToolDefinition(env.cwd, { operations: env.sandbox.operations, exposeSessionEnvironment: false });
+    tools.push({
+      ...bash,
+      // A long output is saved to a file the result names: that one file becomes readable to this run.
+      async execute(...args: Parameters<typeof bash.execute>) {
+        const result = await bash.execute(...args);
+        const saved = (result.details as { fullOutputPath?: unknown } | undefined)?.fullOutputPath;
+        if (typeof saved === "string") env.reads.files.add(canonicalPath(saved));
+        return result;
+      },
+    } as unknown as AnyTool);
   }
   // The result exactly as the adapter guards it: a large result arrives as a preview and a file path.
   const invokeMcpTool = async (tool: McpToolInfo, params: Record<string, unknown>) => {
@@ -318,8 +326,12 @@ export async function runHelper(env: HelperEnvironment, batch: HelperBatch, sign
 
   // The skills the helper is offered (as the loader resolved them) can be loaded, though most live
   // in Pi's agent folder, which is otherwise closed to it: each skill's own file, nothing beside it.
-  const reads: ReadPolicy = { ...env.reads, files: new Set(env.reads.files) };
-  for (const skill of loader.getSkills().skills) if (isReadableSkillFile(skill.filePath)) reads.files.add(canonicalPath(skill.filePath));
+  const reads: ReadPolicy = { ...env.reads, files: new Set(env.reads.files), skillFolders: [...env.reads.skillFolders] };
+  for (const skill of loader.getSkills().skills) {
+    const folder = skillFolder(reads, skill.filePath);
+    if (folder) reads.skillFolders.push(folder);
+    else if (/\.md$/i.test(skill.filePath)) reads.files.add(canonicalPath(skill.filePath));
+  }
   const tools = buildHelperTools({ ...env, reads }, outcome, batch.requestRoom);
   const { session } = await createAgentSession({
     cwd: env.cwd,

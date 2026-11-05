@@ -33,8 +33,8 @@ An agent, during an unattended build, from the owner's ruling that the helper ge
 - A browser server under another name is not recognized until the owner adds it to `privateServers`.
 
 ## Enforced by
-`packages/extensions/slack-companion/extensions/slack-companion/mcp-tools.test.ts` ("the owner's own Slack server is private: its tools are reachable only when he lists them") and `wiring.test.ts` ("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed", "a server that drives the owner's browser is private: its read-only tools reach no helper unless listed") — pin the exclusion, the opt-in by name, and the production wiring.
+`packages/extensions/slack-companion/extensions/slack-companion/mcp-tools.test.ts` ("the owner's own Slack server is private: its tools are reachable only when he lists them", "every server in the private list is closed to the helper unless a tool is listed") and `wiring.test.ts` ("the real helper gets read-only tools and the owner's listed ones; never the send tool, nor his own Slack unless listed", "a server that drives the owner's browser is private: its read-only tools reach no helper unless listed") — pin the exclusion, the opt-in by name, and the production wiring.
 
 ## Source
-- Session: the unattended build of slack-companion (2026-11-04), review rounds 4, 7 and 8; execution log `~/.manifest-dev/logs/do-manifest-20261104-191921-e6fcc51c.md`.
+- Session: the unattended build of slack-companion (2026-11-04), review rounds 4, 7, 8 and 9; execution log `~/.manifest-dev/logs/do-manifest-20261104-191921-e6fcc51c.md`.
 - Amends 20261104-hold-slack-conversations-in-a-read-only-fork-of-main (which MCP tools the helper reaches).

@@ -31,9 +31,11 @@ Proves: the package works as its README says, in real Pi sessions with a scripte
   read-only MCP tool, main's active ones shown directly, the owner's own Slack and the private
   servers only when he lists them as server/tool, never the send tool), reaches the model with
   main's credential, stops when stopped and at its turn limit; its file tools and its sandboxed
-  shell (macOS) read the project, the opened folders and, for the file tools, the offered skills,
-  and refuse the rest of the home and every secret in every path form and through symlinks; on
-  Linux it has no shell and is told so once; the real wiring builds that policy.
+  shell (macOS) read the project, the opened and repository folders and, for the file tools, the
+  offered skills' folders and the files its own calls saved, and refuse the rest of the home, the
+  temp folders and every secret in every path form and through symlinks; the shell writes only to
+  its scratch folder; on Linux it has no shell and is told so once; the real wiring builds that
+  policy.
 - Triage, hand-offs, approvals (read to the end before approving; they outlive their watch),
   held replies, limits and their daily reset, stopping, locks and routing between sessions,
   resume catch-up, crash and reload safety, bounded state, the line and panel at every size, and

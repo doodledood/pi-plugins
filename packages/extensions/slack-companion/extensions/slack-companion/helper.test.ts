@@ -4,7 +4,7 @@
 // docs/adr/20261104-close-the-home-folder-to-the-slack-helper.md.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -100,7 +100,9 @@ async function helperRun(steps: Step[], options: { home?: string; sandbox?: (cwd
     sandbox: await (options.sandbox ?? realSandbox)(h.workspace, home),
     reads: readPolicy({ home, agentDir: join(home, ".pi", "agent"), roots: [h.workspace] }),
   };
-  const outcome = await runHelper(env, batch, options.signal);
+  const outcome = await runHelper(env, batch, options.signal).finally(async () => {
+    if (env.sandbox.ok) await env.sandbox.dispose(); // no scratch folder outlives the test
+  });
   const results = outcome.ownEntries
     .filter((e: any) => e.type === "message" && e.message.role === "toolResult")
     .map((e: any) => ({ tool: e.message.toolName as string, isError: e.message.isError as boolean, text: textOf(e.message.content) }));
@@ -329,6 +331,8 @@ test("the helper can load the skills it is offered from Pi's agent folder, and n
   const skillDir = join(agentDir, "git", "example.com", "pkg", "skills", "triage-notes");
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), "SKILL-BODY");
+  mkdirSync(join(skillDir, "references"));
+  writeFileSync(join(skillDir, "references", "LOG.md"), "REFERENCE-BODY");
   writeFileSync(join(skillDir, ".env"), "SKILL-SECRET");
   writeFileSync(join(agentDir, "models.json"), "MODELS-KEY");
   mkdirSync(join(agentDir, "skills", "not-offered"), { recursive: true });
@@ -336,13 +340,15 @@ test("the helper can load the skills it is offered from Pi's agent folder, and n
   const skill = { name: "triage-notes", description: "notes", filePath: join(skillDir, "SKILL.md"), baseDir: skillDir, sourceInfo: { path: join(skillDir, "SKILL.md"), source: "package", scope: "user" } as any, disableModelInvocation: false };
   const { results } = await helperRun([
     { kind: "tool", name: "read", args: { path: join(skillDir, "SKILL.md") } },
+    { kind: "tool", name: "read", args: { path: join(skillDir, "references", "LOG.md") } },
     { kind: "tool", name: "read", args: { path: join(skillDir, ".env") } },
     { kind: "tool", name: "read", args: { path: join(agentDir, "models.json") } },
     { kind: "tool", name: "read", args: { path: join(agentDir, "skills", "not-offered", "SKILL.md") } },
   ], { home, skills: () => [skill] });
-  const [body, secret, models, other] = results;
+  const [body, reference, secret, models, other] = results;
   assert.equal(body!.isError, false);
   assert.match(body!.text, /SKILL-BODY/, "an offered skill loads");
+  assert.match(reference!.text, /REFERENCE-BODY/, "and the files beside its SKILL.md, which it names by relative path");
   for (const [r, what] of [[secret, "a secret name inside the skill"], [models, "models.json"], [other, "a skill not offered"]] as const) {
     assert.ok(r!.isError && /not open to the Slack helper/.test(r!.text), `${what} stays closed`);
   }
@@ -434,12 +440,16 @@ test("the real shell writes only to its scratch folder: not to sandbox-runtime's
   const elsewhere = mkdtempSync(join(tmpdir(), "other-"));
   writeFileSync(join(elsewhere, "pi-bash-log.txt"), "MAIN-SESSION-OUTPUT");
   const marker = `zz-${process.pid}-${Date.now()}`;
-  const out = await runInShell(t, cwd, home, `echo x > /tmp/claude/${marker} 2>/dev/null && echo WROTE-SHARED; echo y > "$SCRATCH/ok" && echo WROTE-SCRATCH; [ "$TMPDIR" = "$SCRATCH" ] && echo TMPDIR-IS-SCRATCH; cat '${join(elsewhere, "pi-bash-log.txt")}' 2>/dev/null; echo END`);
+  const shared = mkdtempSync("/tmp/shared-");
+  writeFileSync(join(shared, "notes.txt"), "SHARED-TMP-NOTES");
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const out = await runInShell(t, cwd, home, `echo x > /tmp/claude/${marker} 2>/dev/null && echo WROTE-SHARED; echo y > "$SCRATCH/ok" && echo WROTE-SCRATCH; [ "$TMPDIR" = "$SCRATCH" ] && echo TMPDIR-IS-SCRATCH; cat '${join(elsewhere, "pi-bash-log.txt")}' '${join(shared, "notes.txt")}' 2>/dev/null; echo END`);
   if (out === undefined) return;
   assert.doesNotMatch(out, /WROTE-SHARED/, "sandbox-runtime's shared /tmp/claude is not writable");
   assert.match(out, /WROTE-SCRATCH/);
   assert.match(out, /TMPDIR-IS-SCRATCH/);
   assert.doesNotMatch(out, /MAIN-SESSION-OUTPUT/, "other files in the temp folder are closed");
+  assert.doesNotMatch(out, /SHARED-TMP-NOTES/, "and in the shared /tmp");
   assert.match(out, /END/);
 });
 
@@ -464,7 +474,37 @@ test("git works in the real shell from a linked worktree, whose repository lies 
   git(main, "commit", "-qm", "first commit here");
   const worktree = join(home, "code", "repo-wt");
   git(main, "worktree", "add", "-q", worktree);
-  const out = await runInShell(t, worktree, home, "git log --oneline -1; echo END");
+  const out = await runInShell(t, worktree, home, "git log --oneline -1 2>&1; echo END");
   if (out === undefined) return;
   assert.match(out, /first commit here/, out);
+  assert.doesNotMatch(out, /error|couldn't|not permitted/i, "git runs without errors");
+});
+
+test("searches through the helper drop what it may not read: no secret file's lines or name come back", async () => {
+  const { results } = await helperRun([
+    { kind: "tool", name: "grep", args: { pattern: "TOKEN", path: "." } },
+    { kind: "tool", name: "find", args: { pattern: "*", path: "." } },
+    { kind: "tool", name: "ls", args: { path: "." } },
+  ]);
+  for (const r of results) {
+    assert.equal(/secret-value|\.env/.test(r.text), false, `${r.tool}: ${r.text}`);
+  }
+  assert.match(results[1]!.text, /config\.ts/, "ordinary files are listed");
+});
+
+test("the helper can read the full output its own long shell command saved", async (t) => {
+  let saved = "";
+  const { results } = await helperRun([
+    { kind: "tool", name: "bash", args: { command: "seq 1 30000" } },
+    (c) => {
+      saved = /Full output: ([^\]\s]+)/.exec(textOf((c.messages.at(-1) as any)?.content))?.[1] ?? "";
+      return { kind: "tool", name: "read", args: { path: saved, offset: 29990 } };
+    },
+  ]);
+  if (results.length < 2 || !results[0]!.text.includes("Full output")) {
+    t.diagnostic("no shell here, or the output was not cut: nothing to check");
+    return;
+  }
+  assert.equal(results[1]!.isError, false, results[1]!.text);
+  assert.match(results[1]!.text, /30000/);
 });
