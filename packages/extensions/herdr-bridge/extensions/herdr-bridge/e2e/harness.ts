@@ -292,7 +292,24 @@ export function classifyInstalled(sources: readonly string[], localFiles: readon
 }
 
 /** The person's installed Pi extensions, as files Pi can load read-only from where they are, with the package sources left out. */
-export function installedExtensions(): { paths: string[]; leftOut: string[] } {
+/** The name in the package.json nearest above `path`, or undefined when there is none. */
+export function packageNameOf(path: string): string | undefined {
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) return JSON.parse(readFileSync(manifest, "utf8")).name;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/** This package's name: an installed copy of it is replaced by the copy under test. */
+export const UNDER_TEST = packageNameOf(BRIDGE_EXTENSION)!;
+
+/**
+ * The extension files of the person's installed packages, as the real-setup run loads them. An
+ * installed copy of this package is left out (`replaced`): the copy under test is loaded instead,
+ * and two copies register the same flags, which Pi refuses at startup.
+ */
+export function installedExtensions(): { paths: string[]; leftOut: string[]; replaced: string[] } {
   const agent = join(homedir(), ".pi", "agent");
   const settings = JSON.parse(readFileSync(join(agent, "settings.json"), "utf8"));
   const entries: { source: string; excluded: Set<string> }[] = (settings.packages ?? []).map((entry: any) => ({
@@ -306,6 +323,7 @@ export function installedExtensions(): { paths: string[]; leftOut: string[] } {
     localFiles,
   );
   const out: string[] = [];
+  const replaced: string[] = [];
   for (const { source, excluded } of entries) {
     if (!load.includes(source)) continue;
     let dir: string | undefined;
@@ -317,8 +335,10 @@ export function installedExtensions(): { paths: string[]; leftOut: string[] } {
       const clean = rel.replace(/^\.\//, "");
       if (excluded.has(clean)) continue;
       const path = join(dir, clean);
-      if (existsSync(path)) out.push(path);
+      if (!existsSync(path)) continue;
+      if (packageNameOf(path) === UNDER_TEST) replaced.push(path);
+      else out.push(path);
     }
   }
-  return { paths: out, leftOut };
+  return { paths: out, leftOut, replaced };
 }

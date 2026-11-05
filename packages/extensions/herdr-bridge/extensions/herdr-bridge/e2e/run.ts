@@ -296,6 +296,7 @@ async function main(): Promise<void> {
       const home = homedir();
       console.log(`  installed extensions loaded (${installed.paths.length}): ${installed.paths.map((p) => p.replace(home, "~")).join(", ")}`);
       console.log(`  installed packages left out: ${installed.leftOut.join(", ") || "none"}`);
+      console.log(`  installed copies replaced by the one under test: ${installed.replaced.map((p) => p.replace(home, "~")).join(", ") || "none"}`);
     }
     try {
       await run.open();
