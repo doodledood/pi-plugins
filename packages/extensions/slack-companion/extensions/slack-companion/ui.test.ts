@@ -477,11 +477,14 @@ test("the agent post that waits shows its words in the panel at every width", ()
   }
 });
 
+/** Wider than the panel's inner width at 80 cells (76) and than the line's room at 120. */
+const HUGE_NAME = "Wolfeschlegelsteinhausenbergerdorff Hubert Blaine Maximiliano Fernández-Oyarzábal de la Vega";
+
 test("a person's name is never cut: the panel names everyone whole at any width, wrapping a name wider than its row", () => {
   const agent = (userId: string, userName: string) => ({ ts: "1.000001", userId, userName, text: "🤖 please approve the rollout", agentFooter: true, origin: "someone's agent" as const });
   const person = (userId: string, userName: string) => ({ ts: "1.000002", userId, userName, text: "is staging down for everyone?", agentFooter: false, origin: "person" as const });
   const long = "alerts-prod-payments";
-  const pairs: Array<[string, string]> = [["Daniel Fischer", "Daniel Fogarty"], ["Daniel Fox Smith", "Daniel Ray Smith"], ["Robin Colleague", "Robert Smith"], ["Alexandra Montgomery-Fitzgerald", "Maximiliano Fernández-Oyarzábal"]];
+  const pairs: Array<[string, string]> = [["Daniel Fischer", "Daniel Fogarty"], ["Daniel Fox Smith", "Daniel Ray Smith"], ["Robin Colleague", "Robert Smith"], ["Alexandra Montgomery-Fitzgerald", "Maximiliano Fernández-Oyarzábal"], [HUGE_NAME, "Robin Colleague"]];
   for (const [a, b] of pairs) {
     const states = [
       surface({ watches: [
@@ -603,5 +606,36 @@ test("a request names who asked whole, wrapped when long, and its head rows stay
   for (const width of [30, 40, 60]) {
     const rows = renderPanel(surface({ approvals: [long] }), 0, plain, width, 0);
     assert.ok(joined(rows).includes("fromMaximilianoFernández-Oyarzábalin#release-train-2026-q4-coordination"), `${width}:\n${rows.join("\n")}`);
+  }
+});
+
+test("the line names a person whole or not at all: one too long for its room folds into the count", () => {
+  const states = [
+    { watches: [watch({ partner: { userId: "U1", name: HUGE_NAME } })] },
+    { watches: [channelWatch(1, { partner: { userId: "U1", name: HUGE_NAME } }), watch({ key: "D2/1.0", conversation: { kind: "dm-top", channelId: "D2" } })], approvals: [approval()] },
+  ];
+  const first = HUGE_NAME.split(" ")[0]!;
+  for (const engine of states) for (let width = 40; width <= 220; width += 1) {
+    const [line] = renderLine(surface(engine), plain, width);
+    assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
+    if (line!.includes(first.slice(0, 4))) assert.ok(line!.includes(HUGE_NAME), `whole when shown, at ${width}: ${line}`);
+    else assert.match(line!, /\d+ watching/, `folded into the count, at ${width}: ${line}`);
+    if (engine.approvals) assert.match(line!, /1 waiting/, `the waiting count stays, at ${width}`);
+  }
+  assert.ok(renderLine(surface(states[0]!), plain, 200)[0]!.includes(HUGE_NAME), "shown whole where it fits");
+});
+
+test("in a narrow panel the keys wrap by whole keys, so esc close always shows, and the panel stays in its rows", () => {
+  const states = [
+    surface({ watches: [watch(), channelWatch(2, { status: "paused", reason: "r", pause: "sendLimit" })] }),
+    surface({ watches: [watch()], approvals: [approval({ text: "short" })] }),
+  ];
+  for (const state of states) for (const selected of [0, 1]) for (let width = 24; width <= 80; width += 1) for (const maxRows of [12, 40]) {
+    const rows = renderPanel(state, selected, plain, width, 0, maxRows);
+    assert.ok(rows.length <= maxRows, `${rows.length} rows within ${maxRows} at ${width}`);
+    assert.ok(rows.every((r) => visibleWidth(r) <= width), `fits ${width}`);
+    const keys = rows.slice(rows.findLastIndex((r) => r.replace(/[│ ]/g, "") === "") + 1, -1).join(" ");
+    assert.equal(keys.includes("…"), false, `no key cut at ${width}:\n${rows.join("\n")}`);
+    assert.match(keys, /esc close/, `esc close at ${width}:\n${rows.join("\n")}`);
   }
 });

@@ -588,7 +588,15 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
     for (let i = 1; i < rows.length; i += 1) rows[i] = `  ${rows[i]}`;
     return { rows, pinned };
   });
-  const budget = Math.max(4, maxRows - CHROME_ROWS);
+  // The keys row wraps by whole keys in a narrow panel; its widest form sets the rows it keeps.
+  const keyRows = (keys: string[]) => keys.reduce<string[]>((rows, key) => {
+    const last = rows.at(-1);
+    if (last !== undefined && visibleWidth(`${last} · ${key}`) <= inner) rows[rows.length - 1] = `${last} · ${key}`;
+    else rows.push(key);
+    return rows;
+  }, []);
+  const widestKeys = keyRows([keysFor(items[selected], true), "esc close"].filter(Boolean).flatMap((k) => k.split(" · ")));
+  const budget = Math.max(4, maxRows - CHROME_ROWS - (widestKeys.length - 1));
   const content: string[] = [];
   const sel = blocks[selected]!;
   const above = selected;
@@ -650,9 +658,9 @@ export function layoutPanel(surface: SurfaceState, view: PanelView, paint: Paint
   const endInView = below <= 0;
   const approvable = item?.kind === "approval" && (endInView || view.read.has(item.approval.id));
   // The keys row: action keys and "esc close" always; "↑↓ move" gives way when the row is short.
-  let keys = [keysFor(item, approvable), items.length > 1 || below > 0 ? "↑↓ move" : "", "esc close"].filter(Boolean).join(" · ");
-  if (visibleWidth(keys) > inner) keys = [keysFor(item, approvable), "esc close"].filter(Boolean).join(" · ");
-  content.push("", paint.fg("muted", keys));
+  let keys = [keysFor(item, approvable), items.length > 1 || below > 0 ? "↑↓ move" : "", "esc close"].filter(Boolean);
+  if (keyRows(keys).length > 1) keys = [keysFor(item, approvable), "esc close"].filter(Boolean);
+  content.push("", ...keyRows(keys.flatMap((k) => k.split(" · "))).map((row) => paint.fg("muted", row)));
   return { lines: frame(content, width, title, paint), items, selected, offset, selectedEndInView: endInView, selectedRowsBelow: Math.max(0, below), pageRows, shown };
 }
 
