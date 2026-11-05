@@ -21,7 +21,7 @@ Run: `npm run verify:structure`
 Proves: the script tests pass and every install surface lists the same extensions, themes,
 skills and setup files, with no workplace term in the published tree, and the lockfile matches
 the manifests.
-Line: 4.5 s on darwin-arm64-12cpu; raised: the structure scenario now runs scripts/check-lockfile.test.mjs, whose five tests build fixture lockfiles with npm offline (about 3.7 s), the old structure tests are no slower
+Line: 4.5 s on darwin-arm64-12cpu; raised: the structure scenario now runs the lockfile check (0.5 s) and its tests, which spawn npm offline on fixture repositories (about 3 s), and the old structure tests are no slower
 
 ### types
 Run: `npm run typecheck`

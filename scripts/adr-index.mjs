@@ -9,6 +9,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./is-main.mjs";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const STRATEGY_HEADING = "## Strategy choices in force";
@@ -97,7 +98,7 @@ export function expected(repoRoot = root) {
   };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const want = expected();
   const indexPath = join(root, "docs", "adr", "README.md");
   const northStarPath = join(root, "NORTH_STAR.md");

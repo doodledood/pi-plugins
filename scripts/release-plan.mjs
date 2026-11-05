@@ -1,4 +1,4 @@
-import { pathToFileURL } from "node:url";
+import { isMain } from "./is-main.mjs";
 
 export function planReleaseActions({ isCurrentCommit, tagExists, releaseExists }) {
   return {
@@ -8,7 +8,7 @@ export function planReleaseActions({ isCurrentCommit, tagExists, releaseExists }
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const [, , isCurrentCommit, tagExists, releaseExists] = process.argv;
   if ([isCurrentCommit, tagExists, releaseExists].some((value) => !["true", "false"].includes(value))) {
     console.error("usage: node scripts/release-plan.mjs <is-current> <tag-exists> <release-exists>");
