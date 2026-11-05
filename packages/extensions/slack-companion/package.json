@@ -1,6 +1,6 @@
 {
   "name": "@doodledood/pi-slack-companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Let the people your Pi session messages on Slack work with it directly: a plain-code watcher wakes a read-only, sandboxed fork of your session to answer them, hands information to your session, and holds every change to your work for your approval.",
   "keywords": [

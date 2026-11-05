@@ -141,14 +141,19 @@ test("a request taller than the panel scrolls inside itself, keeps its header in
   assert.deepEqual(actions, [], "not approvable yet");
   for (let i = 0; i < 3; i += 1) {
     panel.handleInput(" "); // a page at a time, each painted
-    panel.render(80);
+    const frame = panel.render(80).join("\n");
+    // The frame that first shows the last row already offers approval, so it does not also ask to read on.
+    if (/Finally:/.test(frame)) assert.doesNotMatch(frame, /read all to approve/, `the hint is gone once approvable:\n${frame}`);
   }
   rendered = panel.render(80).join("\n");
   assert.match(rendered, /Finally: drop the old results table\./);
+  assert.doesNotMatch(rendered, /read all to approve/, "no hint at the end of a request already read");
   assert.match(rendered, /◐ waiting for your OK · 31 min ago[\s\S]*from Robin Colleague \(DM\)/, "who asked stays in view at the end");
   assert.match(rendered, /a approve · d deny/);
   panel.handleInput(DOWN); // held once at the end
-  assert.match(panel.render(80).join("\n"), /Finally: drop/);
+  const held = panel.render(80).join("\n");
+  assert.match(held, /Finally: drop/);
+  assert.doesNotMatch(held, /read all to approve/);
   panel.handleInput(DOWN); // then moves on
   panel.handleInput("\u001b[A"); // and back: lands at the end, still approvable
   rendered = panel.render(80).join("\n");
@@ -889,4 +894,23 @@ test("a request half read when the panel's width changes starts again at its top
   }
   assert.equal(actions[0]?.kind, "approve", "approvable once read through at the new width");
   assert.ok(panel.render(50).join("\n").includes("Step 30"));
+});
+
+test("when every label of a conversation is already shown, the line counts it and never throws", () => {
+  const fresh = (i: number, channelId: string, text: string, channelName?: string) =>
+    channelWatch(i, { key: `${channelId}/1.00000${i}`, conversation: { kind: "thread", channelId, threadTs: `1.00000${i}` }, ...(channelName ? { channelName } : {}), partner: undefined, lastActivityAt: 10 - i, context: [{ ts: `1.00000${i}`, userId: "U0", userName: "Owner", text, agentFooter: false, origin: "this session" }] });
+  const dms = [1, 2, 3].map((i) => fresh(i, `D${i}`, `Can you review the PR #${i}?`));
+  const threads = [1, 2, 3].map((i) => fresh(i, "C0GEN", `Can you review the PR #${i}?`, "general"));
+  for (const watches of [dms, threads]) {
+    for (let width = 20; width <= 200; width += 1) {
+      const [line] = renderLine(surface({ watches }), plain, width);
+      assert.ok(visibleWidth(line!) <= width, `fits ${width}`);
+      const left = line!.split(/ {2,}alt\+s/)[0]!;
+      const named = (left.match(/ – watching/g) ?? []).length;
+      const counted = Number(/(\d+) watching/.exec(left.replace(/ – watching/g, ""))?.[1] ?? 0);
+      if (named + counted > 0) assert.equal(named + counted, 3, `every watch named or counted at ${width}: ${line}`);
+    }
+  }
+  assert.match(renderLine(surface({ watches: dms }), plain, 120)[0]!, /a direct message – watching · DM "Can you review…" – watching · \+1 watching/, "the third reads like the second, so it is counted");
+  assert.match(renderLine(surface({ watches: threads }), plain, 120)[0]!, /#general – watching · #general "Can you review…" – watching · \+1 watching/);
 });
