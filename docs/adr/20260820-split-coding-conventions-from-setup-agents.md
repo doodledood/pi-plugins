@@ -45,7 +45,7 @@ Two constraints follow, and both are enforced rather than remembered:
 - The conventions file's title is now load-bearing for consumers outside this repository, which is a constraint no reader of the file alone would guess. The structure check is what carries that knowledge forward.
 
 ## Enforced by
-`scripts/verify-structure.mjs` (the setup conventions companion and embedding rules) — fails when either setup file, the reference between them, or the embedded conventions drift.
+`scripts/verify-structure.mjs` (the setup conventions companion and embedding rules) — fails when either setup file, the reference between them, or the embedded conventions drift, naming `node scripts/embed-conventions.mjs` to regenerate the embedded section; `.github/workflows/structure-check.yml` runs it on every pull request to `main`.
 
 ## Source
 - Session: 2026-08-20, splitting the conventions so other repositories can adopt them

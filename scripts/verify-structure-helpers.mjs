@@ -26,20 +26,37 @@ export function validateLocalSettings({
   return errors;
 }
 
+// Holds part of docs/adr/20260820-split-coding-conventions-from-setup-agents.md: the root AGENTS.md
+// embeds setup/CODING_CONVENTIONS.md as its "## Coding Conventions" section, every heading demoted
+// one level. embedConventions is the one transform; the structure check and
+// scripts/embed-conventions.mjs both go through it, so the check and the fix cannot disagree.
+const conventionsMarker = "## Coding Conventions\n";
+export const embedConventionsCommand = "node scripts/embed-conventions.mjs";
+
 /**
- * The root AGENTS.md embeds setup/CODING_CONVENTIONS.md as its "## Coding Conventions"
- * section, with every heading demoted one level. Returns an error when the two differ.
+ * Returns agentsText with its "## Coding Conventions" section (up to the next "## " heading, or
+ * the end of the file) replaced by conventionsText with every heading demoted one level. Every
+ * byte outside the section is kept. Throws when agentsText has no such section, so a missing
+ * section is never silently appended.
  */
+export function embedConventions({ agentsText, conventionsText }) {
+  const start = agentsText.indexOf(conventionsMarker);
+  if (start === -1) throw new Error("AGENTS.md: missing '## Coding Conventions' section");
+  const afterMarker = start + conventionsMarker.length;
+  const next = agentsText.slice(afterMarker).search(/^## /m);
+  const end = next === -1 ? agentsText.length : afterMarker + next;
+  const demoted = conventionsText.replace(/^(#+ )/gm, "#$1").trimEnd();
+  // Keep the section's own separation from what follows it: a blank line before a later
+  // section, a single newline at the end of the file.
+  const tail = next === -1 ? "\n" : "\n\n";
+  return agentsText.slice(0, start) + demoted + tail + agentsText.slice(end);
+}
+
+/** Returns an error naming the fix when the embedded section differs from conventionsText. */
 export function validateEmbeddedConventions({ agentsText, conventionsText }) {
-  const marker = "## Coding Conventions\n";
-  const start = agentsText.indexOf(marker);
-  if (start === -1) return ["AGENTS.md: missing '## Coding Conventions' section"];
-  const rest = agentsText.slice(start);
-  const next = rest.slice(marker.length).search(/^## /m);
-  const section = next === -1 ? rest : rest.slice(0, marker.length + next);
-  const expected = conventionsText.replace(/^(#+ )/gm, "#$1");
-  if (section.trimEnd() !== expected.trimEnd()) {
-    return ["AGENTS.md: '## Coding Conventions' section must match setup/CODING_CONVENTIONS.md (headings demoted one level)"];
+  if (!agentsText.includes(conventionsMarker)) return ["AGENTS.md: missing '## Coding Conventions' section"];
+  if (embedConventions({ agentsText, conventionsText }) !== agentsText) {
+    return [`AGENTS.md: '## Coding Conventions' section must match setup/CODING_CONVENTIONS.md (headings demoted one level); run \`${embedConventionsCommand}\` to regenerate it`];
   }
   return [];
 }

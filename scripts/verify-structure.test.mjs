@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
+import { embedConventions, isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const rootBundleSource = "git:github.com/doodledood/pi-plugins@main";
 const portablePackage = "git:github.com/doodledood/manifest-dev@main";
@@ -54,6 +54,33 @@ test("embedded conventions section that drifted from the source fails", () => {
 
 test("missing embedded conventions section fails", () => {
   assert.equal(validateEmbeddedConventions({ agentsText: "# Repo\n", conventionsText }).length, 1);
+});
+
+test("a drifted section's error names the command that regenerates it", () => {
+  const [error] = validateEmbeddedConventions({ agentsText: `# Repo\n\n## Coding Conventions\n\nstale\n`, conventionsText });
+  assert.match(error, /node scripts\/embed-conventions\.mjs/);
+});
+
+test("embedding rewrites only the section, at the end of the file", () => {
+  const stale = "# Repo\n\nIntro.\n\n## Coding Conventions\n\n### Old\n\n- Patch the instance.\n";
+  assert.equal(embedConventions({ agentsText: stale, conventionsText }), `# Repo\n\nIntro.\n\n${embedded}`);
+});
+
+test("embedding rewrites only the section, before a later section", () => {
+  const stale = "# Repo\n\n## Coding Conventions\n\n### Old\n\n- Patch the instance.\n\n## Later\n\nx\n";
+  assert.equal(embedConventions({ agentsText: stale, conventionsText }), `# Repo\n\n${embedded}\n## Later\n\nx\n`);
+});
+
+test("embedded output passes the check, and embedding it again changes nothing", () => {
+  for (const stale of ["# Repo\n\n## Coding Conventions\n\nstale\n", "# Repo\n\n## Coding Conventions\n\nstale\n## Later\n\nx\n"]) {
+    const once = embedConventions({ agentsText: stale, conventionsText });
+    assert.deepEqual(validateEmbeddedConventions({ agentsText: once, conventionsText }), []);
+    assert.equal(embedConventions({ agentsText: once, conventionsText }), once);
+  }
+});
+
+test("embedding into a file with no conventions section throws instead of appending", () => {
+  assert.throws(() => embedConventions({ agentsText: "# Repo\n", conventionsText }), /missing '## Coding Conventions' section/);
 });
 
 test("runtime state is caught by its name, not by a document that mentions it", () => {
