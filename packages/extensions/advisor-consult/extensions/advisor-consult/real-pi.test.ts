@@ -350,14 +350,17 @@ test("a finished answer counts even when the timeout lands while the advisor shu
 
 // ── AC-7.2: timeout and abort settle within 5 s and leave no process ──────────
 
-test("the survivor check sees a running process, and not one that has exited", async () => {
+test("the survivor check sees a running process, and not one that has exited", { timeout: 30_000 }, async () => {
   assert.equal(alive(process.pid), true, "this test process is running");
   const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });
-  await new Promise((resolve) => child.once("spawn", resolve));
-  assert.equal(alive(child.pid!), true, "a running process that ignores SIGTERM");
   const exited = new Promise((resolve) => child.once("exit", resolve));
-  child.kill("SIGKILL");
-  await exited;
+  try {
+    await new Promise((resolve) => child.once("spawn", resolve));
+    assert.equal(alive(child.pid!), true, "a running process that ignores SIGTERM");
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+  }
   assert.equal(alive(child.pid!), false, "a killed process");
 });
 
