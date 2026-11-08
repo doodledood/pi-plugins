@@ -30,14 +30,12 @@ that record.
 Line: 0.2 s on darwin-arm64-12cpu
 
 ### conventions
-Run: `node scripts/embed-conventions.mjs && git diff --exit-code -- AGENTS.md`
-Proves: the embed command runs, and the Coding Conventions section `AGENTS.md` embeds already
-matches `setup/CODING_CONVENTIONS.md`, so the command leaves the file unchanged.
+Run: `node scripts/embed-conventions.mjs --check`
+Proves: the Coding Conventions section `AGENTS.md` embeds matches `setup/CODING_CONVENTIONS.md`;
+when it does not, the run fails without writing and names the command that regenerates it.
 Line: 0.0 s on linux-x64-4cpu
 
 ## Gotchas
 
-- The conventions scenario rewrites `AGENTS.md` when the section is stale and then fails on the
-  diff; run it with no other uncommitted edit to `AGENTS.md`, and commit what it wrote.
 - No walk scenario checks that a fresh reader understands these files; the first change that needs
   one adds it, marked ask-first, since it would start an agent session.

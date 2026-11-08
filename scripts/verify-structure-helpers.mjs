@@ -26,37 +26,66 @@ export function validateLocalSettings({
   return errors;
 }
 
-// Holds part of docs/adr/20260820-split-coding-conventions-from-setup-agents.md: the root AGENTS.md
+// Holds docs/adr/20261108-embed-the-coding-conventions-in-the-root-agents-md.md: the root AGENTS.md
 // embeds setup/CODING_CONVENTIONS.md as its "## Coding Conventions" section, every heading demoted
 // one level. embedConventions is the one transform; the structure check and
 // scripts/embed-conventions.mjs both go through it, so the check and the fix cannot disagree.
-const conventionsMarker = "## Coding Conventions\n";
-export const embedConventionsCommand = "node scripts/embed-conventions.mjs";
+const conventionsHeading = "## Coding Conventions";
+const embedConventionsCommand = "node scripts/embed-conventions.mjs";
+
+/**
+ * For each line, whether it belongs to a fenced code block (its fences included), so a "# " line
+ * inside a fence is never read as a heading.
+ */
+function fencedLines(lines) {
+  let open = null;
+  return lines.map((line) => {
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (open) {
+      if (fence && fence[0] === open[0] && fence.length >= open.length && line.trim() === fence) open = null;
+      return true;
+    }
+    if (fence) open = fence;
+    return Boolean(fence);
+  });
+}
 
 /**
  * Returns agentsText with its "## Coding Conventions" section (up to the next "## " heading, or
- * the end of the file) replaced by conventionsText with every heading demoted one level. Every
- * byte outside the section is kept. Throws when agentsText has no such section, so a missing
- * section is never silently appended.
+ * the end of the file) replaced by conventionsText with every heading demoted one level. Headings
+ * are lines that start with "#" outside fenced code blocks. Every byte outside the section is
+ * kept. Throws when agentsText has no such section, so a missing section is never silently
+ * appended.
  */
 export function embedConventions({ agentsText, conventionsText }) {
-  const start = agentsText.indexOf(conventionsMarker);
-  if (start === -1) throw new Error("AGENTS.md: missing '## Coding Conventions' section");
-  const afterMarker = start + conventionsMarker.length;
-  const next = agentsText.slice(afterMarker).search(/^## /m);
-  const end = next === -1 ? agentsText.length : afterMarker + next;
-  const demoted = conventionsText.replace(/^(#+ )/gm, "#$1").trimEnd();
+  const lines = agentsText.split("\n");
+  const fenced = fencedLines(lines);
+  const start = lines.findIndex((line, i) => !fenced[i] && line === conventionsHeading);
+  if (start === -1) throw new Error(`AGENTS.md: missing '${conventionsHeading}' section`);
+  const end = lines.findIndex((line, i) => i > start && !fenced[i] && line.startsWith("## "));
+  const conventionsLines = conventionsText.split("\n");
+  const conventionsFenced = fencedLines(conventionsLines);
+  const demoted = conventionsLines
+    .map((line, i) => (!conventionsFenced[i] && /^#+ /.test(line) ? `#${line}` : line))
+    .join("\n")
+    .trimEnd();
+  const before = start === 0 ? "" : `${lines.slice(0, start).join("\n")}\n`;
   // Keep the section's own separation from what follows it: a blank line before a later
   // section, a single newline at the end of the file.
-  const tail = next === -1 ? "\n" : "\n\n";
-  return agentsText.slice(0, start) + demoted + tail + agentsText.slice(end);
+  const after = end === -1 ? "\n" : `\n\n${lines.slice(end).join("\n")}`;
+  return before + demoted + after;
 }
 
 /** Returns an error naming the fix when the embedded section differs from conventionsText. */
 export function validateEmbeddedConventions({ agentsText, conventionsText }) {
-  if (!agentsText.includes(conventionsMarker)) return ["AGENTS.md: missing '## Coding Conventions' section"];
-  if (embedConventions({ agentsText, conventionsText }) !== agentsText) {
-    return [`AGENTS.md: '## Coding Conventions' section must match setup/CODING_CONVENTIONS.md (headings demoted one level); run \`${embedConventionsCommand}\` to regenerate it`];
+  let embedded;
+  try {
+    embedded = embedConventions({ agentsText, conventionsText });
+  } catch (error) {
+    return [error.message];
+  }
+  if (embedded !== agentsText) {
+    return [`AGENTS.md: '${conventionsHeading}' section must match setup/CODING_CONVENTIONS.md (headings demoted one level); run \`${embedConventionsCommand}\` to regenerate it`];
   }
   return [];
 }

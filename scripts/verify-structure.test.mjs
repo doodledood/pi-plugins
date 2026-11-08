@@ -87,3 +87,20 @@ test("runtime state is caught by its name, not by a document that mentions it", 
   for (const name of ["sessions", "mcp-oauth", "mcp-cache", "mcp-npx-cache", "pi-debug.log", "pi-crash-2026.log"]) assert.equal(isRuntimeStateName(name), true, name);
   for (const name of ["20261101-derive-the-orchestrator-role-from-started-sessions.md", "sessions.md", "my-sessions"]) assert.equal(isRuntimeStateName(name), false, name);
 });
+
+test("a deeper 'Coding Conventions' heading above the section is left alone", () => {
+  const agentsText = "# Repo\n\n### Coding Conventions\n\nA hand-written note.\n\n## Coding Conventions\n\nstale\n";
+  assert.equal(
+    embedConventions({ agentsText, conventionsText }),
+    `# Repo\n\n### Coding Conventions\n\nA hand-written note.\n\n${embedded}`,
+  );
+});
+
+test("a '# ' line inside a fenced block is neither demoted nor read as the section's end", () => {
+  const fencedConventions = "# Coding Conventions\n\n## Shell\n\n```sh\n# a comment\nls\n```\n";
+  const fencedEmbedded = "## Coding Conventions\n\n### Shell\n\n```sh\n# a comment\nls\n```\n";
+  const once = embedConventions({ agentsText: "# Repo\n\n## Coding Conventions\n\nstale\n\n## Later\n\nx\n", conventionsText: fencedConventions });
+  assert.equal(once, `# Repo\n\n${fencedEmbedded}\n## Later\n\nx\n`);
+  assert.deepEqual(validateEmbeddedConventions({ agentsText: once, conventionsText: fencedConventions }), []);
+  assert.equal(embedConventions({ agentsText: once, conventionsText: fencedConventions }), once);
+});
