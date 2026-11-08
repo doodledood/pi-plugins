@@ -39,3 +39,8 @@ Line: 61.8 s on darwin-arm64-12cpu
   covering a path a user reaches, which the other recipes cover.
 - A new workspace joins the root `test` and `typecheck` scripts by hand; until it does, these
   scenarios pass without running it.
+- The tests need the workspace installed (`npm ci`; a bare checkout fails on `tsx: not found`) and
+  `fd` and `rg` on `PATH`: the slack-companion helper tests run Pi's `find` and `grep` tools, which
+  otherwise try to download those binaries and fail offline or behind a proxy with "fd is not
+  available and could not be downloaded". On Debian or Ubuntu, `apt-get install fd-find ripgrep`
+  and link `fdfind` as `fd`.

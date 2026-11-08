@@ -1,0 +1,25 @@
+# Holds docs/adr/20261108-embed-the-coding-conventions-in-the-root-agents-md.md: a pull request whose
+# root AGENTS.md "Coding Conventions" section drifted from setup/CODING_CONVENTIONS.md cannot merge
+# green. Runs the repo's structure check, its unit tests and the lockfile check, none of which need
+# an npm install.
+name: Structure check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Structure, unit tests and lockfile
+        run: npm run -s verify:structure

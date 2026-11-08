@@ -3,6 +3,7 @@
 // stops at the output limit, finishes during shutdown, ignores SIGTERM, or streams before a timeout.
 // HOME, the agent directory and sessions live in a temporary directory.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -244,13 +245,31 @@ function readPids(): number[] {
   }
 }
 
+/**
+ * Whether a process is still running. A killed process whose parent already exited stays a zombie until
+ * PID 1 reaps it, which some containers' init does a second or more late; `kill(pid, 0)` still succeeds on
+ * a zombie, but it has exited and holds nothing, so on Linux its `/proc` state `Z` counts as not running.
+ */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // EPERM: the process exists but belongs to someone else.
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
   }
+  if (process.platform !== "linux") return true;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    // The process exited and was reaped between the signal check and the read.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  // /proc/<pid>/stat is "pid (comm) state …"; comm may contain spaces or parentheses, so read after the last ")".
+  return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
 }
 
 /**
@@ -330,6 +349,20 @@ test("a finished answer counts even when the timeout lands while the advisor shu
 });
 
 // ── AC-7.2: timeout and abort settle within 5 s and leave no process ──────────
+
+test("the survivor check sees a running process, and not one that has exited", { timeout: 30_000 }, async () => {
+  assert.equal(alive(process.pid), true, "this test process is running");
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  try {
+    await new Promise((resolve) => child.once("spawn", resolve));
+    assert.equal(alive(child.pid!), true, "a running process that ignores SIGTERM");
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+  }
+  assert.equal(alive(child.pid!), false, "a killed process");
+});
 
 test("a timeout settles within 5 s when the advisor ignores SIGTERM, and nothing it started survives", { timeout: 30_000 }, async () => {
   writeAdvisorConfig({ defaultTimeoutMs: 500 });

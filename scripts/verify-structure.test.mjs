@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
+import { embedConventions, isRuntimeStateName, validateEmbeddedConventions, validateLocalSettings } from "./verify-structure-helpers.mjs";
 
 const rootBundleSource = "git:github.com/doodledood/pi-plugins@main";
 const portablePackage = "git:github.com/doodledood/manifest-dev@main";
@@ -56,7 +56,58 @@ test("missing embedded conventions section fails", () => {
   assert.equal(validateEmbeddedConventions({ agentsText: "# Repo\n", conventionsText }).length, 1);
 });
 
+test("a drifted section's error names the command that regenerates it", () => {
+  const [error] = validateEmbeddedConventions({ agentsText: `# Repo\n\n## Coding Conventions\n\nstale\n`, conventionsText });
+  assert.match(error, /node scripts\/embed-conventions\.mjs/);
+});
+
+test("embedding rewrites only the section, at the end of the file", () => {
+  const stale = "# Repo\n\nIntro.\n\n## Coding Conventions\n\n### Old\n\n- Patch the instance.\n";
+  assert.equal(embedConventions({ agentsText: stale, conventionsText }), `# Repo\n\nIntro.\n\n${embedded}`);
+});
+
+test("embedding rewrites only the section, before a later section", () => {
+  const stale = "# Repo\n\n## Coding Conventions\n\n### Old\n\n- Patch the instance.\n\n## Later\n\nx\n";
+  assert.equal(embedConventions({ agentsText: stale, conventionsText }), `# Repo\n\n${embedded}\n## Later\n\nx\n`);
+});
+
+test("embedded output passes the check, and embedding it again changes nothing", () => {
+  for (const stale of ["# Repo\n\n## Coding Conventions\n\nstale\n", "# Repo\n\n## Coding Conventions\n\nstale\n## Later\n\nx\n"]) {
+    const once = embedConventions({ agentsText: stale, conventionsText });
+    assert.deepEqual(validateEmbeddedConventions({ agentsText: once, conventionsText }), []);
+    assert.equal(embedConventions({ agentsText: once, conventionsText }), once);
+  }
+});
+
+test("embedding into a file with no conventions section throws instead of appending", () => {
+  assert.throws(() => embedConventions({ agentsText: "# Repo\n", conventionsText }), /missing '## Coding Conventions' section/);
+});
+
 test("runtime state is caught by its name, not by a document that mentions it", () => {
   for (const name of ["sessions", "mcp-oauth", "mcp-cache", "mcp-npx-cache", "pi-debug.log", "pi-crash-2026.log"]) assert.equal(isRuntimeStateName(name), true, name);
   for (const name of ["20261101-derive-the-orchestrator-role-from-started-sessions.md", "sessions.md", "my-sessions"]) assert.equal(isRuntimeStateName(name), false, name);
+});
+
+test("a deeper 'Coding Conventions' heading above the section is left alone", () => {
+  const agentsText = "# Repo\n\n### Coding Conventions\n\nA hand-written note.\n\n## Coding Conventions\n\nstale\n";
+  assert.equal(
+    embedConventions({ agentsText, conventionsText }),
+    `# Repo\n\n### Coding Conventions\n\nA hand-written note.\n\n${embedded}`,
+  );
+});
+
+test("a '# ' line inside a fenced block is neither demoted nor read as the section's end", () => {
+  const fencedConventions = "# Coding Conventions\n\n## Shell\n\n```sh\n# a comment\nls\n```\n";
+  const fencedEmbedded = "## Coding Conventions\n\n### Shell\n\n```sh\n# a comment\nls\n```\n";
+  const once = embedConventions({ agentsText: "# Repo\n\n## Coding Conventions\n\nstale\n\n## Later\n\nx\n", conventionsText: fencedConventions });
+  assert.equal(once, `# Repo\n\n${fencedEmbedded}\n## Later\n\nx\n`);
+  assert.deepEqual(validateEmbeddedConventions({ agentsText: once, conventionsText: fencedConventions }), []);
+  assert.equal(embedConventions({ agentsText: once, conventionsText: fencedConventions }), once);
+});
+
+test("an unclosed code fence fails loudly instead of swallowing later sections", () => {
+  const agentsText = "# Repo\n\n## Coding Conventions\n\nstale\n\n## Later\n\nx\n";
+  assert.throws(() => embedConventions({ agentsText, conventionsText: "# Coding Conventions\n\n```sh\n# c\n" }), /setup\/CODING_CONVENTIONS\.md: a code fence opened with ``` never closes/);
+  assert.throws(() => embedConventions({ agentsText: "# Repo\n\n~~~\n## Coding Conventions\n", conventionsText }), /AGENTS\.md: a code fence opened with ~~~ never closes/);
+  assert.equal(validateEmbeddedConventions({ agentsText, conventionsText: "# Coding Conventions\n\n```\n" }).length, 1);
 });
