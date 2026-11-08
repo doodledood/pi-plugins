@@ -1,6 +1,6 @@
 ---
 kind: walk
-covers: AGENTS.md, CONTEXT.md, NORTH_STAR.md, docs/NORTH_STAR_CONVENTIONS.md, docs/adr, tickets, scripts/adr-index.mjs, scripts/adr-index.test.mjs, scripts/adr-enforced.test.mjs, scripts/embed-conventions.mjs
+covers: AGENTS.md, CONTEXT.md, NORTH_STAR.md, docs/NORTH_STAR_CONVENTIONS.md, docs/adr, tickets, scripts/adr-index.mjs, scripts/adr-index.test.mjs, scripts/adr-enforced.test.mjs, scripts/embed-conventions.mjs, .gitattributes
 ---
 # Project surfaces
 

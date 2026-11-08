@@ -104,3 +104,10 @@ test("a '# ' line inside a fenced block is neither demoted nor read as the secti
   assert.deepEqual(validateEmbeddedConventions({ agentsText: once, conventionsText: fencedConventions }), []);
   assert.equal(embedConventions({ agentsText: once, conventionsText: fencedConventions }), once);
 });
+
+test("an unclosed code fence fails loudly instead of swallowing later sections", () => {
+  const agentsText = "# Repo\n\n## Coding Conventions\n\nstale\n\n## Later\n\nx\n";
+  assert.throws(() => embedConventions({ agentsText, conventionsText: "# Coding Conventions\n\n```sh\n# c\n" }), /setup\/CODING_CONVENTIONS\.md: a code fence opened with ``` never closes/);
+  assert.throws(() => embedConventions({ agentsText: "# Repo\n\n~~~\n## Coding Conventions\n", conventionsText }), /AGENTS\.md: a code fence opened with ~~~ never closes/);
+  assert.equal(validateEmbeddedConventions({ agentsText, conventionsText: "# Coding Conventions\n\n```\n" }).length, 1);
+});

@@ -35,11 +35,12 @@ const embedConventionsCommand = "node scripts/embed-conventions.mjs";
 
 /**
  * For each line, whether it belongs to a fenced code block (its fences included), so a "# " line
- * inside a fence is never read as a heading.
+ * inside a fence is never read as a heading. Throws on a fence that never closes, which would
+ * otherwise hide every later heading in the file.
  */
-function fencedLines(lines) {
+function fencedLines(lines, file) {
   let open = null;
-  return lines.map((line) => {
+  const fenced = lines.map((line) => {
     const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
     if (open) {
       if (fence && fence[0] === open[0] && fence.length >= open.length && line.trim() === fence) open = null;
@@ -48,6 +49,8 @@ function fencedLines(lines) {
     if (fence) open = fence;
     return Boolean(fence);
   });
+  if (open) throw new Error(`${file}: a code fence opened with ${open} never closes`);
+  return fenced;
 }
 
 /**
@@ -59,12 +62,12 @@ function fencedLines(lines) {
  */
 export function embedConventions({ agentsText, conventionsText }) {
   const lines = agentsText.split("\n");
-  const fenced = fencedLines(lines);
+  const fenced = fencedLines(lines, "AGENTS.md");
   const start = lines.findIndex((line, i) => !fenced[i] && line === conventionsHeading);
   if (start === -1) throw new Error(`AGENTS.md: missing '${conventionsHeading}' section`);
   const end = lines.findIndex((line, i) => i > start && !fenced[i] && line.startsWith("## "));
   const conventionsLines = conventionsText.split("\n");
-  const conventionsFenced = fencedLines(conventionsLines);
+  const conventionsFenced = fencedLines(conventionsLines, "setup/CODING_CONVENTIONS.md");
   const demoted = conventionsLines
     .map((line, i) => (!conventionsFenced[i] && /^#+ /.test(line) ? `#${line}` : line))
     .join("\n")
