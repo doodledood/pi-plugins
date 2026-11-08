@@ -1,6 +1,6 @@
 ---
 kind: walk
-covers: AGENTS.md, CONTEXT.md, NORTH_STAR.md, docs/NORTH_STAR_CONVENTIONS.md, docs/adr, tickets, scripts/adr-index.mjs, scripts/adr-index.test.mjs, scripts/adr-enforced.test.mjs
+covers: AGENTS.md, CONTEXT.md, NORTH_STAR.md, docs/NORTH_STAR_CONVENTIONS.md, docs/adr, tickets, scripts/adr-index.mjs, scripts/adr-index.test.mjs, scripts/adr-enforced.test.mjs, scripts/embed-conventions.mjs
 ---
 # Project surfaces
 
@@ -11,6 +11,8 @@ and the Ticket store config.
 ## How a user reaches it
 
 - Every session reads `AGENTS.md` (also `CLAUDE.md`), `NORTH_STAR.md` and `CONTEXT.md` at start.
+- Syncing `setup/CODING_CONVENTIONS.md`, after which `node scripts/embed-conventions.mjs`
+  regenerates the conventions section `AGENTS.md` embeds.
 - Writing a decision record, which rebuilds `docs/adr/README.md` and the North Star's strategy list
   (`node scripts/adr-index.mjs`).
 
@@ -27,7 +29,15 @@ Proves: every file a record in effect names under Enforced by exists and carries
 that record.
 Line: 0.2 s on darwin-arm64-12cpu
 
+### conventions
+Run: `node scripts/embed-conventions.mjs && git diff --exit-code -- AGENTS.md`
+Proves: the embed command runs, and the Coding Conventions section `AGENTS.md` embeds already
+matches `setup/CODING_CONVENTIONS.md`, so the command leaves the file unchanged.
+Line: 0.0 s on linux-x64-4cpu
+
 ## Gotchas
 
+- The conventions scenario rewrites `AGENTS.md` when the section is stale and then fails on the
+  diff; run it with no other uncommitted edit to `AGENTS.md`, and commit what it wrote.
 - No walk scenario checks that a fresh reader understands these files; the first change that needs
   one adds it, marked ask-first, since it would start an agent session.
