@@ -244,10 +244,22 @@ function readPids(): number[] {
   }
 }
 
+/**
+ * Whether a process is still running. A killed process whose parent already exited stays a zombie until
+ * PID 1 reaps it, which some containers' init does a second or more late; `kill(pid, 0)` still succeeds on
+ * a zombie, but it has exited and holds nothing, so on Linux its `/proc` state `Z` counts as not running.
+ */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") return true;
+  try {
+    // /proc/<pid>/stat is "pid (comm) state …"; comm may contain spaces or parentheses, so read after the last ")".
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
   } catch {
     return false;
   }
