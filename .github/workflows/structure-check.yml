@@ -1,4 +1,4 @@
-# Holds part of docs/adr/20260820-split-coding-conventions-from-setup-agents.md: a pull request whose
+# Holds docs/adr/20261108-embed-the-coding-conventions-in-the-root-agents-md.md: a pull request whose
 # root AGENTS.md "Coding Conventions" section drifted from setup/CODING_CONVENTIONS.md cannot merge
 # green. Runs the repo's structure check, its unit tests and the lockfile check, none of which need
 # an npm install.

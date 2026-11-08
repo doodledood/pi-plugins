@@ -216,6 +216,7 @@ if (existsSync(setupConventions) && !readFileSync(setupConventions, "utf8").star
   errors.push("setup/CODING_CONVENTIONS.md: must open with '# Coding Conventions' — repo syncs anchor on that title");
 }
 // This repo's own AGENTS.md embeds the conventions as a section; a hand-kept copy drifts.
+// Holds docs/adr/20261108-embed-the-coding-conventions-in-the-root-agents-md.md.
 if (existsSync(setupConventions)) {
   errors.push(...validateEmbeddedConventions({
     agentsText: readFileSync(join(root, "AGENTS.md"), "utf8"),
