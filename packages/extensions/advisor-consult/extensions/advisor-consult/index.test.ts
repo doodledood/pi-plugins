@@ -23,7 +23,7 @@ function recordingRunner(result: AdvisorResult): { runner: AdvisorRunner; last: 
   };
 }
 
-const ok: AdvisorResult = { ok: true, advice: "Ship it behind a flag; back out is one toggle.", model: "anthropic/claude-fable-5-1", elapsedMs: 42_000 };
+const ok: AdvisorResult = { ok: true, advice: "Ship it behind a flag; back out is one toggle.", model: "anthropic/claude-fable-5-2", elapsedMs: 42_000 };
 
 const renderTheme = {
   fg: (_color: string, text: string) => text,
@@ -95,7 +95,7 @@ test("consult returns advice with a model/duration header on success", async () 
   const { runner, last } = recordingRunner(ok);
   const out = await consult({ query: "Should we ship the migration behind a flag?", thinking: "high" }, deps(runner));
   assert.equal(out.details.ok, true);
-  assert.match(out.text, /advisor · model: anthropic\/claude-fable-5-1 · 42\.0s/);
+  assert.match(out.text, /advisor · model: anthropic\/claude-fable-5-2 · 42\.0s/);
   assert.match(out.text, /Ship it behind a flag/);
   assert.equal(last()?.thinking, "high");
   // Hard denies always flow to the subprocess.
@@ -131,15 +131,15 @@ test("consult flags when the advisor ran on a different model than requested", a
   const mismatched: AdvisorResult = { ok: true, advice: "advice", model: "openai/gpt-5.5", elapsedMs: 1000 };
   const { runner } = recordingRunner(mismatched);
   const out = await consult(
-    { query: "q", model: "anthropic/claude-fable-5-1" },
-    deps(runner, { resolveModelPattern: () => "anthropic/claude-fable-5-1" }),
+    { query: "q", model: "anthropic/claude-fable-5-2" },
+    deps(runner, { resolveModelPattern: () => "anthropic/claude-fable-5-2" }),
   );
-  assert.match(out.text, /requested model 'anthropic\/claude-fable-5-1' was not used/);
+  assert.match(out.text, /requested model 'anthropic\/claude-fable-5-2' was not used/);
 });
 
 test("resolveModel honors overrides, config default, and inherit", () => {
   assert.deepEqual(resolveModel("provider/x", DEFAULT_CONFIG, "openai/gpt-5.5"), { model: "provider/x", inherited: false });
-  assert.deepEqual(resolveModel(undefined, DEFAULT_CONFIG, "openai/gpt-5.5"), { model: "anthropic/claude-fable-5-1", inherited: false });
+  assert.deepEqual(resolveModel(undefined, DEFAULT_CONFIG, "openai/gpt-5.5"), { model: "anthropic/claude-fable-5-2", inherited: false });
   assert.deepEqual(resolveModel("inherit", DEFAULT_CONFIG, "openai/gpt-5.5"), { model: "openai/gpt-5.5", inherited: true });
   assert.deepEqual(resolveModel(undefined, { ...DEFAULT_CONFIG, defaultModel: "inherit" }, "openai/gpt-5.5"), {
     model: "openai/gpt-5.5",
@@ -155,9 +155,9 @@ test("resolveTimeout applies default, clamp, and invalid handling", () => {
 });
 
 test("modelNotUsed compares what the pattern resolves to, tolerating a bare id", () => {
-  const resolve = (pattern: string) => (pattern.startsWith("anthropic/claude-fable-5-1") ? "anthropic/claude-fable-5-1" : undefined);
-  assert.equal(modelNotUsed("anthropic/claude-fable-5-1:high", "claude-fable-5-1", resolve), false);
-  assert.equal(modelNotUsed("anthropic/claude-fable-5-1", "openai/gpt-5.5", resolve), true);
+  const resolve = (pattern: string) => (pattern.startsWith("anthropic/claude-fable-5-2") ? "anthropic/claude-fable-5-2" : undefined);
+  assert.equal(modelNotUsed("anthropic/claude-fable-5-2:high", "claude-fable-5-2", resolve), false);
+  assert.equal(modelNotUsed("anthropic/claude-fable-5-2", "openai/gpt-5.5", resolve), true);
   assert.equal(modelNotUsed("unknown-pattern", "openai/gpt-5.5", resolve), false, "nothing to compare against");
 });
 
@@ -256,7 +256,7 @@ test("renderCall tolerates partial and malformed streaming arguments and reuses 
   const restored = plainLines(
     renderAdvisorCall(tool, { query: "Historical brief." }, { argsComplete: false, isPartial: false, expanded: true }).lines,
   );
-  assert.match(restored, /model: anthropic\/claude-fable-5-1 \(configured default\)/);
+  assert.match(restored, /model: anthropic\/claude-fable-5-2 \(configured default\)/);
   assert.match(restored, /effort: xhigh \(configured default\)/);
   assert.match(restored, /timeout: 10m \(configured default\)/);
   assert.doesNotMatch(restored, /pending/);
@@ -268,7 +268,7 @@ test("renderCall tolerates partial and malformed streaming arguments and reuses 
       { argsComplete: false, isPartial: true, executionStarted: true, expanded: true },
     ).lines,
   );
-  assert.match(started, /model: anthropic\/claude-fable-5-1 \(configured default\)/);
+  assert.match(started, /model: anthropic\/claude-fable-5-2 \(configured default\)/);
   assert.match(started, /effort: xhigh \(configured default\)/);
   assert.match(started, /timeout: 10m \(configured default\)/);
   assert.doesNotMatch(started, /pending/);
@@ -301,7 +301,7 @@ test("renderCall tolerates partial and malformed streaming arguments and reuses 
   const ignoredOverrides = plainLines(
     renderAdvisorCall(tool, { query: "Use defaults.", model: " ", timeout_ms: -1 }, { expanded: true }).lines,
   );
-  assert.match(ignoredOverrides, /model: anthropic\/claude-fable-5-1 \(configured default\)/);
+  assert.match(ignoredOverrides, /model: anthropic\/claude-fable-5-2 \(configured default\)/);
   assert.match(ignoredOverrides, /timeout: 10m \(configured default\)/);
 });
 

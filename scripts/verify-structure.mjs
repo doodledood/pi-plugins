@@ -16,7 +16,7 @@ const expectedEnabledModels = [
   "anthropic/claude-opus-5-5-full:high",
   "openai/gpt-6-astra:medium",
   "openai/gpt-6.1-sol:high",
-  "anthropic/claude-fable-5-1:max",
+  "anthropic/claude-fable-5-2:max",
   "anthropic/claude-sonnet-5-5:xhigh",
 ];
 
@@ -117,9 +117,30 @@ if (installedSettings && localSettings) {
     }
   }
 }
+// Holds docs/adr/20261109-add-catalog-lagging-models-through-models-json.md: models.example.json only
+// adds whole models Pi's catalog does not ship yet, each one an alias target. Provider overrides and
+// window changes stay out; operating windows live in model-aliases.json alone.
 const setupModels = readJson(join(root, "setup", "models.example.json"));
-if (setupModels && Object.keys(setupModels.providers ?? {}).length !== 0) {
-  errors.push("setup/models.example.json: full profile must not use model-provider overrides");
+const setupAliasesForModels = readJson(join(root, "setup", "configs", "model-aliases.json"));
+if (setupModels) {
+  const aliasTargets = new Set((setupAliasesForModels?.aliases ?? []).map((alias) => `${alias.targetProvider ?? alias.provider}/${alias.targetModel ?? alias.id}`));
+  for (const [provider, config] of Object.entries(setupModels.providers ?? {})) {
+    const extraKeys = Object.keys(config).filter((key) => key !== "models");
+    if (extraKeys.length > 0) {
+      errors.push(`setup/models.example.json: ${provider} may only add models, found provider overrides [${extraKeys.join(", ")}]`);
+    }
+    for (const model of config.models ?? []) {
+      if (!aliasTargets.has(`${provider}/${model.id}`)) {
+        errors.push(`setup/models.example.json: ${provider}/${model.id} is not the target of any alias in setup/configs/model-aliases.json`);
+      }
+      for (const field of ["api", "cost", "contextWindow", "maxTokens", "promptCache"]) {
+        if (model[field] === undefined) errors.push(`setup/models.example.json: ${provider}/${model.id} must define ${field}, as Pi's own catalog record would`);
+      }
+      if (model.baseUrl !== undefined) {
+        errors.push(`setup/models.example.json: ${provider}/${model.id} must not pin baseUrl, so it follows the provider's route`);
+      }
+    }
+  }
 }
 const setupGoalController = readJson(join(root, "setup", "configs", "goal-controller.config.json"));
 if (setupGoalController) {
@@ -154,15 +175,15 @@ if (setupAdvisor) {
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 // Opus 5.5 is a plan/execute pair: claude-opus-5-5 is the 300K execution window and claude-opus-5-5-full
-// the unrestricted planning window. Fable 5.1 is unrestricted; claude-fable-5-1-full is now an exact
-// duplicate of it, kept only because Pi continues a session whose model id has vanished on the default model.
+// the unrestricted planning window. Fable 5.2 is unrestricted. claude-fable-5-1-full is the retired
+// Fable 5.1 slot, kept only because Pi continues a session whose model id has vanished on the default model.
 const expectedSetupAliases = new Map([
   ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-6.1-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["gpt-6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
-  ["claude-fable-5-1", { contextWindow: 1000000, targetContextWindow: 1000000 }],
+  ["claude-fable-5-2", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-sonnet-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],

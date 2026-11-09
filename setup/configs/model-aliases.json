@@ -56,9 +56,9 @@
     },
     {
       "provider": "anthropic",
-      "id": "claude-fable-5-1",
+      "id": "claude-fable-5-2",
       "targetProvider": "anthropic",
-      "targetModel": "claude-fable-5-1",
+      "targetModel": "claude-fable-5-2",
       "contextWindow": 1000000,
       "targetContextWindow": 1000000
     },

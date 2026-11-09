@@ -26,7 +26,7 @@ export function configPath(): string {
 }
 
 export const DEFAULT_CONFIG: AdvisorConsultConfig = {
-  defaultModel: "anthropic/claude-fable-5-1",
+  defaultModel: "anthropic/claude-fable-5-2",
   defaultThinking: "xhigh",
   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
   minTimeoutMs: MIN_TIMEOUT_MS,
