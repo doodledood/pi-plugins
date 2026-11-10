@@ -128,7 +128,7 @@ It has no edit, write or Slack-send tool, and it cannot use your session's other
 
 **What the helper can share.** The package serves anyone who posts in a watched conversation. The helper knows what your session knows, so its replies can share session content with the people there. A read-only tool that reaches the internet can carry content out. Watch only conversations whose readers you trust with that.
 
-**It does not spam.** It sends at most one reply per batch of messages. In channels, it replies only in the thread. It marks every message as your agent's. The first message in a conversation says whose agent it is.
+**It does not spam.** It sends at most one reply per batch of messages. In channels, it replies only in the thread. It marks every message as your agent's with the marker (🤖 by default) and nothing more.
 
 ## Configuration
 

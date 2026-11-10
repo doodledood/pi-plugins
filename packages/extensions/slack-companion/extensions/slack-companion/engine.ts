@@ -54,7 +54,6 @@ export interface WatchState {
   sendsWithoutOwner: number;
   lastActivityAt: number;
   lastNote?: string;
-  agentLineSent: boolean;
   /** Today's spend; `lifted` when the owner resumed past the cap for the rest of the day. */
   spend: { day: string; usd: number; lifted?: boolean };
   /** The first other person seen here: who a direct message is with, or who a thread is with. */
@@ -455,13 +454,6 @@ export class Engine {
     return threadTs ? !this.isTombstoned(conversationKey({ kind: "thread", channelId: channel, threadTs })) : true;
   }
 
-  /** Was the agent line already sent where this send goes? */
-  agentLineSentFor(channelId: string, threadTs: string | undefined): boolean {
-    // Only where the send surely lands: a repeated agent line is harmless, a missing one is not.
-    const keys = this.channelsFor(channelId, false).flatMap((channel) => (threadTs ? [conversationKey({ kind: "thread", channelId: channel, threadTs })] : isDirectMessage(channel) ? [conversationKey({ kind: "dm-top", channelId: channel })] : []));
-    return keys.some((key) => this.watch(key)?.agentLineSent === true);
-  }
-
   /**
    * Main is about to send this marked text to a channel (or a user id, for a direct message) and
    * perhaps a thread. Kept even when the result is an error: the message may have gone out anyway.
@@ -540,13 +532,12 @@ export class Engine {
         if (!watch) continue;
       }
       this.markOwn(watch, input.ts, "this session");
-      watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
       watch.lastActivityAt = this.deps.now();
       // What the session asked, so the triage call and the helper know what a reply answers.
       if (input.text && !watch.context.some((m) => m.ts === input.ts)) {
         const self = this.state.owner;
-        // Kept as main wrote it: the marker and the agent line are the package's, not its words.
+        // Kept as main wrote it: the marker is the package's, not its words.
         this.remember(watch, { ts: input.ts, userId: self?.userId ?? "self", userName: self?.name ?? "the owner's agent", text: ownerWords(input.text, this.deps.config().marker), agentFooter: true, origin: "this session" });
       }
     }
@@ -575,7 +566,6 @@ export class Engine {
       inbox: [],
       sendsWithoutOwner: 0,
       lastActivityAt: this.deps.now(),
-      agentLineSent: false,
       spend: { day: dayOf(this.deps.now()), usd: 0 },
       // A send-started watch begins at its own message; an attached one at this moment, so a
       // "stop" written before the owner attached is history.
@@ -928,7 +918,7 @@ export class Engine {
     let heldAnsweredElsewhere = false;
     const marker = this.deps.config().marker;
     for (const raw of fresh) {
-      // The owner's agents' posts are kept as main wrote them: the marker and agent line are the package's.
+      // The owner's agents' posts are kept as main wrote them: the marker is the package's.
       const text = stripControl(raw.userId === owner.userId && raw.agentFooter ? ownerWords(raw.text, marker) : raw.text);
       const message: SlackMessage = { ...raw, userName: clean(raw.userName), text };
       watch.lastActivityAt = this.deps.now();
@@ -1204,7 +1194,7 @@ export class Engine {
       watch.sendsWithoutOwner += 1;
     }
     const owner = await this.owner();
-    const marked = markMessage(text, config.marker, owner.name, !watch.agentLineSent);
+    const marked = markMessage(text, config.marker, { ownerName: owner.name });
     const entry: LedgerEntry = { id: randomUUID(), watchKey: watch.key, text: marked, at: this.deps.now(), status: "sending", by };
     // The step this send completes is recorded in the same save as the send itself, so a crash
     // during the send is settled by reconcile and the step is never redone.
@@ -1233,7 +1223,6 @@ export class Engine {
       entry.status = "sent";
       entry.ts = sentTs;
       this.markOwn(watch, sentTs, by);
-      watch.agentLineSent = true;
       watch.lastAgentPostOurs = true;
     }
     if (by === "helper" && watch.sendsWithoutOwner >= config.pauseAfterSends) this.pauseForLimit(watch);

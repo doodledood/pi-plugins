@@ -88,13 +88,12 @@ const agentPosts = (slack: FakeSlack, channelId: string, threadTs?: string) =>
 test("a reply in a conversation the session started is answered once, in its thread, marked", async () => {
   const slack = new FakeSlack();
   const { engine, log } = makeEngine(slack);
-  const question = await mainSends(slack, engine, DM, "🤖 **Dana Owner's agent** …\n\nThree questions");
+  const question = await mainSends(slack, engine, DM, "🤖 Three questions");
   slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "1 yes, 2 no", question.ts);
   await settle(engine);
   const replies = agentPosts(slack, DM, question.ts);
   assert.equal(replies.length, 1);
   assert.match(replies[0]!.text, /^🤖 re: 1 yes, 2 no/);
-  assert.ok(!replies[0]!.text.includes("Dana Owner's agent**"), "the agent line was already sent by main's first message");
   await settle(engine);
   assert.equal(log.helpers.length, 1, "nothing is answered twice");
 });
@@ -149,7 +148,7 @@ test("in a channel every reply goes into the thread, and the first one names the
   const replies = agentPosts(slack, CHANNEL);
   assert.equal(replies.length, 1);
   assert.equal(replies[0]!.threadTs, link.ts);
-  assert.match(replies[0]!.text, /^🤖 \*\*Dana Owner's agent\*\*/);
+  assert.match(replies[0]!.text, /^🤖 (?!\*\*)/, "the marker alone says whose message it is");
 });
 
 test("attaching hands only the unanswered part to the helper, and ignores an earlier stop", async () => {
@@ -180,7 +179,6 @@ test("attaching a conversation already watched keeps its state", async () => {
   assert.equal(engine.watch(key)!.status, "paused");
   await engine.attach({ channelId: DM, messageTs: q.ts, threadTs: q.ts }, { byOwner: true });
   assert.equal(engine.watch(key)!.status, "paused", "not reset by attaching again");
-  assert.equal(engine.watch(key)!.agentLineSent, true);
 });
 
 test("after the configured sends without the owner the watch pauses, keeps the waiting message, and resumes on owner input", async () => {
@@ -475,21 +473,19 @@ test("disposing during a helper run posts nothing afterwards and raises nothing"
   assert.equal(log.notices.length, 0);
 });
 
-test("a send addressed to a user id is tracked by its DM channel, and only the first message carries the agent line", async () => {
+test("a send addressed to a user id is tracked by its DM channel, and a send into it is marked", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack);
-  assert.equal(engine.agentLineSentFor(COLLEAGUE.id, undefined), false);
   const posted = slack.post(DM, slack.ownerId, slack.ownerName, "hi");
   await engine.onMainSend({ channelId: DM, ts: posted.ts, addressedTo: COLLEAGUE.id });
   assert.equal(engine.channelFor(COLLEAGUE.id), DM);
-  assert.equal(engine.agentLineSentFor(COLLEAGUE.id, undefined), true);
   await mainSends(slack, engine, "D0FAKE0003", "to someone not known yet");
   engine.setAutoStart(false);
   assert.equal(engine.sendWillBeWatched(COLLEAGUE.id, undefined), true, "a send into the watched DM is still marked after /slack off");
 });
 
 test("a very long reply is cut below Slack's limit", () => {
-  const marked = markMessage("x".repeat(MAX_REPLY_CHARS + 500), "🤖", "Dana Owner", false);
+  const marked = markMessage("x".repeat(MAX_REPLY_CHARS + 500), "🤖", { ownerName: "Dana Owner" });
   assert.ok(marked.length < 5000);
   assert.match(marked, /cut; the rest is in Dana Owner's session/);
 });
@@ -1805,7 +1801,7 @@ test("a post corrected to this session's when its result comes clears the agent-
   assert.equal(engine.watch(key)!.agentPostsWaiting, undefined);
 });
 
-test("with automatic starts off, main's send to a person's user id into their watched DM is still marked, with its agent line once", async () => {
+test("with automatic starts off, main's send to a person's user id into their watched DM is still marked", async () => {
   const slack = new FakeSlack();
   const { engine } = makeEngine(slack);
   const q = await mainSends(slack, engine, DM, "first, by channel id");
@@ -1814,13 +1810,11 @@ test("with automatic starts off, main's send to a person's user id into their wa
   engine.setAutoStart(false);
   assert.equal(engine.sendWillBeWatched(COLLEAGUE.id, undefined), true, "it lands in a watched DM: marked");
   assert.equal(engine.sendWillBeWatched(OTHER.id, undefined), false, "a person with no watched DM: not watched");
-  assert.equal(engine.agentLineSentFor(COLLEAGUE.id, undefined), true, "the agent line went out there already");
-  // A DM whose person is not known yet: marked (harmless), but its agent line is not assumed sent.
+  // A DM whose person is not known yet: marked (harmless).
   engine.setAutoStart(true);
   await mainSends(slack, engine, "D0FAKE0003", "to someone not known yet");
   engine.setAutoStart(false);
   assert.equal(engine.sendWillBeWatched(OTHER.id, undefined), true, "it may land in that DM: marked");
-  assert.equal(engine.agentLineSentFor(OTHER.id, undefined), false, "the agent line goes out again rather than be missed");
 });
 
 test("the helper's own reply leaves the agent-post count: it never answers agent posts", async () => {

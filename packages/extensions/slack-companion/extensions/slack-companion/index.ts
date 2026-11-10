@@ -356,13 +356,7 @@ export function activate(pi: ExtensionAPI, overrides: Overrides = {}): void {
     const call = sendCallOf(event.toolName, event.input as Record<string, unknown>, config.tools.sendMessage);
     if (!call || !engine.sendWillBeWatched(call.channelId, call.threadTs)) return;
     markedCalls.add(event.toolCallId);
-    let ownerName = "the owner";
-    try {
-      ownerName = (await engine.owner()).name;
-    } catch {
-      /* the watch will report the backend problem; mark with a neutral name */
-    }
-    const marked = markMessage(call.message, config.marker, ownerName, !engine.agentLineSentFor(call.channelId, call.threadTs), { cut: false });
+    const marked = markMessage(call.message, config.marker);
     call.setMessage(marked);
     engine.mainSendStarting(event.toolCallId, { text: marked, channelId: call.channelId, ...(call.threadTs ? { threadTs: call.threadTs } : {}) });
   });

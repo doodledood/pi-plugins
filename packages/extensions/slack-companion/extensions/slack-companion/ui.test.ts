@@ -15,7 +15,7 @@ function watch(over: Partial<WatchState> = {}): WatchState {
   return {
     key: "D1/1.000001", conversation: { kind: "thread", channelId: "D1", threadTs: "1.000001" },
     startedBy: "send", status: "active", point: { checkpoint: "1.000001", seen: [] }, ownPosts: [], context: [], inbox: [],
-    sendsWithoutOwner: 0, lastActivityAt: 0, agentLineSent: true, spend: { day: "2026-11-04", usd: 0 }, since: "1.000001",
+    sendsWithoutOwner: 0, lastActivityAt: 0, spend: { day: "2026-11-04", usd: 0 }, since: "1.000001",
     partner: { userId: "U1", name: "Robin Colleague" }, ...over,
   };
 }

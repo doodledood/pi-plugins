@@ -41,7 +41,7 @@ for (const [route, redactEmails] of [["direct", false], ["deferred", false], ["m
     const h = await createHarness({ replies: script(route), redactEmails });
     await h.session.prompt("ask Robin the three questions");
     const [question] = h.slack.messages(DM);
-    assert.match(question!.text, /^🤖 \*\*Dana Owner's agent\*\* — an AI agent working in Dana Owner's Pi session\.[\s\S]*Three quick questions/);
+    assert.match(question!.text, /^🤖 (?!\*\*)[\s\S]*Three quick questions/);
     assert.equal(h.engine().liveWatches().length, 2, "the question's thread and the DM's top level");
     h.slack.post(DM, COLLEAGUE.id, COLLEAGUE.name, "what do you mean by 3?", question!.ts);
     await h.engine().poll();
@@ -125,7 +125,7 @@ test("/slack <link> attaches a colleague's thread and the state is saved in the 
   await h.engine().attach({ channelId: DM, messageTs: root.ts }, { byOwner: true });
   await h.engine().idle();
   const reply = slack.messages(DM).find((m) => m.threadTs === root.ts && m.userId === slack.ownerId);
-  assert.match(reply!.text, /^🤖 \*\*Dana Owner's agent\*\*/);
+  assert.match(reply!.text, /^🤖 (?!\*\*)/, "the marker alone says whose message it is");
   const saved = (h.session.sessionManager.getBranch() as any[]).filter((e) => e.type === "custom" && e.customType === STATE_ENTRY);
   assert.ok(saved.length > 0);
 });

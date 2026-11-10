@@ -92,12 +92,12 @@ test("the poll timer starts once, and a reload stops the old one", async () => {
   assert.ok(h.runningTimers().length <= 1);
 });
 
-test("main's own message is sent whole, and gets the agent line even if it already starts with the marker", async () => {
+test("main's own message is sent whole, marked once even if it already starts with the marker", async () => {
   const long = `🤖 ${"word ".repeat(900)}end`;
   const h = await createHarness({ replies: script(long, () => ({ kind: "text", text: "done" })) });
   await h.session.prompt("ask Robin");
   const [sent] = h.slack.messages(DM);
-  assert.match(sent!.text, /^🤖 \*\*Dana Owner's agent\*\*/);
+  assert.match(sent!.text, /^🤖 word /, "the marker alone, no agent line");
   assert.equal((sent!.text.match(/🤖/g) ?? []).length, 1, "one marker");
   assert.match(sent!.text, /end\n\*Sent using\*/, "not cut");
   assert.equal(sent!.text.includes("(cut;"), false);
@@ -345,7 +345,7 @@ test("on Linux the owner is told once that the helper has no shell, and the file
   assert.equal(reads.includes("PRIVATE-KEY-CONTENT"), false, "the file tools still deny secrets");
 });
 
-test("through the real send path, a fresh DM is named by the words main wrote, never by the package's agent line", async () => {
+test("through the real send path, a fresh DM is named by the words main wrote, never by the package's marker", async () => {
   for (const marker of ["🤖", ""]) {
     const h = await createHarness({
       ui: { rows: 30 },
@@ -363,7 +363,7 @@ test("through the real send path, a fresh DM is named by the words main wrote, n
     const [line] = h.line(160);
     assert.match(line!, /DM "Which build sho…"/, `marker ${JSON.stringify(marker)}: ${line}`);
     assert.match(line!, /DM "Can you review…"/, "two fresh DMs read apart");
-    assert.doesNotMatch(line!, /agent\*\*|Dana Owner/, "the package's agent line is not the name");
+    assert.doesNotMatch(line!, /🤖/, "the package's marker is not the name");
   }
 });
 

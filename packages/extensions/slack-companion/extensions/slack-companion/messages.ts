@@ -39,31 +39,24 @@ export function approvedActionText(input: { label: string; requester: string; ow
   ].join("\n");
 }
 
-export function agentLine(ownerName: string): string {
-  return `**${ownerName}'s agent** — an AI agent working in ${ownerName}'s Pi session. ${ownerName} sees this conversation.`;
-}
-
 /** Slack refuses a text element over 5,000 characters; replies stay well under it. */
 export const MAX_REPLY_CHARS = 4000;
 
 /**
- * Mark a message as the agent's; the first message in a conversation also says whose agent it is.
- * A helper's reply is cut below Slack's limit; a message main's model wrote is sent whole (`cut: false`).
+ * Mark a message as the agent's with the marker alone. A helper's reply is cut below Slack's limit
+ * (pass `cut` with the owner's name, for the note saying where the rest is); a message main's model
+ * wrote is sent whole.
  */
-export function markMessage(text: string, marker: string, ownerName: string, first: boolean, options: { cut?: boolean } = {}): string {
+export function markMessage(text: string, marker: string, cut?: { ownerName: string }): string {
   const prefix = marker ? `${marker} ` : "";
   let body = prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text;
-  if (options.cut !== false && body.length > MAX_REPLY_CHARS) body = `${body.slice(0, MAX_REPLY_CHARS)}… (cut; the rest is in ${ownerName}'s session)`;
-  return first ? `${prefix}${agentLine(ownerName)}\n\n${body}` : `${prefix}${body}`;
+  if (cut && body.length > MAX_REPLY_CHARS) body = `${body.slice(0, MAX_REPLY_CHARS)}… (cut; the rest is in ${cut.ownerName}'s session)`;
+  return `${prefix}${body}`;
 }
 
-/**
- * The words main wrote, without what markMessage added (the marker and the agent line). The agent
- * line is recognized by its shape, so a name the package does not know yet is still removed.
- */
+/** The words main wrote, without the marker markMessage added. */
 export function ownerWords(text: string, marker: string): string {
-  const body = marker && text.startsWith(`${marker} `) ? text.slice(marker.length + 1) : text;
-  return body.replace(/^\*\*[^*\n]+'s agent\*\* — [^\n]*\n\n/, "");
+  return marker && text.startsWith(`${marker} `) ? text.slice(marker.length + 1) : text;
 }
 
 export function waitingNote(ownerName: string, requests: readonly string[]): string {
