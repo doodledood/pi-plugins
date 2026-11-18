@@ -5,8 +5,8 @@
   "enabledModels": [
     "anthropic/claude-opus-5-5:high",
     "anthropic/claude-opus-5-5-full:high",
-    "openai/gpt-6-astra:medium",
-    "openai/gpt-6.1-sol:high",
+    "openai/gpt-6.2-astra:medium",
+    "openai/gpt-6.2-sol:high",
     "anthropic/claude-fable-5-2:max",
     "anthropic/claude-sonnet-5-5:xhigh"
   ],

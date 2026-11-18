@@ -120,7 +120,7 @@ Optional config at `~/.pi/agent/advisor-consult.json` (see `config/advisor-consu
 
 ### Model default and portability
 
-Aviram's portable setup keeps its own choice in `setup/configs/advisor-consult.json` (`openai/gpt-6-astra` at `max`) so this package default never has to change for one setup.
+Aviram's portable setup keeps its own choice in `setup/configs/advisor-consult.json` (`openai/gpt-6.2-astra` at `max`) so this package default never has to change for one setup.
 
 The package default prefers a **Fable-family** model because advisor calls are high-leverage and warrant top capability. If that model is not available/enabled in your environment, set `defaultModel` to one you have (or `"inherit"`). When the requested model is not the one the subprocess actually ran on, the result surfaces that mismatch so the advice is never silently produced by a weaker model.
 

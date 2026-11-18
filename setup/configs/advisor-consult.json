@@ -1,4 +1,4 @@
 {
-  "defaultModel": "openai/gpt-6-astra",
+  "defaultModel": "openai/gpt-6.2-astra",
   "defaultThinking": "max"
 }

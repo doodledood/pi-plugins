@@ -14,8 +14,8 @@ const expectedSetupSkills = ["deletion-pass", "telegram"];
 const expectedEnabledModels = [
   "anthropic/claude-opus-5-5:high",
   "anthropic/claude-opus-5-5-full:high",
-  "openai/gpt-6-astra:medium",
-  "openai/gpt-6.1-sol:high",
+  "openai/gpt-6.2-astra:medium",
+  "openai/gpt-6.2-sol:high",
   "anthropic/claude-fable-5-2:max",
   "anthropic/claude-sonnet-5-5:xhigh",
 ];
@@ -160,8 +160,8 @@ if (setupGoalController) {
 }
 const setupAdvisor = readJson(join(root, "setup", "configs", "advisor-consult.json"));
 if (setupAdvisor) {
-  if (setupAdvisor.defaultModel !== "openai/gpt-6-astra") {
-    errors.push("setup/configs/advisor-consult.json: defaultModel must be openai/gpt-6-astra");
+  if (setupAdvisor.defaultModel !== "openai/gpt-6.2-astra") {
+    errors.push("setup/configs/advisor-consult.json: defaultModel must be openai/gpt-6.2-astra");
   }
   if (setupAdvisor.defaultThinking !== "max") {
     errors.push("setup/configs/advisor-consult.json: defaultThinking must be max");
@@ -178,8 +178,8 @@ if (setupAdvisor) {
 // the unrestricted planning window. Fable 5.2 is unrestricted. claude-fable-5-1-full is the retired
 // Fable 5.1 slot, kept only because Pi continues a session whose model id has vanished on the default model.
 const expectedSetupAliases = new Map([
-  ["gpt-6-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
-  ["gpt-6.1-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-6.2-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
+  ["gpt-6.2-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-5.6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["gpt-6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
