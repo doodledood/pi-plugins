@@ -64,14 +64,6 @@
     },
     {
       "provider": "anthropic",
-      "id": "claude-sonnet-5-5",
-      "targetProvider": "anthropic",
-      "targetModel": "claude-sonnet-5-5",
-      "contextWindow": 300000,
-      "targetContextWindow": 1000000
-    },
-    {
-      "provider": "anthropic",
       "id": "claude-opus-5-5-full",
       "name": "Claude Opus 5.5 (Full Window)",
       "targetProvider": "anthropic",
@@ -87,6 +79,16 @@
       "targetModel": "claude-fable-5-1",
       "contextWindow": 1000000,
       "targetContextWindow": 1000000
+    },
+    {
+      "provider": "google",
+      "id": "gemini-4-neon-300k",
+      "name": "Gemini 4 Neon (300K)",
+      "targetProvider": "google",
+      "targetModel": "gemini-4-neon",
+      "apiKey": "$GEMINI_API_KEY",
+      "contextWindow": 300000,
+      "targetContextWindow": 1048576
     }
   ]
 }

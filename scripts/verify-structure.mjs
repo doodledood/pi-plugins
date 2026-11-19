@@ -17,7 +17,7 @@ const expectedEnabledModels = [
   "openai/gpt-6.2-astra:medium",
   "openai/gpt-6.2-sol:high",
   "anthropic/claude-fable-5-2:max",
-  "anthropic/claude-sonnet-5-5:xhigh",
+  "google/gemini-4-neon-300k:high",
   "google/gemini-4-neon:high",
 ];
 
@@ -181,8 +181,9 @@ if (setupAdvisor) {
 // The full profile's operating boundaries live here rather than in models.json, so this is
 // the one place they are stated: an exact id set (no stale aliases) with each window pair.
 // Opus 5.5 is a plan/execute pair: claude-opus-5-5 is the 300K execution window and claude-opus-5-5-full
-// the unrestricted planning window. Fable 5.2 is unrestricted. claude-fable-5-1-full is the retired
-// Fable 5.1 slot, kept only because Pi continues a session whose model id has vanished on the default model.
+// the unrestricted planning window. Gemini 4 Neon pairs the direct 1,048,576-token model with
+// gemini-4-neon-300k for a 300K execution window. Fable 5.2 is unrestricted. claude-fable-5-1-full is the
+// retired Fable 5.1 slot, kept only because Pi continues a session whose model id has vanished on the default model.
 const expectedSetupAliases = new Map([
   ["gpt-6.2-astra", { contextWindow: 272000, targetContextWindow: 1050000 }],
   ["gpt-6.2-sol", { contextWindow: 272000, targetContextWindow: 1050000 }],
@@ -190,9 +191,9 @@ const expectedSetupAliases = new Map([
   ["gpt-6-luna", { contextWindow: 270000, targetContextWindow: 1050000 }],
   ["claude-opus-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-fable-5-2", { contextWindow: 1000000, targetContextWindow: 1000000 }],
-  ["claude-sonnet-5-5", { contextWindow: 300000, targetContextWindow: 1000000 }],
   ["claude-opus-5-5-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
   ["claude-fable-5-1-full", { contextWindow: 1000000, targetContextWindow: 1000000 }],
+  ["gemini-4-neon-300k", { contextWindow: 300000, targetContextWindow: 1048576 }],
 ]);
 const setupModelAliases = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModelAliases) {
