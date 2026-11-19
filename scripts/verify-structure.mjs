@@ -18,6 +18,7 @@ const expectedEnabledModels = [
   "openai/gpt-6.2-sol:high",
   "anthropic/claude-fable-5-2:max",
   "anthropic/claude-sonnet-5-5:xhigh",
+  "google/gemini-4-neon:high",
 ];
 
 function readJson(path) {
@@ -118,22 +119,27 @@ if (installedSettings && localSettings) {
   }
 }
 // Holds docs/adr/20261109-add-catalog-lagging-models-through-models-json.md: models.example.json only
-// adds whole models Pi's catalog does not ship yet, each one an alias target. Provider overrides and
-// window changes stay out; operating windows live in model-aliases.json alone.
+// adds whole models Pi's catalog does not ship yet, each one used by the profile: an alias target or a
+// model the cycle enables directly. Provider overrides and window changes stay out; operating windows
+// live in model-aliases.json alone. Pi's catalog carries promptCache lifetimes only on Anthropic
+// records (Gemini caches implicitly), so only those entries must define one.
 const setupModels = readJson(join(root, "setup", "models.example.json"));
 const setupAliasesForModels = readJson(join(root, "setup", "configs", "model-aliases.json"));
 if (setupModels) {
   const aliasTargets = new Set((setupAliasesForModels?.aliases ?? []).map((alias) => `${alias.targetProvider ?? alias.provider}/${alias.targetModel ?? alias.id}`));
+  const enabledModelIds = new Set(expectedEnabledModels.map((entry) => entry.replace(/:[^/]*$/, "")));
+  const providersWithCacheLifetimes = new Set(["anthropic"]);
   for (const [provider, config] of Object.entries(setupModels.providers ?? {})) {
     const extraKeys = Object.keys(config).filter((key) => key !== "models");
     if (extraKeys.length > 0) {
       errors.push(`setup/models.example.json: ${provider} may only add models, found provider overrides [${extraKeys.join(", ")}]`);
     }
     for (const model of config.models ?? []) {
-      if (!aliasTargets.has(`${provider}/${model.id}`)) {
-        errors.push(`setup/models.example.json: ${provider}/${model.id} is not the target of any alias in setup/configs/model-aliases.json`);
+      if (!aliasTargets.has(`${provider}/${model.id}`) && !enabledModelIds.has(`${provider}/${model.id}`)) {
+        errors.push(`setup/models.example.json: ${provider}/${model.id} is neither the target of an alias in setup/configs/model-aliases.json nor an enabled model`);
       }
-      for (const field of ["api", "cost", "contextWindow", "maxTokens", "promptCache"]) {
+      const requiredFields = ["api", "cost", "contextWindow", "maxTokens", ...(providersWithCacheLifetimes.has(provider) ? ["promptCache"] : [])];
+      for (const field of requiredFields) {
         if (model[field] === undefined) errors.push(`setup/models.example.json: ${provider}/${model.id} must define ${field}, as Pi's own catalog record would`);
       }
       if (model.baseUrl !== undefined) {

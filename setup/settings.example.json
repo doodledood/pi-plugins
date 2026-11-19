@@ -8,7 +8,8 @@
     "openai/gpt-6.2-astra:medium",
     "openai/gpt-6.2-sol:high",
     "anthropic/claude-fable-5-2:max",
-    "anthropic/claude-sonnet-5-5:xhigh"
+    "anthropic/claude-sonnet-5-5:xhigh",
+    "google/gemini-4-neon:high"
   ],
   "followUpMode": "all",
   "steeringMode": "all",

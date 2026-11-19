@@ -45,7 +45,7 @@ A model the profile uses before Pi's catalog ships it goes into `setup/models.ex
 - `models.example.json` is no longer empty, so installs merge it, and the entry needs deleting once Pi ships the model. Nothing fails when that is forgotten; a stale entry only overrides Pi's own record with a copy.
 
 ## Enforced by
-partly — `scripts/verify-structure.mjs` allows only `models` entries in `setup/models.example.json`, each an alias target with `api`, `cost`, `contextWindow`, `maxTokens` and `promptCache`, and none with a `baseUrl`. Deleting an entry once Pi ships the model stays judgment, because the structure check runs without Pi installed.
+partly — `scripts/verify-structure.mjs` allows only `models` entries in `setup/models.example.json`, each an alias target or a model the cycle enables directly, with `api`, `cost`, `contextWindow` and `maxTokens` (plus `promptCache` for Anthropic, the only provider whose catalog records carry it), and none with a `baseUrl`. Deleting an entry once Pi ships the model stays judgment, because the structure check runs without Pi installed.
 
 ## Source
 - Session: Fable 5.2 switch, 2026-11-09
